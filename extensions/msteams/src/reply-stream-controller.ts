@@ -11,8 +11,6 @@ import { buildMSTeamsMessageActivity } from "./message-activity.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-type Maybe<T> = T | undefined;
-
 type TeamsStreamChunkActivity = {
   id?: string;
   type?: string;
@@ -48,21 +46,7 @@ function isStreamCancelledError(err: unknown): boolean {
   return err instanceof Error && err.name === "StreamCancelledError";
 }
 
-/**
- * Bridges openclaw's reply pipeline callbacks to the SDK's `ctx.stream`.
- * Streaming is enabled for personal (DM) conversations only; group/channel
- * messages fall through to block delivery.
- *
- * Streaming modes (resolved from `cfg.channels.msteams.streaming.mode`):
- * - "partial" (default): per-token streaming via `stream.emit(text)`. Each
- *   chunk goes onto the live preview card in Teams.
- * - "progress": no per-token streaming; the preview card carries an
- *   informative status that updates as tools run (e.g. "Looking up the
- *   schema..." → "Generating SQL..."). When tool-progress streaming is also
- *   enabled, raw tool names appear as bullets above the label.
- * - "block": disable native streaming entirely; the reply lands as a regular
- *   block message. We bypass the controller in that case.
- */
+/** Bridge reply callbacks to the SDK stream; shared conversations use block delivery. */
 export function createTeamsReplyStreamController(params: {
   allowProviderPreview: boolean;
   conversationType?: string;
@@ -71,10 +55,7 @@ export function createTeamsReplyStreamController(params: {
   log?: MSTeamsMonitorLogger;
   msteamsConfig?: MSTeamsConfig;
   tableMode?: MarkdownTableMode;
-  /**
-   * Seed for the random label rotation so the same conversation gets the same
-   * "Thinking..." flavor across reconnects. Typically `${accountId}:${convId}`.
-   */
+  /** Stable label rotation across reconnects, typically `${accountId}:${convId}`. */
   progressSeed?: string;
 }) {
   const isPersonal = normalizeOptionalLowercaseString(params.conversationType) === "personal";
@@ -90,20 +71,11 @@ export function createTeamsReplyStreamController(params: {
   let nativeDeliveryClaimed = false;
   let streamFinalizationPending = false;
   let canceledLocally = false;
-  // Set when `stream.emit/close` fails for a non-cancel reason after we've
-  // already started streaming. Differentiates "user pressed Stop" from "the
-  // stream broke under us"; the second case wants block-delivery fallback so
-  // the user gets the full reply instead of a truncated streamed prefix.
-  // Matches the pre-migration `TeamsHttpStream.hasContent → false` recovery.
+  // Provider failures allow block fallback; user cancellation suppresses it.
   let streamFailed = false;
-  let pendingFinalPayload: Maybe<ReplyPayload>;
-  // openclaw's reply pipeline calls onPartialReply with the cumulative text on
-  // each chunk, but the SDK's HttpStream appends each emit() to its internal
-  // text buffer (this.text += activity.text). Forwarding cumulative text into
-  // an appending sink produces "chunk1 + chunk2 + chunk3..." duplication. We
-  // track the cumulative text we've already emitted and forward only the
-  // delta. Holding text instead of length preserves the next chunk when the
-  // pipeline normalizes trailing whitespace between cumulative snapshots.
+  let pendingFinalPayload: ReplyPayload | undefined;
+  // The SDK appends deltas to cumulative pipeline text. Retain the text, not just
+  // its length, because later snapshots can normalize trailing whitespace.
   let emittedText = "";
   let acknowledgedText = "";
   let acknowledgedLogicalText = "";
@@ -173,7 +145,9 @@ export function createTeamsReplyStreamController(params: {
     };
   };
 
-  const fallbackPayloadAfterAcknowledgedText = (payload: ReplyPayload): Maybe<ReplyPayload> => {
+  const fallbackPayloadAfterAcknowledgedText = (
+    payload: ReplyPayload,
+  ): ReplyPayload | undefined => {
     if (
       !acknowledgedLogicalText ||
       typeof payload.text !== "string" ||
@@ -210,7 +184,7 @@ export function createTeamsReplyStreamController(params: {
   };
 
   const takeDeferredReplacementPayloads = (
-    replacementFallback: Maybe<ReplyPayload>,
+    replacementFallback: ReplyPayload | undefined,
   ): ReplyPayload[] => {
     const payloads = deferredReplacementEntries.flatMap((entry) => {
       if (entry.kind === "payload") {
@@ -359,7 +333,7 @@ export function createTeamsReplyStreamController(params: {
     pushApprovalEvent: progressDraft.pushApprovalEvent.bind(progressDraft),
     pushPlanProgress: progressDraft.pushPlanProgress.bind(progressDraft),
 
-    preparePayload(payload: ReplyPayload): Maybe<ReplyPayload> {
+    preparePayload(payload: ReplyPayload): ReplyPayload | undefined {
       if (!stream) {
         return payload;
       }
@@ -374,11 +348,7 @@ export function createTeamsReplyStreamController(params: {
         progressDraft.markFinalReplyStarted();
       }
       if (replacementSettlementPending) {
-        if (!replacementFinalPending) {
-          deferredReplacementEntries.push({ kind: "payload", payload });
-          return undefined;
-        }
-        if (!payload.text) {
+        if (!replacementFinalPending || !payload.text) {
           // The native stream activity was created before final payloads and
           // remains the provider-visible root. Preserve deferred block order
           // after that root; sending early would leak content after Stop.

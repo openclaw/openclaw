@@ -12,6 +12,16 @@ import {
   mountProfilePage,
 } from "./profile-page.test-support.ts";
 
+const profile: UserProfile = {
+  ...modelAccountProfile,
+  emails: [],
+  githubIdentity: {
+    login: "octocat",
+    profileUrl: "https://github.com/octocat",
+    avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+  },
+};
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -23,16 +33,17 @@ afterEach(async () => {
   await i18n.setLocale("en");
 });
 
+async function mount(request: GatewayBrowserClient["request"]) {
+  const harness = createConnectedContext(request, {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const page = mountProfilePage(harness.context);
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  return page;
+}
+
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
       return { profile };
@@ -50,13 +61,7 @@ it("loads and updates co-author consent separately from verified GitHub identity
     }
     throw new Error(`unexpected method: ${method}`);
   });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const page = await mount(request as GatewayBrowserClient["request"]);
   await waitForFast(() =>
     expect(page.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked).toBe(
       false,
@@ -82,15 +87,6 @@ it("loads and updates co-author consent separately from verified GitHub identity
 });
 
 it("treats a malformed co-author preference as opted out", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
       return { profile };
@@ -101,27 +97,12 @@ it("treats a malformed co-author preference as opted out", async () => {
     }
     throw new Error(`unexpected method: ${method}`);
   });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const page = await mount(request as GatewayBrowserClient["request"]);
   const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
   await waitForFast(() => expect(toggle?.checked).toBe(false));
 });
 
 it("keeps co-author credit on until the person opts out", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
       return { profile };
@@ -136,13 +117,7 @@ it("keeps co-author credit on until the person opts out", async () => {
     }
     throw new Error(`unexpected method: ${method}`);
   });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const page = await mount(request as GatewayBrowserClient["request"]);
   const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
   await waitForFast(() => expect(toggle?.checked).toBe(true));
 

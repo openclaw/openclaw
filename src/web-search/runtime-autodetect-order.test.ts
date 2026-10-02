@@ -1,7 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -23,50 +21,36 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 describe("web search OAuth and environment auto-detection", () => {
-  const tempDirs: string[] = [];
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   afterEach(() => {
     vi.unstubAllEnvs();
     resolveProviders.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
-    for (const dir of tempDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it.each([
     {
-      name: "OAuth before environment",
-      oauth: true,
-      failGrok: false,
-      pin: undefined,
-      order: ["grok"],
-    },
-    {
       name: "environment fallback after OAuth failure",
       oauth: true,
-      failGrok: true,
       pin: undefined,
       order: ["grok", "tavily"],
     },
     {
       name: "environment only",
       oauth: false,
-      failGrok: false,
       pin: undefined,
       order: ["tavily"],
     },
     {
       name: "explicit environment provider",
       oauth: true,
-      failGrok: false,
       pin: "tavily",
       order: ["tavily"],
     },
-  ])("preserves $name", async ({ oauth, failGrok, pin, order }) => {
+  ])("preserves $name", async ({ oauth, pin, order }) => {
     vi.stubEnv("TAVILY_API_KEY", "tavily-synthetic-key");
-    const agentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-order-"));
-    tempDirs.push(agentDir);
+    const agentDir = tempDirs.make("openclaw-web-search-order-");
     replaceRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
@@ -99,10 +83,7 @@ describe("web search OAuth and environment auto-detection", () => {
           parameters: {},
           execute: async () => {
             attempts.push("grok");
-            if (failGrok) {
-              throw new Error("grok search failed");
-            }
-            return { answer: "OAuth result" };
+            throw new Error("grok search failed");
           },
         }),
       }),

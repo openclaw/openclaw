@@ -7,6 +7,7 @@ import { parse } from "yaml";
 import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const scriptPath = path.resolve("scripts/check-workflows.mts");
 const tempDirs: string[] = [];
@@ -481,13 +482,50 @@ describe("check-workflows", () => {
     );
   });
 
+  it("honors the Defender exclusion opt-out in every Windows proof job", () => {
+    const { workflow } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.skip_defender_exclusions).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const cases = [
+      [false, false, "", false],
+      [false, true, "", true],
+      [false, false, "{}", true],
+      [false, true, "{}", true],
+      [true, false, "", false],
+      [true, true, "", false],
+      [true, false, "{}", false],
+      [true, true, "{}", false],
+    ] as const;
+    for (const jobName of ["probe", "native-schtasks", "native-schtasks-package"]) {
+      const condition = workflow.jobs[jobName]!.steps.find(
+        (step) => step.name === "Try to exclude workspace from Windows Defender (best-effort)",
+      )?.if;
+      expect(condition).toBeDefined();
+      for (const [skipDefenderExclusions, runWindowsCi, windowsCiReplay, expected] of cases) {
+        expect(
+          evaluateWorkflowExpression(condition, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            skipDefenderExclusions,
+            runWindowsCi,
+            windowsCiReplay,
+          }),
+          `${jobName}: skip=${skipDefenderExclusions}, ci=${runWindowsCi}, replay=${windowsCiReplay}`,
+        ).toBe(expected);
+      }
+    }
+  });
+
   it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {
     const { workflow, probe, native } = readWindowsProbe();
     expect(workflow.on.workflow_dispatch.inputs.installed_startup_package).toMatchObject({
       default: "",
       type: "string",
     });
-    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.8.2");
+    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.9.0");
     expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
       default: false,
       type: "boolean",

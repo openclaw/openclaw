@@ -532,7 +532,7 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
 
     const sqlite = requireNodeSqlite();
     const mutate = new sqlite.DatabaseSync(filePath);
@@ -718,7 +718,7 @@ describe("installed plugin index persistence", () => {
   it("preserves newer shared-state schema errors while reading the index", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
@@ -733,7 +733,7 @@ describe("installed plugin index persistence", () => {
     });
   });
 
-  it("leaves retired JSON index files to the doctor migration owner", async () => {
+  it("does not read retired JSON index files", async () => {
     const stateDir = makeTempDir();
     const filePath = path.join(stateDir, "installs.json");
     fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");

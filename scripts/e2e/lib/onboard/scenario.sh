@@ -249,17 +249,43 @@ send_skills_flow() {
   send "" 2.0
 }
 
+wait_for_model_auth_prompt() {
+  local timeout_s="${1:-45}"
+  local started_s="$SECONDS"
+  while true; do
+    if log_contains "Use Current model?"; then
+      printf '%s\n' "configured-model"
+      return 0
+    fi
+    if log_contains "Model/auth provider"; then
+      printf '%s\n' "provider-picker"
+      return 0
+    fi
+    if ((SECONDS - started_s >= timeout_s)); then
+      echo "Timeout waiting for model/auth prompt" >&2
+      if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
+        tail -n 140 "$WIZARD_LOG_PATH" >&2 || true
+      fi
+      return 1
+    fi
+    sleep 0.2
+  done
+}
+
 send_guided_skip_ui_flow() {
+  local model_auth_prompt
   wait_for_log "Help make OpenClaw better?" 120 || return $?
   send $'\r' 0.8
   wait_for_first_agent_prompt log_contains 120 0.8 || return $?
   send $'\r' 0.8
   wait_for_log "How should I set things up?" 120 || return $?
   send $'\r' 0.8
-  wait_for_log "Model/auth provider" 120 || return $?
+  model_auth_prompt="$(wait_for_model_auth_prompt 120)" || return $?
   send $'\r' 0.8
-  wait_for_log "Use which detected AI?" 120 || return $?
-  send $'\r' 0.8
+  if [ "$model_auth_prompt" = "provider-picker" ]; then
+    wait_for_log "Use which detected AI?" 120 || return $?
+    send $'\r' 0.8
+  fi
 }
 
 validate_guided_skip_ui_log() {

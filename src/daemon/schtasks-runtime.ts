@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -19,6 +20,7 @@ import { formatLine } from "./output.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
   readScheduledTaskCommand,
+  readStartupEntryCommand,
   resolveStartupEntryPaths,
   resolveTaskName,
   resolveTaskScriptPath,
@@ -53,6 +55,8 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
+  GatewayServiceState,
+  ReadGatewayServiceStateArgs,
 } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -257,6 +261,65 @@ export async function launchFallbackTaskScript(
     },
   });
   child.unref();
+}
+
+/** Inspect an exact login item without borrowing a same-name Scheduled Task's state. */
+export async function readStartupEntryState(
+  startupEntryPath: string,
+  args: ReadGatewayServiceStateArgs,
+): Promise<GatewayServiceState> {
+  const deadline = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
+  const capture = async () => {
+    const contents: string[] = [];
+    const command = await readStartupEntryCommand(startupEntryPath, {
+      deadline,
+      onLauncherContent: (content) => contents.push(content),
+    });
+    return { command, contents };
+  };
+  let command: GatewayServiceCommandConfig | null = null;
+  let env = args.env ?? process.env;
+  try {
+    const captured = await capture();
+    command = captured.command;
+    env = mergeGatewayServiceEnv(env, command);
+    args.validateEnvBeforeStatusRead?.(env);
+    let runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
+      (error: unknown) => createServiceRuntimeInspectionFailure(error, args.timeoutMs),
+    );
+    if (!isDeepStrictEqual(await capture(), captured)) {
+      throw new Error("Startup launcher changed during runtime inspection.");
+    }
+    if (deadline !== undefined && performance.now() >= deadline) {
+      runtime = createServiceRuntimeInspectionFailure(
+        "Startup runtime inspection timed out.",
+        args.timeoutMs,
+      );
+    }
+    return {
+      installed: true,
+      loadState: { status: "loaded" },
+      running: runtime.status === "running",
+      env,
+      command,
+      runtime,
+      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
+    };
+  } catch (error) {
+    if (!(error instanceof ScheduledTaskInspectionError) || error.timeoutMs === undefined) {
+      throw error;
+    }
+    const runtime = createServiceRuntimeInspectionFailure(error, args.timeoutMs);
+    return {
+      installed: command !== null,
+      loadState: { status: "unknown", detail: runtime.inspectionFailure.detail },
+      running: false,
+      env,
+      command,
+      runtime,
+      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
+    };
+  }
 }
 
 export async function resolveFallbackRuntime(

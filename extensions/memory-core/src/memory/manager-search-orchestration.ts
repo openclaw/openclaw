@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -20,7 +20,7 @@ import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
-import { projectHybridCandidates } from "./manager-hybrid-candidates.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -31,13 +31,13 @@ import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { searchVector } from "./manager-search-vector.js";
+import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
 import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
@@ -183,7 +183,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           if (err instanceof WorkerTaskError && err.code === "overloaded") {
             throw err;
           }
-          if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
+          if (
+            this.providerRequirement.mode === "optional" &&
+            isMemoryEmbeddingOperationError(err)
+          ) {
             const failedProvider = this.provider?.id ?? this.settings.provider;
             await this.retireCurrentProvider().catch((retireErr: unknown) => {
               const message = redactSensitiveText(formatErrorMessage(retireErr), {
@@ -450,7 +453,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           normalizedQuery,
           opts?.signal,
           semanticProvider,
-          false,
           semanticProviderRuntime,
           opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
         );
@@ -473,7 +475,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           opts?.onPartialResults?.(null);
           this.markLocalEmbeddingProviderDegraded(err);
           const message = formatErrorMessage(err);
-          const activatedFallback = this.shouldFallbackOnError(err)
+          const activatedFallback = isMemoryEmbeddingOperationError(err)
             ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
                 log.warn(
                   `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
@@ -574,8 +576,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           .slice(0, maxResults);
       }
 
+      const matchExactPath = prepareExactPathMatcher(normalizedQuery);
       const merged = await mergeHybridResults({
-        ...projectHybridCandidates(normalizedQuery, vectorResults, keywordResults),
+        vector: vectorResults.map((entry) => ({
+          ...entry,
+          vectorScore: entry.score,
+          exactPathSpecificity: matchExactPath(entry.path),
+        })),
+        keyword: keywordResults.map((entry) => ({ ...entry, rankingScore: entry.score })),
         vectorWeight: hybrid.vectorWeight,
         textWeight: hybrid.textWeight,
         isNonTextMediaPath: (path) =>

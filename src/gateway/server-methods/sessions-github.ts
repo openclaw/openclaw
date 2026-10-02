@@ -10,18 +10,25 @@ import {
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { OpenClawStateLeaseAcquisitionError } from "../../state/openclaw-state-lease-error.js";
-import { prepareCurrentGitHubPublicationOptionsIdentity } from "../github-publication-availability.js";
+import { prepareControlUiSessionPrRead } from "../control-ui-session-pr-read.js";
+import {
+  prepareCurrentGitHubPublicationOptionsIdentity,
+  hasSupportedGitHubPublicationTarget,
+  type PublicationSessionIdentity,
+} from "../github-publication-availability.js";
 import { GitHubPublicationKnownFailure } from "../github-publication-failure.js";
+import { isGitHubPublicationSuperseded } from "../github-publication-relevance.js";
 import { captureGitHubPublicationRequester } from "../github-publication-requester.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
-import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.js";
+import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.kernel.js";
 import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionAction,
 } from "./github-personal-authorization.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 
 type SessionGitHubMethod = Extract<keyof GatewayCoreRequestParams, `sessions.github.${string}`>;
@@ -84,6 +91,47 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       );
     }
   });
+}
+
+async function isSessionPublicationSuperseded(
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context">,
+  session: PublicationSessionIdentity,
+  snapshot: Parameters<typeof isGitHubPublicationSuperseded>[0],
+  assertCurrent: () => void,
+): Promise<boolean> {
+  const { client, context } = options;
+  const prOwner = context.controlUiSessionPullRequests;
+  if (!client || !prOwner) {
+    return false;
+  }
+  const readTarget = await prepareControlUiSessionPrRead({
+    client,
+    sessionKey: session.sessionKey,
+    agentId: session.agentId,
+    getRuntimeConfig: context.getRuntimeConfig,
+    getSessionRowProjection: () => getSessionRowProjection(context),
+    isCurrentClient: () => {
+      assertCurrent();
+      return true;
+    },
+  });
+  assertCurrent();
+  const target = await readTarget?.();
+  assertCurrent();
+  if (!target) {
+    return false;
+  }
+  const assertReadCurrent = () => {
+    assertCurrent();
+    target.assertCurrent?.();
+  };
+  const published = await prOwner.read(target, assertReadCurrent, "publication");
+  assertReadCurrent();
+  return published.status === "ready" && !published.rateLimited
+    ? isGitHubPublicationSuperseded(snapshot, published.pullRequests, {
+        assertCurrent: assertReadCurrent,
+      })
+    : false;
 }
 
 export const sessionsGitHubHandlers: GatewayRequestHandlers = {
@@ -167,7 +215,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
     "sessions.github.options",
     validateSessionGitHubOptionsParams,
     async (options) => {
-      const read = prepareGitHubPublicationOptionsRead(options, options.params);
+      const read = await prepareGitHubPublicationOptionsRead(options, options.params);
       const coordinator = options.context.githubPublicationService;
       if (!coordinator) {
         options.respond(
@@ -191,6 +239,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       } catch {
         /* An unavailable shared account must not hide the caller's personal option. */
       }
+      read.currentSession();
       const service = options.context.githubOAuthService?.personal;
       if (read.personal.kind === "eligible" && !service) {
         throw new Error("GitHub connections are unavailable; retry after Gateway startup.");
@@ -198,21 +247,36 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const action = read.personal.kind === "eligible" ? read.personal.action : null;
       let personal = action ? await service!.status(action) : null;
       const session = read.currentSession();
+      const assertResponseCurrent = () => read.assertSessionUnchanged(session);
       const pendingPersonal = action ? await coordinator.personalPending(action, session) : null;
-      read.currentSession();
+      assertResponseCurrent();
       if (action && personal) {
         personal = service!.revalidateStatus(action, personal);
       }
-      const latestShared = coordinator.latestShared(session, options.params.idempotencyKey);
-      read.currentSession();
+      const latestShared = await coordinator.latestShared(
+        session,
+        options.params.idempotencyKey,
+        (snapshot) =>
+          isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
+      );
+      assertResponseCurrent();
+      if (action && personal) {
+        personal = service!.revalidateStatus(action, personal);
+      }
+      if (shared && read.sessionScoped) {
+        if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
+          shared = null;
+        }
+        assertResponseCurrent();
+      }
       options.respond(true, { personal, shared, pendingPersonal, latestShared });
     },
   ),
   "sessions.github.status": defineSessionGitHubMethod(
     "sessions.github.status",
     validateSessionGitHubStatusParams,
-    (options) => {
-      const read = prepareGitHubPublicationOptionsRead(options, options.params);
+    async (options) => {
+      const read = await prepareGitHubPublicationOptionsRead(options, options.params);
       const service = options.context.githubPublicationService;
       if (!service) {
         options.respond(
@@ -225,10 +289,14 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      const prepared =
+        read.personal.kind === "eligible"
+          ? await service.preparePersonalStatus(options.params.requestId)
+          : undefined;
       const session = read.currentSession();
-      const shared = service.sharedStatus(session, options.params.requestId);
+      const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
-        read.currentSession();
+        read.assertSessionUnchanged(session);
         options.respond(true, shared);
         return;
       }
@@ -239,8 +307,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         read.personal.action,
         session,
         options.params.requestId,
+        prepared,
       );
-      read.currentSession();
+      read.assertSessionUnchanged(session);
       options.respond(true, result);
     },
   ),

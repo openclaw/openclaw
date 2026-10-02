@@ -1,27 +1,18 @@
-import type { Bot, Context } from "grammy";
+import type { Context } from "grammy";
 import {
   findCommandByNativeName,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type {
-  ChannelGroupPolicy,
-  OpenClawConfig,
-  TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type {
-  TelegramNativeCommandCallbackDispatcher,
-  TelegramResolvedGroupConfig,
-} from "./bot-handlers.types.js";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramNativeCommandCallbackDispatcher } from "./bot-handlers.types.js";
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
-import {
-  defaultTelegramNativeCommandDeps,
-  type TelegramNativeCommandDeps,
-} from "./bot-native-command-deps.runtime.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
+import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -29,7 +20,6 @@ import {
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
-import type { TelegramBotOptions } from "./bot.types.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -45,33 +35,15 @@ const loadTelegramPluginCommandExecutor = createLazyRuntimeModule(
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
-type RegisterTelegramNativeCommandsParams = {
-  bot: Bot;
+type RegisterTelegramNativeCommandsParams = Omit<
+  TelegramCommandExecutorParams,
+  "botUser" | "msg" | "rawText"
+> & {
   cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  accountId: string;
   telegramCfg: TelegramAccountConfig;
-  mediaMaxBytes?: number;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
-  resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
-  telegramDeps?: TelegramNativeCommandDeps;
-  opts: Pick<
-    TelegramBotOptions,
-    | "token"
-    | "ownerAgentId"
-    | "botInfo"
-    | "allowFrom"
-    | "groupAllowFrom"
-    | "replyToMode"
-    | "accountAbortSignal"
-  >;
 };
 
 export const registerTelegramNativeCommands = ({

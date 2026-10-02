@@ -359,6 +359,8 @@ describe("check-cli-bootstrap-imports", () => {
       "#!/usr/bin/env node",
       "export { available };",
       'import fs from "node:fs";',
+      'import { createRequire } from "node:module";',
+      'if (process.versions.bun) createRequire(import.meta.url)("bun:ffi");',
       "const available = Boolean(fs);",
       `const text = ${JSON.stringify('require("string-only")')};`,
       String.raw`const expression = /require\("regex-only"\)/;`,
@@ -511,6 +513,30 @@ describe("check-cli-bootstrap-imports", () => {
     ).toEqual(["Worker deploy artifact directory dist/worker is unreadable."]);
   });
 
+  it("validates every split worker chunk and rejects missing or external dependencies", () => {
+    const root = makeTempRoot();
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(root, `dist/worker/${artifact}`, "export {};\n");
+    }
+    writeFixture(root, "dist/worker/worker.mjs", 'import "./worker-chunk-start.mjs";');
+    writeFixture(
+      root,
+      "dist/worker/worker-chunk-start.mjs",
+      'export const load = () => import("./worker-chunk-lazy.mjs");',
+    );
+    writeFixture(root, "dist/worker/worker-chunk-lazy.mjs", 'import "node:fs";');
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+
+    writeFixture(root, "dist/worker/worker-chunk-lazy.mjs", 'import "unbundled";');
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/worker-chunk-lazy.mjs retains runtime import "unbundled" instead of bundling it.',
+    ]);
+    rmSync(join(root, "dist/worker/worker-chunk-lazy.mjs"));
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      'Worker deploy artifact dist/worker/worker-chunk-start.mjs retains runtime import "./worker-chunk-lazy.mjs" instead of bundling it.',
+    ]);
+  });
+
   it("rejects worker package imports and dependency manifests", () => {
     const root = makeTempRoot();
     for (const artifact of workerDeployArtifactNames) {
@@ -521,6 +547,8 @@ describe("check-cli-bootstrap-imports", () => {
       "dist/worker/worker.mjs",
       [
         'import "left-pad";',
+        'require("koffi");',
+        'require("bun:ffi-extra");',
         'await import("./lazy.mjs");',
         '__require("json5");',
         '__require2("numbered");',
@@ -553,15 +581,16 @@ describe("check-cli-bootstrap-imports", () => {
     expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
       'Worker deploy artifact dist/worker/github-exec-launcher.mjs retains runtime import "yaml" instead of bundling it.',
       'Worker deploy artifact dist/worker/service-child-group-anchor.mjs retains runtime import "signal-exit" instead of bundling it.',
-      'Worker deploy artifact dist/worker/service-child-relay.mjs retains runtime import "./service-child-group-anchor.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "bun:ffi-extra" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "escaped" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-all" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-named" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "final-external" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "json5" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "koffi" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "left-pad" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "nested" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "numbered" instead of bundling it.',

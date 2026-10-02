@@ -18,8 +18,9 @@ import {
 } from "./tunnel-contract.js";
 import { failHandedOffTurn } from "./worker-turn-failure.js";
 import {
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
   ENVIRONMENT_ID,
-  MANIFEST_REF,
   OWNER_EPOCH,
   SESSION_ID,
   SESSION_KEY,
@@ -27,7 +28,6 @@ import {
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
-  measureLaunchTurn,
   hasLoneSurrogate,
   openSessionManager,
   placements,
@@ -60,29 +60,26 @@ describe("worker turn launcher failure recovery", () => {
       get: () => environment,
       acquireTurnCredential: async () => credential(),
       acknowledgeCredentialDelivery: async () => true,
-      startTunnel: async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace: vi.fn(),
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
-        measureLaunchTurn,
-        launchTurn: async (request) => {
-          request.onDispatchReady?.();
-          launchStarted.resolve();
-          await finishLaunch.promise;
-          return {
-            stdout: "",
-            stderr: "worker admission deadline exceeded",
-            code: 1,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
-        },
-      }),
+      startTunnel: async () =>
+        createWorkerTurnTunnel({
+          quiesceWorkspace: vi.fn(),
+          syncWorkspace: vi.fn(),
+          reconcileWorkspace: vi.fn(),
+          stop: vi.fn(),
+          launchTurn: async (request) => {
+            request.onDispatchReady?.();
+            launchStarted.resolve();
+            await finishLaunch.promise;
+            return {
+              stdout: "",
+              stderr: "worker admission deadline exceeded",
+              code: 1,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            };
+          },
+        }),
       stopTunnel: async () => {
         teardownStarted.resolve();
         await finishTeardown.promise;
@@ -347,8 +344,8 @@ describe("worker turn launcher failure recovery", () => {
 
   it("fails impossible replay before handoff and keeps the active placement reusable", async () => {
     await seedActivePlacement();
-    const manager = openSessionManager();
-    manager.appendMessage(
+    const manager = await openSessionManager();
+    await manager.appendMessageAsync(
       makeAgentAssistantMessage({
         content: [{ type: "toolCall", id: "call-replay", name: "read", arguments: {} }],
         model: "gpt-test",
@@ -365,7 +362,7 @@ describe("worker turn launcher failure recovery", () => {
         timestamp: 1,
       }),
     );
-    manager.appendMessage({
+    await manager.appendMessageAsync({
       role: "toolResult",
       toolCallId: "call-replay",
       toolName: "read",
@@ -378,17 +375,14 @@ describe("worker turn launcher failure recovery", () => {
       throw new Error("unexpected worker handoff");
     });
     const acknowledgeCredentialDelivery = vi.fn(async () => true);
-    const startTunnel = vi.fn(async (): Promise<WorkerTunnelHandle> => ({
-      environmentId: ENVIRONMENT_ID,
-      ownerEpoch: OWNER_EPOCH,
-      quiesceWorkspace: vi.fn(),
-      runWorkspaceCommand: vi.fn(),
-      measureLaunchTurn,
-      launchTurn,
-      syncWorkspace: vi.fn(),
-      reconcileWorkspace: vi.fn(),
-      stop: vi.fn(async () => {}),
-    }));
+    const startTunnel = vi.fn(async (): Promise<WorkerTunnelHandle> =>
+      createWorkerTurnTunnel({
+        quiesceWorkspace: vi.fn(),
+        launchTurn,
+        syncWorkspace: vi.fn(),
+        reconcileWorkspace: vi.fn(),
+      }),
+    );
     const stopTunnel = vi.fn(async () => {});
     const destroy = vi.fn(async () => attachedEnvironment());
     const environments: WorkerTurnEnvironmentService = {
@@ -437,7 +431,7 @@ describe("worker turn launcher failure recovery", () => {
       placementGeneration: active.generation,
     };
     const basePack = Buffer.from("conflicted journal snapshot");
-    placements.beginWorkspaceReconciliation(owner, {
+    await placements.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "e".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -501,7 +495,7 @@ describe("worker turn launcher failure recovery", () => {
     await expect(attempt).rejects.toThrow("workspace recovery could not complete");
 
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-    expect(placements.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await placements.listWorkspaceReconciliationOwners()).toEqual([owner]);
     expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
     expect(environments.destroy).not.toHaveBeenCalled();
   });
@@ -529,38 +523,17 @@ describe("worker turn launcher failure recovery", () => {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery,
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn: vi.fn(async (request) => {
-          if (dispatched) {
-            request.onDispatchReady?.();
-          }
-          throw error;
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn: vi.fn(async (request) => {
+            if (dispatched) {
+              request.onDispatchReady?.();
+            }
+            throw error;
+          }),
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         }),
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
-        }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel,
       destroy,
     };
@@ -606,33 +579,27 @@ describe("worker turn launcher failure recovery", () => {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
-          request.onDispatchReady?.();
-          return {
-            stdout: "",
-            stderr,
-            code: 1,
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
+            request.onDispatchReady?.();
+            return {
+              stdout: "",
+              stderr,
+              code: 1,
+              signal: null,
+              killed: false,
+              termination: "exit",
+            };
+          }),
+          quiesceWorkspace: vi.fn(async () => {
+            throw new Error("unexpected workspace quiescence");
+          }),
+          reconcileWorkspace: vi.fn(async () => {
+            throw new Error("unexpected workspace reconciliation");
+          }),
         }),
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
-        }),
-        quiesceWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace quiescence");
-        }),
-        reconcileWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace reconciliation");
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel,
       destroy,
     };

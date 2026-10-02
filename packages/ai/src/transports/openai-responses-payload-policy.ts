@@ -67,15 +67,7 @@ function resolveUrlHostname(value: unknown): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  try {
-    return new URL(trimmed).hostname.toLowerCase();
-  } catch {
-    try {
-      return new URL(`https://${trimmed}`).hostname.toLowerCase();
-    } catch {
-      return undefined;
-    }
-  }
+  return (URL.parse(trimmed) ?? URL.parse(`https://${trimmed}`))?.hostname.toLowerCase();
 }
 
 function resolveOpenAIResponsesEndpointClass(baseUrl: unknown): OpenAIResponsesEndpointClass {
@@ -173,13 +165,10 @@ function resolveOpenAIResponsesPayloadCapabilities(
   return {
     allowsOpenAIServiceTier:
       (provider === "openai" &&
-        (api === "openai-responses" || api === "openclaw-openai-responses-transport") &&
-        endpointClass === "openai-public") ||
+        (api === "openai-responses" || api === "openclaw-openai-responses-transport")) ||
       (isOpenAIProvider &&
         (api === "openai-chatgpt-responses" ||
-          api === "openclaw-openai-chatgpt-responses-transport" ||
-          api === "openai-responses" ||
-          api === "openclaw-openai-responses-transport") &&
+          api === "openclaw-openai-chatgpt-responses-transport") &&
         endpointClass === "openai"),
     allowsResponsesStore:
       supportsResponsesStoreField &&

@@ -6,6 +6,7 @@ mod desktop_node;
 mod desktop_node_process;
 mod discovery;
 mod gateway;
+mod gateway_control_auth;
 mod gateway_device_identity;
 mod gateway_operation_queue;
 mod gateway_profiles;
@@ -68,6 +69,7 @@ pub(crate) fn native_auth_initialization_script(
     dashboard: &Url,
     gateway: &Url,
     request: &RemoteGatewayRequest,
+    native_session: bool,
 ) -> Result<String, String> {
     if request.transport == "direct" && request.tls_fingerprint.is_some() {
         return Err(
@@ -75,6 +77,9 @@ pub(crate) fn native_auth_initialization_script(
              Connect using Remote over SSH instead."
                 .to_string(),
         );
+    }
+    if native_session {
+        return gateway_control_auth::initialization_script(dashboard, gateway);
     }
     let path = dashboard.path().trim_end_matches('/');
     let origin = serde_json::to_string(&dashboard.origin().ascii_serialization())
@@ -259,7 +264,8 @@ mod native_browser_tests {
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
         let initialization_script =
-            native_auth_initialization_script(&dashboard, &gateway, &request).expect("auth script");
+            native_auth_initialization_script(&dashboard, &gateway, &request, false)
+                .expect("auth script");
         assert!(!dashboard.as_str().contains("fixture-password"));
         assert!(!gateway.as_str().contains("fixture-password"));
 
@@ -294,6 +300,41 @@ mod native_browser_tests {
     }
 
     #[test]
+    fn native_primary_dashboard_keeps_bootstrap_credentials_out_of_the_document() {
+        let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
+            "transport": "direct", "url": "https://gateway.example.com/control",
+            "token": "fixture-shared-secret", "password": "fixture-password",
+        }))
+        .unwrap();
+        let script = native_auth_initialization_script(
+            &Url::parse("https://gateway.example.com/control").unwrap(),
+            &Url::parse("wss://gateway.example.com/control").unwrap(),
+            &request,
+            true,
+        )
+        .unwrap();
+        let runner = r#"
+            const window = {addEventListener() {}, __TAURI_INTERNALS__: {invoke() {}}};
+            window.top = window;
+            new Function('window', 'location', process.argv[1])(window, {origin: 'https://gateway.example.com', pathname: '/control/chat'});
+            const auth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+            if (!auth?.nativeConnectAuth || auth.gatewayUrl !== 'wss://gateway.example.com/control' || 'token' in auth || 'password' in auth) {
+              throw new Error('Primary must use native challenge authentication, not bootstrap credentials');
+            }
+            if (typeof window.OpenClawNativeGatewayAuth?.postMessage !== 'function') throw new Error('native challenge bridge missing');
+        "#;
+        let result = Command::new("node")
+            .args(["-e", runner, &script])
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[test]
     fn pinned_remote_gateway_never_receives_credentials_through_an_unpinned_webview() {
         let request: RemoteGatewayRequest = serde_json::from_value(serde_json::json!({
             "transport": "direct",
@@ -304,7 +345,7 @@ mod native_browser_tests {
         .expect("pinned remote request");
         let dashboard = Url::parse("https://gateway.example.com/openclaw").expect("dashboard");
         let gateway = Url::parse("wss://gateway.example.com/openclaw").expect("Gateway");
-        let result = native_auth_initialization_script(&dashboard, &gateway, &request);
+        let result = native_auth_initialization_script(&dashboard, &gateway, &request, false);
 
         assert!(
             result.is_err(),
@@ -323,8 +364,13 @@ mod native_browser_tests {
         let tunneled_dashboard = Url::parse("http://127.0.0.1:18789").expect("tunneled dashboard");
         let tunneled_gateway = Url::parse("ws://127.0.0.1:18789").expect("tunneled Gateway");
         assert!(
-            native_auth_initialization_script(&tunneled_dashboard, &tunneled_gateway, &tunneled)
-                .is_ok(),
+            native_auth_initialization_script(
+                &tunneled_dashboard,
+                &tunneled_gateway,
+                &tunneled,
+                false
+            )
+            .is_ok(),
             "host-key-verified SSH tunneling must remain available"
         );
     }
@@ -709,7 +755,13 @@ impl DesktopState {
                 })
             })
             .and_then(|request| {
-                self.connect_remote_locked(app, request, RemoteConnectionSource::Saved, selection)
+                self.connect_remote_guarded(
+                    app,
+                    request,
+                    RemoteConnectionSource::Saved,
+                    selection,
+                    None,
+                )
             });
         match result {
             Ok(snapshot) => Ok(snapshot),
@@ -730,11 +782,12 @@ impl DesktopState {
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
         if !explicit_local {
             if let Some(remote) = remote_gateway::load_saved_remote()? {
-                return self.connect_remote_locked(
+                return self.connect_remote_guarded(
                     app,
                     remote,
                     RemoteConnectionSource::Saved,
                     selection,
+                    None,
                 );
             }
             self.on_main(app, move |state, app| {
@@ -926,22 +979,17 @@ impl DesktopState {
             .operation
             .lock()
             .map_err(|_| "Gateway operation lock is unavailable.".to_string())?;
-        let result =
-            self.connect_remote_locked(app, request, RemoteConnectionSource::Submitted, selection);
+        let result = self.connect_remote_guarded(
+            app,
+            request,
+            RemoteConnectionSource::Submitted,
+            selection,
+            None,
+        );
         if let Err(error) = &result {
             let _ = self.remote_failure(app, error.clone(), selection, None);
         }
         result
-    }
-
-    fn connect_remote_locked(
-        &self,
-        app: &AppHandle,
-        request: RemoteGatewayRequest,
-        source: RemoteConnectionSource,
-        selection: u64,
-    ) -> Result<GatewaySnapshot, String> {
-        self.connect_remote_guarded(app, request, source, selection, None)
     }
 
     fn promote_profile(
@@ -1035,7 +1083,7 @@ impl DesktopState {
             )?;
         }
         let target = remote_gateway::dashboard_url(&gateway_url)?;
-        let script = native_auth_initialization_script(&target, &gateway_url, &request)?;
+        let script = native_auth_initialization_script(&target, &gateway_url, &request, true)?;
         let pending = Arc::new(Mutex::new(tunnel));
         let commit_pending = Arc::clone(&pending);
         let result = self.on_main(app, move |state, app| {
@@ -1113,15 +1161,46 @@ impl DesktopState {
         navigation: &mut NavigationState,
         returning_from_settings: bool,
     ) -> Result<(), String> {
-        if !app
+        let selection = app
             .state::<gateway_windows::GatewayWindows>()
             .primary_selected(
                 app,
                 &dashboard,
-                Some(script.clone()),
+                Some(script),
                 gateway_ws::GatewayOwnership::Remote,
-            )?
-        {
+            )?;
+        let generation = navigation.watch_generation;
+        let installed = selection.install(|auth_script| {
+            let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
+            let bridge_script = bridge
+                .select(app, &dashboard, true)?
+                .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
+            match replace_main_webview(
+                app,
+                dashboard.clone(),
+                Some(format!(
+                    "{}\n{bridge_script}",
+                    auth_script.unwrap_or_default()
+                )),
+                Some(generation),
+            ) {
+                Ok(_) => Ok(()),
+                Err(_) => {
+                    navigation.cancel_watchdog();
+                    bridge.clear(app);
+                    let mut local = self.inner.local_url.clone();
+                    local
+                        .query_pairs_mut()
+                        .append_pair("mode", "connectionSettings");
+                    let _ = replace_main_webview(app, local, None, None);
+                    Err(
+                        "Could not open the remote Gateway dashboard. Try connecting again."
+                            .to_string(),
+                    )
+                }
+            }
+        })?;
+        if !installed {
             if returning_from_settings
                 && main_window(app)
                     .ok()
@@ -1132,32 +1211,6 @@ impl DesktopState {
             }
             return Ok(());
         }
-        let generation = navigation.watch_generation;
-        let bridge = app.state::<native_browser_bridge::NativeBrowserBridgeState>();
-        let bridge_script = bridge
-            .select(app, &dashboard, true)?
-            .ok_or_else(|| "Could not prepare the native browser.".to_string())?;
-        match replace_main_webview(
-            app,
-            dashboard.clone(),
-            Some(format!("{script}\n{bridge_script}")),
-            Some(generation),
-        ) {
-            Ok(_) => {}
-            Err(_) => {
-                navigation.cancel_watchdog();
-                bridge.clear(app);
-                let mut local = self.inner.local_url.clone();
-                local
-                    .query_pairs_mut()
-                    .append_pair("mode", "connectionSettings");
-                let _ = replace_main_webview(app, local, None, None);
-                return Err(
-                    "Could not open the remote Gateway dashboard. Try connecting again."
-                        .to_string(),
-                );
-            }
-        };
         #[cfg(target_os = "linux")]
         {
             if !self.is_quitting()
@@ -1336,7 +1389,8 @@ impl DesktopState {
         session_key: &str,
         agent_id: &str,
     ) -> Result<(), String> {
-        // Match connection publication's NAV -> Gateway config lock order.
+        // Keep NAV -> route-publication ordering. Native navigation callbacks
+        // may read authentication without recursively locking Gateway config.
         // This entry is already on the native thread; do not nest on_main.
         let monitor = {
             let mut navigation = self.inner.navigation.lock().expect("navigation");
@@ -1735,7 +1789,10 @@ impl DesktopState {
         let windows = app.state::<gateway_windows::GatewayWindows>();
         let base = Url::parse(target).map_err(|_| "Dashboard returned an invalid URL.")?;
         if dashboard {
-            if !windows.primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)? {
+            if !windows
+                .primary_selected(app, &base, None, gateway_ws::GatewayOwnership::Local)?
+                .follows_primary()
+            {
                 return Ok(());
             }
         } else if !windows.main_is_primary(app) {

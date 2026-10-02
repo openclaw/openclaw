@@ -101,10 +101,8 @@ export type TelegramDispatchTurnConfig = Omit<
   /** Resolved once per turn by the rich-messages owner; never re-read from telegramCfg. */
   richMessages: boolean;
   statusReactionController: TelegramMessageContext["statusReactionController"];
-  tableMode: Parameters<
-    NonNullable<import("./bot-deps.js").TelegramBotDeps["deliverReplies"]>
-  >[0]["tableMode"];
-  telegramDeps: import("./bot-deps.js").TelegramBotDeps;
+  tableMode: Parameters<NonNullable<TelegramBotDeps["deliverReplies"]>>[0]["tableMode"];
+  telegramDeps: TelegramBotDeps;
 };
 
 export type TelegramDraftPartialTextUpdate = {

@@ -102,6 +102,9 @@ export async function readChatHistoryPage(
     },
     signal,
   );
+  if (page.encodedResponse) {
+    return page;
+  }
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
   return {
     ...page,

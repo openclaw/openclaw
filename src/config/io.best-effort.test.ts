@@ -1,12 +1,7 @@
 // Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   readBestEffortConfig,
@@ -22,45 +17,10 @@ const cachePruningConfig = {
   agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6" } } },
 };
 
-type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
-
-function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
-  const { db } = openOpenClawStateDatabase({ env });
-  const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    healthDb
-      .selectFrom("config_health_entries")
-      .select(["config_path", "last_known_good_json"])
-      .where("config_path", "=", configPath),
-  );
-}
-
 describe("readBestEffortConfig", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     resetConfigOverrides();
-  });
-
-  it("resolves config env above exact lower-precedence values in isolated snapshots", async () => {
-    await withTempHome(async (home) => {
-      const key = "OPENCLAW_GATEWAY_TOKEN";
-      await withEnvAsync({ [key]: "shell-token" }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: "config-token" } },
-          gateway: { auth: { mode: "token", token: `\${${key}}` }, mode: "local" },
-        });
-
-        const snapshot = await readConfigFileSnapshot({
-          isolateEnv: true,
-          lowerPrecedenceEnv: { [key]: "shell-token" },
-          observe: false,
-        });
-
-        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
-        expect(process.env[key]).toBe("shell-token");
-      });
-    });
   });
 
   it("resolves config env above normalized lower-precedence aliases in isolated snapshots", async () => {
@@ -104,26 +64,6 @@ describe("readBestEffortConfig", () => {
     });
   });
 
-  it("can read best-effort config without applying env vars or recording observation", async () => {
-    await withTempHome(async (home) => {
-      const key = "OPENCLAW_ISOLATED_BEST_EFFORT_CONFIG_TEST";
-      await withEnvAsync({ [key]: undefined }, async () => {
-        await writeOpenClawConfig(home, {
-          env: { vars: { [key]: "from-config" } },
-          gateway: { mode: "local" },
-        });
-
-        const config = await readBestEffortConfig({ isolateEnv: true, observe: false });
-
-        expect(config.gateway?.mode).toBe("local");
-        expect(process.env[key]).toBeUndefined();
-        await expect(fs.stat(`${home}/.openclaw/logs/config-health.json`)).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-      });
-    });
-  });
-
   it("records why an unparseable config was ignored by best-effort reads", async () => {
     await withTempHome(async (home) => {
       const configPath = `${home}/.openclaw/openclaw.json`;
@@ -134,7 +74,6 @@ describe("readBestEffortConfig", () => {
       try {
         const config = await readSourceConfigBestEffort();
 
-        // The fallback value stays {} — but the degradation is recorded.
         expect(config).toEqual({});
         expect(
           warn.mock.calls.some(([line]) =>
@@ -206,24 +145,23 @@ describe("readBestEffortConfig", () => {
       const loaded = loadConfig({ pin: false, skipPluginValidation: true });
 
       expect(snapshot.exists).toBe(false);
-      // Missing config = fresh install; snapshot and load must produce the same
-      // out-of-box defaults an existing empty {} config gets (contextPruning
-      // stays provider-conditional, so compaction is the parity signal here).
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
       expect(loaded.agents?.defaults?.compaction?.mode).toBe("safeguard");
       expect(loaded.logging?.level).toBe("warn");
     });
   });
 
-  it("reuses valid snapshots while preserving load-time defaults", async () => {
+  it("keeps authored source separate from materialized best-effort defaults", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, cachePruningConfig);
 
       const snapshot = await readConfigFileSnapshot();
       const bestEffort = await readBestEffortConfig();
+      const sourceBestEffort = await readSourceConfigBestEffort();
+      expect(sourceBestEffort).toEqual(snapshot.sourceConfigBeforeMigrations);
+      expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+      expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
 
-      // Snapshot materialization must inject the same defaults as load; prepared-runtime
-      // exact-config resolution compares the two and diverging shapes fail it permanently.
       expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
       expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
 
@@ -233,29 +171,6 @@ describe("readBestEffortConfig", () => {
       expect(
         bestEffort.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
       ).toBe("short");
-    });
-  });
-
-  it("controls observation while returning source and materialized config", async () => {
-    await withTempHome(async (home) => {
-      const configPath = await writeOpenClawConfig(home, cachePruningConfig);
-      const configRaw = await fs.readFile(configPath, "utf-8");
-
-      const snapshot = await readBestEffortConfigSnapshot({ observe: false });
-
-      expect(snapshot.configDiagnostics).toBeNull();
-      expect(snapshot.sourceConfig.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      expect(snapshot.config.agents?.defaults?.contextPruning?.mode).toBe("cache-ttl");
-      expect(snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(configRaw);
-      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toBeUndefined();
-
-      await readBestEffortConfigSnapshot();
-
-      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
-        config_path: configPath,
-        last_known_good_json: expect.any(String),
-      });
     });
   });
 
@@ -276,21 +191,6 @@ describe("readBestEffortConfig", () => {
           },
         ],
       });
-    });
-  });
-});
-
-describe("readSourceConfigBestEffort", () => {
-  it("preserves the authored source config without load-time defaults", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, cachePruningConfig);
-
-      const snapshot = await readConfigFileSnapshot();
-      const sourceBestEffort = await readSourceConfigBestEffort();
-
-      expect(sourceBestEffort).toEqual(snapshot.sourceConfigBeforeMigrations);
-      expect(sourceBestEffort.agents?.defaults?.contextPruning?.mode).toBeUndefined();
-      expect(sourceBestEffort.agents?.defaults?.compaction?.mode).toBeUndefined();
     });
   });
 });

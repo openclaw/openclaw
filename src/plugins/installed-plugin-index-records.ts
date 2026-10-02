@@ -1,11 +1,10 @@
 /** Builds and compares installed plugin index records for refresh decisions. */
 import {
   createPluginInstallRecordMap,
-  setPluginInstallRecordMapEntry,
+  copyPluginInstallRecordMap,
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import "./installed-plugin-index-record-reader.js";
 import {
   refreshPersistedInstalledPluginIndexWithLeaseSync,
   type InstalledPluginIndexWriteLease,
@@ -101,11 +100,7 @@ export function removePluginInstallRecordFromRecords(
   records: Record<string, PluginInstallRecord>,
   pluginId: string,
 ): Record<string, PluginInstallRecord> {
-  const remaining = createPluginInstallRecordMap<PluginInstallRecord>();
-  for (const [candidateId, record] of Object.entries(records)) {
-    if (candidateId !== pluginId) {
-      setPluginInstallRecordMapEntry(remaining, candidateId, record);
-    }
-  }
+  const remaining = copyPluginInstallRecordMap(records);
+  delete remaining[pluginId];
   return remaining;
 }

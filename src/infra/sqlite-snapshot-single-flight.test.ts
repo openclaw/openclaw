@@ -1,13 +1,121 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  mapRetainedOperation,
+} from "./retained-operation.js";
+import type {
+  PreparedSqliteReadOnlyLocation,
+  RetainedPreparedSqliteReadOnlyLocation,
+} from "./sqlite-readonly-location.types.js";
+import {
+  prepareSingleFlightSqliteSnapshot,
+  startSingleFlightSqliteSnapshot,
+} from "./sqlite-snapshot-single-flight.js";
 
-it.each([1, 2])("withdraws %i cancelled waiters before admitting snapshot work", async (count) => {
+it("does not replay a synchronously refused producer even if a second attempt could succeed", () => {
+  const failure = new Error("snapshot producer admission refused");
+  let attempts = 0;
+  const pending = startSingleFlightSqliteSnapshot(
+    "refused-producer.sqlite",
+    "retained-test",
+    () => {
+      attempts++;
+      if (attempts === 1) {
+        throw failure;
+      }
+      const unexpected = createRetainedOperation<
+        PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
+      >(() => {});
+      unexpected.resolve({
+        location: "untracked-second-snapshot.sqlite",
+        cleanup: () => true,
+        cleanupAsync: async () => true,
+        startCleanup() {
+          const cleanup = createRetainedOperation<boolean>(() => {});
+          cleanup.resolve(true);
+          return cleanup.operation;
+        },
+      });
+      return {
+        ...unexpected.operation,
+        startClose: () =>
+          flatMapRetainedOperation(unexpected.operation, (prepared) =>
+            mapRetainedOperation(prepared.startCleanup(), (cleaned) => {
+              if (!cleaned) {
+                throw new Error("Unexpected snapshot cleanup failed");
+              }
+            }),
+          ),
+      };
+    },
+  );
+  pending.service();
+  expect(pending.read()).toEqual({ status: "rejected", error: failure });
+  expect(attempts).toBe(1);
+});
+
+it("services shared production and final cleanup without a host microtask turn", () => {
+  const production = createRetainedOperation<
+    PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
+  >(() => {});
+  const removal = createRetainedOperation<boolean>(() => {});
+  const producer = {
+    ...production.operation,
+    startClose: () =>
+      mapRetainedOperation(removal.operation, (cleaned) => {
+        if (!cleaned) {
+          throw new Error("Retained producer cleanup failed");
+        }
+      }),
+  };
+  const controller = new AbortController();
+  const reason = new Error("one retained waiter stopped");
+  const cancelled = startSingleFlightSqliteSnapshot(
+    "retained-progress.sqlite",
+    "retained-test",
+    () => producer,
+    controller.signal,
+  );
+  const surviving = startSingleFlightSqliteSnapshot(
+    "retained-progress.sqlite",
+    "retained-test",
+    () => producer,
+  );
+  controller.abort(reason);
+  expect(cancelled.read()).toEqual({ status: "rejected", error: reason });
+  expect(surviving.read()).toEqual({ status: "pending" });
+  production.resolve({
+    location: "retained-snapshot.sqlite",
+    cleanup() {
+      throw new Error("A retained lease cannot substitute synchronous native cleanup");
+    },
+    cleanupAsync() {
+      throw new Error("A retained lease cannot depend on a Promise-only cleanup path");
+    },
+    startCleanup: () => removal.operation,
+  });
+  surviving.service();
+  const ready = surviving.read();
+  expect(ready.status).toBe("fulfilled");
+  if (ready.status !== "fulfilled") {
+    throw new Error("The retained snapshot did not become available");
+  }
+  const cleanup = ready.value.startCleanup();
+  cleanup.service();
+  expect(cleanup.read()).toEqual({ status: "pending" });
+  removal.resolve(true);
+  cleanup.service();
+  expect(cleanup.read()).toEqual({ status: "fulfilled", value: true });
+});
+
+it("withdraws all cancelled waiters before admitting snapshot work", async () => {
   let copies = 0;
-  const controllers = Array.from({ length: count }, () => new AbortController());
+  const controllers = [new AbortController(), new AbortController()];
   const operations = controllers.map((controller) =>
     prepareSingleFlightSqliteSnapshot(
-      `cancelled-demand-${count}.sqlite`,
+      "cancelled-demand.sqlite",
       "test",
       async (signal) => {
         signal.throwIfAborted();
@@ -69,41 +177,6 @@ it.each([0, 1])("keeps shared snapshot demand when waiter %i cancels", async (ca
   expect(removed).toBe(true);
 });
 
-it("tracks the producer after a caller cancels its wait", async () => {
-  const admitted = createDeferred();
-  const produced = createDeferred();
-  const tracked: Promise<unknown>[] = [];
-  const controller = new AbortController();
-  const pending = prepareSingleFlightSqliteSnapshot(
-    "producer-drain.sqlite",
-    "test",
-    async () => {
-      admitted.resolve();
-      await produced.promise;
-      return {
-        location: "snapshot.sqlite",
-        cleanup: () => true,
-        cleanupAsync: async () => true,
-      };
-    },
-    controller.signal,
-    { trackProducer: (producer) => tracked.push(producer) },
-  );
-
-  await admitted.promise;
-  controller.abort(new Error("caller stopped waiting"));
-  await expect(pending).rejects.toThrow("caller stopped waiting");
-  expect(tracked).toHaveLength(1);
-  let producerSettled = false;
-  void tracked[0]?.then(() => {
-    producerSettled = true;
-  });
-  await Promise.resolve();
-  expect(producerSettled).toBe(false);
-  produced.resolve();
-  await expect(tracked[0]).resolves.toMatchObject({ location: "snapshot.sqlite" });
-});
-
 it("joins orphan cleanup before the tracked producer settles", async () => {
   const admitted = createDeferred();
   const produced = createDeferred();
@@ -133,17 +206,20 @@ it("joins orphan cleanup before the tracked producer settles", async () => {
   await admitted.promise;
   controller.abort(new Error("caller cancelled"));
   await expect(pending).rejects.toThrow("caller cancelled");
+  expect(tracked).toHaveLength(1);
   let settled = false;
   void tracked[0]?.then(() => {
     settled = true;
   });
+  await Promise.resolve();
+  expect(settled).toBe(false);
   produced.resolve();
   await cleanupStarted.promise;
   await Promise.resolve();
   await Promise.resolve();
   const settledBeforeCleanup = settled;
   cleanupFinished.resolve();
-  await tracked[0];
+  await expect(tracked[0]).resolves.toMatchObject({ location: "orphan-snapshot.sqlite" });
   expect(settledBeforeCleanup).toBe(false);
 });
 
@@ -186,72 +262,4 @@ it("retains the snapshot until a signalled joined waiter acquires its lease", as
     await snapshot.cleanupAsync();
   }
   expect(exists).toBe(false);
-});
-
-it("cancels queued snapshot allocation when its only waiter aborts", async () => {
-  const controller = new AbortController();
-  const reason = new Error("cancelled before snapshot allocation");
-  let allocated = false;
-  const pending = prepareSingleFlightSqliteSnapshot(
-    "cancelled-queued-source.sqlite",
-    "test",
-    async (signal) => {
-      signal.throwIfAborted();
-      allocated = true;
-      return {
-        location: "unused-snapshot.sqlite",
-        cleanup: () => true,
-        cleanupAsync: async () => true,
-      };
-    },
-    controller.signal,
-  );
-  controller.abort(reason);
-  await expect(pending).rejects.toBe(reason);
-  expect(allocated).toBe(false);
-});
-
-it("keeps queued production for a surviving waiter after the first aborts", async () => {
-  const controller = new AbortController();
-  const reason = new Error("first waiter stopped");
-  const produced = createDeferred();
-  const entered = createDeferred();
-  let cleaned = false;
-  const producer = async (signal: AbortSignal) => {
-    signal.throwIfAborted();
-    entered.resolve();
-    await produced.promise;
-    signal.throwIfAborted();
-    return {
-      location: "surviving-snapshot.sqlite",
-      cleanup: () => true,
-      cleanupAsync: async () => {
-        cleaned = true;
-        return true;
-      },
-    };
-  };
-  const first = prepareSingleFlightSqliteSnapshot(
-    "surviving-queued-source.sqlite",
-    "test",
-    producer,
-    controller.signal,
-  );
-  const second = prepareSingleFlightSqliteSnapshot(
-    "surviving-queued-source.sqlite",
-    "test",
-    producer,
-  );
-  controller.abort(reason);
-  try {
-    await expect(first).rejects.toBe(reason);
-    await entered.promise;
-    expect(cleaned).toBe(false);
-  } finally {
-    produced.resolve();
-    const snapshot = await second;
-    expect(snapshot.location).toBe("surviving-snapshot.sqlite");
-    expect(await snapshot.cleanupAsync()).toBe(true);
-  }
-  expect(cleaned).toBe(true);
 });

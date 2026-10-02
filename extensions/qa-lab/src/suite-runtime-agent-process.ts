@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveIntegerOption, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError } from "./errors.js";
 import { extractGatewayMessageText } from "./gateway-log-sentinel.js";
@@ -166,23 +166,6 @@ function readLatestAssistantTextFromHistory(history: QaChatHistoryResponse | und
   return undefined;
 }
 
-async function readLatestAgentHistoryReply(
-  env: Pick<QaSuiteRuntimeEnv, "gateway">,
-  sessionKey: string,
-) {
-  const history = (await env.gateway.call(
-    "chat.history",
-    {
-      sessionKey,
-      limit: 12,
-    },
-    {
-      timeoutMs: 10_000,
-    },
-  )) as QaChatHistoryResponse | undefined;
-  return readLatestAssistantTextFromHistory(history);
-}
-
 function resolveRetryableHistoryDelayMs(error: unknown) {
   let current: unknown = error;
   // QA adds redacted logs in two wrapper layers. Walk their causes so retry
@@ -191,16 +174,11 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
     const code = current.gatewayCode ?? current.code;
     if (code === "UNAVAILABLE" && current.retryable === true) {
       const detailMethod = isRecord(current.details) ? current.details.method : undefined;
-      if (typeof detailMethod !== "string" || detailMethod === "chat.history") {
-        const retryAfterMs = current.retryAfterMs;
-        const rawDelayMs =
-          typeof retryAfterMs === "number" && Number.isFinite(retryAfterMs)
-            ? retryAfterMs
-            : QA_HISTORY_RETRY_DEFAULT_MS;
-        return Math.min(
-          Math.max(Math.floor(rawDelayMs), QA_HISTORY_RETRY_MIN_MS),
-          QA_HISTORY_RETRY_MAX_MS,
-        );
+      if (detailMethod === "chat.history") {
+        return resolveIntegerOption(current.retryAfterMs, QA_HISTORY_RETRY_DEFAULT_MS, {
+          min: QA_HISTORY_RETRY_MIN_MS,
+          max: QA_HISTORY_RETRY_MAX_MS,
+        });
       }
     }
     current = current.cause;
@@ -208,20 +186,25 @@ function resolveRetryableHistoryDelayMs(error: unknown) {
   return null;
 }
 
-async function waitForAgentHistoryReply(
+async function waitForAgentHistory<T>(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
-  predicate: (text: string) => boolean | Promise<boolean>,
+  select: (history: QaChatHistoryResponse) => T | undefined | Promise<T | undefined>,
   timeoutMs = 30_000,
   intervalMs = 250,
+  options = { limit: 100, requestTimeoutMs: 30_000 },
 ) {
   const startedAt = Date.now();
   let lastRetryableHistoryError: unknown;
   while (Date.now() - startedAt < timeoutMs) {
     let delayMs = intervalMs;
-    let text: string | undefined;
+    let history: QaChatHistoryResponse | undefined;
     try {
-      text = await readLatestAgentHistoryReply(env, sessionKey);
+      history = (await env.gateway.call(
+        "chat.history",
+        { sessionKey, limit: options.limit },
+        { timeoutMs: options.requestTimeoutMs },
+      )) as QaChatHistoryResponse;
       lastRetryableHistoryError = undefined;
     } catch (error) {
       const retryDelayMs = resolveRetryableHistoryDelayMs(error);
@@ -231,8 +214,11 @@ async function waitForAgentHistoryReply(
       lastRetryableHistoryError = error;
       delayMs = retryDelayMs;
     }
-    if (text && (await predicate(text))) {
-      return { text };
+    if (history) {
+      const selected = await select(history);
+      if (selected !== undefined) {
+        return selected;
+      }
     }
     const remainingMs = timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
@@ -244,6 +230,26 @@ async function waitForAgentHistoryReply(
   throw lastRetryableHistoryError === undefined
     ? new Error(message)
     : new Error(message, { cause: lastRetryableHistoryError });
+}
+
+async function waitForAgentHistoryReply(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+  predicate: (text: string) => boolean | Promise<boolean>,
+  timeoutMs = 30_000,
+  intervalMs = 250,
+) {
+  return waitForAgentHistory(
+    env,
+    sessionKey,
+    async (history) => {
+      const text = readLatestAssistantTextFromHistory(history);
+      return text && (await predicate(text)) ? { text } : undefined;
+    },
+    timeoutMs,
+    intervalMs,
+    { limit: 12, requestTimeoutMs: 10_000 },
+  );
 }
 
 async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -408,6 +414,7 @@ export {
   readDoctorMemoryStatus,
   runAgentPrompt,
   startAgentRun,
+  waitForAgentHistory,
   waitForAgentHistoryReply,
   waitForAgentRun,
 };

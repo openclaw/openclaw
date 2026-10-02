@@ -84,28 +84,21 @@ function parseExecDirectiveArgs(raw: string): Omit<
     if (key === "host") {
       rawExecHost = value;
       execHost = normalizeExecTarget(value) ?? undefined;
-      if (!execHost) {
-        invalidHost = true;
-      }
+      invalidHost ||= !execHost;
     } else if (key === "security") {
       rawExecSecurity = value;
       execSecurity = normalizeExecSecurity(value) ?? undefined;
-      if (!execSecurity) {
-        invalidSecurity = true;
-      }
+      invalidSecurity ||= !execSecurity;
     } else if (key === "ask") {
       rawExecAsk = value;
       execAsk = normalizeExecAsk(value) ?? undefined;
-      if (!execAsk) {
-        invalidAsk = true;
-      }
+      invalidAsk ||= !execAsk;
     } else if (key === "node") {
       rawExecNode = value;
-      const trimmed = value.trim();
-      if (!trimmed) {
+      if (!value) {
         invalidNode = true;
       } else {
-        execNode = trimmed;
+        execNode = value;
       }
     } else {
       break;
@@ -150,24 +143,12 @@ export function extractExecDirective(rawBody?: string): ExecDirectiveParse {
   }
   const start = match.index;
   const argsStart = start + "/exec".length;
-  const parsed = parseExecDirectiveArgs(body.slice(argsStart));
+  const { consumed, ...parsed } = parseExecDirectiveArgs(body.slice(argsStart));
   // Remove only consumed key/value options so remaining text still reaches the agent.
-  const cleaned = removeDirectiveSpan(body, start, argsStart + parsed.consumed);
+  const cleaned = removeDirectiveSpan(body, start, argsStart + consumed);
   return {
     cleaned,
     hasDirective: true,
-    execHost: parsed.execHost,
-    execSecurity: parsed.execSecurity,
-    execAsk: parsed.execAsk,
-    execNode: parsed.execNode,
-    rawExecHost: parsed.rawExecHost,
-    rawExecSecurity: parsed.rawExecSecurity,
-    rawExecAsk: parsed.rawExecAsk,
-    rawExecNode: parsed.rawExecNode,
-    hasExecOptions: parsed.hasExecOptions,
-    invalidHost: parsed.invalidHost,
-    invalidSecurity: parsed.invalidSecurity,
-    invalidAsk: parsed.invalidAsk,
-    invalidNode: parsed.invalidNode,
+    ...parsed,
   };
 }

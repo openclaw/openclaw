@@ -184,7 +184,7 @@ export const callNodePairApprovalGatewayCli = async (
 export function buildNodeInvokeParams(params: {
   nodeId: string;
   command: string;
-  params?: Record<string, unknown>;
+  params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
 }): Record<string, unknown> {

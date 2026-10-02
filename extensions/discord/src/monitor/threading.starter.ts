@@ -1,6 +1,5 @@
 import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import { ChannelType, DiscordError, getChannelMessage, type Client } from "../internal/discord.js";
@@ -211,17 +210,11 @@ export function resolveDiscordReplyTarget(opts: {
   replyToId?: string;
   hasReplied: boolean;
 }): string | undefined {
-  if (opts.replyToMode === "off") {
-    return undefined;
-  }
-  const replyToId = normalizeOptionalString(opts.replyToId);
-  if (!replyToId) {
-    return undefined;
-  }
-  if (opts.replyToMode === "all") {
-    return replyToId;
-  }
-  return opts.hasReplied ? undefined : replyToId;
+  return createReplyReferencePlanner({
+    replyToMode: opts.replyToMode,
+    startId: opts.replyToId,
+    hasReplied: opts.hasReplied,
+  }).peek();
 }
 
 export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): string {
@@ -232,8 +225,7 @@ export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): 
     .replace(/\s+/g, " ")
     .trim();
   const baseSource = cleanedName || `Thread ${fallbackId}`;
-  const base = truncateUtf16Safe(baseSource, 80);
-  return base || `Thread ${fallbackId}`;
+  return truncateUtf16Safe(baseSource, 80);
 }
 
 export function resolveDiscordReplyDeliveryPlan(params: {

@@ -1497,7 +1497,7 @@ function graphql(query) {
     try {
       const response = githubApi(["graphql", "-f", `query=${query}`]);
       if (response?.data && typeof response.data === "object") {
-        return response.data;
+        return response;
       }
       const errors = Array.isArray(response?.errors)
         ? response.errors.map((error) => error?.message).filter(Boolean)
@@ -1573,7 +1573,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       appendPullRequests(chunk[offset], data[`c${index + offset}`]?.object?.associatedPullRequests);
     }
@@ -1599,7 +1599,7 @@ function resolveAssociatedPullRequests(commitHashes, targetTimestamp, history) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       appendPullRequests(
         chunk[offset].commitHash,
@@ -1646,7 +1646,7 @@ function resolveIssueRelationshipPages(nodes) {
         }`;
       })
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const item = chunk[offset];
       const node = nodes.get(item.number);
@@ -1713,8 +1713,66 @@ function resolveSourceWorkflowRuns(source, nodes, requiredReferences) {
   return runs;
 }
 
+export function githubNotFoundReferences(response, numbers) {
+  const errors = Array.isArray(response.errors) ? response.errors : [];
+  return numbers.filter((number) =>
+    errors.some(
+      (error) =>
+        error?.type === "NOT_FOUND" &&
+        Array.isArray(error.path) &&
+        error.path.length === 2 &&
+        error.path[0] === `n${number}` &&
+        error.path[1] === "issueOrPullRequest",
+    ),
+  );
+}
+
+export function classifyUnavailableContextualReferences({
+  unresolved,
+  notFound,
+  activeCommits,
+  protectedReferences,
+  highestResolved,
+}) {
+  const required = new Set(protectedReferences);
+  const bodyCommits = new Map();
+  for (const commit of activeCommits) {
+    for (const number of [
+      ...referencesIn(commit.subject),
+      ...closingReferencesIn(`${commit.subject}\n${commit.body}`),
+    ]) {
+      required.add(number);
+    }
+    for (const number of referencesIn(commit.body)) {
+      const commits = bodyCommits.get(number) ?? new Set();
+      commits.add(commit.hash.slice(0, 12));
+      bodyCommits.set(number, commits);
+    }
+  }
+  const unavailable = [];
+  const stillUnresolved = [];
+  for (const number of unresolved) {
+    if (
+      notFound.has(number) &&
+      !required.has(number) &&
+      number < highestResolved &&
+      bodyCommits.has(number)
+    ) {
+      unavailable.push({
+        number,
+        commits: [...bodyCommits.get(number)].toSorted((a, b) => (a === b ? 0 : a < b ? -1 : 1)),
+      });
+    } else {
+      stillUnresolved.push(number);
+    }
+  }
+  unavailable.sort((a, b) => a.number - b.number);
+  return { unavailable, stillUnresolved };
+}
+
 function resolveReferences(numbers) {
   const nodes = new Map();
+  const notFound = new Set();
   // GitHub's issue-number argument is GraphQL Int; Actions run IDs can exceed it.
   const issueNumbers = numbers.filter((number) => number <= 2147483647);
   for (let index = 0; index < issueNumbers.length; index += 40) {
@@ -1749,19 +1807,22 @@ function resolveReferences(numbers) {
         }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const response = graphql(`query { ${fields} }`);
+    for (const number of githubNotFoundReferences(response, chunk)) {
+      notFound.add(number);
+    }
     for (const number of chunk) {
-      const node = data[`n${number}`]?.issueOrPullRequest;
+      const node = response.data[`n${number}`]?.issueOrPullRequest;
       if (node) {
         nodes.set(number, node);
       }
     }
   }
-  return resolveIssueRelationshipPages(nodes);
+  return { nodes: resolveIssueRelationshipPages(nodes), notFound };
 }
 
 // A vanished GitHub PR is recoverable only when a prior exact-SHA ledger
-// covered its exact merge-title commit; every other unresolved ref stays fatal.
+// covered its exact merge-title commit.
 export function recoverUnavailablePullRequests({
   numbers,
   nodes,
@@ -1861,7 +1922,7 @@ function resolveGitHubHandles(handles) {
           `u${index + offset}: user(login: ${JSON.stringify(handle)}) { __typename login }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const user = data[`u${index + offset}`];
       if (user?.__typename === "User" && isEligibleHandle(user.login)) {
@@ -1893,7 +1954,7 @@ function resolveDirectCommitAuthors(commits) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const author = data[`c${index + offset}`]?.object?.author?.user;
       if (author?.login && isEligibleHandle(author.login)) {
@@ -1926,7 +1987,7 @@ function resolveCommitCoauthors(commits) {
           }`,
       )
       .join("\n");
-    const data = graphql(`query { ${fields} }`);
+    const { data } = graphql(`query { ${fields} }`);
     for (let offset = 0; offset < chunk.length; offset += 1) {
       const coauthorEmails = new Set(
         chunk[offset].coauthorEmails.map((email) => email.toLowerCase()),
@@ -2482,6 +2543,7 @@ function manifestFor(options, source, ledger, directCommitRecords) {
     version: options.version,
     shippedBaselines: source.shippedBaselines,
     workflowRuns: source.workflowRuns,
+    unavailableReferences: source.unavailableReferences,
     source: {
       references: ledger.entries.length,
       ...ledger.provenance,
@@ -2630,6 +2692,7 @@ function main() {
     const seedSection = sectionFor(seedSource.record ?? seedSource.section, options.version);
     priorRecord = contributionRecordFor(seedSection);
   }
+  const priorRecordReferences = contributionRecordMetadataReferences(priorRecord);
   priorRecord = withoutExcludedContributionRecords(priorRecord, excludedRecordedReferences);
   const recordedReferences = contributionRecordMetadataReferences(priorRecord);
   const revertedRecordedReferences = recordedReferences.filter((number) =>
@@ -2646,12 +2709,15 @@ function main() {
   appendReferences(references, noteReferences);
   appendReferences(references, effectiveRenderedRecordReferences);
   appendReferences(references, recordedReferences);
-  let nodes = resolveReferences(references);
+  let { nodes } = resolveReferences(references);
+  let highestResolved = Math.max(0, ...nodes.keys());
   const legacyIssuePullRequests = [...legacyIssuesByPullRequest(priorRecord, nodes).keys()].filter(
     (number) => !shippedExclusions.pullRequests.has(number),
   );
   appendReferences(references, legacyIssuePullRequests);
-  nodes = resolveReferences(references);
+  const resolution = resolveReferences(references);
+  nodes = resolution.nodes;
+  highestResolved = Math.max(highestResolved, ...nodes.keys());
   const recoveredPullRequests = recoverUnavailablePullRequests({
     numbers: references,
     nodes,
@@ -2668,6 +2734,36 @@ function main() {
   source.workflowRuns = workflowRuns;
   const workflowRunIds = new Set(workflowRuns.map((workflowRun) => workflowRun.id));
   references = references.filter((number) => !workflowRunIds.has(number));
+  const { unavailable } = classifyUnavailableContextualReferences({
+    unresolved: references.filter((number) => !nodes.has(number)),
+    notFound: resolution.notFound,
+    activeCommits: source.activeCommits,
+    protectedReferences: new Set([
+      ...noteReferences,
+      ...renderedRecordReferences,
+      ...priorRecordReferences,
+      ...contributionRecordMetadataReferences(committedRecord),
+      ...legacyIssuePullRequests,
+      ...source.pullRequests,
+      ...[...source.provenanceOverrides.values()].flat(),
+    ]),
+    highestResolved,
+  });
+  source.unavailableReferences = unavailable;
+  const unavailableNumbers = new Set(unavailable.map((reference) => reference.number));
+  references = references.filter((number) => !unavailableNumbers.has(number));
+  source.references = source.references.filter((number) => !unavailableNumbers.has(number));
+  for (const commit of source.activeCommits) {
+    commit.references = commit.references.filter((number) => !unavailableNumbers.has(number));
+  }
+  for (const number of unavailableNumbers) {
+    source.coauthorsByReference.delete(number);
+  }
+  if (unavailable.length > 0) {
+    process.stderr.write(
+      `unavailable contextual references (GitHub NOT_FOUND): ${unavailable.map(({ number }) => `#${number}`).join(", ")}\n`,
+    );
+  }
   const unresolvedSourceReferences = references.filter((number) => !nodes.has(number));
   if (unresolvedSourceReferences.length > 0) {
     fail(
@@ -2687,7 +2783,7 @@ function main() {
   const resolvedReferences = [...references];
   appendReferences(resolvedReferences, titleReferenceNumbers);
   appendReferences(resolvedReferences, closingIssueNumbers);
-  nodes = resolveReferences(resolvedReferences);
+  ({ nodes } = resolveReferences(resolvedReferences));
   for (const [number, node] of recoveredPullRequests) {
     if (!nodes.has(number)) {
       nodes.set(number, node);

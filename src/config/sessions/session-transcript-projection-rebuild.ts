@@ -20,6 +20,7 @@ import {
   prepareSessionTranscriptProjectionAppend,
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
+  type PreparedSessionTranscriptProjectionAppend,
   type SessionTranscriptProjectionCursor,
   type TranscriptIndexEntry,
 } from "./session-transcript-projection-append.js";
@@ -55,12 +56,7 @@ export type PreparedSessionTranscriptProjectionMetadata = {
 };
 
 export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProjectionMetadata & {
-  activeRows: Array<{
-    activePosition: number;
-    contextEligible: 0 | 1;
-    eventSeq: number;
-    messagePosition: number | null;
-  }>;
+  activeRows: NonNullable<PreparedSessionTranscriptProjectionAppend["activeRow"]>[];
   ftsRows: TranscriptIndexEntry[];
 };
 
@@ -119,10 +115,6 @@ function readCanonicalEventId(event: unknown): string | null {
     return null;
   }
   return event.id.trim() || null;
-}
-
-function changesPriorProjectionVisibility(event: unknown): boolean {
-  return isCanonicalSessionTranscriptEntry(event) && event.type === "reset";
 }
 
 /** Streams projection payloads; only navigation metadata is retained for branch resolution. */
@@ -557,7 +549,7 @@ function prepareProjectionTailCatchUp(
   };
   for (const row of rows) {
     const event: unknown = JSON.parse(row.event_json);
-    if (changesPriorProjectionVisibility(event)) {
+    if (isCanonicalSessionTranscriptEntry(event) && event.type === "reset") {
       return undefined;
     }
     const append = prepareSessionTranscriptProjectionAppend({

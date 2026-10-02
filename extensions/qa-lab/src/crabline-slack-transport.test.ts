@@ -1,4 +1,6 @@
 import { createHmac } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
@@ -13,7 +15,7 @@ const selection = {
 } as const;
 
 describe("Crabline Slack transport", () => {
-  it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
+  it("keeps startup readiness and full runtime evidence for the same Slack provider", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
         outputDir,
@@ -46,6 +48,39 @@ describe("Crabline Slack transport", () => {
           replyTo: "C1234567890",
           to: "C1234567890",
         });
+        const env = transport.createRuntimeEnvPatch?.() ?? {};
+        const response = await fetch(`${env.SLACK_API_URL}users.info?user=U0123456789`, {
+          headers: { authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
+        });
+        await response.json();
+        const recorderPath = path.join(outputDir, "artifacts/crabline/slack-provider-server.jsonl");
+        const beforeCapture = await fs.readFile(recorderPath, "utf8");
+        expect(beforeCapture).toContain('"path":"/api/users.info"');
+
+        const captured = await transport.captureArtifacts({ outputDir });
+        const afterCapture = await fs.readFile(recorderPath, "utf8");
+        expect(afterCapture.startsWith(beforeCapture)).toBe(true);
+        const finalProbe = afterCapture.slice(beforeCapture.length).trim().split("\n");
+        expect(finalProbe).toHaveLength(1);
+        expect(JSON.parse(finalProbe[0]!)).toMatchObject({
+          accepted: true,
+          path: "/api/auth.test",
+        });
+        const readinessPath = captured.artifacts.find(
+          (artifact) => artifact.kind === "channel-driver-smoke",
+        )!.path;
+        const readiness = JSON.parse(
+          await fs.readFile(path.join(outputDir, readinessPath), "utf8"),
+        );
+        const startupRecorder = await fs.readFile(
+          path.join(outputDir, readiness.providerReadiness.result.recorderPath),
+          "utf8",
+        );
+        expect(startupRecorder).toContain('"path":"/api/auth.test"');
+        expect(startupRecorder).not.toContain('"path":"/api/users.info"');
+        expect(captured.reportNotes.join("\n")).toContain(
+          "artifacts/crabline/slack-provider-server.jsonl",
+        );
       } finally {
         await transport.cleanupAfterGatewayStop?.();
       }

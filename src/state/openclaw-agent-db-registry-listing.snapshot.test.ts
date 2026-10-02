@@ -81,6 +81,17 @@ it("defers a capture refusal until the registry is actually demanded", async () 
   await expect(prepared.read()).rejects.toBe(failure);
 });
 
+it("retains scoped revocation before native registry rows are needed", async () => {
+  const prepared = prepareOpenClawAgentDatabaseRegistrySnapshotRead(options, () => true);
+  expect(() => prepared.assertCurrent()).not.toThrow();
+  expect(mocks.read).not.toHaveBeenCalled();
+  invalidateRegisteredAgentDatabasesMemo(options);
+  expect(() => prepared.assertCurrent()).toThrow("registry changed");
+  await expect(prepared.read()).rejects.toThrow("registry changed");
+  expect(() => prepared.assertCurrent()).toThrow("registry changed");
+  expect(mocks.read).not.toHaveBeenCalled();
+});
+
 it("publishes full successful rows into the existing canonical memo", async () => {
   const incompatible = {
     ...entry,
@@ -96,24 +107,30 @@ it("publishes full successful rows into the existing canonical memo", async () =
   expect(mocks.read).toHaveBeenCalledOnce();
 });
 
-it("follows only contiguous owned registry invalidations and keeps a refusal sticky", async () => {
-  const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(options).read();
-  const owned = invalidateRegisteredAgentDatabasesMemo(options);
-  if (!owned) {
-    throw new Error("Expected an active registry generation");
-  }
-  snapshot.followRegistration(owned);
-  expect(() => snapshot.assertCurrent()).not.toThrow();
+it.each([false, true])(
+  "follows only contiguous owned registry invalidations (scoped=%s)",
+  async (scoped) => {
+    const snapshot = await prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+      options,
+      scoped ? () => true : undefined,
+    ).read();
+    const owned = invalidateRegisteredAgentDatabasesMemo(options);
+    if (!owned) {
+      throw new Error("Expected an active registry generation");
+    }
+    snapshot.followRegistration(owned);
+    expect(() => snapshot.assertCurrent()).not.toThrow();
 
-  invalidateRegisteredAgentDatabasesMemo(options);
-  const later = invalidateRegisteredAgentDatabasesMemo(options);
-  if (!later) {
-    throw new Error("Expected another registry invalidation");
-  }
-  expect(() => snapshot.followRegistration(later)).toThrow(/invalidated registry/);
-  expect(() => snapshot.followRegistration(owned)).toThrow(/invalidated registry/);
-  expect(() => snapshot.assertCurrent()).toThrow(/registry changed/);
-});
+    invalidateRegisteredAgentDatabasesMemo(options);
+    const later = invalidateRegisteredAgentDatabasesMemo(options);
+    if (!later) {
+      throw new Error("Expected another registry invalidation");
+    }
+    expect(() => snapshot.followRegistration(later)).toThrow(/invalidated registry/);
+    expect(() => snapshot.followRegistration(owned)).toThrow(/invalidated registry/);
+    expect(() => snapshot.assertCurrent()).toThrow(/registry changed/);
+  },
+);
 
 it("does not cache a certified unavailable read", async () => {
   mocks.read.mockResolvedValueOnce({ status: "unavailable" });

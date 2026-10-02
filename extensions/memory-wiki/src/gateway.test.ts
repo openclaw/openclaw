@@ -3,17 +3,20 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { compileMemoryWikiVault } from "./compile.js";
-import { MemoryWikiDashboardUnavailableError } from "./compiled-cache.js";
+import {
+  loadMemoryWikiCompiledDashboards,
+  MemoryWikiDashboardUnavailableError,
+  type MemoryWikiImportInsightsStatus,
+  type MemoryWikiOverviewStatus,
+} from "./compiled-cache.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
-import { listMemoryWikiImportInsights } from "./import-insights.js";
 import { listMemoryWikiImportRuns } from "./import-runs.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { searchMemoryWiki } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
-import { listMemoryWikiOverview } from "./wiki-overview.js";
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
 
@@ -30,8 +33,9 @@ vi.mock("./ingest.js", () => ({
   ingestMemoryWikiSource: vi.fn(),
 }));
 
-vi.mock("./import-insights.js", () => ({
-  listMemoryWikiImportInsights: vi.fn(),
+vi.mock("./compiled-cache.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./compiled-cache.js")>()),
+  loadMemoryWikiCompiledDashboards: vi.fn(),
 }));
 
 vi.mock("./import-runs.js", () => ({
@@ -40,10 +44,6 @@ vi.mock("./import-runs.js", () => ({
 
 vi.mock("./lint.js", () => ({
   lintMemoryWikiVault: vi.fn(),
-}));
-
-vi.mock("./wiki-overview.js", () => ({
-  listMemoryWikiOverview: vi.fn(),
 }));
 
 vi.mock("./obsidian.js", async (importOriginal) => ({
@@ -128,7 +128,7 @@ const VAULT_BACKED_GATEWAY_CASES = [
   ["wiki.obsidian.daily", {}],
 ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>;
 
-const importInsights: Awaited<ReturnType<typeof listMemoryWikiImportInsights>> = {
+const importInsights: MemoryWikiImportInsightsStatus = {
   sourceType: "chatgpt",
   totalItems: 2,
   totalClusters: 1,
@@ -167,7 +167,7 @@ const importInsights: Awaited<ReturnType<typeof listMemoryWikiImportInsights>> =
   truncated: false,
 };
 
-const overview: Awaited<ReturnType<typeof listMemoryWikiOverview>> = {
+const overview: MemoryWikiOverviewStatus = {
   totalItems: 1,
   totalPages: 3,
   pageCounts: {
@@ -239,8 +239,9 @@ describe("memory-wiki gateway methods", () => {
       activeRuns: 0,
       rolledBackRuns: 0,
     } as never);
-    vi.mocked(listMemoryWikiImportInsights).mockResolvedValue(structuredClone(importInsights));
-    vi.mocked(listMemoryWikiOverview).mockResolvedValue(structuredClone(overview));
+    vi.mocked(loadMemoryWikiCompiledDashboards).mockResolvedValue(
+      structuredClone({ importInsights, overview }),
+    );
     vi.mocked(normalizeMemoryWikiMutationInput).mockReturnValue({
       op: "create_synthesis",
       title: "Gateway Alpha",
@@ -510,9 +511,7 @@ describe("memory-wiki gateway methods", () => {
 
       expect(respond).toHaveBeenCalledOnce();
       expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
-      expect(
-        method === "wiki.importInsights" ? listMemoryWikiImportInsights : listMemoryWikiOverview,
-      ).toHaveBeenCalledWith(config);
+      expect(loadMemoryWikiCompiledDashboards).toHaveBeenCalledWith(config);
       expect(readRespondPayload(respond)).toEqual(
         method === "wiki.importInsights" ? importInsights : overview,
       );
@@ -541,7 +540,7 @@ describe("memory-wiki gateway methods", () => {
     async (state, code, retryable, retryAfterMs) => {
       const { config } = await createVault({ prefix: "memory-wiki-gateway-state-" });
       const { api, registerGatewayMethod } = createPluginApi();
-      vi.mocked(listMemoryWikiImportInsights).mockRejectedValueOnce(
+      vi.mocked(loadMemoryWikiCompiledDashboards).mockRejectedValueOnce(
         new MemoryWikiDashboardUnavailableError(state, `dashboard ${state}`),
       );
 
@@ -628,6 +627,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).toHaveBeenCalledWith({
+      memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
       appConfig: undefined,
       query: "Teams Azure",
@@ -665,6 +665,7 @@ describe("memory-wiki gateway methods", () => {
     });
 
     expect(searchMemoryWiki).toHaveBeenCalledWith({
+      memoryContext: expect.objectContaining({ assertCurrent: expect.any(Function) }),
       config,
       appConfig,
       agentId: "main",

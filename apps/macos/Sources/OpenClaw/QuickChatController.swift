@@ -42,7 +42,6 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private let dictation: QuickChatDictation
     @ObservationIgnored private let allowsHotkeyRegistrationInTests: Bool
     @ObservationIgnored private var panel: QuickChatPanel?
-    @ObservationIgnored private var hostingView: NSHostingView<QuickChatView>?
     @ObservationIgnored private weak var textView: NSTextView?
     @ObservationIgnored private var globalMonitor: Any?
     @ObservationIgnored private var localMonitor: Any?
@@ -168,7 +167,6 @@ final class QuickChatController: NSObject {
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
         self.panel?.delegate = nil
         self.panel = nil
-        self.hostingView = nil
         self.textView = nil
     }
 
@@ -209,11 +207,11 @@ final class QuickChatController: NSObject {
         panel.alphaValue = 1
         if wasVisible {
             OverlayPanelFactory.applyFrame(window: panel, target: target, animate: true)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         } else {
             let start = QuickChatPlacement.scaledRect(target, factor: 0.96)
             OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.16)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
         self.focusEditor()
     }
@@ -255,7 +253,7 @@ final class QuickChatController: NSObject {
             if self.transitionID != dismissalID, self.isVisible {
                 panel.alphaValue = 1
                 panel.setFrame(self.targetFrame(), display: true)
-                panel.makeKeyAndOrderFront(nil)
+                AppActivation.shared.makeKeyAndOrderFront(window: panel)
                 self.focusEditor()
             }
         }
@@ -283,7 +281,6 @@ final class QuickChatController: NSObject {
         let host = NSHostingView(rootView: view)
         panel.contentView = host
         self.panel = panel
-        self.hostingView = host
         // Sheets retain SwiftUI's delegate; observe their focus loss without replacing it.
         NotificationCenter.default.addObserver(
             self,
@@ -345,7 +342,7 @@ final class QuickChatController: NSObject {
         guard self.isVisible, let panel = self.panel, panel.attachedSheet == nil,
               let textView = self.textView
         else { return }
-        panel.makeKeyAndOrderFront(nil)
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         panel.makeFirstResponder(textView)
         let transitionID = self.transitionID
         DispatchQueue.main.async { [weak self, weak panel, weak textView] in
@@ -504,7 +501,7 @@ final class QuickChatController: NSObject {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID {
             return true
         }
-        guard targetApp.activate(options: []) else { return false }
+        guard AppActivation.shared.activate(application: targetApp) else { return false }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(1))
         while clock.now < deadline {
@@ -672,7 +669,7 @@ final class QuickChatController: NSObject {
 
     private var canShowRecentSessions: Bool {
         self.isVisible &&
-            self.model.canSelectRecentSession &&
+            self.model.canCaptureWindow &&
             self.windowPicker?.isInteractionActive != true &&
             !self.isMenuActive
     }
@@ -738,11 +735,7 @@ final class QuickChatController: NSObject {
         // Competing interaction: a recents menu must not pop over the picker overlays.
         self.invalidateRecentsFetch()
         Task {
-            if area {
-                await windowPicker.beginArea()
-            } else {
-                await windowPicker.beginWindow()
-            }
+            await windowPicker.begin(mode: area ? .area : .window)
         }
     }
 

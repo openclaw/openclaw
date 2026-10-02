@@ -1,4 +1,3 @@
-// Agent config mutation and summary builders used by `openclaw agents` commands.
 import {
   normalizeOptionalString,
   resolvePrimaryStringValue,

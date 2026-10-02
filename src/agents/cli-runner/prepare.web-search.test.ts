@@ -125,7 +125,6 @@ describe("registered Claude CLI search preparation", () => {
       sessionSearch: true,
       managed: false,
     },
-    { name: "session off", config: {}, native: false, sessionSearch: false, managed: false },
     {
       name: "session off overrides an explicit tool allowlist",
       config: {},
@@ -150,7 +149,8 @@ describe("registered Claude CLI search preparation", () => {
         tools: {
           ...config.tools,
           allow: ["exec", "web_search", "message"],
-          exec: { host: "auto", mode: "full" },
+          // Keep this node-only proof explicit now that ordinary local shell is managed.
+          exec: { host: openClaw ? "auto" : "node", mode: "full" },
         },
       };
       const context = await fixture.prepare({

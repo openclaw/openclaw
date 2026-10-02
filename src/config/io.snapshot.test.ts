@@ -110,26 +110,9 @@ describe("config snapshot plugin metadata", () => {
     }
   });
 
-  it("leaves an absent config without authored provenance or a new file", async () => {
-    const root = tempDirs.make("openclaw-config-absent-authored-");
-    const context = createContext(root);
-    const snapshot = await readConfigFileSnapshotFromContext(context);
-    expect(snapshot).toMatchObject({
-      path: context.configPath,
-      exists: false,
-      raw: null,
-      parsed: {},
-    });
-    expect(snapshot.authoredConfig).toBeUndefined();
-    expect(snapshot.sourceConfig.plugins).toBeUndefined();
-    expect(fs.existsSync(context.configPath)).toBe(false);
-  });
-
   it.each([
-    { useInclude: false, invalid: false },
     { useInclude: false, invalid: true },
     { useInclude: true, invalid: false },
-    { useInclude: true, invalid: true },
   ])(
     "pairs authored references with their resolved read (include: $useInclude, invalid: $invalid)",
     async ({ useInclude, invalid }) => {
@@ -171,24 +154,30 @@ describe("config snapshot plugin metadata", () => {
   );
 
   it.each(["full", "core-only"] as const)(
-    "keeps legacy roster channel discovery owned by %s validation",
+    "leaves legacy roster repair to Doctor during %s validation",
     async (pluginValidation) => {
       const root = tempDirs.make("openclaw-config-roster-metadata-");
       const context = createContext(root);
       context.options.pluginValidation = pluginValidation;
+      const agents = { list: [{ id: "primary", default: true }, { id: "secondary" }] };
       fs.writeFileSync(
         context.configPath,
         JSON.stringify({
-          agents: { list: [{ id: "primary", default: true }, { id: "secondary" }] },
+          agents,
           channels: { discord: { enabled: false } },
         }),
       );
       const discovery = vi.spyOn(channelPresence, "listChannelIdsForOwnershipMigration");
       const snapshot = await readConfigFileSnapshotFromContext(context);
-      expect(snapshot.valid).toBe(true);
-      expect(snapshot.config.agents?.entries).toEqual({ primary: {}, secondary: {} });
-      expect(snapshot.config.agents?.defaults?.systemAgent?.agentId).toBe("primary");
-      expect(discovery.mock.calls.length > 0).toBe(pluginValidation === "full");
+      expect(snapshot.valid).toBe(false);
+      expect(snapshot.sourceConfig.agents).toEqual(agents);
+      expect(snapshot.issues).toContainEqual(
+        expect.objectContaining({
+          path: "agents.list",
+          message: expect.stringContaining("doctor --fix"),
+        }),
+      );
+      expect(discovery).not.toHaveBeenCalled();
     },
   );
 

@@ -76,9 +76,9 @@ enum ExecApprovalsPromptPresenter {
             }
             self.activePrompt?.panel = panel
             self.activePrompt?.continuation = continuation
-            NSApp.activate(ignoringOtherApps: true)
+            AppActivation.shared.activate()
             panel.center()
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
             panel.makeFirstResponder(nil)
             // A nested runModal loop blocks SwiftUI's MainActor callbacks and deadlines.
             // Suspend this caller instead; the queue still owns one active approval.

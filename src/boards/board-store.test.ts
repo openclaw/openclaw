@@ -335,9 +335,13 @@ describe("board store", () => {
       expect(error).toMatchObject({ code: "invalid_operation" });
       expect((error as Error).message).toContain("more than 48 widgets");
     }
-    await expect(
-      putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073)),
-    ).rejects.toThrow("262144 UTF-8 bytes");
+    const largeStore = createTestBoardStore();
+    const html = "é".repeat(5 * 1024 * 1024);
+    await putHtml(largeStore, "session", "large", html);
+    await expect(putHtml(largeStore, "session", "large", html + "é")).rejects.toThrow(
+      "10485760 UTF-8 bytes",
+    );
+    expect((await readBoardHtml(largeStore, { sessionKey: "session" }, "large"))?.html).toBe(html);
   });
 
   it("bumps once per applyOps transaction and removes widget bytes", async () => {

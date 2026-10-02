@@ -30,7 +30,6 @@ import {
 export {
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
 } from "./chat-command-invocation.js";
 
@@ -132,18 +131,16 @@ export async function prepareBundledSkillCommandForWorkspace(
 
 function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
-  const out: SkillCommandSpec[] = [];
-  for (const cmd of commands) {
+  return commands.filter((cmd) => {
     const key = normalizeOptionalLowercaseString(cmd.skillName);
     if (key && seen.has(key)) {
-      continue;
+      return false;
     }
     if (key) {
       seen.add(key);
     }
-    out.push(cmd);
-  }
-  return out;
+    return true;
+  });
 }
 
 type AgentSkillCommandParams = {

@@ -125,6 +125,9 @@ A schema-valid but unset path explains that the runtime default applies; an unkn
 `openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
 on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
 
+Nested paths inside open-ended parameter bags, such as `agents.defaults.params.custom.nested`,
+are schema-valid even before they are set. This does not confirm that a provider supports the parameter.
+
 Explicit `null`, `false`, `0`, and empty strings remain readable values in both modes;
 `--json` preserves their types. Optional fields with no runtime value are reported as unset.
 
@@ -215,6 +218,8 @@ openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --s
 For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
+
+When a model uses string shorthand, setting its `fallbacks` or a supported tool-model `timeoutMs` preserves that string as `primary`. This also applies to chat `/config set`. Setting `primary` explicitly replaces the primary, and setting the whole model still replaces the whole value.
 
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
 

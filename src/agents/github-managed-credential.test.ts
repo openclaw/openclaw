@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveCommandEnv } from "../process/exec-spawn.js";
 import { clearGitHubCredentialVerificationCache } from "./github-oauth-client.js";
 
 const commands = vi.hoisted(() => ({ run: vi.fn() }));
@@ -97,7 +98,6 @@ describe("managed credential isolation", () => {
       nativeToken = "synthetic-native-after";
       // Exercise the actual overlay composition used by subprocesses, including
       // a different ambient token and an absent selected credential file.
-      const { resolveCommandEnv } = await import("../process/exec-spawn.js");
       const child = resolveCommandEnv({
         argv: ["gh", "api", "user"],
         baseEnv: { GH_TOKEN: nativeToken },

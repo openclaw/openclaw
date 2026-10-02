@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 371005,
-  "reason": "Native conversation validation and owner hooks measure 371581 B startup gzip with bridge and presentation implementation deferred. Raise the paired original 370756 B baseline and cap by the remaining measured 249 B overage (0.067%); unchanged 512 B growth and 64 B build variance give a 371581 B enforcement limit. All other budgets are unchanged.",
-  "updatedAt": "2026-09-27"
+  "startupJsGzipBytes": 372878,
+  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
+  "updatedAt": "2026-10-02"
 }

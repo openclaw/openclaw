@@ -9,6 +9,7 @@ import {
 } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { captureSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import {
   assertTransactionUsable,
@@ -42,7 +43,6 @@ import { needsOpenClawStateDatabaseSchemaRepair } from "./openclaw-state-db-fast
 import {
   assertOpenClawStateDatabaseForMaintenance,
   markCurrentStateSchemaVersion,
-  resolveDatabasePath,
 } from "./openclaw-state-db-maintenance.js";
 import { openUnpublishedStateDatabase } from "./openclaw-state-db-open.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
@@ -64,6 +64,7 @@ import {
   withOpenClawStateStartupCheckpointConnection,
 } from "./openclaw-state-db-startup-checkpoint.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
+import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   assertOpenClawStateWriteAllowed,
   assertOpenClawStateWriteAllowedAtPath,
@@ -237,6 +238,7 @@ export async function openExistingOpenClawStateDatabaseReadOnly(
     path: pathname,
     walMaintenance: {
       checkpoint: () => false,
+      stop: async () => {},
       reclaimFreePages: createSqliteWalReclamationResult,
       // Cleanup can fail transiently after the database closes. Keep the
       // close contract retryable until one call finishes both responsibilities.
@@ -484,7 +486,10 @@ export function runOpenClawStateWriteTransaction<T>(
         databaseLabel: acquired.path,
         ...transactionOptions,
         ...(remaining ? { busyTimeoutMs: remaining() } : {}),
-        operationLabel: transactionOptions.operationLabel ?? "state.write",
+        operationLabel:
+          transactionOptions.operationLabel ??
+          captureSqliteReaderOwner()?.operation ??
+          "state.write",
       },
     );
     return { database: acquired, value };

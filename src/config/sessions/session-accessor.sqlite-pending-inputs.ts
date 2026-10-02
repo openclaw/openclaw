@@ -26,7 +26,7 @@ import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pendin
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
-import type { CapturedSessionEntryReadSource } from "./session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 
 export type SessionPendingInputState = "queued" | "interrupted" | "cancelled";
@@ -63,6 +63,100 @@ export type SessionPendingInputOwner = {
   /** Aggregate authority is the exact source closures, never persisted source identifiers. */
   sources?: readonly SessionPendingInputOwner[];
 };
+
+/** Transported facts do not grant custody; the host retains and checks the exact live owner. */
+export type SessionPendingInputWorkerFacts = Pick<
+  SessionPendingInputOwner,
+  | "inputId"
+  | "transcriptInputId"
+  | "sessionId"
+  | "sessionKey"
+  | "databasePath"
+  | "idempotencyKey"
+  | "lifecycleGeneration"
+  | "messageJson"
+> & { sources?: readonly SessionPendingInputWorkerFacts[] };
+
+export type SessionPendingInputWorkerReceipt = {
+  transcriptInputId: string;
+  consumedInputIds: string[];
+};
+
+const workerCustody = resolveGlobalSingleton(
+  Symbol.for("openclaw.sessionPendingInputWorkerCustody"),
+  () =>
+    new AsyncLocalStorage<{
+      owner: SessionPendingInputOwner;
+      assertCurrent(): void;
+    }>(),
+);
+
+export function captureSessionPendingInputWorkerCustody() {
+  const owner = owners.current.getStore();
+  if (!owner) {
+    return undefined;
+  }
+  const copy = (current: SessionPendingInputOwner): SessionPendingInputWorkerFacts => ({
+    inputId: current.inputId,
+    transcriptInputId: current.transcriptInputId,
+    sessionId: current.sessionId,
+    sessionKey: current.sessionKey,
+    databasePath: current.databasePath,
+    idempotencyKey: current.idempotencyKey,
+    lifecycleGeneration: current.lifecycleGeneration,
+    messageJson: current.messageJson,
+    ...(current.sources ? { sources: current.sources.map(copy) } : {}),
+  });
+  const relocation = owners.relocation.getStore();
+  return {
+    facts: copy(owner),
+    ...(relocation?.owner === owner ? { relocation: relocation.sourceInputId } : {}),
+    assertCurrent: () => assertPendingInputOwnerCurrent(owner),
+    publish(receipt: SessionPendingInputWorkerReceipt) {
+      owner.transcriptInputId = receipt.transcriptInputId;
+      const consumed = new Set(receipt.consumedInputIds);
+      for (const source of owner.sources ?? [owner]) {
+        if (consumed.has(source.inputId)) {
+          source.consumed = true;
+        }
+      }
+    },
+  };
+}
+
+/** Runs inside the writer; every live check crosses back to the captured host admission. */
+export function runWithSessionPendingInputWorkerCustody<T>(
+  facts: SessionPendingInputWorkerFacts,
+  relocation: string | undefined,
+  assertCurrent: () => void,
+  run: () => T,
+): { value: T; receipt: SessionPendingInputWorkerReceipt } {
+  const hydrate = (current: SessionPendingInputWorkerFacts): SessionPendingInputOwner => ({
+    ...current,
+    sources: current.sources?.map(hydrate),
+    assertCurrent,
+    finish: () => {
+      throw new Error("Worker custody cannot finish its host owner");
+    },
+  });
+  const owner = hydrate(facts);
+  const value = workerCustody.run({ owner, assertCurrent }, () =>
+    owners.current.run(owner, () =>
+      relocation === undefined
+        ? run()
+        : owners.relocation.run({ owner, sourceInputId: relocation }, run),
+    ),
+  );
+  return {
+    value,
+    receipt: {
+      transcriptInputId: owner.transcriptInputId,
+      consumedInputIds: (owner.sources ?? [owner])
+        .filter((source) => source.consumed)
+        .map((source) => source.inputId),
+    },
+  };
+}
 
 const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOwners"), () => ({
   live: new Map<string, SessionPendingInputOwner>(),
@@ -119,22 +213,31 @@ export function finishSessionPendingInputOwner(
   }
   const capturedOptions = { ...options, agentId: source.agentId, path: source.path };
   assertCapturedSessionEntryReadSource(source, getOpenClawAgentDatabaseIfOpen(capturedOptions));
-  runOpenClawAgentWriteTransaction((current) => {
-    assertCapturedSessionEntryReadSource(source, current);
-    executeSqliteQuerySync(
-      current.db,
-      getSessionKysely(current.db)
-        .updateTable("session_pending_inputs")
-        .set({ state: disposition })
-        .where("input_id", "=", owner.inputId)
-        .where("lifecycle_generation", "=", owner.lifecycleGeneration)
-        .where("state", "=", "queued")
-        .where("consumed_event_id", "is", null),
-    );
-  }, capturedOptions);
+  runOpenClawAgentWriteTransaction(
+    (current) => {
+      assertCapturedSessionEntryReadSource(source, current);
+      executeSqliteQuerySync(
+        current.db,
+        getSessionKysely(current.db)
+          .updateTable("session_pending_inputs")
+          .set({ state: disposition })
+          .where("input_id", "=", owner.inputId)
+          .where("lifecycle_generation", "=", owner.lifecycleGeneration)
+          .where("state", "=", "queued")
+          .where("consumed_event_id", "is", null),
+      );
+    },
+    capturedOptions,
+    { operationLabel: "session.pending-input.finish-owner" },
+  );
 }
 
 function assertPendingInputOwnerCurrent(owner: SessionPendingInputOwner): void {
+  const worker = workerCustody.getStore();
+  if (worker?.owner === owner) {
+    worker.assertCurrent();
+    return;
+  }
   if (owner.sources) {
     for (const source of owner.sources) {
       assertPendingInputOwnerCurrent(source);
@@ -185,7 +288,25 @@ export function withSessionPendingInputRelocation<T>(
   return owners.relocation.run({ owner, sourceInputId }, append);
 }
 
-/** Registration owns disposition; execution and promotion check the private operational predicates. */
+/** Registration owns disposition even after operational cancellation; this check performs no SQL. */
+export function hasRegisteredSessionPendingInputOwner(
+  databasePath: string,
+  row: Pick<
+    SessionPendingInputRow,
+    "input_id" | "session_key" | "session_id" | "lifecycle_generation"
+  >,
+): boolean {
+  const owner = owners.live.get(row.input_id);
+  return (
+    owner?.databasePath === databasePath &&
+    owner.sessionId === row.session_id &&
+    owner.sessionKey === row.session_key &&
+    owner.lifecycleGeneration === row.lifecycle_generation &&
+    isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)
+  );
+}
+
+/** Native stage and submitted-input recovery retain their transaction-local session check. */
 export function readSessionPendingInputOwnerIds(
   database: PendingInputDatabase,
   rows: readonly Pick<
@@ -193,16 +314,9 @@ export function readSessionPendingInputOwnerIds(
     "input_id" | "session_key" | "session_id" | "lifecycle_generation"
   >[],
 ): Set<string> {
-  const candidates = rows.filter((row) => {
-    const owner = owners.live.get(row.input_id);
-    return (
-      owner?.databasePath === database.path &&
-      owner.sessionId === row.session_id &&
-      owner.sessionKey === row.session_key &&
-      owner.lifecycleGeneration === row.lifecycle_generation &&
-      isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)
-    );
-  });
+  const candidates = rows.filter((row) =>
+    hasRegisteredSessionPendingInputOwner(database.path, row),
+  );
   if (!candidates.length) {
     return new Set();
   }
@@ -547,7 +661,8 @@ export function consumeSessionPendingInput(
   const inputIds = new Set(pending.sourceInputIds ?? [pending.inputId]);
   const consumedOwners = (owner?.sources ?? (owner ? [owner] : [])).filter(
     (candidate) =>
-      owners.live.get(candidate.inputId) === candidate &&
+      (owners.live.get(candidate.inputId) === candidate ||
+        workerCustody.getStore()?.owner === owner) &&
       candidate.databasePath === database.path &&
       inputIds.has(candidate.inputId),
   );

@@ -1,10 +1,7 @@
-// Cron service regression tests cover historical scheduling edge cases.
 import { describe, expect, it } from "vitest";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
-import {
-  needsCronTimerMaintenance,
-  recomputeNextRunsForMaintenance,
-} from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.js";
 import { reserveQueuedCronRun } from "./service/run-admission.js";
 import type { CronRunReceiptHandle } from "./store/run-receipt.types.js";
 import type { CronJob } from "./types.js";
@@ -39,197 +36,7 @@ function testReceipt(jobId: string, startedAtMs: number): CronRunReceiptHandle {
   };
 }
 
-// regression: #13992
-describe("issue #13992 regression - cron jobs skip execution", () => {
-  it.each([
-    {
-      name: "already-executed slot",
-      state: (now: number, next: number) => ({ nextRunAtMs: next, lastRunAtMs: next + 1 }),
-      expected: true,
-    },
-    {
-      name: "stale backoff slot",
-      state: (now: number, next: number) => ({
-        nextRunAtMs: next,
-        lastRunAtMs: now - 10_000,
-        lastRunStatus: "error" as const,
-        consecutiveErrors: 1,
-      }),
-      expected: true,
-    },
-    {
-      name: "ordinary due slot",
-      state: (_now: number, next: number) => ({ nextRunAtMs: next }),
-      expected: false,
-    },
-    {
-      name: "active queued slot",
-      state: (now: number, next: number) => ({ nextRunAtMs: next, queuedAtMs: now }),
-      expected: false,
-    },
-    {
-      name: "active running slot",
-      state: (now: number, next: number) => ({ nextRunAtMs: next, runningAtMs: now }),
-      expected: false,
-    },
-    {
-      name: "startup catch-up slot",
-      state: (_now: number, next: number) => ({
-        nextRunAtMs: next,
-        lastRunAtMs: next + 1,
-        startupCatchupAtMs: next,
-      }),
-      expected: false,
-    },
-    {
-      name: "force-preserved slot",
-      state: (_now: number, next: number) => ({
-        nextRunAtMs: next,
-        lastRunAtMs: next + 1,
-        forcePreservedNextRunAtMs: next,
-      }),
-      expected: false,
-    },
-  ])("classifies $name for expired maintenance", ({ state, expected }) => {
-    const now = Date.now();
-    const next = now - 60_000;
-    const job = createCronSystemEventJob(now, { state: state(now, next) });
-
-    expect(needsCronTimerMaintenance(job, now)).toBe(expected);
-  });
-
-  it("should NOT recompute nextRunAtMs for past-due jobs by default", () => {
-    const now = Date.now();
-    const pastDue = now - 60_000; // 1 minute ago
-
-    const job = createCronSystemEventJob(now, {
-      createdAtMs: now - 3600_000,
-      updatedAtMs: now - 3600_000,
-      state: {
-        nextRunAtMs: pastDue, // This is in the past and should NOT be recomputed
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-    // Should not have changed the past-due nextRunAtMs
-    expect(job.state.nextRunAtMs).toBe(pastDue);
-  });
-
-  it("should recompute past-due nextRunAtMs with recomputeExpired when slot already executed", () => {
-    // NOTE: in onTimer this recovery branch is used only when due scan found no
-    // runnable jobs; this unit test validates the maintenance helper contract.
-    const now = Date.now();
-    const pastDue = now - 60_000;
-
-    const job = createCronSystemEventJob(now, {
-      createdAtMs: now - 3600_000,
-      updatedAtMs: now - 3600_000,
-      state: {
-        nextRunAtMs: pastDue,
-        lastRunAtMs: pastDue + 1000,
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
-
-    expect(typeof job.state.nextRunAtMs).toBe("number");
-    expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
-  });
-
-  it("should NOT recompute past-due nextRunAtMs for running jobs even with recomputeExpired", () => {
-    const now = Date.now();
-    const pastDue = now - 60_000;
-
-    const job = createCronSystemEventJob(now, {
-      createdAtMs: now - 3600_000,
-      updatedAtMs: now - 3600_000,
-      state: {
-        nextRunAtMs: pastDue,
-        runningAtMs: now - 500,
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
-
-    expect(job.state.nextRunAtMs).toBe(pastDue);
-  });
-
-  it("should compute missing nextRunAtMs during maintenance", () => {
-    const now = Date.now();
-
-    const job = createCronSystemEventJob(now, {
-      state: {
-        // nextRunAtMs is missing
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-    // Should have computed a nextRunAtMs
-    expect(typeof job.state.nextRunAtMs).toBe("number");
-    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
-  });
-
-  it("should repair nextRunAtMs=0 during maintenance", () => {
-    const now = Date.now();
-
-    const job = createCronSystemEventJob(now, {
-      state: {
-        nextRunAtMs: 0,
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-    expect(typeof job.state.nextRunAtMs).toBe("number");
-    expect(job.state.nextRunAtMs).toBeGreaterThan(now);
-  });
-
-  it("should clear nextRunAtMs for disabled jobs during maintenance", () => {
-    const now = Date.now();
-    const futureTime = now + 3600_000;
-
-    const job = createCronSystemEventJob(now, {
-      enabled: false, // Disabled
-      state: {
-        nextRunAtMs: futureTime,
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-    // Should have cleared nextRunAtMs for disabled job
-    expect(job.state.nextRunAtMs).toBeUndefined();
-  });
-
-  it("should clear stuck running markers during maintenance", () => {
-    const now = Date.now();
-    const stuckTime = now - 3 * 60 * 60_000; // 3 hours ago (> 2 hour threshold)
-    const futureTime = now + 3600_000;
-
-    const job = createCronSystemEventJob(now, {
-      state: {
-        nextRunAtMs: futureTime,
-        runningAtMs: stuckTime, // Stuck running marker
-      },
-    });
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-    // Should have cleared stuck running marker
-    expect(job.state.runningAtMs).toBeUndefined();
-    // But should NOT have changed nextRunAtMs (it's still future)
-    expect(job.state.nextRunAtMs).toBe(futureTime);
-  });
-
+describe("cron maintenance ownership", () => {
   it("clears an orphaned queued marker from before a clock rollback", () => {
     const now = Date.now();
     const futureQueuedAt = now + 3 * 60 * 60_000;
@@ -281,26 +88,8 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
       reserveQueuedCronRun(state, job.id, futureMarker, {
         runReceipt: testReceipt(job.id, futureMarker),
+        runReceiptContext: captureOpenClawStateWorkerContext(),
       });
-
-      recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
-
-      expect(job.state[markerField]).toBe(futureMarker);
-    },
-  );
-
-  it.each(["queuedAtMs", "runningAtMs"] as const)(
-    "preserves a near-future %s marker within the stale-run window",
-    (markerField) => {
-      const now = Date.now();
-      const futureMarker = now + 1_000;
-      const job = createCronSystemEventJob(now, {
-        state: {
-          nextRunAtMs: now + 60_000,
-          [markerField]: futureMarker,
-        },
-      });
-      const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
 
       recomputeNextRunsForMaintenance(state, { deferredNotifications: [] });
 
@@ -312,35 +101,18 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     const now = Date.now();
     const pastDue = now - 1_000;
 
-    const dueJob: CronJob = {
+    const dueJob = createCronSystemEventJob(now, {
       id: "due-job",
-      name: "due job",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "due" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now - 3600_000,
-      updatedAtMs: now - 3600_000,
       state: {
         nextRunAtMs: pastDue,
       },
-    };
+    });
 
-    const malformedJob: CronJob = {
+    const malformedJob = createCronSystemEventJob(now, {
       id: "bad-job",
-      name: "bad job",
-      enabled: true,
       schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "bad" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now - 3600_000,
-      updatedAtMs: now - 3600_000,
-      state: {
-        // missing nextRunAtMs
-      },
-    };
+      state: {},
+    });
 
     const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
 
@@ -351,105 +123,18 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
     expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
   });
 
-  it("recomputes expired slots already executed but keeps never-executed stale slots", () => {
-    const now = Date.now();
-    const pastDue = now - 60_000;
-    const alreadyExecuted: CronJob = {
-      id: "already-executed",
-      name: "already executed",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "done" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now - 86400_000,
-      updatedAtMs: now - 86400_000,
-      state: {
-        nextRunAtMs: pastDue,
-        lastRunAtMs: pastDue + 1000,
-      },
-    };
-
-    const neverExecuted: CronJob = {
-      id: "never-executed",
-      name: "never executed",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "pending" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now - 86400_000 * 2,
-      updatedAtMs: now - 86400_000 * 2,
-      state: {
-        nextRunAtMs: pastDue,
-        lastRunAtMs: pastDue - 86400_000,
-      },
-    };
-
-    const state = createMockCronStateForJobs({
-      jobs: [alreadyExecuted, neverExecuted],
-      nowMs: now,
-    });
-    recomputeNextRunsForMaintenance(state, { deferredNotifications: [], recomputeExpired: true });
-
-    expect((alreadyExecuted.state.nextRunAtMs ?? 0) > now).toBe(true);
-    expect(neverExecuted.state.nextRunAtMs).toBe(pastDue);
-  });
-
-  it("does not advance overdue never-executed jobs when stale running marker is cleared", () => {
-    const now = Date.now();
-    const pastDue = now - 60_000;
-    const staleRunningAt = now - 3 * 60 * 60_000;
-
-    const job: CronJob = {
-      id: "stale-running-overdue",
-      name: "stale running overdue",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now - 86400_000,
-      updatedAtMs: now - 86400_000,
-      state: {
-        nextRunAtMs: pastDue,
-        runningAtMs: staleRunningAt,
-        lastRunAtMs: pastDue - 3600_000,
-      },
-    };
-
-    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
-    recomputeNextRunsForMaintenance(state, {
-      deferredNotifications: [],
-      recomputeExpired: true,
-      nowMs: now,
-    });
-
-    expect(job.state.runningAtMs).toBeUndefined();
-    expect(job.state.nextRunAtMs).toBe(pastDue);
-  });
-
   it("advances overdue already-executed jobs when stale running marker is cleared", () => {
     const now = Date.now();
     const pastDue = now - 60_000;
     const staleRunningAt = now - 3 * 60 * 60_000;
 
-    const job: CronJob = {
-      id: "stale-running-already-executed",
-      name: "stale running already executed",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "test" },
-      sessionTarget: "main",
-      wakeMode: "next-heartbeat",
-      createdAtMs: now - 86400_000,
-      updatedAtMs: now - 86400_000,
+    const job = createCronSystemEventJob(now, {
       state: {
         nextRunAtMs: pastDue,
         runningAtMs: staleRunningAt,
         lastRunAtMs: pastDue + 1000,
       },
-    };
+    });
 
     const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state, {

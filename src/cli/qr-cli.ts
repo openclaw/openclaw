@@ -1,4 +1,3 @@
-// QR/setup-code CLI for mobile/device pairing with local or remote Gateway credentials.
 import type { Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -36,10 +35,6 @@ type QrCliOptions = {
 const LIMITED_TRANSPORT_WARNING =
   "This Gateway URL uses plaintext ws://, so the setup code was limited for safety. Use wss:// or Tailscale Serve, then generate a new code for full access.";
 
-function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
-  return trimToUndefined(cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"]);
-}
-
 function shouldResolveLocalGatewayPasswordSecret(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -63,26 +58,7 @@ function shouldResolveLocalGatewayPasswordSecret(
   return !envToken && !configTokenConfigured;
 }
 
-async function resolveLocalGatewayPasswordSecretIfNeeded(cfg: OpenClawConfig): Promise<void> {
-  const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
-    config: cfg,
-    env: process.env,
-    value: cfg.gateway?.auth?.password,
-    path: "gateway.auth.password",
-  });
-  if (!resolvedPassword) {
-    return;
-  }
-  if (!cfg.gateway?.auth) {
-    return;
-  }
-  cfg.gateway.auth.password = resolvedPassword;
-}
-
 function emitQrSecretResolveDiagnostics(diagnostics: string[], opts: QrCliOptions): void {
-  if (diagnostics.length === 0) {
-    return;
-  }
   const toStderr = opts.json === true || opts.setupCodeOnly === true;
   for (const entry of diagnostics) {
     const message = theme.warn(`[secrets] ${entry}`);
@@ -160,28 +136,18 @@ export function registerQrCli(program: Command) {
         };
         emitQrSecretResolveDiagnostics(remoteDiagnostics, opts);
 
-        if (token) {
+        const authToken =
+          token || (wantsRemote && !password ? trimToUndefined(cfg.gateway.remote?.token) : "");
+        const authPassword =
+          password || (wantsRemote && !token ? trimToUndefined(cfg.gateway.remote?.password) : "");
+        if (authToken) {
           cfg.gateway.auth.mode = "token";
-          cfg.gateway.auth.token = token;
+          cfg.gateway.auth.token = authToken;
           cfg.gateway.auth.password = undefined;
-        }
-        if (password) {
+        } else if (authPassword) {
           cfg.gateway.auth.mode = "password";
-          cfg.gateway.auth.password = password;
+          cfg.gateway.auth.password = authPassword;
           cfg.gateway.auth.token = undefined;
-        }
-        if (wantsRemote && !token && !password) {
-          const remoteToken = trimToUndefined(cfg.gateway?.remote?.token) ?? "";
-          const remotePassword = trimToUndefined(cfg.gateway?.remote?.password) ?? "";
-          if (remoteToken) {
-            cfg.gateway.auth.mode = "token";
-            cfg.gateway.auth.token = remoteToken;
-            cfg.gateway.auth.password = undefined;
-          } else if (remotePassword) {
-            cfg.gateway.auth.mode = "password";
-            cfg.gateway.auth.password = remotePassword;
-            cfg.gateway.auth.token = undefined;
-          }
         }
         if (
           !wantsRemote &&
@@ -189,15 +155,20 @@ export function registerQrCli(program: Command) {
           !token &&
           shouldResolveLocalGatewayPasswordSecret(cfg, process.env)
         ) {
-          await resolveLocalGatewayPasswordSecretIfNeeded(cfg);
+          const resolvedPassword = await resolveRequiredConfiguredSecretRefInputString({
+            config: cfg,
+            env: process.env,
+            value: cfg.gateway.auth.password,
+            path: "gateway.auth.password",
+          });
+          if (resolvedPassword) {
+            cfg.gateway.auth.password = resolvedPassword;
+          }
         }
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
-        const publicUrl =
-          explicitUrl ?? (wantsRemote ? undefined : readDevicePairPublicUrlFromConfig(cfg));
-
         const resolved = await resolvePairingSetupFromConfig(cfg, {
-          publicUrl,
+          publicUrl: explicitUrl,
           preferRemoteUrl: wantsRemote,
           ...(opts.voiceNode
             ? { bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }

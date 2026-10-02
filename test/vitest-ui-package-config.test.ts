@@ -1,7 +1,8 @@
 // Vitest UI package config tests validate UI package test project settings.
-import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { globSync as nativeGlobSync } from "tinyglobby";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserProviderOption } from "vitest/node";
 import { resolveCiTestRuntimeSelections } from "../scripts/lib/ci-test-runtime.mts";
@@ -15,7 +16,7 @@ import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.js";
 import { loadVitestPerformanceConfig } from "./vitest/vitest.performance-config.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest/vitest.timeouts.ts";
 import { createUiIsolatedVitestConfig } from "./vitest/vitest.ui-isolated.config.ts";
-import { uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
+import { uiNodeDrivenBrowserTestFiles, uiTimingTestFiles } from "./vitest/vitest.ui-paths.mjs";
 import { createUiTimingVitestConfig } from "./vitest/vitest.ui-timing.config.ts";
 import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
 
@@ -33,6 +34,19 @@ type ExpectedTestConfig = ReturnType<typeof loadVitestPerformanceConfig> & {
   setupFiles?: string[];
   sequence?: { groupOrder?: number };
 };
+
+function globTestFiles(
+  patterns: string | string[],
+  options: { cwd?: string; exclude?: string[] } = {},
+): string[] {
+  // Use the same discovery engine and options as Vitest, including for scoped owners.
+  return nativeGlobSync(patterns, {
+    cwd: options.cwd,
+    ignore: options.exclude,
+    dot: true,
+    expandDirectories: false,
+  });
+}
 
 function requireTestConfig(config: unknown): ExpectedTestConfig {
   if (!config || typeof config !== "object" || !("test" in config) || !config.test) {
@@ -117,6 +131,8 @@ describe("ui package vitest config", () => {
       expect(result.stdout).toContain("[ui-runtime] file shuffle seed: 37");
       const report = JSON.parse(readFileSync(output, "utf8")) as {
         discovered: string[];
+        packageNodeFiles: string[];
+        rootNodeFiles: string[];
         rows: Array<{
           original: string[];
           selected: Record<string, Array<{ runtime: string; files: string[] }>>;
@@ -150,10 +166,19 @@ describe("ui package vitest config", () => {
         };
       };
       const nodeFiles = new Set([
-        "ui/src/pages/chat/chat-thread.test.ts",
-        "ui/src/pages/usage/usage-page-details.test.ts",
+        "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+        "ui/src/pages/chat/chat-pane-retention.test.ts",
+        "ui/src/pages/chat/chat-thread-retention.test.ts",
+        "ui/src/pages/chat/session-snapshot-store.test.ts",
+        "ui/src/pages/usage/usage-page-retention.test.ts",
       ]);
       expect(report.discovered.length).toBeGreaterThan(1000);
+      // Package isolated/timing/Chromium projects retain their separate owners.
+      expect(report.rootNodeFiles).toEqual(report.packageNodeFiles);
+      expect(report.rootNodeFiles).toContain(
+        "ui/src/pages/chat/talk/shared.browser-import.test.ts",
+      );
+      expect(report.rootNodeFiles).toEqual(expect.arrayContaining(uiNodeDrivenBrowserTestFiles));
       expect(report.rows).toHaveLength(4);
       expect(report.empty).toEqual({ modules: 0, errors: 0 });
       expect(report.emptyDiscoveryAllowed).toBe(false);
@@ -225,7 +250,7 @@ describe("ui package vitest config", () => {
             root: path.join(process.cwd(), "ui").replaceAll("\\", "/"),
             files: expect.any(Array),
           });
-          // The producer must retain the native shard, including the other runtime's files.
+          // Every runtime invocation must retain the complete native shard receipt.
           expect(value.files.toSorted()).toEqual(row.original);
         }
         const compatible = row.selected["bun-compatible"]!;
@@ -249,18 +274,18 @@ describe("ui package vitest config", () => {
     const rootIsolated = requireTestConfig(createUiIsolatedVitestConfig({}));
     expect(packageIsolated?.isolate).toBe(true);
     expect(rootIsolated.isolate).toBe(true);
-    const packageFiles = globSync(packageIsolated?.include ?? [], {
+    const packageFiles = globTestFiles(packageIsolated?.include ?? [], {
       cwd: path.join(process.cwd(), "ui"),
       exclude: packageIsolated?.exclude,
     }).map((file) => path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`));
     expect(packageFiles.length).toBeGreaterThan(0);
-    const rootFiles = globSync(rootIsolated.include ?? [], { exclude: rootIsolated.exclude }).map(
-      (file) => file.replaceAll("\\", "/"),
-    );
+    const rootFiles = globTestFiles(rootIsolated.include ?? [], {
+      exclude: rootIsolated.exclude,
+    }).map((file) => file.replaceAll("\\", "/"));
     expect(rootFiles.toSorted()).toEqual(packageFiles.toSorted());
     const rootShared = requireTestConfig(createUiVitestConfig({}));
     expect(
-      globSync(rootShared.include ?? [], { exclude: rootShared.exclude }).filter((file) =>
+      globTestFiles(rootShared.include ?? [], { exclude: rootShared.exclude }).filter((file) =>
         packageFiles.includes(file.replaceAll("\\", "/")),
       ),
     ).toEqual([]);
@@ -348,18 +373,18 @@ describe("ui package vitest config", () => {
       expect(timing?.sequence?.groupOrder).toBeGreaterThan(project.sequence?.groupOrder ?? 0);
     }
     const selected = projects.flatMap((project) =>
-      globSync(project.include ?? [], {
+      globTestFiles(project.include ?? [], {
         cwd: path.join(process.cwd(), "ui"),
         exclude: project.exclude,
       }).map((file) => `ui/${file.replaceAll("\\", "/")}`),
     );
     const rootTiming = requireTestConfig(createUiTimingVitestConfig({}));
     const rootShared = requireTestConfig(createUiVitestConfig({}));
-    const rootFiles = globSync(rootShared.include ?? [], { exclude: rootShared.exclude });
+    const rootFiles = globTestFiles(rootShared.include ?? [], { exclude: rootShared.exclude });
     for (const project of [rootShared, requireTestConfig(createUiIsolatedVitestConfig({}))]) {
       expect(rootTiming.sequence?.groupOrder).toBeGreaterThan(project.sequence?.groupOrder ?? 0);
     }
-    expect(globSync(rootTiming.include ?? [], { exclude: rootTiming.exclude })).toEqual(
+    expect(globTestFiles(rootTiming.include ?? [], { exclude: rootTiming.exclude })).toEqual(
       uiTimingTestFiles,
     );
     for (const file of uiTimingTestFiles) {
@@ -398,23 +423,23 @@ describe("ui package vitest config", () => {
     const browser = projects.find((project) => project.browser?.enabled);
     const node = projects.find((project) => project.name === "unit-node");
     const root = requireTestConfig(createUiVitestConfig());
-    const nativeFiles = globSync(browser?.include ?? [], {
+    const nativeFiles = globTestFiles(browser?.include ?? [], {
       cwd: uiRoot,
       exclude: browser?.exclude,
     }).map((file) => `ui/${file}`);
-    const nodeFiles = globSync(node?.include ?? [], {
+    const nodeFiles = globTestFiles(node?.include ?? [], {
       cwd: uiRoot,
       exclude: node?.exclude,
     })
       .filter((file) => file.endsWith(".browser.test.ts"))
       .map((file) => `ui/${file}`);
-    const rootFiles = globSync(root.include ?? [], { exclude: root.exclude });
+    const rootFiles = globTestFiles(root.include ?? [], { exclude: root.exclude });
     expect(nativeFiles).toContain("ui/src/components/markdown-mermaid.runtime.browser.test.ts");
     expect(nodeFiles).toContain("ui/src/components/form-controls.browser.test.ts");
     expect(rootFiles.filter((file) => nativeFiles.includes(file))).toEqual([]);
     expect(rootFiles).toEqual(expect.arrayContaining(nodeFiles));
     expect([...nativeFiles, ...nodeFiles].toSorted()).toEqual(
-      globSync("ui/src/**/*.browser.test.ts").toSorted(),
+      globTestFiles("ui/src/**/*.browser.test.ts").toSorted(),
     );
     const unpartitionedBrowser = requireTestConfig(createUiBrowserVitestConfig({}));
     expect(unpartitionedBrowser.browser?.provider?.prewarm).toEqual(expect.any(Function));
@@ -458,9 +483,9 @@ describe("ui package vitest config", () => {
     const scopedRoot = requireTestConfig(
       createUiVitestConfig({ OPENCLAW_VITEST_INCLUDE_FILE: includeFile }),
     );
-    expect(globSync(scopedRoot.include ?? [], { exclude: scopedRoot.exclude }).toSorted()).toEqual(
-      nodeFiles.toSorted(),
-    );
+    expect(
+      globTestFiles(scopedRoot.include ?? [], { exclude: scopedRoot.exclude }).toSorted(),
+    ).toEqual(nodeFiles.toSorted());
   });
 
   it.each([
@@ -498,7 +523,7 @@ describe("ui package vitest config", () => {
     expect(config.root).toBe(uiRoot);
     const selected = (requireTestConfig(config).projects ?? []).flatMap((project) => {
       const test = requireTestConfig(project);
-      return globSync(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map((file) =>
+      return globTestFiles(test.include ?? [], { cwd: uiRoot, exclude: test.exclude }).map((file) =>
         path.posix.normalize(`ui/${file.replaceAll("\\", "/")}`),
       );
     });
@@ -506,10 +531,11 @@ describe("ui package vitest config", () => {
     expect(selected.toSorted()).toEqual(expected);
   });
 
-  it("keeps the standalone ui package on thread workers without broad isolation", () => {
+  it("keeps the standalone ui package on native runtime workers without broad isolation", () => {
     const testConfig = requireTestConfig(uiConfig);
+    const expectedPool = process.versions.bun ? "forks" : "threads";
 
-    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.pool).toBe(expectedPool);
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.projects).toHaveLength(5);
     expect(testConfig.maxWorkers).toBeGreaterThan(0);
@@ -519,7 +545,7 @@ describe("ui package vitest config", () => {
       const projectTestConfig = requireTestConfig(project);
       expect((project as { extends?: boolean }).extends).toBe(false);
       expect(projectTestConfig.clearMocks).toBe(false);
-      expect(projectTestConfig.pool).toBe("threads");
+      expect(projectTestConfig.pool).toBe(expectedPool);
       // Project overrides would defeat CI's explicit --maxWorkers limit.
       expect(projectTestConfig.maxWorkers).toBeUndefined();
       expect(projectTestConfig.setupFiles).toEqual(["./src/test-helpers/lit-warnings.setup.ts"]);

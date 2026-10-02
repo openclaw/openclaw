@@ -1,6 +1,7 @@
 import { compareChatQueueOrder, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
 import type { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import type { SenderIdentity } from "../../lib/chat/sender-label.ts";
 import { scopedAgentIdForSession, type SessionScopeHost } from "../../lib/sessions/index.ts";
@@ -14,7 +15,6 @@ import {
   storedChatOutboxScopeKey,
   type ChatComposerScope,
   type StoredChatOutbox,
-  type StoredChatOutboxScope,
 } from "./composer-persistence.ts";
 
 type ChatQueueStoreHost = {

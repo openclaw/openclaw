@@ -57,10 +57,6 @@ function parseDurationMs(value: unknown): number | undefined {
   return parsePositiveInteger(Math.round(seconds * 1000));
 }
 
-function parseStreamIndex(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
-}
-
 function selectPlaybackStream(
   streams: readonly Record<string, unknown>[],
   codecType: "audio" | "video",
@@ -121,8 +117,8 @@ function parseFfprobeMediaMetadata(
   const videoCodec = normalizeOptionalLowercaseString(videoStream?.codec_name);
   const videoPixelFormat = normalizeOptionalLowercaseString(videoStream?.pix_fmt);
   const videoProfile = normalizeOptionalLowercaseString(videoStream?.profile);
-  const audioStreamIndex = parseStreamIndex(audioStream?.index);
-  const videoStreamIndex = parseStreamIndex(videoStream?.index);
+  const audioStreamIndex = asSafeIntegerInRange(audioStream?.index, { min: 0 });
+  const videoStreamIndex = asSafeIntegerInRange(videoStream?.index, { min: 0 });
   return {
     ...(durationMs ? { durationMs } : {}),
     ...(kind === "video" && width && height ? { width, height } : {}),
@@ -266,7 +262,6 @@ export async function probePlaybackMediaFileDescriptor(
   return await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options);
 }
 
-/** Positive display dimensions of the selected video stream. */
 type VideoDimensions = {
   width: number;
   height: number;

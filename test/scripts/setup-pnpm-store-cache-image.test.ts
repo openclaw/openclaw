@@ -47,8 +47,8 @@ function fixture(platform = "linux", version = "12.3.4") {
     .replaceAll("process.platform", JSON.stringify(platform))
     .replaceAll("process.arch", '"x64"')
     .replace(
-      version === "12.5.0"
-        ? "9cdbaa34ffacae1768635ac0d23e94db6201c7d59bf3da236b23d67c8f6b794d1dab323bcd5bcc51b55c8cafbf6f19a24e4aa61d6ab7772aa3b5cc85e325dc4d"
+      version === "12.5.1"
+        ? "e3f305bc784a2bc89f5ad3b6138889470fae8d2af5f36b61216ec91c2c3d64089775f9de38aac331044ea40f245cb0d5666392dfdf65824e1907ef6a2c62de5f"
         : "961aa41fb077da3a04a441d9f8e15ebc0c96da8ef710b2eb67bf9ee7cb0610eabd48f1fd85f51cffe73846785fa0f87c56a3a872a1d893f8446741b5cce45457",
       wrapperHash,
     )
@@ -81,11 +81,11 @@ function fixture(platform = "linux", version = "12.3.4") {
 
 describe("pnpm image archive consumer", () => {
   it("seeds the pinned Windows wrapper without installing a Linux native binary", () => {
-    const f = fixture("win32", "12.5.0");
+    const f = fixture("win32", "12.5.1");
     const result = f.run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.trim()).not.toBe("");
-    const pnpmRoot = join(result.stdout.trim(), "v1", "pnpm", "12.5.0");
+    const pnpmRoot = join(result.stdout.trim(), "v1", "pnpm", "12.5.1");
     const metadata = JSON.parse(readFileSync(join(pnpmRoot, ".corepack"), "utf8"));
     expect(metadata.hash).toBe(f.spec.slice(f.spec.indexOf("+") + 1));
     expect(metadata.bin.pnpm).toBe("./bin/pnpm.mjs");
@@ -94,13 +94,13 @@ describe("pnpm image archive consumer", () => {
       execFileSync(process.execPath, [join(pnpmRoot, metadata.bin.pnpm)], {
         encoding: "utf8",
       }).trim(),
-    ).toBe("12.5.0");
+    ).toBe("12.5.1");
     expect(existsSync(join(f.root, "old-corepack"))).toBe(false);
   });
 
   it("does not admit a corrupt Windows wrapper with networking disabled", () => {
-    const f = fixture("win32", "12.5.0");
-    writeFileSync(join(f.image, "pnpm-12.5.0.tgz"), "corrupt wrapper");
+    const f = fixture("win32", "12.5.1");
+    writeFileSync(join(f.image, "pnpm-12.5.1.tgz"), "corrupt wrapper");
     const result = f.run();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe("");

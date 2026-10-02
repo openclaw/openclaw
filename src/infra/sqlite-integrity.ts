@@ -32,9 +32,12 @@ export type SqliteIntegrityCheck = {
 export type SqliteIntegrityOperation<T> = Generator<SqliteIntegrityCheck, T, void>;
 
 export type SqliteIntegrityDiagnostics = {
-  integrityGateReason?: "revoked" | "no-proof" | "lease-class";
+  integrityGateReason?: "revoked" | "stale-lease" | "dirty-receipt" | "no-proof" | "lease-class";
   integrityGateMode?: "full" | "tables";
   integrityTableTimings?: SqliteIntegrityCheckTiming["tables"];
+  integrityTableTotals?: Partial<
+    Record<SqliteCheckPragma, { tableCount: number; elapsedMs: number }>
+  >;
   integrityGateMs?: number;
   integrityGateOutcome?: "healthy" | "failed" | "cached";
   integrityCheckSyncMs?: number;
@@ -59,6 +62,7 @@ export function* sqliteIntegrityCheckSteps(
     check.timing = {};
     diagnostics.integrityGateMode = tables ? "tables" : "full";
     delete diagnostics.integrityTableTimings;
+    delete diagnostics.integrityTableTotals;
     // A later async driver must not inherit an earlier gate's synchronous measurement.
     delete diagnostics.integrityCheckSyncMs;
     delete diagnostics.integrityOutsideCheckMs;
@@ -80,7 +84,18 @@ export function* sqliteIntegrityCheckSteps(
     if (diagnostics) {
       diagnostics.integrityGateMs = Math.floor(performance.now() - startedAt);
       if (check.timing?.tables) {
-        diagnostics.integrityTableTimings = check.timing.tables;
+        diagnostics.integrityTableTotals = {};
+        for (const table of check.timing.tables) {
+          const total = (diagnostics.integrityTableTotals[table.check] ??= {
+            tableCount: 0,
+            elapsedMs: 0,
+          });
+          total.tableCount += 1;
+          total.elapsedMs += table.elapsedMs;
+        }
+        diagnostics.integrityTableTimings = check.timing.tables
+          .toSorted((left, right) => right.elapsedMs - left.elapsedMs)
+          .slice(0, 10);
       }
       if (check.timing?.syncElapsedMs !== undefined) {
         diagnostics.integrityCheckSyncMs = Math.floor(check.timing.syncElapsedMs);
@@ -119,16 +134,22 @@ export function runSqliteIntegrityCheckSync(check: SqliteIntegrityCheck): void {
 }
 
 /** Run the same admission steps synchronously when the caller cannot yield. */
-export function runSqliteIntegrityOperationSync<T>(operation: SqliteIntegrityOperation<T>): T {
+export function runSqliteIntegrityOperationSync<T>(
+  operation: SqliteIntegrityOperation<T>,
+  beforeResume?: () => void,
+): T {
+  beforeResume?.();
   let step = operation.next();
   while (!step.done) {
+    let failure: { error: unknown } | undefined;
     try {
       runSqliteIntegrityCheckSync(step.value);
     } catch (error) {
-      step = operation.throw(error);
-      continue;
+      failure = { error };
     }
-    step = operation.next();
+    // A blocking check can outlive its caller; both success and failure resume schema work.
+    beforeResume?.();
+    step = failure ? operation.throw(failure.error) : operation.next();
   }
   return step.value;
 }
@@ -218,19 +239,6 @@ export function assertSqliteIntegrity(
   return { integrityCheck };
 }
 
-/** Run integrity checks and preserve whether a failure proves persistent damage. */
-function confirmSqliteIntegrity(
-  database: DatabaseSync,
-  databaseLabel: string,
-): UnboundSqliteIntegrityConfirmation {
-  try {
-    assertSqliteIntegrity(database, databaseLabel);
-    return { status: "healthy" };
-  } catch (error) {
-    return failedSqliteIntegrityConfirmation(error);
-  }
-}
-
 /** Reconfirm an advisory failure against the database currently at a closed path. */
 export function confirmSqliteFileIntegrity(
   pathname: string,
@@ -253,17 +261,13 @@ export function confirmSqliteFileIntegrity(
       return unboundSqliteIntegrityFailure(error);
     }
 
-    let opened: SqliteFileGeneration;
+    let opened: SqliteFileGeneration | undefined;
     try {
       opened = readStableSqliteFileGeneration(pathname);
     } catch {
-      const closeError = closeSqliteDatabase(database);
-      if (closeError) {
-        return unboundSqliteIntegrityFailure(closeError);
-      }
-      continue;
+      // A missing generation follows the same native cleanup as a changed one.
     }
-    if (!sameSqliteFileGeneration(initial, opened)) {
+    if (!opened || !sameSqliteFileGeneration(initial, opened)) {
       const closeError = closeSqliteDatabase(database);
       if (closeError) {
         return unboundSqliteIntegrityFailure(closeError);
@@ -271,7 +275,13 @@ export function confirmSqliteFileIntegrity(
       continue;
     }
 
-    let confirmation = confirmSqliteIntegrity(database, databaseLabel);
+    let confirmation: UnboundSqliteIntegrityConfirmation;
+    try {
+      assertSqliteIntegrity(database, databaseLabel);
+      confirmation = { status: "healthy" };
+    } catch (error) {
+      confirmation = failedSqliteIntegrityConfirmation(error);
+    }
     const closeError = closeSqliteDatabase(database);
     if (closeError && confirmation.status === "healthy") {
       confirmation = failedSqliteIntegrityConfirmation(closeError);
@@ -286,24 +296,16 @@ export function confirmSqliteFileIntegrity(
     if (!sameSqliteFileGeneration(opened, final)) {
       continue;
     }
-    return bindSqliteIntegrityConfirmation(confirmation, final);
+    if (confirmation.status === "healthy") {
+      return { status: "healthy", generation: final };
+    }
+    return confirmation.terminal
+      ? { ...confirmation, generation: final, terminal: true }
+      : { ...confirmation, terminal: false };
   }
   return unboundSqliteIntegrityFailure(
     new Error(`SQLite file generation did not stabilize during confirmation: ${pathname}`),
   );
-}
-
-function bindSqliteIntegrityConfirmation(
-  confirmation: UnboundSqliteIntegrityConfirmation,
-  generation: SqliteFileGeneration,
-): SqliteIntegrityConfirmation {
-  if (confirmation.status === "healthy") {
-    return { status: "healthy", generation };
-  }
-  if (confirmation.terminal) {
-    return { ...confirmation, generation, terminal: true };
-  }
-  return { ...confirmation, terminal: false };
 }
 
 function failedSqliteIntegrityConfirmation(error: unknown): UnboundSqliteIntegrityConfirmation {

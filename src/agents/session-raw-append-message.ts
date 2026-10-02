@@ -6,16 +6,19 @@
 import type { SessionManager } from "./sessions/index.js";
 
 const RAW_APPEND_MESSAGE = Symbol("openclaw.session.rawAppendMessage");
+const RAW_APPEND_MESSAGE_ASYNC = Symbol("openclaw.session.rawAppendMessageAsync");
 
 type SessionManagerWithRawAppend = SessionManager & {
   [RAW_APPEND_MESSAGE]?: SessionManager["appendMessage"];
+  [RAW_APPEND_MESSAGE_ASYNC]?: SessionManager["appendMessageAsync"];
 };
 
 /** Return the unguarded appendMessage implementation for a session manager. */
 export function getRawSessionAppendMessage(
   sessionManager: SessionManager,
 ): SessionManager["appendMessage"] {
-  const rawAppend = (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE];
+  const rawManager: SessionManagerWithRawAppend = sessionManager;
+  const rawAppend = rawManager[RAW_APPEND_MESSAGE];
   return rawAppend ?? sessionManager.appendMessage.bind(sessionManager);
 }
 
@@ -24,5 +27,23 @@ export function setRawSessionAppendMessage(
   sessionManager: SessionManager,
   appendMessage: SessionManager["appendMessage"],
 ): void {
-  (sessionManager as SessionManagerWithRawAppend)[RAW_APPEND_MESSAGE] = appendMessage;
+  const rawManager: SessionManagerWithRawAppend = sessionManager;
+  rawManager[RAW_APPEND_MESSAGE] = appendMessage;
+}
+
+export function getRawSessionAppendMessageAsync(
+  sessionManager: SessionManager,
+): SessionManager["appendMessageAsync"] {
+  const rawManager: SessionManagerWithRawAppend = sessionManager;
+  return (
+    rawManager[RAW_APPEND_MESSAGE_ASYNC] ?? sessionManager.appendMessageAsync.bind(sessionManager)
+  );
+}
+
+export function setRawSessionAppendMessageAsync(
+  sessionManager: SessionManager,
+  appendMessage: SessionManager["appendMessageAsync"],
+): void {
+  const rawManager: SessionManagerWithRawAppend = sessionManager;
+  rawManager[RAW_APPEND_MESSAGE_ASYNC] = appendMessage;
 }

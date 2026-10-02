@@ -1,16 +1,14 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { beforeEach, describe, expect, vi } from "vitest";
+import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   BUNDLE_HASH,
@@ -23,7 +21,8 @@ import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
+const it = createCommandTest();
 
 describe("worker placement dispatch reclaim", () => {
   let root: string;
@@ -34,11 +33,6 @@ describe("worker placement dispatch reclaim", () => {
     root = tempDirs.make("openclaw-dispatch-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    tempDirs.cleanup();
   });
 
   it("admits an unrelated provider provision after Stop while another provision never settles", async () => {
@@ -152,9 +146,12 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
-      turnClaim: null,
+      turnClaim: { owner: "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+      { workspaceAcceptedAtMs: expect.any(Number) },
+    ]);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("workspace:resume");
   });
@@ -664,7 +661,7 @@ describe("worker placement dispatch reclaim", () => {
     await placementStore.releaseTurn(claim);
 
     const basePack = Buffer.from("retirement workspace base pack");
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -701,7 +698,7 @@ describe("worker placement dispatch reclaim", () => {
       to: "reclaimed",
       expectedGeneration: reconciling.generation,
     });
-    expect(placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
     expect(placementStore.get(active.sessionId)?.workspaceResultConflict).toBeDefined();
 
     placementStore.retireSessionPlacement({
@@ -711,7 +708,7 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(placementStore.get(active.sessionId)).toBeUndefined();
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
     await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },
@@ -769,14 +766,12 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
   });
 
-  it("releases a failed stop claim so reclaim can be retried", async () => {
+  it("releases a failed stop claim so reclaim can be retried", async ({ command }) => {
     const workspacePath = path.join(root, "retry-workspace");
-    await fs.mkdir(workspacePath);
-    const initialized = await runCommandWithTimeout(
-      ["git", "-C", workspacePath, "init", "--quiet"],
-      { timeoutMs: 10_000 },
-    );
-    expect(initialized.code).toBe(0);
+    const initialized = await command.run("git", ["init", "--quiet", workspacePath], {
+      timeout: 10_000,
+    });
+    expect(initialized.status).toBe(0);
     const harness = createHarness(database, placementStore, {
       reconcileFailureCount: 1,
       workspacePath,
@@ -929,7 +924,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("keeps a changed result fenced when quiescence fails after apply", async () => {
-    const harness = createHarness(database, placementStore, { leaseFailureCount: 1 });
+    const harness = createHarness(database, placementStore, { leaseFailureCall: 2 });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -989,7 +984,9 @@ describe("worker placement dispatch reclaim", () => {
     };
     const harness = createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
-      verifyFails: true,
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailureCall: 3,
     });
     await harness.service.dispatch(REQUEST);
 

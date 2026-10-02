@@ -37,7 +37,7 @@ import type {
   ProviderLocalServiceTarget,
 } from "./provider-local-service-target.js";
 import { resolveConfiguredProviderLocalServiceTarget } from "./provider-local-service-target.js";
-import { setManagedProviderLocalServicesActive } from "./provider-runtime-lifecycle.js";
+import { setManagedProviderLocalServicesStop } from "./provider-runtime-lifecycle.js";
 import { unwrapHeadersInitSentinelsForProviderEgress } from "./provider-secret-egress.js";
 
 const log = createSubsystemLogger("provider-local-service");
@@ -154,7 +154,7 @@ async function acquireProviderLocalService(
   }
   const managed = current ?? { active: 0 };
   services.set(key, managed);
-  setManagedProviderLocalServicesActive(true);
+  setManagedProviderLocalServicesStop(stopManagedProviderLocalServices);
   clearIdleTimer(managed);
   managed.active += 1;
 
@@ -471,7 +471,9 @@ function scheduleIdleStop(
   if (!managed.process) {
     if (!managed.starting) {
       services.delete(key);
-      setManagedProviderLocalServicesActive(services.size > 0);
+      setManagedProviderLocalServicesStop(
+        services.size > 0 ? stopManagedProviderLocalServices : undefined,
+      );
     }
     return;
   }
@@ -523,7 +525,9 @@ function stopManagedService(
       if (services.get(key) === managed) {
         services.delete(key);
       }
-      setManagedProviderLocalServicesActive(services.size > 0);
+      setManagedProviderLocalServicesStop(
+        services.size > 0 ? stopManagedProviderLocalServices : undefined,
+      );
     })
     .catch((error: unknown) => {
       // Keep retirement ownership; a later call may recheck a delayed process exit.
@@ -588,7 +592,7 @@ function installExitHandler() {
     for (const [key, managed] of services) {
       forceStopManagedService(key, managed);
     }
-    setManagedProviderLocalServicesActive(false);
+    setManagedProviderLocalServicesStop(undefined);
   });
 }
 

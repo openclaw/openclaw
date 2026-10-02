@@ -27,6 +27,11 @@ on:
         required: false
         default: true
         type: boolean
+      run_bun_only_runtime_smoke:
+        description: Run the advisory Bun-only runtime smoke (Release Checks only)
+        required: false
+        default: false
+        type: boolean
       update_baseline_version:
         description: Baseline openclaw version or dist-tag for installer update smoke
         required: false
@@ -1524,7 +1529,8 @@ jobs:
         with:
           node-version: "24.x"
 
-      - name: Verify candidate payload contents
+      - &candidate_payload_verify_step
+        name: Verify candidate payload contents
         env:
           HARNESS_REPOSITORY: ${{ steps.workflow.outputs.repository }}
           HARNESS_SHA: ${{ steps.workflow.outputs.sha }}
@@ -1559,6 +1565,54 @@ jobs:
           OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD: "0"
           OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz
         run: bash scripts/e2e/bun-global-install-smoke.sh
+
+  bun_only_runtime_smoke:
+    needs: [preflight, installer_smoke_candidate_payload]
+    if: needs.preflight.outputs.run_full_install_smoke == 'true' && inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions
+    runs-on: ${{ inputs.runner_group != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(inputs.runner_group), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    # Advisory until the listed Bun blockers land: failures stay visible without gating releases.
+    continue-on-error: true
+    timeout-minutes: 20
+    steps:
+      - *trusted_workflow_subdir_checkout_step
+      - name: Setup Node for payload verification
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - *trusted_workflow_subdir_identity_step
+
+      - *candidate_payload_binding_step
+
+      - *candidate_payload_download_step
+
+      - *candidate_payload_verify_step
+
+      - name: Setup pinned Bun runtime
+        uses: ./.release-harness/.github/actions/setup-test-bun
+
+      - name: Run Bun-only runtime smoke
+        working-directory: .release-harness
+        env:
+          OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ: ${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz
+          OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/bun-only-runtime-smoke
+          OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE: "1"
+        run: bash scripts/e2e/bun-only-runtime-smoke.sh
+
+      - name: Upload Bun-only runtime smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: bun-only-runtime-smoke-${{ github.run_attempt }}
+          # Evidence only; the installed package trees and state under this directory are hundreds of MB.
+          path: |
+            ${{ runner.temp }}/bun-only-runtime-smoke/*.md
+            ${{ runner.temp }}/bun-only-runtime-smoke/*.json
+            ${{ runner.temp }}/bun-only-runtime-smoke/*.jsonl
+            ${{ runner.temp }}/bun-only-runtime-smoke/*.log
+          retention-days: 14
+          if-no-files-found: ignore
 
   docker-e2e-fast:
     needs: [preflight]

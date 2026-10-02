@@ -1,7 +1,7 @@
-// Gateway RPC handlers for safe gateway restart requests and preflight state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import {
   createSafeGatewayRestartPreflight,
@@ -12,6 +12,7 @@ import {
   parseTargetedGatewayRestart,
   parseTargetedGatewayRestartIntent,
 } from "./restart-request.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function normalizeReason(value: unknown): string | undefined {
@@ -22,8 +23,43 @@ function normalizeReason(value: unknown): string | undefined {
     : undefined;
 }
 
-/** Gateway request handlers for safe restart coordination. */
 export const restartHandlers: GatewayRequestHandlers = {
+  "gateway.stop.request": async (options) => {
+    const { params, respond, context } = options;
+    const target = isRecord(params) ? parseTargetedGatewayRestart(params.target) : null;
+    if (!target) {
+      return respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid targeted gateway stop"),
+      );
+    }
+    const { assertCurrent } = readGatewayRequestMutationAuthority(options);
+    try {
+      assertCurrent();
+      const activeLock = await readActiveGatewayLockIdentity();
+      assertCurrent();
+      if (
+        activeLock?.pid !== process.pid ||
+        activeLock.pid !== target.pid ||
+        activeLock.ownerId !== target.ownerId ||
+        activeLock.port !== target.port
+      ) {
+        return respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "target gateway no longer owns the active lock"),
+        );
+      }
+      const result = await context.hostLifecycle?.request("stop", assertCurrent);
+      if (!result?.ok) {
+        throw new Error(result?.error ?? "Gateway host does not own process exit");
+      }
+      respond(true, { ok: true, pid: process.pid, status: "scheduled" });
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
   "gateway.restart.request": async ({ respond, params }) => {
     if (!isRecord(params)) {
       respond(

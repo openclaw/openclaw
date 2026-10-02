@@ -201,6 +201,37 @@ describe("readDraftCloudProfiles", () => {
 });
 
 describe("readDraftEnvironments", () => {
+  it("retains actionable worker-host issues while discarding malformed messages", () => {
+    const issue = {
+      code: "worker-host-unavailable",
+      message: "state directory /srv/node is group-writable; run chmod go-w /srv/node",
+    };
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:unavailable",
+          type: "node",
+          status: "unavailable",
+          sessionHost: false,
+          issues: [
+            issue,
+            { ...issue, message: " " },
+            { ...issue, message: 42 },
+            { ...issue, message: "x".repeat(1_025) },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:unavailable",
+        type: "node",
+        status: "unavailable",
+        sessionHost: false,
+        issues: [issue],
+      },
+    ]);
+  });
+
   it("keeps only the exact update-required issue contract", () => {
     const issue = {
       code: "update-required",
@@ -252,6 +283,24 @@ describe("readDraftEnvironments", () => {
         },
       },
     ]);
+  });
+
+  it("preserves the Gateway's remediation for a runtime-required command", () => {
+    const requiredNodeCommand = {
+      command: "codex.exec-server.stdio.v1",
+      state: "undeclared",
+      message: "Enable the codex plugin on this node with openclaw plugins enable codex.",
+    };
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          status: "available",
+          requiredNodeCommand,
+        },
+      ])[0]?.requiredNodeCommand,
+    ).toEqual(requiredNodeCommand);
   });
 
   it("keeps the closed environment types while rejecting malformed entries", () => {

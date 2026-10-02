@@ -67,36 +67,6 @@ const loadSessionArchiveRuntime = createLazyRuntimeModule(
   () => import("../../gateway/session-archive.runtime.js"),
 );
 
-/**
- * Persists runner reset metadata with its transcript boundary.
- */
-export async function persistSessionResetLifecycle(params: {
-  agentId?: string;
-  cleanupPreviousTranscript?: boolean;
-  nextEntry: SessionEntry;
-  workspaceDir: string;
-  nextSessionFile: string;
-  previousEntry: SessionEntry;
-  previousSessionId?: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<{ replayedMessages: number }> {
-  await applySessionEntryLifecycleMutation({
-    agentId: params.agentId,
-    activeSessionKey: params.sessionKey,
-    storePath: params.storePath,
-    upserts: [
-      {
-        sessionKey: params.sessionKey,
-        entry: params.nextEntry,
-        resetBoundary: { context: "preserve-tail", reason: "reset", cwd: params.workspaceDir },
-      },
-    ],
-    skipMaintenance: true,
-  });
-  return { replayedMessages: 0 };
-}
-
 type ReplySessionInitializationSelection = {
   agentId: string;
   storePath: string;

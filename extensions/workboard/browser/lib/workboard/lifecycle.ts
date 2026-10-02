@@ -1,4 +1,3 @@
-import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { normalizeSessionKeyForUiComparison } from "../sessions/session-key.ts";
 import { isFailedSessionStatus, staleSessionState, workboardCardSessionKey } from "./card-state.ts";
@@ -46,44 +45,19 @@ export function getWorkboardLifecycle(
     };
   }
   if (session.status === "queued") {
-    return {
-      session,
-      state: "queued",
-      targetStatus: "todo",
-      sourceUpdatedAt: asFiniteNumber(session.updatedAt),
-    };
+    return { session, state: "queued" };
   }
   if (staleSessionState(session)) {
-    return {
-      session,
-      state: "stale",
-      targetStatus: "running",
-      sourceUpdatedAt: asFiniteNumber(session.updatedAt),
-    };
+    return { session, state: "stale" };
   }
   if (session.hasActiveRun === true || session.status === "running") {
-    return {
-      session,
-      state: "running",
-      targetStatus: "running",
-      sourceUpdatedAt: asFiniteNumber(session.updatedAt),
-    };
+    return { session, state: "running" };
   }
   if (session.abortedLastRun || isFailedSessionStatus(session.status)) {
-    return {
-      session,
-      state: "failed",
-      targetStatus: "blocked",
-      sourceUpdatedAt: asFiniteNumber(session.updatedAt),
-    };
+    return { session, state: "failed" };
   }
   if (session.status === "done") {
-    return {
-      session,
-      state: "succeeded",
-      targetStatus: "review",
-      sourceUpdatedAt: asFiniteNumber(session.updatedAt),
-    };
+    return { session, state: "succeeded" };
   }
   return { session, state: "idle" };
 }

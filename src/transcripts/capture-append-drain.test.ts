@@ -11,16 +11,20 @@ import {
 
 const fixture = useTranscriptStatusFixture();
 
+async function startCapture(sessionId: string) {
+  const f = fixture();
+  const started = createDeferred<TranscriptStartRequest>();
+  f.provider.start = async (request) => {
+    started.resolve(request);
+    return { ok: true, session: request.session };
+  };
+  await f.start({ ...room, sessionId });
+  return { f, request: await started.promise };
+}
+
 describe("transcript capture accepted append drainage", () => {
   it("persists concurrently accepted speech in order before terminal metadata and notes", async () => {
-    const f = fixture();
-    const started = createDeferred<TranscriptStartRequest>();
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      return { ok: true, session: request.session };
-    };
-    await f.start({ ...room, sessionId: "terminal-drain" });
-    const request = await started.promise;
+    const { f, request } = await startCapture("terminal-drain");
     const appendEntered = createDeferred();
     const releaseAppend = createDeferred();
     const events: string[] = [];
@@ -266,14 +270,7 @@ describe("transcript capture accepted append drainage", () => {
     ]);
   });
   it("settles metadata rejection promptly while preserving earlier accepted speech ordering", async () => {
-    const f = fixture();
-    const started = createDeferred<TranscriptStartRequest>();
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      return { ok: true, session: request.session };
-    };
-    await f.start({ ...room, sessionId: "serialization-rejection" });
-    const request = await started.promise;
+    const { f, request } = await startCapture("serialization-rejection");
     const appendEntered = createDeferred();
     const releaseAppend = createDeferred();
     const append = f.store.appendUtteranceForSession.bind(f.store);
@@ -322,14 +319,7 @@ describe("transcript capture accepted append drainage", () => {
   });
 
   it("drains an accepted append when its metadata serialization ends the capture", async () => {
-    const f = fixture();
-    const started = createDeferred<TranscriptStartRequest>();
-    f.provider.start = async (request) => {
-      started.resolve(request);
-      return { ok: true, session: request.session };
-    };
-    await f.start({ ...room, sessionId: "serialization-terminal" });
-    const request = await started.promise;
+    const { f, request } = await startCapture("serialization-terminal");
     const terminal = createDeferred();
     const toJSON = vi.fn(() => {
       // Provider metadata can synchronously end capture while this speech is being prepared.

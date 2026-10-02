@@ -1,15 +1,6 @@
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
-import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
 import type { CodexAppServerBindingIdentity } from "./session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
-
-/** Both read and write projections must leave retained assignment facts unchanged. */
-function projectAssignmentOwner(
-  assignment: CodexNativeSubagentPendingAssignment,
-  owner: CodexNativeSubagentHistoryOwner,
-): CodexNativeSubagentPendingAssignment {
-  return { ...assignment, owner };
-}
 
 /** Carries one prepared run identity through callers that rederive it from public params. */
 export function scopeCodexRunBindingStore(params: {
@@ -38,16 +29,10 @@ export function scopeCodexRunBindingStore(params: {
       ? { ...owner, sessionId: mapped.sessionId }
       : owner;
   };
-  const readMany = params.bindingStore.readMany?.bind(params.bindingStore);
   return {
     ...params.bindingStore,
     read: (identity) => params.bindingStore.read(mapIdentity(identity)),
-    ...(readMany
-      ? {
-          readMany: (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readMany(identities.map(mapIdentity)),
-        }
-      : {}),
+    readMany: (identities) => params.bindingStore.readMany(identities.map(mapIdentity)),
     readNativeSubagentAssignments: (identity, owner) =>
       (
         params.bindingStore.readNativeSubagentAssignments?.(
@@ -55,7 +40,9 @@ export function scopeCodexRunBindingStore(params: {
           mapHistoryOwner(identity, owner),
         ) ?? []
       ).map((assignment) =>
-        projectAssignmentOwner(assignment, { ...assignment.owner, sessionId: owner.sessionId }),
+        Object.assign({}, assignment, {
+          owner: { ...assignment.owner, sessionId: owner.sessionId },
+        }),
       ),
     readNativeSubagentSubmissions: (identity, owner) =>
       params.bindingStore.readNativeSubagentSubmissions(
@@ -75,10 +62,10 @@ export function scopeCodexRunBindingStore(params: {
           ? {
               ...mutation,
               owner: mapHistoryOwner(identity, mutation.owner),
-              assignment: projectAssignmentOwner(
-                mutation.assignment,
-                mapHistoryOwner(identity, mutation.assignment.owner),
-              ),
+              assignment: {
+                ...mutation.assignment,
+                owner: mapHistoryOwner(identity, mutation.assignment.owner),
+              },
             }
           : mutation.kind === "record-native-subagent-submission" ||
               mutation.kind === "consume-native-subagent-submission"

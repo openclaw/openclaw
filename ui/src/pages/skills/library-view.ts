@@ -5,6 +5,7 @@ import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-pro
 import { renderSettingsEmpty, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/modal-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import type { SkillLibraryController } from "./library-controller.ts";
 import { renderLibraryDialogHeader, renderLibraryIdentity } from "./library-detail.ts";
 import { libraryEventControl } from "./library-events.ts";
@@ -131,6 +132,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
   }
   const pending = draft.proposal !== null;
   const disabled = !library.canEdit || library.busy || library.loading || pending;
+  const uploadBlocked = draft.importedFiles && !library.uploadsEnabled;
   const support = draft.files.find((file) => file.path === draft.selectedFile);
   const text =
     draft.selectedFile === "SKILL.md" ? draft.content : support ? libraryFileText(support) : null;
@@ -371,7 +373,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
                 : html`<button
                     type="submit"
                     class="btn primary"
-                    ?disabled=${disabled || !draft.dirty || !draft.content.trim()}
+                    ?disabled=${disabled || uploadBlocked || !draft.dirty || !draft.content.trim()}
                   >
                     ${
                       library.busy
@@ -490,6 +492,7 @@ function renderLibraryImport(library: SkillLibraryController) {
     >
       ${renderLibraryDialogHeader(t("skillLibrary.import"), close, library.busy)}
       <div class="skill-reader-dialog__body skill-library-import">
+        ${!library.importSource && !library.uploadsEnabled ? html`<p role="status">${uploadsDisabledMessage()}</p>` : nothing}
         <p class="muted">
           ${
             library.importSource
@@ -515,7 +518,7 @@ function renderLibraryImport(library: SkillLibraryController) {
             }}
         /></label>
         ${
-          !library.importSource
+          !library.importSource && library.uploadsEnabled
             ? html`<div class="field" role="group" aria-labelledby="library-import-files-label">
                 <span id="library-import-files-label">${t("skillLibrary.files")}</span>
                 <small id="library-import-files-help" class="settings-row__desc">
@@ -534,6 +537,9 @@ function renderLibraryImport(library: SkillLibraryController) {
                         aria-describedby="library-import-files-help library-import-selection"
                         ?disabled=${library.busy}
                         @click=${(event: Event) => {
+                          if (!library.uploadsEnabled) {
+                            return;
+                          }
                           const input = libraryEventControl(
                             event,
                             HTMLButtonElement,
@@ -558,7 +564,9 @@ function renderLibraryImport(library: SkillLibraryController) {
                         ?disabled=${library.busy}
                         @change=${(event: Event) => {
                           const input = libraryEventControl(event, HTMLInputElement);
-                          library.importSelection = Array.from(input.files ?? []);
+                          library.importSelection = library.uploadsEnabled
+                            ? Array.from(input.files ?? [])
+                            : [];
                           input.value = "";
                           library.changed();
                         }}
@@ -597,7 +605,7 @@ function renderLibraryImport(library: SkillLibraryController) {
         <button
           type="submit"
           class="btn primary"
-          ?disabled=${library.busy || (!library.importSource && selectedFiles.length === 0)}
+          ?disabled=${library.busy || (!library.importSource && (!library.uploadsEnabled || selectedFiles.length === 0))}
         >
           ${library.busy ? t("common.loading") : t("skillLibrary.import")}
         </button>

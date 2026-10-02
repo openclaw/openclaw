@@ -280,10 +280,7 @@ export async function resolveDiscordVoiceIngressContextWithParticipants(params: 
     cfg: params.cfg,
     discordConfig: params.discordConfig,
     admissionAllowFrom: params.admissionAllowFrom,
-    fetchGuildName: async (guildId) => {
-      const guild = await params.client.fetchGuild(guildId).catch(() => null);
-      return guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
-    },
+    client: params.client,
     speakerContext: params.speakerContext,
   });
   if (!context || context.isCurrent?.() === false) {

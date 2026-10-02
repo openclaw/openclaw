@@ -3,7 +3,7 @@
  *
  * Wraps pi-tui keybindings with OpenClaw-specific actions and per-agent overrides.
  */
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type Keybinding,
@@ -228,12 +228,12 @@ const KEYBINDING_NAME_MIGRATIONS = {
 } as const satisfies Record<string, Keybinding>;
 
 function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAME_MIGRATIONS {
-  return key in KEYBINDING_NAME_MIGRATIONS;
+  return Object.hasOwn(KEYBINDING_NAME_MIGRATIONS, key);
 }
 
 /** Migrates legacy keybinding names and orders known entries ahead of unknown extras. */
 function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): KeybindingsConfig {
-  const config: KeybindingsConfig = {};
+  const config = new Map<string, KeyId | KeyId[]>();
   for (const [key, binding] of Object.entries(rawConfig)) {
     const nextKey = isLegacyKeybindingName(key) ? KEYBINDING_NAME_MIGRATIONS[key] : key;
     if (key !== nextKey && Object.hasOwn(rawConfig, nextKey)) {
@@ -241,51 +241,29 @@ function migrateKeybindingsConfig(rawConfig: Record<string, unknown>): Keybindin
       continue;
     }
     if (typeof binding === "string") {
-      config[nextKey] = binding as KeyId;
+      config.set(nextKey, binding as KeyId);
     } else if (Array.isArray(binding) && binding.every((entry) => typeof entry === "string")) {
-      config[nextKey] = binding as KeyId[];
+      config.set(nextKey, binding as KeyId[]);
     }
   }
-  return orderKeybindingsConfig(config);
+  return orderKeybindingsConfig(Object.fromEntries(config));
 }
 
 function orderKeybindingsConfig(config: KeybindingsConfig): KeybindingsConfig {
-  const ordered: KeybindingsConfig = {};
-  for (const keybinding of Object.keys(KEYBINDINGS)) {
-    if (Object.hasOwn(config, keybinding)) {
-      ordered[keybinding] = config[keybinding];
-    }
-  }
-
+  const known = Object.keys(KEYBINDINGS).filter((key) => Object.hasOwn(config, key));
   const extras = Object.keys(config)
-    .filter((key) => !Object.hasOwn(ordered, key))
+    .filter((key) => !Object.hasOwn(KEYBINDINGS, key))
     .toSorted();
-  for (const key of extras) {
-    ordered[key] = config[key];
-  }
-
-  return ordered;
-}
-
-function loadRawConfig(path: string): Record<string, unknown> | undefined {
-  if (!existsSync(path)) {
-    return undefined;
-  }
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf-8")) as unknown;
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  return Object.fromEntries([...known, ...extras].map((key) => [key, config[key]]));
 }
 
 /** Keybinding manager that loads OpenClaw defaults plus optional user overrides. */
 export class KeybindingsManager extends TuiKeybindingsManager {
-  private configPath: string | undefined;
-
-  constructor(userBindings: KeybindingsConfig = {}, configPath?: string) {
+  constructor(
+    userBindings: KeybindingsConfig = {},
+    private configPath?: string,
+  ) {
     super(KEYBINDINGS, userBindings);
-    this.configPath = configPath;
   }
 
   /** Creates a manager from the agent keybindings.json file. */
@@ -309,11 +287,12 @@ export class KeybindingsManager extends TuiKeybindingsManager {
   }
 
   private static loadFromFile(path: string): KeybindingsConfig {
-    const rawConfig = loadRawConfig(path);
-    if (!rawConfig) {
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf-8"));
+      return isRecord(parsed) ? migrateKeybindingsConfig(parsed) : {};
+    } catch {
       return {};
     }
-    return migrateKeybindingsConfig(rawConfig);
   }
 }
 

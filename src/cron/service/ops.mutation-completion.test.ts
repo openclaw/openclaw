@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
@@ -121,21 +120,17 @@ describe("Cron mutation completion", () => {
     const state = createMutationState(storePath);
     const completion = createCronMutationCompletion("cron.add")!;
     const database = openOpenClawStateDatabase().db;
-    const { DatabaseSync } = requireNodeSqlite();
-    // oxlint-disable-next-line typescript/unbound-method -- Every delegated call restores the intercepted database as its receiver.
-    const originalExec = DatabaseSync.prototype.exec;
-    const failure = new Error("simulated commit failure");
-    let injected = false;
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      if (this === database && sql === "COMMIT") {
-        injected = true;
-        throw failure;
-      }
-      originalExec.call(this, sql);
-    });
+    // A deferred constraint reaches the worker's native COMMIT after the job write succeeds.
+    database.exec(`
+      CREATE TABLE cron_commit_failure_parent (id TEXT PRIMARY KEY) STRICT;
+      CREATE TABLE cron_commit_failure_child (
+        parent_id TEXT REFERENCES cron_commit_failure_parent(id) DEFERRABLE INITIALLY DEFERRED
+      ) STRICT;
+      CREATE TRIGGER reject_cron_job_commit AFTER INSERT ON cron_jobs
+      BEGIN
+        INSERT INTO cron_commit_failure_child (parent_id) VALUES (NEW.job_id);
+      END;
+    `);
     try {
       await expect(
         completion.run(() =>
@@ -152,13 +147,15 @@ describe("Cron mutation completion", () => {
             { commitGuard: () => {} },
           ),
         ),
-      ).rejects.toThrow("simulated commit failure");
-      expect(injected).toBe(true);
-      exec.mockRestore();
+      ).rejects.toThrow("FOREIGN KEY constraint failed");
       expect((await loadCronStore(storePath)).jobs).toHaveLength(0);
       expect(completion.isCommitted()).toBe(false);
     } finally {
-      exec.mockRestore();
+      database.exec(`
+        DROP TRIGGER reject_cron_job_commit;
+        DROP TABLE cron_commit_failure_child;
+        DROP TABLE cron_commit_failure_parent;
+      `);
       stop(state);
     }
   });

@@ -28,16 +28,18 @@ import {
   markTrackedRoomIfFirst,
   shouldDeferMatrixAudioPreflightForRoomIngress,
 } from "./handler-helpers.js";
-import { resolveMatrixIngressAccess } from "./handler-ingress-access.js";
+import {
+  resolveMatrixIngressAccess,
+  type MatrixIngressAccessParams,
+} from "./handler-ingress-access.js";
 import { resolveMatrixIngressContent } from "./handler-ingress-content.js";
 import { readMatrixIngressPrefix } from "./handler-ingress-prefix.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
-import type { MatrixLocationPayload } from "./location.js";
-import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
+import { createRoomHistoryTracker } from "./room-history.js";
+import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
 // Core emits this stable error code across the plugin boundary; Matrix cannot import the
@@ -178,14 +180,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             inboundReplayClaim = handle;
           },
         });
-      const continueIngress = async (paramsLocal: {
-        audioPreflightMode?: "defer" | "run";
-        content: RoomMessageEventContent;
-        isDirectMessage: boolean;
-        locationPayload: MatrixLocationPayload | null;
-        reservedHistorySlot?: ReservedHistorySlot;
-        selfUserId: string;
-      }) => {
+      const continueIngress = async (paramsLocal: MatrixIngressAccessParams) => {
         const access = await resolveMatrixIngressAccess({
           handler: handlerConfig,
           params: paramsLocal,

@@ -49,7 +49,10 @@ function neverChunkingVideoResponse(): Response {
 
 describe("DashScope Wan request contracts", () => {
   it("advertises only the modes supported by each bundled Wan model", () => {
-    expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-t2v"]?.modes).toEqual(["generate"]);
+    expect(DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-t2v"]?.modes).toEqual([
+      "generate",
+      "imageToVideo",
+    ]);
     expect(
       DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL["wan2.6-t2v"]?.capabilities?.generate
         ?.supportsAspectRatio,
@@ -101,14 +104,14 @@ describe("DashScope Wan request contracts", () => {
           provider: "alibaba",
           model: "wan2.7-r2v",
           prompt: "Image 1 greets Video 1",
-          inputImages: [{ url: "https://example.com/character.png" }],
+          inputImages: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
           inputVideos: [{ url: "https://example.com/action.mp4", role: "reference_video" }],
         }),
       }),
     ).toEqual({
       prompt: "Image 1 greets Video 1",
       media: [
-        { type: "reference_image", url: "https://example.com/character.png" },
+        { type: "reference_image", url: "data:image/png;base64,cG5nLWJ5dGVz" },
         { type: "reference_video", url: "https://example.com/action.mp4" },
       ],
     });
@@ -380,6 +383,69 @@ describe("pollDashscopeVideoTaskUntilComplete", () => {
 });
 
 describe("runDashscopeVideoGenerationTask", () => {
+  it.each([
+    {
+      name: "buffer-backed reference video",
+      model: "wan2.6-r2v",
+      inputVideos: [{ buffer: Buffer.from("video"), mimeType: "video/mp4" }],
+      error: /remote http\(s\) URLs for reference videos/u,
+    },
+    {
+      name: "data URI reference video",
+      model: "wan2.7-r2v",
+      inputVideos: [{ url: "data:video/mp4;base64,dmlkZW8=" }],
+      error: /remote http\(s\) URLs for reference videos/u,
+    },
+    ...["wan2.6-i2v", "wan2.7-r2v"].map((model) => ({
+      name: `oversized image for ${model}`,
+      model,
+      inputImages: [{ buffer: Buffer.alloc(20 * 1024 * 1024 + 1), mimeType: "image/png" }],
+      error: /reference image exceeds the 20 MB limit/u,
+    })),
+    {
+      name: "oversized inline data URI image",
+      model: "wan2.6-i2v",
+      inputImages: [
+        {
+          url: `data:image/png;base64,${Buffer.alloc(20 * 1024 * 1024 + 1).toString("base64")}`,
+        },
+      ],
+      error: /reference image exceeds the 20 MB limit/u,
+    },
+    {
+      name: "unknown i2v sibling",
+      model: "wan2.5-t2v-preview",
+      inputImages: [{ url: "https://example.com/image.png" }],
+      error: /text-to-video.*does not accept reference media/u,
+    },
+    {
+      name: "local image on Wan 2.6 reference-to-video",
+      model: "wan2.6-r2v",
+      inputImages: [{ buffer: Buffer.from("png-bytes") }],
+      error: /requires remote http\(s\) URLs for reference images/u,
+    },
+    {
+      name: "multiple images with a text-to-video model",
+      model: "wan2.6-t2v",
+      inputImages: [{ url: "https://example.com/1.png" }, { url: "https://example.com/2.png" }],
+      error: /text-to-video.*does not accept reference media/u,
+    },
+  ])("rejects $name before submission", async ({ name: _name, error, ...request }) => {
+    const fetchFn = vi.fn<typeof fetch>();
+    await expect(
+      runDashscopeVideoGenerationTask({
+        providerLabel: "Qwen",
+        model: request.model,
+        req: videoRequest(request),
+        url: "https://example.com/video-synthesis",
+        headers: new Headers(),
+        baseUrl: "https://example.com",
+        fetchFn,
+      }),
+    ).rejects.toThrow(error);
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
   it("releases the submission request timeout before polling the task", async () => {
     vi.useFakeTimers();
     try {

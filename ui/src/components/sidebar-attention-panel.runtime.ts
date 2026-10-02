@@ -8,6 +8,7 @@ import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import { renderHubTabs } from "./hub-tabs.ts";
 import { icons } from "./icons.ts";
@@ -25,7 +26,7 @@ import {
   renderSidebarScopeUpgradeItem,
   renderSidebarUpdateSurface,
 } from "./sidebar-issue-item.ts";
-import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
+import { ISSUE_TABS, type IssueTab } from "./sidebar-issues-tabs.ts";
 import { renderSidebarOutboxItem } from "./sidebar-outbox-item.ts";
 import "./menu-surface.ts";
 
@@ -210,7 +211,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
           active: params.selectedTab,
           tabs: ISSUE_TABS.map((tab) => ({
             value: tab,
-            label: issueTabLabel(tab),
+            label: t(`attention.tabs.${tab}`),
             // A zero count is the tab's resting state, not information — show
             // the badge only when the tab actually holds items.
             count: tabCounts[tab] > 0 ? tabCounts[tab] : null,

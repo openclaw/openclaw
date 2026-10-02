@@ -75,10 +75,6 @@ it("patches 100 held placement updates across 40 subscribers and reads once on r
       await vi.advanceTimersByTimeAsync(100);
     }
     await vi.advanceTimersByTimeAsync(20_000);
-    console.log(
-      "placement fan-out list requests",
-      clients.reduce((sum, client) => sum + client.reads.mock.calls.length, 0),
-    );
     expect.soft(clients.map((client) => client.reads.mock.calls.length)).toEqual(Array(40).fill(0));
     for (const client of clients) {
       expect(client.sessions.state.result?.sessions.map((row) => row.placement)).toEqual(

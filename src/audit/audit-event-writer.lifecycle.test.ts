@@ -10,7 +10,9 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { AuditEventInput } from "./audit-event-types.js";
 import { createAuditEventWriter } from "./audit-event-writer.js";
-import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
+import { input } from "./audit-event-writer.test-support.js";
+import type { AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 
 const { execute } = vi.hoisted(() => ({
   execute:
@@ -46,18 +48,23 @@ afterEach(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function event(sourceId: string): AuditEventInput {
-  return {
-    sourceId,
-    sourceSequence: 1,
-    occurredAt: Date.now(),
-    kind: "agent_run",
-    action: "agent.run.started",
-    status: "started",
-    actorType: "agent",
-    actorId: "main",
-    agentId: "main",
-    runId: sourceId,
-  };
+  return { ...input(), sourceId, runId: sourceId };
+}
+
+function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterResult>) {
+  const requests: string[] = [];
+  execute.mockImplementation(async (command) => {
+    if (command.type === "audit.writer.prune") {
+      return { status: "settled" };
+    }
+    if (command.input.type !== "record-event") {
+      throw new Error("Unexpected audit request in event lifecycle test");
+    }
+    const sourceId = command.input.input.sourceId;
+    requests.push(sourceId);
+    return await handler(sourceId);
+  });
+  return requests;
 }
 
 async function advanceDispatch() {
@@ -108,15 +115,7 @@ describe("audit writer async settlement", () => {
   it("retains in-flight capacity and joins submission after the shutdown deadline", async () => {
     const submitted = createDeferred();
     const finish = createDeferred<AuditWriterResult>();
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request in event lifecycle test");
-      }
-      requests.push(command.input.input.sourceId);
+    const requests = mockEventRequests(async () => {
       submitted.resolve();
       return await finish.promise;
     });
@@ -172,16 +171,7 @@ describe("audit writer async settlement", () => {
   it("does not replay an unknown transport outcome with SQLite busy fields", async () => {
     const submitted = createDeferred();
     const firstResult = createDeferred<AuditWriterResult>();
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request in event lifecycle test");
-      }
-      const sourceId = command.input.input.sourceId;
-      requests.push(sourceId);
+    const requests = mockEventRequests(async (sourceId) => {
       if (sourceId === "unknown-outcome") {
         submitted.resolve();
         return await firstResult.promise;
@@ -226,16 +216,7 @@ describe("audit writer async settlement", () => {
     }
   });
   it("releases settled capacity before notifying the error observer", async () => {
-    const requests: string[] = [];
-    execute.mockImplementation(async (command) => {
-      if (command.type === "audit.writer.prune") {
-        return { status: "settled" };
-      }
-      if (command.input.type !== "record-event") {
-        throw new Error("Unexpected audit request");
-      }
-      const sourceId = command.input.input.sourceId;
-      requests.push(sourceId);
+    const requests = mockEventRequests(async (sourceId) => {
       if (sourceId === "unknown-outcome") {
         throw new SqliteWorkerError("Audit write outcome is unknown", "outcome-unknown");
       }

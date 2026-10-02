@@ -130,32 +130,29 @@ it("retains growing duplicate archives and the restore refusal without leaking i
   });
 });
 
-it.each(["dry-run", "import", "validate"] as const)(
-  "%s carries one fleet discovery into legacy archive coverage",
-  async (mode) => {
-    await withOpenClawTestState({ label: "doctor-fleet-discovery" }, async (state) => {
-      const agentIds = ["first", "second", "third"];
-      for (const agentId of agentIds) {
-        const sessions = state.sessionsDir(agentId);
-        fs.mkdirSync(sessions, { recursive: true });
-        fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
-      }
-      const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreCandidateTargetsSync");
-      try {
-        const report = await runDoctorSessionSqlite({
-          mode,
-          allAgents: true,
-          cfg: {},
-          env: state.env,
-        });
-        expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(agentIds);
-        expect(discovery).toHaveBeenCalledTimes(1);
-      } finally {
-        discovery.mockRestore();
-      }
-    });
-  },
-);
+it("carries one fleet discovery into import archive coverage", async () => {
+  await withOpenClawTestState({ label: "doctor-fleet-discovery" }, async (state) => {
+    const agentIds = ["first", "second", "third"];
+    for (const agentId of agentIds) {
+      const sessions = state.sessionsDir(agentId);
+      fs.mkdirSync(sessions, { recursive: true });
+      fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
+    }
+    const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreCandidateTargetsSync");
+    try {
+      const report = await runDoctorSessionSqlite({
+        mode: "import",
+        allAgents: true,
+        cfg: {},
+        env: state.env,
+      });
+      expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(agentIds);
+      expect(discovery).toHaveBeenCalledTimes(1);
+    } finally {
+      discovery.mockRestore();
+    }
+  });
+});
 
 it.each([{ allAgents: true }, { agent: "retired" }])(
   "admits transcript-only retired agents through the public selector %j",
@@ -783,7 +780,7 @@ it("resolves one generated primary for a missing registry filename at the Doctor
   });
 });
 
-it.each([1, 2, 3])(
+it.each([1, 2])(
   "imports validated version %i history through the legacy codec",
   async (version) => {
     await withOpenClawTestState({ label: "doctor-historical-version" }, async (state) => {

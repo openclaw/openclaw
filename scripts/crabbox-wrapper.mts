@@ -33,7 +33,6 @@ import { StringDecoder } from "node:string_decoder";
 import { setImmediate as yieldToSignals } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { gte as semverGte } from "semver";
 import {
   ensureManagedCrabboxBinary,
   findCrabboxBinary,
@@ -1183,8 +1182,7 @@ function userDisplayPath(path: string) {
 }
 
 function blacksmithTestboxPrivateKeyPath(id: string) {
-  // Crabbox 0.58 moved explicit state-root keys; older supported clients use config.
-  const stateRoot = semverGte(version, "0.58.0") ? process.env.XDG_STATE_HOME : undefined;
+  const stateRoot = process.env.XDG_STATE_HOME;
   if (
     stateRoot &&
     !(process.platform === "win32"
@@ -1238,7 +1236,7 @@ function enforceCrabboxOwnedBlacksmithLease(commandArgs: string[]) {
     console.error(
       [
         `[crabbox] provider=blacksmith-testbox --id ${id} has no Crabbox SSH key at ${userDisplayPath(keyPath)}.`,
-        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 90m",
+        "[crabbox] create reusable Testboxes through Crabbox before reusing them: node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --idle-timeout 15m",
         "[crabbox] direct `blacksmith testbox warmup` leases can be used with `blacksmith testbox run`, but Crabbox cannot sync or run them by id.",
       ].join("\n"),
     );
@@ -1335,7 +1333,7 @@ function observeBlacksmithTimingJSONLine(line: string) {
     if (
       canonicalProviderName(report?.provider) === "blacksmith-testbox" &&
       typeof report.leaseId === "string" &&
-      report.leaseId.startsWith("tbx_")
+      /^tbx_[a-zA-Z0-9_-]+$/u.test(report.leaseId)
     ) {
       capturedBlacksmithLeaseId = report.leaseId;
     }
@@ -1505,11 +1503,11 @@ function commandWordsNeedAwsMacosSwiftToolchain(wordsInput: string[]): boolean {
     }
   }
 
-  if (isAwsMacosSwiftScriptTarget(words[0])) {
+  if (isScriptTarget(words[0], awsMacosSwiftScriptTargets)) {
     return true;
   }
 
-  if (commandWordsRunAwsMacosSwiftScript(words)) {
+  if (commandWordsRunScriptTarget(words, awsMacosSwiftScriptTargets)) {
     return true;
   }
 
@@ -1541,11 +1539,11 @@ function commandWordsNeedAwsMacosPackageManager(
     }
   }
 
-  if (isAwsMacosPackageManagerScriptTarget(words[0])) {
+  if (isScriptTarget(words[0], awsMacosPackageManagerScriptTargets)) {
     return true;
   }
 
-  if (commandWordsRunAwsMacosPackageManagerScript(words)) {
+  if (commandWordsRunScriptTarget(words, awsMacosPackageManagerScriptTargets)) {
     return true;
   }
 
@@ -1558,29 +1556,15 @@ function commandWordsNeedAwsMacosPackageManager(
   );
 }
 
-function isAwsMacosSwiftScriptTarget(word: string | undefined) {
+function isScriptTarget(word: string | undefined, targets: ReadonlySet<string>) {
   if (!word) {
     return false;
   }
   const normalized = word.replace(/^\.\//u, "");
-  return (
-    awsMacosSwiftScriptTargets.has(normalized) ||
-    awsMacosSwiftScriptTargets.has(normalized.split("/").pop() ?? "")
-  );
+  return targets.has(normalized) || targets.has(normalized.split("/").pop() ?? "");
 }
 
-function isAwsMacosPackageManagerScriptTarget(word: string | undefined) {
-  if (!word) {
-    return false;
-  }
-  const normalized = word.replace(/^\.\//u, "");
-  return (
-    awsMacosPackageManagerScriptTargets.has(normalized) ||
-    awsMacosPackageManagerScriptTargets.has(normalized.split("/").pop() ?? "")
-  );
-}
-
-function commandWordsRunScriptTarget(words: string[], isScriptTarget: (word: string) => boolean) {
+function commandWordsRunScriptTarget(words: string[], targets: ReadonlySet<string>) {
   const first = (words[0] ?? "").split("/").pop() ?? "";
   if (!shellInlineCommandInterpreters.has(first)) {
     return false;
@@ -1604,17 +1588,9 @@ function commandWordsRunScriptTarget(words: string[], isScriptTarget: (word: str
     if (word.startsWith("-") || word.startsWith("+")) {
       continue;
     }
-    return isScriptTarget(word);
+    return isScriptTarget(word, targets);
   }
   return false;
-}
-
-function commandWordsRunAwsMacosSwiftScript(words: string[]) {
-  return commandWordsRunScriptTarget(words, isAwsMacosSwiftScriptTarget);
-}
-
-function commandWordsRunAwsMacosPackageManagerScript(words: string[]) {
-  return commandWordsRunScriptTarget(words, isAwsMacosPackageManagerScriptTarget);
 }
 
 function commandNeedsEntrypoint(
@@ -1684,7 +1660,7 @@ function changedGateBasesFromWords(
   options: CommandNormalizeOptions = {},
 ): string[] {
   const words = normalizeExecutableWords(wordsInput, options);
-  if (isChangedGateWords(words)) {
+  if (isCheckGateWords(words)) {
     for (let index = 0; index < words.length; index += 1) {
       const word = words[index] ?? "";
       if (word === "--base") {
@@ -1736,6 +1712,21 @@ function isChangedGateWords(wordsInput: string[]) {
     (words[0] === "pnpm" && words[1] === "check:changed") ||
     (words[0] === "pnpm" && words[1] === "run" && words[2] === "check:changed") ||
     nodeScriptWord(words)?.endsWith("scripts/check-changed.mjs")
+  );
+}
+
+function isCheckGateWords(wordsInput: string[]) {
+  if (isChangedGateWords(wordsInput)) {
+    return true;
+  }
+  const words = normalizeExecutableWords(wordsInput);
+  if (words[0] === "corepack") {
+    words.shift();
+  }
+  return (
+    (words[0] === "pnpm" && words[1] === "check") ||
+    (words[0] === "pnpm" && words[1] === "run" && words[2] === "check") ||
+    nodeScriptWord(words)?.endsWith("scripts/check.mts")
   );
 }
 
@@ -2426,16 +2417,20 @@ function changedGateBaseForCommand(commandArgs: string[]) {
   }
   const explicitBase = requestedBases[0] ?? "origin/main";
   const remoteAlias = remoteAliasForChangedGateBase(explicitBase);
-  if (explicitBase !== "origin/main" && !remoteAlias) {
+  const immutableBase = /^[a-f0-9]{40}$/u.test(explicitBase);
+  if (explicitBase !== "origin/main" && !remoteAlias && !immutableBase) {
     throw new Error(
-      `remote changed-gate sync requires an exact origin/<branch> base; received: ${explicitBase}`,
+      `remote changed-gate sync requires an exact origin/<branch> or full commit SHA base; received: ${explicitBase}`,
     );
   }
-  // Only exact remote-tracking refs can be recreated under their original name
-  // after the remote raw-sync checkout initializes fresh Git metadata.
+  // The receiver recreates named remote refs and fetches the exact capsule base.
+  // A literal commit must itself be the fork base, not merely resolve to one.
   const requestedBase = explicitBase;
   const base = gitOutput(["merge-base", requestedBase, "HEAD"]);
   if (base.status === 0 && base.stdout) {
+    if (immutableBase && base.stdout !== requestedBase) {
+      throw new Error(`explicit changed-gate commit must be an ancestor of HEAD: ${requestedBase}`);
+    }
     return {
       remoteAlias,
       resolvedBase: base.stdout,
@@ -3798,6 +3793,19 @@ if (provider && !isProviderAdvertised(provider, providers)) {
 }
 
 if (canonicalProvider === "blacksmith-testbox") {
+  if (["run", "warmup"].includes(normalizedArgs[0] ?? "")) {
+    const workflowRef = parseCommandInvocation(help.text, normalizedArgs).optionEntries.findLast(
+      ({ name }) => name === "blacksmith-ref",
+    );
+    if (workflowRef && workflowRef.value !== "main") {
+      console.error(
+        "[crabbox] Testbox workflow ref must be main so allocations use current spending limits. Omit --blacksmith-ref; the source capsule preserves the checkout being tested.",
+      );
+      process.exit(2);
+    }
+    // Override config/environment refs before binding the allocation receipt.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--blacksmith-ref=main");
+  }
   // The delegated provider rejects uploaded scripts before acquiring a lease.
   if (
     normalizedArgs[0] === "run" &&
@@ -3859,11 +3867,36 @@ if (canonicalProvider === "blacksmith-testbox") {
 let testboxLeaseFreshness: ReturnType<typeof prepareTestboxLeaseFreshness>;
 try {
   testboxLeaseFreshness = prepareTestboxLeaseFreshness({
-    args: normalizedArgs,
+    // Reuse the native-help parser's boundary; payload flags are never lease
+    // options. Equals form preserves option-looking values and Go's last value.
+    args: [
+      normalizedArgs[0] ?? "",
+      ...parseCommandInvocation(help.text, normalizedArgs).optionEntries.map(
+        ({ name, value, index }) =>
+          normalizedArgs[index]?.includes("=") || commandValueOptionsFromHelp.has(name)
+            ? `--${name}=${value}`
+            : `--${name}`,
+      ),
+    ],
+    command: normalizedArgs,
     env: { ...process.env, CI: process.env.CI || "true" },
     provider: canonicalProvider,
     repoRoot,
   });
+  if (testboxLeaseFreshness) {
+    // Native timing carries the allocated id for warmup as well as run. Capture
+    // it so reuse can require an allocation receipt instead of adopting a lease.
+    // Go flags use the last value. An earlier explicit false must not disable
+    // the allocation receipt after a retained lease has already been created.
+    normalizedArgs.splice(commandOptionEnd(normalizedArgs), 0, "--timing-json");
+    console.error(
+      JSON.stringify({
+        event: "testbox-admission",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: testboxLeaseFreshness.id || undefined,
+      }),
+    );
+  }
 } catch (error) {
   console.error(`[crabbox] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(2);
@@ -3989,8 +4022,7 @@ try {
   if (shouldUseFullCheckoutForRemoteSync(normalizedArgs, provider)) {
     const invocation = parseCommandInvocation(help.text, normalizedArgs);
     const facts = analyzeRemoteCommand(invocation);
-    const changedGate = facts.changedGate ? changedGateBaseForCommand(facts.commandArgs) : null;
-    const changedGateBase = changedGate?.resolvedBase ?? "";
+    const checkGate = changedGateBaseForCommand(facts.commandArgs);
     const needsCapsule = needsSourceCapsule(normalizedArgs, provider);
     if (needsCapsule) {
       const syncRoot = fullCheckoutSyncRoot();
@@ -4005,7 +4037,7 @@ try {
           process.env,
           process.platform,
         ),
-        base: changedGateBase || changedGateBaseForCommand([]).resolvedBase,
+        base: checkGate.resolvedBase,
       });
       sourceStaging = sourceCapsule.staging;
     }
@@ -4032,7 +4064,7 @@ try {
     // Crabbox claims Git's physical top-level. Match it so macOS /var aliases
     // restore to the invoking repository instead of the disposable checkout.
     childCwd = realpathSync(checkout.dir);
-    remoteChangedGateAlias = changedGate?.remoteAlias ?? "";
+    remoteChangedGateAlias = checkGate.remoteAlias;
     console.error(
       `[crabbox] isolated checkout sync; syncing from temporary full checkout ${checkout.dir}`,
     );
@@ -4232,6 +4264,14 @@ const childStartedAtMs = Date.now();
 const FAST_FAIL_HINT_WINDOW_MS = 15_000;
 const spawnManagedChild = await loadManagedChildSpawner();
 await preparationCheckpoint();
+try {
+  // Preparation can yield while a receipt or source changes. Keep the original
+  // capsule provenance and refuse before native Testbox I/O if it no longer matches.
+  testboxLeaseFreshness?.assertCurrent();
+} catch (error) {
+  cleanupOnce();
+  throw error;
+}
 // Persist admission before the child can observe or mutate the staged source.
 if (sourceStaging?.recorded) {
   let namespace;
@@ -4312,9 +4352,9 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
   let exitCode = code;
   const fullCheckoutAvailable =
     !fullCheckout || assertFullCheckoutAvailableBeforeExit(fullCheckout.dir);
-  if (settled && !signal && code === 0) {
+  if (settled && !signal && (code === 0 || capturedBlacksmithLeaseId)) {
     try {
-      recordTestboxLeaseFreshness(testboxLeaseFreshness);
+      recordTestboxLeaseFreshness(testboxLeaseFreshness, capturedBlacksmithLeaseId, code ?? 1);
     } catch (error) {
       console.error(
         `[crabbox] failed to record Testbox lease freshness: ${error instanceof Error ? error.message : String(error)}`,
@@ -4323,10 +4363,27 @@ async function finishChildExit(code: number | null, signal: Signal | null) {
     }
   }
   const cleaned = cleanupOnce();
+  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
+  if (testboxLeaseFreshness) {
+    console.error(
+      JSON.stringify({
+        event: "testbox-completion",
+        ...testboxLeaseFreshness.attribution,
+        leaseId: capturedBlacksmithLeaseId || testboxLeaseFreshness.id || undefined,
+        sourceTree: sourceCapsule?.tree,
+        elapsedMs: Date.now() - childStartedAtMs,
+        exitCode:
+          cancellationSignal || signal
+            ? (signalExitCodes.get(cancellationSignal ?? signal!) ?? 1)
+            : finalExitCode,
+        signal: cancellationSignal || signal,
+        settled,
+      }),
+    );
+  }
   if (cancellationSignal || signal) {
     process.exit(signalExitCodes.get(cancellationSignal ?? signal!) ?? 1);
   }
-  const finalExitCode = (exitCode ?? 1) || (settled && fullCheckoutAvailable && cleaned ? 0 : 1);
   if (finalExitCode === 0 && discoveredStaging && !cancellationSignal && !signal) {
     try {
       const recovered = await recoverDiscoveredStaging(

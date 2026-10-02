@@ -1,20 +1,20 @@
 import { createHash } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -26,11 +26,6 @@ describe("worker placement idle suspension", () => {
     const root = tempDirs.make("openclaw-worker-idle-sweep-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-  });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    tempDirs.cleanup();
   });
 
   function createIdleFixture(
@@ -105,7 +100,16 @@ describe("worker placement idle suspension", () => {
     const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 59_999;
-    await idleSweep.sweep();
+    const sql = observeHostDataSql();
+    try {
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+      expect(sql.queries.length).toBeGreaterThan(0);
+      const beforeSweep = sql.queries.length;
+      await idleSweep.sweep();
+      expect(sql.queries.slice(beforeSweep)).toEqual([]);
+    } finally {
+      sql.restore();
+    }
     expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
     expect(harness.environments.destroy).not.toHaveBeenCalled();
 
@@ -249,7 +253,7 @@ describe("worker placement idle suspension", () => {
         }
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
-        placements.beginWorkspaceReconciliation(
+        await placements.beginWorkspaceReconciliation(
           {
             sessionId: active.sessionId,
             environmentId: active.environmentId,

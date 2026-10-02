@@ -31,6 +31,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import * as restartHealth from "../daemon-cli/restart-health.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -113,6 +114,20 @@ beforeEach(async () => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());
   });
+  // Ordinary lease cases have no Gateway; restoration cases supply their managed service state.
+  const readHealth = async ({
+    port,
+  }: {
+    port: number;
+  }): Promise<restartHealth.GatewayRestartSnapshot> => ({
+    runtime: { status: "stopped" },
+    portUsage: { port, status: "free", listeners: [], hints: [] },
+    healthy: false,
+    staleGatewayPids: [],
+    waitOutcome: "stopped-free",
+  });
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementation(readHealth);
+  vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(readHealth);
   state = await createOpenClawTestState({
     label: "update-lease",
     env: {

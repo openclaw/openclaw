@@ -29,8 +29,5 @@ export function buildTextEmbeddingInput(text: string): EmbeddingInput {
 
 /** Return true when a chunk needs structured provider handling, not text splitting. */
 export function hasNonTextEmbeddingParts(input: EmbeddingInput | undefined): boolean {
-  if (!input?.parts?.length) {
-    return false;
-  }
-  return input.parts.some((part) => part.type === "inline-data");
+  return input?.parts?.some((part) => part.type === "inline-data") ?? false;
 }

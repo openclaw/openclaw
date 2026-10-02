@@ -1,4 +1,3 @@
-// Gateway WebSocket device pairing resolves approvals, metadata upgrades, and device tokens.
 import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
@@ -10,7 +9,7 @@ import {
   ConnectErrorDetailCodes,
   type ConnectPairingRequiredReason,
 } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
-import { ErrorCodes, errorShape } from "../../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   approveBootstrapDevicePairing,
@@ -66,14 +65,13 @@ export async function authorizeGatewayConnectDevice(
     connId,
     buildRequestContext,
     close,
-    send,
     setHandshakeState,
     setCloseCause,
     logGateway,
     requestOrigin,
   } = context.handler;
   const {
-    frame,
+    sendHandshakeErrorResponse,
     connectParams,
     configSnapshot,
     reportedClientIp,
@@ -107,12 +105,7 @@ export async function authorizeGatewayConnectDevice(
     if (closeCause) {
       setCloseCause(closeCause.cause, closeCause.meta);
     }
-    send({
-      type: "res",
-      id: frame.id,
-      ok: false,
-      error: errorShape(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined),
-    });
+    sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message, details ? { details } : undefined);
     close(1008, truncateCloseReason(closeReason ?? message));
   };
   const roleConfiguredHumanOperator = role === "operator" && Boolean(configSnapshot.gateway?.roles);
@@ -273,7 +266,10 @@ export async function authorizeGatewayConnectDevice(
         return replacementPending?.requestId;
       };
       const inlineApprovalAttempted =
-        trustedProxyApprovalScopes !== null || pairing.request.silent === true;
+        trustedProxyApprovalScopes !== null ||
+        pairing.request.silent === true ||
+        // A previously interactive first-node request may now qualify locally.
+        (role === "node" && reason === "role-upgrade" && plan.localApproval === "silent");
       if (inlineApprovalAttempted) {
         if (trustedProxyApprovalScopes !== null) {
           approved = await approveDevicePairing(pairing.request.requestId, {
@@ -316,6 +312,10 @@ export async function authorizeGatewayConnectDevice(
                 !isConnectAuthorizationCurrent() ||
                 pending.deviceId !== device.id ||
                 pending.publicKey !== devicePublicKey ||
+                // Pending retries can merge roles; a node connect cannot approve
+                // an unrelated operator request carried by the same pending row.
+                (role === "node" &&
+                  (pending.role !== role || pending.roles?.some((entry) => entry !== role))) ||
                 (plan.localApproval === "trusted-cidr" && !isScopelessNodePairingRequest(pending))
               ) {
                 return false;
@@ -429,11 +429,13 @@ export async function authorizeGatewayConnectDevice(
           !existingPairedDevice;
         const retryWhileControlUiApprovalPending =
           state.isControlUi && role === "operator" && Boolean(recoveryRequestId);
-        // Retry detached node approvals and pending browser approvals without
+        const retryWhileNodeApprovalPending = role === "node" && Boolean(recoveryRequestId);
+        // Retry pending node and browser approvals without
         // changing which connects require approval or what access they receive.
         const retryWhileApprovalPending =
           retryAfterBootstrapPairingApproval ||
           sshVerifyStarted ||
+          retryWhileNodeApprovalPending ||
           retryWhileControlUiApprovalPending;
         failPairingHandshake({
           message: buildPairingConnectErrorMessage(reason),
@@ -498,15 +500,10 @@ export async function authorizeGatewayConnectDevice(
         hasServerApprovedDeviceTokenBaseline = true;
       }
     } else if (!isPaired) {
-      if (controlUiPairingKind === null) {
-        const ok = await requirePairing("not-paired", paired);
-        if (!ok) {
-          return undefined;
-        }
-        hasServerApprovedDeviceTokenBaseline = true;
-      } else {
-        hasServerApprovedDeviceTokenBaseline = true;
+      if (controlUiPairingKind === null && !(await requirePairing("not-paired", paired))) {
+        return undefined;
       }
+      hasServerApprovedDeviceTokenBaseline = true;
     } else {
       pairedClientId = paired.clientId;
       pairedBrowserOrigin = paired.browserOrigin;

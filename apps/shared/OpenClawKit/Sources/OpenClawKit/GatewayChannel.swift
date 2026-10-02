@@ -450,7 +450,7 @@ public actor GatewayChannelActor {
         let options = self.connectOptions ?? GatewayConnectOptions(
             role: "operator",
             scopes: Self.defaultOperatorConnectScopes,
-            caps: [],
+            caps: [OpenClawGatewayClientCapability.ultrafast],
             commands: [],
             permissions: [:],
             clientId: "openclaw-macos",
@@ -698,20 +698,7 @@ extension GatewayChannelActor {
             suppressedDeviceTokenRetry: suppressedDeviceTokenRetry)
     }
 
-    nonisolated static func _test_requestedScopesExceedStoredToken(
-        role: String,
-        requestedScopes: [String],
-        storedToken: String?,
-        storedScopes: [String]) -> Bool
-    {
-        self.requestedScopesExceedStoredToken(
-            role: role,
-            requestedScopes: requestedScopes,
-            storedToken: storedToken,
-            storedScopes: storedScopes)
-    }
-
-    private nonisolated static func requestedScopesExceedStoredToken(
+    nonisolated static func requestedScopesExceedStoredToken(
         role: String,
         requestedScopes: [String],
         storedToken: String?,
@@ -729,15 +716,11 @@ extension GatewayChannelActor {
         requestedScopes: [String],
         storedScopes: [String]) -> Bool
     {
-        let requested = self.normalizedScopeList(requestedScopes)
+        let requested = Set(requestedScopes.compactMap(\.trimmedNonEmpty))
         if requested.isEmpty {
             return true
         }
-        let allowed = self.normalizedScopeList(storedScopes)
-        if allowed.isEmpty {
-            return false
-        }
-        let allowedSet = Set(allowed)
+        let allowedSet = Set(storedScopes.compactMap(\.trimmedNonEmpty))
         let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
         if normalizedRole != "operator" {
             let prefix = "\(normalizedRole)."
@@ -750,20 +733,6 @@ extension GatewayChannelActor {
         }
     }
 
-    private nonisolated static func normalizedScopeList(_ scopes: [String]) -> [String] {
-        var out: [String] = []
-        var seen = Set<String>()
-        for scope in scopes {
-            let trimmed = scope.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.isEmpty || seen.contains(trimmed) {
-                continue
-            }
-            seen.insert(trimmed)
-            out.append(trimmed)
-        }
-        return out
-    }
-
     private nonisolated static func operatorScopeSatisfied(_ scope: String, granted: Set<String>) -> Bool {
         if !scope.hasPrefix("operator.") {
             return false
@@ -773,9 +742,6 @@ extension GatewayChannelActor {
         }
         if scope == "operator.read" {
             return granted.contains("operator.read") || granted.contains("operator.write")
-        }
-        if scope == "operator.write" {
-            return granted.contains("operator.write")
         }
         return granted.contains(scope)
     }
@@ -834,27 +800,6 @@ extension GatewayChannelActor {
         return requestedScopes
     }
 
-    @discardableResult
-    private func persistBootstrapHandoffToken(
-        deviceId: String,
-        role: String,
-        token: String,
-        scopes: [String],
-        deviceAuthGatewayID: String?,
-        deviceIdentityProfile: GatewayDeviceIdentityProfile) -> Bool
-    {
-        guard let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes) else {
-            return false
-        }
-        return DeviceAuthStore.storeTokenResult(
-            deviceId: deviceId,
-            role: role,
-            token: token,
-            scopes: filteredScopes,
-            gatewayID: deviceAuthGatewayID,
-            profile: deviceIdentityProfile).persisted
-    }
-
     private func persistIssuedDeviceToken(
         authSource: GatewayAuthSource,
         deviceId: String,
@@ -864,23 +809,20 @@ extension GatewayChannelActor {
         deviceAuthGatewayID: String?,
         deviceIdentityProfile: GatewayDeviceIdentityProfile) -> Bool
     {
+        let persistedScopes: [String]
         if authSource == .bootstrapToken {
-            guard self.shouldPersistBootstrapHandoffTokens() else {
-                return false
-            }
-            return self.persistBootstrapHandoffToken(
-                deviceId: deviceId,
-                role: role,
-                token: token,
-                scopes: scopes,
-                deviceAuthGatewayID: deviceAuthGatewayID,
-                deviceIdentityProfile: deviceIdentityProfile)
+            guard self.shouldPersistBootstrapHandoffTokens(),
+                  let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: scopes)
+            else { return false }
+            persistedScopes = filteredScopes
+        } else {
+            persistedScopes = scopes
         }
         return DeviceAuthStore.storeTokenResult(
             deviceId: deviceId,
             role: role,
             token: token,
-            scopes: scopes,
+            scopes: persistedScopes,
             gatewayID: deviceAuthGatewayID,
             profile: deviceIdentityProfile).persisted
     }
@@ -961,8 +903,9 @@ extension GatewayChannelActor {
                 }
                 let scopes = rawEntry["scopes"]?.arrayValue?.compactMap(\.stringValue) ?? []
                 receivedRoles.insert(authRole)
-                if let identity, options.allowsDeviceAuthPersistence, self.shouldPersistBootstrapHandoffTokens(),
-                   self.persistBootstrapHandoffToken(
+                if let identity, options.allowsDeviceAuthPersistence,
+                   self.persistIssuedDeviceToken(
+                       authSource: .bootstrapToken,
                        deviceId: identity.deviceId,
                        role: authRole,
                        token: deviceToken,
@@ -1101,7 +1044,7 @@ extension GatewayChannelActor {
         }
         switch frame {
         case let .res(res):
-            self.finishRequest(id: res.id, result: .success(.res(res)))
+            self.finishRequest(id: res.id, result: .success(res))
         case let .event(evt):
             if evt.event == "connect.challenge" { return }
             if let seq = evt.seq {
@@ -1303,8 +1246,7 @@ extension GatewayChannelActor {
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
-        return authError.canRetryWithDeviceToken ||
-            authError.detail == .authTokenMismatch
+        return authError.canRetryWithDeviceToken
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
@@ -1429,11 +1371,11 @@ extension GatewayChannelActor {
         let effectiveTimeout = Self.resolveRequestTimeoutMs(timeoutMs, defaultMs: self.defaultRequestTimeoutMs)
         let payload = try self.encodeRequest(method: method, params: params, kind: "request")
         let cancellationGate = GatewayRequestCancellationGate()
-        let response: GatewayFrame
+        let response: ResponseFrame
         do {
             response = try await withTaskCancellationHandler {
                 try Task.checkCancellation()
-                return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
+                return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<ResponseFrame, Error>) in
                     guard !cancellationGate.isCancelled else {
                         cont.resume(throwing: CancellationError())
                         return
@@ -1495,16 +1437,13 @@ extension GatewayChannelActor {
         }
         #endif
         try Task.checkCancellation()
-        guard case let .res(res) = response else {
-            throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
-        }
-        if res.ok == false {
-            let code = res.error?.code
-            let msg = res.error?.message
-            let details = gatewayErrorDetails(res.error)
+        if response.ok == false {
+            let code = response.error?.code
+            let msg = response.error?.message
+            let details = gatewayErrorDetails(response.error)
             throw GatewayResponseError(method: method, code: code, message: msg, details: details)
         }
-        if let payload = res.payload {
+        if let payload = response.payload {
             // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.
             return try self.encoder.encode(payload)
         }
@@ -1622,7 +1561,7 @@ extension GatewayChannelActor {
         }
     }
 
-    private func finishRequest(id: String, result: Result<GatewayFrame, Error>) {
+    private func finishRequest(id: String, result: Result<ResponseFrame, Error>) {
         guard let request = self.pending.removeValue(forKey: id) else { return }
         // A deadline belongs to its pending request, including after caller cancellation or disconnect.
         request.timeoutTask?.cancel()

@@ -154,17 +154,7 @@ export function narrowMemorySchema(schema: unknown, keys: readonly string[]): un
   return narrowed;
 }
 
-/** Which `memory.*` children the embedded editor shows for a tab. */
-export function memorySchemaKeysForTab(tab: MemoryTab): readonly string[] {
-  if (tab !== "settings") {
-    return [];
-  }
-  // Keep the old Overview fields before the old Search slice while rendering
-  // one editor, which in turn keeps one autosave status and apply banner.
-  return ["citations", "search"];
-}
-
 /** Every `memory.*` child the Settings editor surfaces. */
 export function memoryVisibleSchemaKeys(): readonly string[] {
-  return memorySchemaKeysForTab("settings");
+  return ["citations", "search"];
 }

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { assertRealOutputRoot } from "../../scripts/lib/output-root-guard.mjs";
 import { resolveRuntimePostBuildRequirement } from "../../scripts/run-node.mts";
 import {
   BUILD_STAMP,
@@ -16,6 +17,7 @@ import {
   touchProjectFiles,
   trackProjectWithGit,
 } from "../../test/scripts/run-node.test-support.js";
+import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { expectRuntime, writeRuntime } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
@@ -60,20 +62,229 @@ describe("Git runtime promotion", () => {
     return candidateRoot;
   }
 
-  async function activate(candidateRoot: string) {
-    const cleanupRoot = path.dirname(candidateRoot);
-    const promotion = await prepareGitRuntimePromotion(
+  function preparePromotion(candidateRoot: string, validateDestination?: (path: string) => void) {
+    return prepareGitRuntimePromotion(
       root,
       candidateRoot,
       runCommandWithTimeout,
       5000,
-      cleanupRoot,
+      path.dirname(candidateRoot),
+      validateDestination,
     );
+  }
+
+  async function activate(candidateRoot: string) {
+    const promotion = await preparePromotion(candidateRoot);
     // Activation must stand alone after the disposable candidate has gone.
-    await fs.rm(cleanupRoot, { recursive: true, force: true });
+    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
     await promotion.activate();
     await promotion.cleanup();
   }
+
+  it.each([false, true])(
+    "does not repeat completed restoration after authority is lost (previous runtime: %s)",
+    async (previous) => {
+      const candidateRoot = await createCandidate();
+      const destination = path.join(root, "dist");
+      if (!previous) {
+        await fs.rm(destination, { recursive: true, force: true });
+      }
+      const promotion = await preparePromotion(candidateRoot);
+      await promotion.activate();
+      let revoked = false;
+      const rename = fs.rename.bind(fs);
+      const remove = fs.rm.bind(fs);
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        await rename(source, target);
+        if (previous && path.basename(String(source)) === "previous" && target === destination) {
+          revoked = true;
+        }
+      });
+      const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+        await remove(target, options);
+        if (!previous && target === destination) {
+          revoked = true;
+        }
+      });
+      try {
+        await expect(
+          promotion.restore(() => {
+            if (revoked) {
+              throw new Error("restoration authority lost");
+            }
+          }),
+        ).rejects.toThrow("restoration authority lost");
+      } finally {
+        renameSpy.mockRestore();
+        removeSpy.mockRestore();
+      }
+      // A completed destination is no longer rollback-owned, even if admission then fails.
+      if (!previous) {
+        await fs.mkdir(destination);
+        await fs.writeFile(path.join(destination, "subsequent-owner"), "preserve");
+      }
+      await promotion.restore();
+      if (previous) {
+        await expectRuntime(root, "original");
+      } else {
+        expect(await fs.readFile(path.join(destination, "subsequent-owner"), "utf8")).toBe(
+          "preserve",
+        );
+      }
+      await promotion.cleanup();
+    },
+  );
+
+  function assertDestination(destination: string) {
+    let current = root;
+    assertRealOutputRoot(current);
+    for (const component of path.relative(root, destination).split(path.sep)) {
+      current = path.join(current, component);
+      assertRealOutputRoot(current);
+    }
+  }
+
+  it.each(["absent", "foreign", "authority-lost", "retained-replaced", "uncertain"] as const)(
+    "compensates only an owned partial activation (%s)",
+    async (outcome) => {
+      const candidateRoot = await createCandidate();
+      let current = true;
+      const uncertainty = new CommandProcessCleanupError();
+      const promotion = await preparePromotion(candidateRoot, (destination) => {
+        if (!current) {
+          throw outcome === "uncertain" ? uncertainty : new Error("source authority lost");
+        }
+        assertDestination(destination);
+      });
+      const destination = path.join(root, "dist");
+      const original = await fs.lstat(destination, { bigint: true });
+      const rename = fs.rename.bind(fs);
+      const activationError = new Error("candidate rename refused");
+      let previous: string | undefined;
+      let renamedAtUncertainty = 0;
+      const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, target) => {
+        if (source === destination) {
+          previous = String(target);
+        }
+        if (String(source).endsWith(`${path.sep}candidate`) && target === destination) {
+          if (outcome === "foreign") {
+            await fs.mkdir(destination);
+          }
+          if (outcome === "authority-lost") {
+            current = false;
+          }
+          if (outcome === "retained-replaced") {
+            await rename(previous!, `${previous!}.operator`);
+            await fs.mkdir(previous!);
+          }
+          throw activationError;
+        }
+        const result = await rename(source, target);
+        if (outcome === "uncertain" && source === destination) {
+          current = false;
+          renamedAtUncertainty = renameSpy.mock.calls.length;
+        }
+        return result;
+      });
+      try {
+        const failure: unknown = await promotion.activate().catch((error: unknown) => error);
+        expect(previous).toBeDefined();
+        if (outcome === "uncertain") {
+          expect(failure).toBe(uncertainty);
+          await expect(promotion.restore()).rejects.toBe(uncertainty);
+          await expect(promotion.cleanup()).rejects.toBe(uncertainty);
+          expect(renameSpy.mock.calls).toHaveLength(renamedAtUncertainty);
+          expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(original.ino);
+          return;
+        }
+        if (outcome === "absent") {
+          expect(failure).toBe(activationError);
+          expect((await fs.lstat(destination, { bigint: true })).ino).toBe(original.ino);
+        } else {
+          const retained = outcome === "retained-replaced" ? `${previous!}.operator` : previous!;
+          expect((await fs.lstat(retained, { bigint: true })).ino).toBe(original.ino);
+          if (outcome === "retained-replaced") {
+            const foreign = await fs.lstat(previous!, { bigint: true });
+            await expect(promotion.restore()).rejects.toThrow();
+            await promotion.cleanup();
+            expect((await fs.lstat(retained, { bigint: true })).ino).toBe(original.ino);
+            expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(foreign.ino);
+            await fs.rmdir(previous!);
+            await rename(retained, previous!);
+          } else if (outcome === "foreign") {
+            const foreign = await fs.lstat(destination, { bigint: true });
+            await expect(promotion.restore()).rejects.toThrow();
+            expect((await fs.lstat(destination, { bigint: true })).ino).toBe(foreign.ino);
+            await promotion.cleanup();
+            expect((await fs.lstat(previous!, { bigint: true })).ino).toBe(original.ino);
+            await fs.rmdir(destination);
+          } else {
+            await expect(promotion.restore()).rejects.toThrow("source authority lost");
+            await expect(promotion.cleanup()).rejects.toThrow("source authority lost");
+            await expect(fs.lstat(destination)).rejects.toMatchObject({ code: "ENOENT" });
+            current = true;
+          }
+          expect(failure).toMatchObject({ errors: [activationError, expect.any(Error)] });
+        }
+        await promotion.restore();
+        await expectRuntime(root, "original");
+        await promotion.cleanup();
+      } finally {
+        renameSpy.mockRestore();
+      }
+    },
+  );
+
+  it("checks the source destination policy before any runtime staging writes", async () => {
+    const candidateRoot = await createCandidate();
+    const outside = path.join(directory, "outside-packages");
+    await fs.rename(path.join(root, "packages"), outside);
+    await fs.symlink(outside, path.join(root, "packages"), "junction");
+    const before = await fs.readdir(outside, { recursive: true });
+    await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
+      "symbolic link",
+    );
+    expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
+    // Restore the fixture's physical depth before resolving its relative dependency links.
+    await fs.unlink(path.join(root, "packages"));
+    await fs.rename(outside, path.join(root, "packages"));
+    await expectRuntime(root, "original");
+  });
+
+  it.each(["activate", "restore", "cleanup"] as const)(
+    "retains originals when a source destination parent changes before %s",
+    async (phase) => {
+      const candidateRoot = await createCandidate();
+      const promotion = await preparePromotion(candidateRoot, assertDestination);
+      if (phase !== "activate") {
+        await promotion.activate();
+        await expectRuntime(root, "candidate");
+      }
+      const heldPackages = path.join(directory, "held-packages");
+      const outside = path.join(directory, "outside-packages");
+      const outsideModules = path.join(outside, "runtime", "node_modules");
+      await fs.mkdir(outsideModules, { recursive: true });
+      await fs.writeFile(path.join(outsideModules, "operator.cjs"), "outside content\n");
+      await fs.rename(path.join(root, "packages"), heldPackages);
+      await fs.symlink(outside, path.join(root, "packages"), "junction");
+
+      await expect(promotion[phase]()).rejects.toThrow("symbolic link");
+      expect(await fs.readFile(path.join(outsideModules, "operator.cjs"), "utf8")).toBe(
+        "outside content\n",
+      );
+      expect(await fs.readdir(outsideModules)).toEqual(["operator.cjs"]);
+
+      await fs.unlink(path.join(root, "packages"));
+      await fs.rename(heldPackages, path.join(root, "packages"));
+      if (phase === "activate") {
+        await expectRuntime(root, "original");
+        await promotion.activate();
+      }
+      await promotion.restore();
+      await expectRuntime(root, "original");
+      await promotion.cleanup();
+    },
+  );
 
   it.each(["dependency", "cache-link", "parent-link"] as const)(
     "preserves tool cache paths owned by a %s",
@@ -163,7 +374,6 @@ describe("Git runtime promotion", () => {
     "../checkout",
     ".artifacts/checkout",
     "live:node_modules",
-    "live:dist",
     "live:packages/runtime/node_modules",
     "link:node_modules",
   ])("refuses virtual store %s before promotion can replace a checkout", async (store) => {
@@ -198,9 +408,7 @@ describe("Git runtime promotion", () => {
         virtualStoreDir: path.relative(modules, storePath),
       }),
     );
-    await expect(
-      prepareGitRuntimePromotion(root, candidateRoot, runCommandWithTimeout, 5000, cleanupRoot),
-    ).rejects.toThrow(/virtual store/i);
+    await expect(preparePromotion(candidateRoot)).rejects.toThrow(/virtual store/i);
     await expectRuntime(root, "original");
   });
 });

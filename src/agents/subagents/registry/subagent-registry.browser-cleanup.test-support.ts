@@ -11,6 +11,7 @@ function createRootAdmissionObservation() {
   const admitted = new WeakMap<Promise<unknown>, { entered: boolean }>();
   const admissions = (
     [
+      "runWithGatewayDetachedWorkAdmission",
       "runWithGatewayIndependentRootWorkAdmission",
       "runWithGatewayIndependentRootWorkContinuation",
     ] as const
@@ -130,7 +131,7 @@ export function registerBrowserCleanupBoundaryTests({
           typeof import("../../../plugin-sdk/browser-maintenance.js").closeTrackedBrowserTabsForSessions
         >()
         .mockResolvedValue(1);
-      const surface = { closeTrackedBrowserTabsForSessions };
+      const surface = { supportsSessionEntryCurrent: true, closeTrackedBrowserTabsForSessions };
       const activation = createDeferred<typeof surface>();
       const activationEntered = createDeferred();
       loadBrowserMaintenanceSurface.mockImplementationOnce(() => {
@@ -149,7 +150,7 @@ export function registerBrowserCleanupBoundaryTests({
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
 
         if (owner === "session reset") {
-          mod.prepareSubagentSessionCleanupRevocation(childSessionKey)();
+          (await mod.prepareSubagentSessionCleanupRevocation(childSessionKey))();
         } else if (owner !== "current owner") {
           mockPendingAgentWait();
           await mod.registerSubagentRun({

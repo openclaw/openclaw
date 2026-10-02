@@ -7,18 +7,24 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import type { Frame } from "playwright";
 import { expect, inject, it } from "vitest";
-import { disposeAllSessionMcpRuntimes } from "../../../src/agents/agent-bundle-mcp-manager-api.js";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { getOrCreateSessionMcpRuntime } from "../../../src/agents/agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "../../../src/agents/agent-bundle-mcp-materialize.js";
+import { getMcpAppModelContext } from "../../../src/agents/mcp-app-model-context.js";
 import { getMcpAppViewLease } from "../../../src/agents/mcp-ui-resource.js";
 import { readConfigFileSnapshotWithPluginMetadata } from "../../../src/config/config.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { startGatewayServer } from "../../../src/gateway/server.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import { createTestGatewayScheduler } from "../../../src/test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.ts";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -38,6 +44,7 @@ import {
   writeFixtureServer,
 } from "../test-helpers/mcp-app-conformance-fixture.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { seedMcpAppConformanceSession } from "./mcp-app-conformance-session.test-support.ts";
 import {
   assertMcpAppTimingEvents,
   waitForMcpAppTimingEvents,
@@ -53,8 +60,11 @@ let proofDir: string;
 let state: OpenClawTestState | undefined;
 let gatewayStartup: ReturnType<typeof startGatewayServer> | undefined;
 let runtimeStartup: ReturnType<typeof getOrCreateSessionMcpRuntime> | undefined;
+let mcpScheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
 let gatewayPort: number;
 let sandboxPort: number;
+// Each claim is held until the listener bound to its port has closed.
+const portClaims: Partial<Record<"appAsset" | "gateway" | "sandbox", TestPortClaim>> = {};
 let tempRoot: string;
 let viewId: string;
 let appAssetServer: HttpServer | undefined;
@@ -66,11 +76,13 @@ let fixture: ReturnType<typeof createMcpAppFixtureControl>;
 let showFixture: (callId: string) => Promise<string>;
 
 const failures: Array<{ step: string; error: string }> = [];
-async function settleCleanup(step: string, cleanup: () => Promise<unknown>) {
+async function settleCleanup(step: string, cleanup: () => Promise<unknown>): Promise<boolean> {
   try {
     await cleanup();
+    return true;
   } catch (error) {
     failures.push({ step, error: String(error) });
+    return false;
   }
 }
 async function recordCleanup() {
@@ -122,7 +134,8 @@ const suite = createControlUiE2eSuite({
       state.envVars.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
       const appEntryPath = require.resolve("@modelcontextprotocol/ext-apps/app-with-deps");
       const appModuleSource = await fs.readFile(appEntryPath, "utf8");
-      const appAssetPort = await getGatewayE2ePortBlock();
+      portClaims.appAsset = await acquireGatewayE2ePortBlock();
+      const appAssetPort = portClaims.appAsset.port;
       signal.throwIfAborted();
       const fixtureAssetServer = createHttpServer((request, response) => {
         if (request.url === "/history-away") {
@@ -162,11 +175,12 @@ const suite = createControlUiE2eSuite({
         fixtureControlPath,
         fixtureEventsPath,
       );
-      gatewayPort = await getGatewayE2ePortBlock();
-      do {
-        signal.throwIfAborted();
-        sandboxPort = await getGatewayE2ePortBlock();
-      } while (sandboxPort === gatewayPort);
+      portClaims.gateway = await acquireGatewayE2ePortBlock();
+      gatewayPort = portClaims.gateway.port;
+      signal.throwIfAborted();
+      // A held claim keeps the sandbox block distinct from the Gateway block.
+      portClaims.sandbox = await acquireGatewayE2ePortBlock();
+      sandboxPort = portClaims.sandbox.port;
       const cfg: OpenClawConfig = {
         gateway: {
           auth: { mode: "token", token: authValue },
@@ -180,6 +194,8 @@ const suite = createControlUiE2eSuite({
               args: [fixturePath],
               cwd: tempRoot,
               requestTimeoutMs: 10_000,
+              // This keyless fixture proves transport lifetime, not interactive approval.
+              codex: { defaultToolsApprovalMode: "approve" },
             },
           },
         },
@@ -187,6 +203,9 @@ const suite = createControlUiE2eSuite({
       await state.writeConfig(cfg);
       signal.throwIfAborted();
       state.applyEnv();
+      mcpScheduler = createTestGatewayScheduler();
+      await setSessionMcpRuntimeScheduler(mcpScheduler);
+      signal.throwIfAborted();
       // Keep rejected acquisitions: no returned handle does not prove cleanup succeeded.
       runtimeStartup = getOrCreateSessionMcpRuntime({
         sessionId: `mcp-app-conformance-${randomUUID()}`,
@@ -196,7 +215,8 @@ const suite = createControlUiE2eSuite({
       });
       runtime = await runtimeStartup;
       signal.throwIfAborted();
-      const materialized = await materializeBundleMcpToolsForRun({ runtime });
+      await seedMcpAppConformanceSession(runtime, state.env);
+      const materialized = await materializeBundleMcpToolsForRun({ runtime, agentId: "main" });
       signal.throwIfAborted();
       materialized.restrictAppTools?.([...materialized.tools, ...(materialized.appTools ?? [])]);
       const show = materialized.tools.find((tool) => tool.name === "conformance__show");
@@ -235,23 +255,35 @@ const suite = createControlUiE2eSuite({
       signal.throwIfAborted();
     },
     close: async () => {
-      await settleCleanup("gateway", async () => {
+      const gatewayClosed = await settleCleanup("gateway", async () => {
         const gateway = await gatewayStartup;
         await gateway?.close({ reason: "MCP App conformance complete" });
       });
-      await settleCleanup("MCP startup", async () => {
+      const mcpStartupSettled = await settleCleanup("MCP startup", async () => {
         await runtimeStartup;
       });
-      await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
-      if (appAssetServer) {
-        await settleCleanup(
-          "asset server",
-          () =>
-            new Promise<void>((resolve, reject) => {
-              appAssetServer?.close((error) => (error ? reject(error) : resolve()));
-            }),
-        );
-      }
+      const mcpClosed = await settleCleanup("MCP runtimes", () => disposeAllSessionMcpRuntimes());
+      await settleCleanup("MCP scheduler", async () => {
+        await mcpScheduler?.stop();
+      });
+      const assetServerClosed = appAssetServer
+        ? await settleCleanup(
+            "asset server",
+            () =>
+              new Promise<void>((resolve, reject) => {
+                appAssetServer?.close((error) => (error ? reject(error) : resolve()));
+              }),
+          )
+        : true;
+      // Incomplete cleanup can leave a listener bound; keep its port claimed.
+      const releasable = [
+        gatewayClosed && portClaims.gateway,
+        gatewayClosed && mcpStartupSettled && mcpClosed && portClaims.sandbox,
+        assetServerClosed && portClaims.appAsset,
+      ].filter((claim): claim is TestPortClaim => Boolean(claim));
+      await settleCleanup("port claims", () =>
+        Promise.all(releasable.map((claim) => claim.release())),
+      );
       if (tempRoot) {
         await settleCleanup("archive fixture events", () =>
           fs.copyFile(fixtureEventsPath, path.join(proofDir, "fixture-events.jsonl")),
@@ -325,6 +357,10 @@ suite.define(() => {
         await waitForTextContaining(app.locator("#tools"), "model_only", false);
         await waitForText(app.locator("#isolation"), "isolated");
         await waitForText(app.locator("#host-theme"), "dark");
+        // A light proxy between dark documents paints an opaque UA canvas.
+        const proxyColorScheme = () =>
+          app.parentFrame()?.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+        await expect.poll(proxyColorScheme).toBe("dark");
         await waitForTextContaining(
           app.locator("#host-variables"),
           '"--color-background-primary":"#161920"',
@@ -348,6 +384,7 @@ suite.define(() => {
           setTheme?.("light");
         });
         await waitForText(app.locator("#host-theme"), "light");
+        await expect.poll(proxyColorScheme).toBe("light");
         await waitForTextContaining(
           app.locator("#host-variables"),
           '"--color-background-primary":"#ffffff"',
@@ -390,7 +427,13 @@ suite.define(() => {
           )
           .toBe("summarize selection");
         expect(confirmedPrompts).toEqual(["Confirm:\n\nsummarize selection"]);
-        expect(runtime.pendingMcpAppModelContext).toMatchObject({ text: "selected item 42" });
+        const currentView = getMcpAppViewLease(viewId, runtime);
+        if (!currentView) {
+          throw new Error("Conformance view expired before context inspection");
+        }
+        expect(getMcpAppModelContext(runtime, currentView)).toMatchObject({
+          content: [{ type: "text", text: "selected item 42" }],
+        });
 
         const standaloneUrl = await requestStandaloneUrl(controlPage, { sessionKey, viewId });
         await fixture.configure({
@@ -687,8 +730,8 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
-                        (event) => event.scenario === spec.scenario && event.event === "tool-start",
+                      (await fixture.readEvents(spec.scenario)).filter(
+                        (event) => event.event === "tool-start",
                       ).length,
                   )
                   .toBe(1);
@@ -709,10 +752,8 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
-                        (event) =>
-                          event.scenario === spec.scenario &&
-                          event.event === "tool-cancellation-observed",
+                      (await fixture.readEvents(spec.scenario)).filter(
+                        (event) => event.event === "tool-cancellation-observed",
                       ).length,
                   )
                   .toBe(1);
@@ -724,17 +765,14 @@ suite.define(() => {
                 await expect
                   .poll(
                     async () =>
-                      (await fixture.readEvents()).filter(
+                      (await fixture.readEvents(spec.scenario)).filter(
                         (event) =>
-                          event.scenario === spec.scenario &&
                           event.event === (spec.cooperative ? "tool-stopped" : "tool-complete"),
                       ).length,
                     { timeout: 8000 },
                   )
                   .toBe(1);
-                const events = (await fixture.readEvents()).filter(
-                  (event) => event.scenario === spec.scenario,
-                );
+                const events = await fixture.readEvents(spec.scenario);
                 const calls = events.filter(
                   (event) => event.event === "incoming" && event.tool === "app_companion",
                 );
@@ -764,9 +802,7 @@ suite.define(() => {
                 Object.assign(observation, {
                   settledAtMs: Date.now(),
                   network: diagnostics.slice(networkStart),
-                  events: (await fixture.readEvents()).filter(
-                    (event) => event.scenario === spec.scenario,
-                  ),
+                  events: await fixture.readEvents(spec.scenario),
                   state: await recordHost(standalonePage, spec.scenario + "-after"),
                 });
                 await fs.writeFile(
@@ -812,9 +848,7 @@ suite.define(() => {
               const controlResponses = http.responses.slice(controlHttpStart);
               expect(controlResponses).toHaveLength(1);
               expect(controlResponses[0]?.writableFinished).toBe(true);
-              const controlEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === spec.scenario + "-control",
-              );
+              const controlEvents = await fixture.readEvents(spec.scenario + "-control");
               expect(
                 controlEvents.filter(
                   (event) => event.event === "incoming" && event.tool === "app_companion",
@@ -826,9 +860,7 @@ suite.define(() => {
                 ),
               ).toHaveLength(1);
               // A subsequent real response is a causal barrier for the cancelled handler's late reply.
-              const settledEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === spec.scenario,
-              );
+              const settledEvents = await fixture.readEvents(spec.scenario);
               observation.events = settledEvents;
               observation.afterControlAtMs = Date.now();
               await fs.writeFile(
@@ -919,8 +951,8 @@ suite.define(() => {
               await historyApp.locator("#call-app").click();
               await waitForTextContaining(historyApp.locator("#app-tool"), "companion-called");
               historyObservations.returnedApp = await recordHost(historyPage, "history-forward");
-              const historyEvents = (await fixture.readEvents()).filter(
-                (event) => event.scenario === "history-forward" && event.tool === "app_companion",
+              const historyEvents = (await fixture.readEvents("history-forward")).filter(
+                (event) => event.tool === "app_companion",
               );
               historyObservations.events = historyEvents;
               const historyCalls = historyEvents.filter((event) => event.event === "incoming");

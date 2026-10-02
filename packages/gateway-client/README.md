@@ -170,6 +170,11 @@ Retryable server hints remain minimum waits and can extend beyond the normal cap
 with up to 20% additional spread. Adapter-owned startup retry hints retain their
 exact next delay without advancing normal backoff.
 
+Browser adapters can observe the shared client's `onReconnectScheduled(delayMs,
+signal)` callback to display the actual retry wait, including jitter and timer
+bounds. The signal aborts when the wait is canceled or superseded; adapters should
+clear their countdown when creating the next socket.
+
 A sequence gap calls `onGap` and retires the socket unless the callback already
 replaced it. A gap-revealing `chat` final, aborted, or error event is delivered
 first so its authoritative outcome can settle the run. Other gapped frames and

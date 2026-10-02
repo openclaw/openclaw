@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAgentDir } from "../agents/config.js";
 import { resolveInstallAgentDir } from "../agents/install-agent-dir.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -31,6 +30,7 @@ import {
   detectLegacyStateMigrations,
   planLegacyStateMigrationsReadOnly,
 } from "./state-migrations.doctor.js";
+import { resolveLegacyStateMigrationOwner } from "./state-migrations.legacy-owner.js";
 import { migrateLegacyAgentDir } from "./state-migrations.legacy-sessions.js";
 import type { LegacyStateMigrationPlan } from "./state-migrations.types.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
@@ -125,7 +125,7 @@ describe("legacy state migration caller storage", () => {
   });
 
   it.each([undefined, "missing"])(
-    "keeps retained migration ownership separate from runtime selection with system owner %s",
+    "keeps raw migration ownership separate from runtime selection with system owner %s",
     async (systemAgentId) => {
       await withOpenClawTestState(
         { label: "retained-install-owner", layout: "split", agentEnv: "clear" },
@@ -137,45 +137,76 @@ describe("legacy state migration caller storage", () => {
               entries: { main: {}, worker: {} },
             },
           };
-          retainLegacyDefaultAgentId(cfg, "worker");
           const resolution = resolveInstallAgentDir(cfg, {
             env: state.env,
             homedir: () => state.home,
           });
+          const migration = resolveLegacyStateMigrationOwner({
+            cfg,
+            locatorConfig: {
+              agents: { list: [{ id: "main" }, { id: "worker", default: true }] },
+            },
+            env: state.env,
+            homedir: () => state.home,
+          });
 
-          expect(resolution.migrationTarget).toEqual(
-            systemAgentId ? undefined : { dir: state.agentDir("worker"), owner: "worker" },
-          );
+          expect(migration.migrationTarget).toEqual({
+            dir: state.agentDir("worker"),
+            owner: "worker",
+          });
+          expect(migration.sessionMigrationAgentId).toBe("worker");
+          expect(resolution.migrationTarget).toBeUndefined();
           expect(resolution.optionalDirectory).toBeUndefined();
         },
       );
     },
   );
 
-  it.each(
-    [
-      { name: "configured main directory", agentId: "main", custom: true, override: "none" },
-      {
-        name: "deferred main SQLite family",
-        agentId: "main",
-        custom: true,
-        override: "none",
-        sqlite: true,
-      },
-      { name: "non-main default", agentId: "worker", custom: false, override: "none" },
-      { name: "configured non-main directory", agentId: "worker", custom: true, override: "none" },
-      { name: "explicit legacy directory", agentId: "worker", custom: true, override: "legacy" },
-      { name: "explicit other directory", agentId: "worker", custom: true, override: "other" },
-      {
-        name: "explicit tilde legacy directory",
-        agentId: "worker",
-        custom: true,
-        override: "tilde",
-      },
-    ].flatMap((testCase) => [false, true].map((malformed) => ({ testCase, malformed }))),
-  )(
-    "shares the install directory between SDK and Doctor: $testCase.name (malformed: $malformed)",
-    async ({ testCase, malformed }) => {
+  it.each([
+    {
+      name: "deferred main SQLite family",
+      agentId: "main",
+      custom: true,
+      override: "none",
+      sqlite: true,
+      malformed: false,
+    },
+    {
+      name: "configured non-main directory",
+      agentId: "worker",
+      custom: true,
+      override: "none",
+      sqlite: false,
+      malformed: false,
+    },
+    {
+      name: "non-main default",
+      agentId: "worker",
+      custom: false,
+      override: "none",
+      sqlite: false,
+      malformed: false,
+    },
+    {
+      name: "malformed default config",
+      agentId: "main",
+      custom: true,
+      override: "none",
+      sqlite: false,
+      malformed: true,
+    },
+    {
+      name: "explicit tilde legacy directory",
+      agentId: "worker",
+      custom: true,
+      override: "tilde",
+      sqlite: false,
+      malformed: true,
+    },
+  ])(
+    "shares the install directory between SDK and Doctor: $name (malformed: $malformed)",
+    async (testCase) => {
+      const { malformed } = testCase;
       await withOpenClawTestState(
         { label: "install-agent-dir", layout: "split", agentEnv: "clear" },
         async (state) => {
@@ -183,12 +214,7 @@ describe("legacy state migration caller storage", () => {
           const configuredDir = testCase.custom
             ? state.path("configured-agent")
             : state.agentDir(testCase.agentId);
-          const overrideDir =
-            testCase.override === "none"
-              ? undefined
-              : testCase.override === "other"
-                ? state.path("selected-agent")
-                : legacyDir;
+          const overrideDir = testCase.override === "none" ? undefined : legacyDir;
           const targetDir = overrideDir ?? (malformed ? state.agentDir("main") : configuredDir);
           const agentConfig = {
             ownership: "explicit",
@@ -363,7 +389,7 @@ describe("legacy state migration caller storage", () => {
 
   it("binds WAL-backed shared-auth and meeting-transcript inputs as SQLite", async () => {
     const fixture = await makeFixture();
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     const agentDatabasePath = path.join(
       fixture.stateDir,

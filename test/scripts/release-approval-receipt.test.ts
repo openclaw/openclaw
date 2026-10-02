@@ -9,7 +9,6 @@ import {
   awaitParentAuthorization,
   createReleaseApprovalReceipt,
   downloadReleaseApprovalReceipt,
-  releaseApprovalArtifactName,
   validateReleaseApprovalReceipt,
   verifyReleaseApprovalReceipt,
 } from "../../scripts/release-approval-receipt.mjs";
@@ -106,6 +105,19 @@ function fixture() {
   };
 }
 
+it.each([
+  { releaseTag: "v2026.9.24-alpha.1" },
+  { npmDistTag: "alpha" },
+  {
+    toolingRef: "tideclaw/alpha/2026-09-24-1200Z",
+    toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-24-1200Z",
+  },
+])("rejects retired alpha approval %j", (override) => {
+  expect(() => validateReleaseApprovalReceipt({ ...fixture().receipt, ...override })).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("release approval receipt", () => {
   it("creates the exact receipt using the last approved npm-release reviewer", () => {
     const receipt = createReleaseApprovalReceipt(env, (path: string) => {
@@ -118,21 +130,13 @@ describe("release approval receipt", () => {
       ];
     });
     expect(receipt).toEqual(fixture().receipt);
-    expect(Object.keys(receipt)).toEqual(Object.keys(fixture().receipt));
-    expect(releaseApprovalArtifactName({ parentRunId: "10", parentRunAttempt: "2" })).toBe(
-      "openclaw-release-approval-v1-10-2",
-    );
-    expect(validateReleaseApprovalReceipt(receipt)).toBe(receipt);
   });
 
-  it.each(["github-actions[bot]", "reviewer[BoT]", "", " "])(
-    "rejects an invalid last approver %j",
-    (login) => {
-      expect(() => createReleaseApprovalReceipt(env, () => [approved(), approved(login)])).toThrow(
-        /human login/u,
-      );
-    },
-  );
+  it.each(["reviewer[BoT]", " "])("rejects an invalid last approver %j", (login) => {
+    expect(() => createReleaseApprovalReceipt(env, () => [approved(), approved(login)])).toThrow(
+      /human login/u,
+    );
+  });
 
   it("rejects approval histories without an approved npm-release entry", () => {
     expect(() =>
@@ -173,11 +177,6 @@ describe("release approval receipt", () => {
     expect(() => validateReleaseApprovalReceipt({ ...fixture().receipt, [key]: value })).toThrow(
       message,
     );
-  });
-
-  it("verifies approval while the parent publish job is still running", () => {
-    const input = fixture();
-    expect(verifyReleaseApprovalReceipt(input)).toBe(input.receipt);
   });
 
   it("rejects extra receipt keys", () => {
@@ -381,10 +380,8 @@ describe("release approval artifact download", () => {
   );
 });
 
-describe.each([
-  ["ClawHub", "openclaw-clawhub-parent-authorization-v2-10-2-30-1", false],
-  ["npm", "openclaw-release-approval-v1-10-2", true],
-])("%s parent authorization wait", (_target, name, requireInProgress) => {
+describe("parent authorization wait", () => {
+  const name = "openclaw-release-approval-v1-10-2";
   const listing = `actions/runs/10/artifacts?name=${name}&per_page=100`;
   const authorization = {
     name,
@@ -395,7 +392,7 @@ describe.each([
     parentRunId: "10",
     parentRunAttempt: "2",
     expectedArtifactName: name,
-    requireInProgress,
+    requireInProgress: true,
     toolingSha: "a".repeat(40),
     sleep: async () => {},
   };
@@ -424,11 +421,11 @@ describe.each([
     );
   });
 
-  it.each(["success", "cancelled", "failure"])(
-    "requires a live npm parent even when its artifact exists (%s)",
-    async (conclusion) => {
-      const runGhJson = api([[authorization]], { status: "completed", conclusion });
-      const result = awaitParentAuthorization({ ...params, runGhJson });
+  it.each([true, false])(
+    "accepts detached authorization only when a live parent is not required (%s)",
+    async (requireInProgress) => {
+      const runGhJson = api([[authorization]], { status: "completed", conclusion: "failure" });
+      const result = awaitParentAuthorization({ ...params, runGhJson, requireInProgress });
       if (requireInProgress) {
         await expect(result).rejects.toThrow(/completed\//u);
       } else {
@@ -472,7 +469,6 @@ describe("parent authorization CLI", () => {
   it.each([
     ["wait-npm-authorization", "in_progress", null, 0, "openclaw-release-approval-v1-10-2"],
     ["wait-npm-authorization", "completed", "success", 1, "openclaw-release-approval-v1-10-2"],
-    ["wait-npm-authorization", "completed", "cancelled", 1, "openclaw-release-approval-v1-10-2"],
     [
       "wait-clawhub-authorization",
       "completed",

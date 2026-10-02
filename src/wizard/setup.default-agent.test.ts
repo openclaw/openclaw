@@ -1,6 +1,7 @@
 // Classic setup tests keep every workspace-owned effect on the configured default agent.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -74,7 +75,6 @@ vi.mock("./setup.gateway-config.js", () => ({
       bind: "loopback",
       authMode: "token",
       gatewayToken: "test-token",
-      tailscaleMode: "off",
     },
   }),
 }));
@@ -137,6 +137,27 @@ const prompter = {
   confirm: vi.fn(),
   progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
 } as unknown as WizardPrompter;
+
+function runWizard(opts: OnboardOptions = {}) {
+  return runSetupWizard(
+    {
+      acceptRisk: true,
+      flow: "advanced",
+      mode: "local",
+      authChoice: "skip",
+      installDaemon: false,
+      skipChannels: true,
+      skipSkills: true,
+      skipSearch: true,
+      skipHealth: true,
+      skipHooks: true,
+      skipUi: true,
+      ...opts,
+    },
+    runtime,
+    prompter,
+  );
+}
 
 describe("runSetupWizard default-agent ownership", () => {
   beforeEach(() => {
@@ -212,23 +233,7 @@ describe("runSetupWizard default-agent ownership", () => {
       return { path: "/tmp/openclaw.json", nextConfig };
     });
 
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "quickstart",
-        mode: "local",
-        authChoice: "skip",
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipHooks: true,
-        skipUi: true,
-        installDaemon: false,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ flow: "quickstart" });
 
     expect(persisted?.telemetry).toEqual({ enabled: false, consentedAt: expect.any(String) });
     expect(persisted?.gateway?.port).toBe(24444);
@@ -247,24 +252,7 @@ describe("runSetupWizard default-agent ownership", () => {
     mocks.setupRecommendations.mockImplementation(
       async ({ config }: { config: OpenClawConfig }) => ({ config, commitResult }),
     );
-    const outcome = runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "local",
-        workspace: "/tmp/global-workspace",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSkills: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipHooks: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    ).then(
+    const outcome = runWizard({ workspace: "/tmp/global-workspace" }).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -286,23 +274,7 @@ describe("runSetupWizard default-agent ownership", () => {
   });
 
   it("uses the keyed default-agent workspace for all classic agent-owned effects", async () => {
-    await runSetupWizard(
-      {
-        acceptRisk: true,
-        flow: "advanced",
-        mode: "local",
-        workspace: "/tmp/global-workspace",
-        authChoice: "skip",
-        installDaemon: false,
-        skipChannels: true,
-        skipSearch: true,
-        skipHealth: true,
-        skipHooks: true,
-        skipUi: true,
-      },
-      runtime,
-      prompter,
-    );
+    await runWizard({ workspace: "/tmp/global-workspace", skipSkills: false });
 
     expect(mocks.writeConfig).toHaveBeenLastCalledWith(
       expect.objectContaining({

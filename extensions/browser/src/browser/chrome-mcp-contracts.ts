@@ -53,7 +53,6 @@ export type ChromeMcpOpenOptions = ChromeMcpOperationOptions & {
 export type ChromeMcpTargetOperation = ChromeMcpOperationOptions & {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
   targetId: string;
 };
 
@@ -101,11 +100,9 @@ export type NormalizedChromeMcpProfileOptions = {
   browserUrl?: string;
   command: string;
   args: string[];
+  env?: Record<string, string>;
 };
-export type ChromeMcpOptionsInput =
-  | string
-  | ChromeMcpProfileOptions
-  | NormalizedChromeMcpProfileOptions;
+export type ChromeMcpOptionsInput = ChromeMcpProfileOptions | NormalizedChromeMcpProfileOptions;
 
 export type ChromeMcpSessionOwner = {
   isCurrent: (session: ChromeMcpSession) => boolean;

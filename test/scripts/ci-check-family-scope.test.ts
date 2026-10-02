@@ -4,12 +4,11 @@ import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-sco
 describe("narrow PR check families", () => {
   it("drops unrelated source guard rows for UI styles", () => {
     expect(resolveCiCheckFamilyScope(["ui/src/styles/chat.css"])).toEqual({
+      mode: "scoped",
       checkTasks: [],
       fastTasks: [],
       additionalGroups: [],
       baselineRatchets: false,
-      pluginContracts: false,
-      channelContracts: false,
       lint: true,
       types: false,
     });
@@ -18,16 +17,15 @@ describe("narrow PR check families", () => {
   it("preserves source scanners and test consumers without rebuilding metadata for a unit test", () => {
     const scope = resolveCiCheckFamilyScope(["src/agents/session.test.ts"]);
     expect(scope.checkTasks).toEqual(["guards", "dependencies"]);
-    expect(scope.fastTasks).toEqual(["startup-corpus"]);
+    expect(scope.fastTasks).toEqual([]);
     expect(scope.additionalGroups).toEqual([
       "boundaries",
       "source-contracts",
       "runtime-topology-architecture",
     ]);
     expect(scope).toMatchObject({
+      mode: "scoped",
       baselineRatchets: true,
-      pluginContracts: true,
-      channelContracts: true,
       lint: true,
       types: true,
     });
@@ -39,17 +37,25 @@ describe("narrow PR check families", () => {
     "packages/media-core/src/types.d.ts",
   ])("keeps runtime and declaration consumers for %s", (path) => {
     const scope = resolveCiCheckFamilyScope([path]);
-    expect(scope.checkTasks).toContain("bundled-channel-config-metadata");
-    expect(scope.fastTasks).toEqual(["startup-corpus", "bundled-protocol", "bun-launcher"]);
+    expect(scope.checkTasks).toEqual(["guards", "dependencies"]);
+    expect(scope.fastTasks).toEqual([]);
+    expect(scope.additionalGroups).toContain("boundaries");
     expect(scope.additionalGroups).toContain("extension-package-boundary");
     expect(scope).toMatchObject({
       baselineRatchets: true,
-      pluginContracts: true,
-      channelContracts: true,
       lint: true,
       types: true,
     });
   });
+
+  it.each(["src/config/zod-schema.core.ts", "extensions/telegram/src/config-schema.ts"])(
+    "selects bundled metadata through its schema owner for %s",
+    (file) => {
+      expect(resolveCiCheckFamilyScope([file]).checkTasks).toContain(
+        "bundled-channel-config-metadata",
+      );
+    },
+  );
 
   it.each([
     "test/helpers/fixture.ts",
@@ -63,12 +69,11 @@ describe("narrow PR check families", () => {
   ])("falls back for shared, policy, or unclassified input %s", (path) => {
     const scope = resolveCiCheckFamilyScope([path]);
     expect(scope.checkTasks).toContain("npm-lock");
-    expect(scope.fastTasks).toContain("bundled-protocol");
+    expect(scope.fastTasks).toEqual(["bundled-protocol"]);
     expect(scope.additionalGroups).toContain("extension-package-boundary");
     expect(scope).toMatchObject({
+      mode: "full",
       baselineRatchets: true,
-      pluginContracts: true,
-      channelContracts: true,
       lint: true,
       types: true,
     });
@@ -81,9 +86,7 @@ describe("narrow PR check families", () => {
         "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
       ]).checkTasks,
     ).toEqual(["guards"]);
-    expect(resolveCiCheckFamilyScope(["docs/providers/new-provider.md"]).fastTasks).toEqual([
-      "startup-corpus",
-    ]);
+    expect(resolveCiCheckFamilyScope(["docs/providers/new-provider.md"]).fastTasks).toEqual([]);
     expect(
       resolveCiCheckFamilyScope([
         "docs/.generated/sqlite-session-transcript-schema-baseline.sha256",
@@ -105,12 +108,9 @@ describe("narrow PR check families", () => {
   });
 
   it.each(["docs/plugins/sdk-subpaths.md", "extensions/discord/skills/discord/SKILL.md"])(
-    "retains plugin contract scanners for watched Markdown in a mixed PR: %s",
+    "leaves runtime scanners with their exact changed-owner tests: %s",
     (path) => {
-      expect(resolveCiCheckFamilyScope(["ui/src/styles/chat.css", path])).toMatchObject({
-        pluginContracts: true,
-        channelContracts: false,
-      });
+      expect(resolveCiCheckFamilyScope(["ui/src/styles/chat.css", path]).fastTasks).toEqual([]);
     },
   );
 
@@ -120,7 +120,7 @@ describe("narrow PR check families", () => {
     ).toContain("npm-lock");
   });
 
-  it("preserves data formatting, JSON type consumers, and explicit launcher tests", () => {
+  it("preserves data formatting and JSON type consumers with direct specialized-runtime opt-in", () => {
     expect(resolveCiCheckFamilyScope(["src/config/catalog.yaml"])).toMatchObject({
       lint: true,
       types: false,
@@ -129,8 +129,8 @@ describe("narrow PR check families", () => {
       lint: true,
       types: true,
     });
-    expect(resolveCiCheckFamilyScope(["test/openclaw-launcher.e2e.test.ts"]).fastTasks).toContain(
+    expect(resolveCiCheckFamilyScope(["test/openclaw-launcher.e2e.test.ts"]).fastTasks).toEqual([
       "bun-launcher",
-    );
+    ]);
   });
 });

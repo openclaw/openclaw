@@ -314,6 +314,10 @@ type SessionEntryCore = SessionRestartRecoveryState &
     archiveReason?: SessionEntryArchiveReason;
     /** Timestamp (ms) when the session was pinned for quick access. */
     pinnedAt?: number;
+    /** Epoch ms wake time; suppresses the active session in sidebar lists until then. */
+    snoozedUntil?: number;
+    /** Server-stamped epoch ms when the current snooze was set. */
+    snoozedAt?: number;
     /** Timestamp (ms) when an operator client last marked the session read. */
     lastReadAt?: number;
     /** Agent-declared sidebar presence; projection drops it after expiresAt. */
@@ -687,40 +691,21 @@ export function resolveSessionPluginTraceLines(
 export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
   const normalizedModel = normalizeOptionalString(entry.model);
   const normalizedProvider = normalizeOptionalString(entry.modelProvider);
-  let next = entry;
-
-  if (!normalizedModel) {
-    // A model without a valid provider/model pair is not durable runtime metadata.
-    if (entry.model !== undefined || entry.modelProvider !== undefined) {
-      next = { ...next };
-      delete next.model;
-      delete next.modelProvider;
-    }
-    return next;
+  // A provider without a model is not durable runtime metadata.
+  const modelProvider = normalizedModel ? normalizedProvider : undefined;
+  if (entry.model === normalizedModel && entry.modelProvider === modelProvider) {
+    return entry;
   }
-
-  if (entry.model !== normalizedModel) {
-    if (next === entry) {
-      next = { ...next };
-    }
+  const next = { ...entry };
+  if (normalizedModel) {
     next.model = normalizedModel;
+  } else {
+    delete next.model;
   }
-
-  if (!normalizedProvider) {
-    if (entry.modelProvider !== undefined) {
-      if (next === entry) {
-        next = { ...next };
-      }
-      delete next.modelProvider;
-    }
-    return next;
-  }
-
-  if (entry.modelProvider !== normalizedProvider) {
-    if (next === entry) {
-      next = { ...next };
-    }
-    next.modelProvider = normalizedProvider;
+  if (modelProvider) {
+    next.modelProvider = modelProvider;
+  } else if (!normalizedModel || entry.modelProvider !== undefined) {
+    delete next.modelProvider;
   }
   return next;
 }
@@ -800,6 +785,9 @@ function mergeSessionEntryWithPolicy(
   }
   if (existing.createdAt !== undefined) {
     next.createdAt = existing.createdAt;
+  }
+  if (existing.conversationLink !== undefined) {
+    next.conversationLink = existing.conversationLink;
   }
   if (existing.projectId !== undefined) {
     next.projectId = existing.projectId;

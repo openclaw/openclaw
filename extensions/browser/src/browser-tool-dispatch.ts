@@ -1,6 +1,7 @@
 /** Browser tab action dispatch. Execution routing is prepared once by the tool owner. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
   type createBrowserToolSessionTabs,
@@ -56,7 +57,6 @@ function readTargetUrlParam(params: Record<string, unknown>) {
   return targetUrl;
 }
 
-/** Run tab actions against the prepared host, node, or sandbox route. */
 export async function executeBrowserTabAction(context: {
   action: string;
   actRequest?: Parameters<typeof browserAct>[1];
@@ -219,10 +219,7 @@ export async function executeBrowserTabAction(context: {
       const targetId = normalizeOptionalString(params.targetId);
       const result = await browserPdfSave(proxyRequest ?? baseUrl, { targetId, profile, signal });
       await touchTab(readStringValue(result.targetId) ?? targetId);
-      return {
-        content: [{ type: "text" as const, text: `FILE:${result.path}` }],
-        details: result,
-      };
+      return textResult(`FILE:${result.path}`, result);
     }
     case "download":
     case "waitfordownload":

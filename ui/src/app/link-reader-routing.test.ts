@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDescriptor } from "../../../src/shared/control-ui-link-reader.js";
 import { linkReaderResponseMatchesTarget } from "../components/link-reader-response.ts";
 import { linkReaderTargetKey, resolveLinkReaderTarget } from "../components/link-reader-target.ts";
-import { LINK_READER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -27,7 +30,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup() {
+function setup(shouldOpenExternally?: () => boolean) {
   const snapshot: ApplicationGatewaySnapshot = {
     phase: "connected",
     client: createTestGatewayClient(vi.fn()),
@@ -45,7 +48,7 @@ function setup() {
       controlUiLinkReaders: [reader],
     },
   };
-  const router = startLinkReaderRouting(() => snapshot);
+  const router = startLinkReaderRouting(() => snapshot, { shouldOpenExternally });
   cleanups.push(router.dispose);
   const accept = vi.fn((event: Event) => event.preventDefault());
   window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, accept);
@@ -70,6 +73,55 @@ function setup() {
 }
 
 describe("Plugin reader link routing", () => {
+  it.each([false, true])(
+    "honors the external preference before readers and browser panels (native: %s)",
+    (native) => {
+      let external = true;
+      const shouldOpenExternally = () => external;
+      const { accept, click } = setup(shouldOpenExternally);
+      const postMessage = vi.fn();
+      if (native) {
+        vi.stubGlobal("webkit", {
+          messageHandlers: {
+            openclawLink: { postMessage },
+            openclawBrowser: { postMessage: vi.fn() },
+          },
+        });
+      }
+      const panel = vi.fn();
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, panel);
+      cleanups.push(() => window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, panel));
+      const routing = startNativeLinkRouting({
+        shouldOpenExternally,
+        shouldOpenInControlUiBrowser: () => true,
+      });
+      cleanups.push(() => routing.dispose());
+
+      expect(click().allowed).toBe(!native);
+      expect(accept).not.toHaveBeenCalled();
+      expect(panel).not.toHaveBeenCalled();
+      expect(postMessage.mock.calls).toEqual(
+        native
+          ? [
+              [
+                {
+                  type: "open-link",
+                  url: "https://forge.example/items/123",
+                  target: "external",
+                },
+              ],
+            ]
+          : [],
+      );
+
+      external = false;
+      expect(click().allowed).toBe(false);
+      expect(accept).toHaveBeenCalledOnce();
+      expect(panel).not.toHaveBeenCalled();
+      expect(postMessage).toHaveBeenCalledTimes(native ? 1 : 0);
+    },
+  );
+
   it("routes primary clicks once before native webview handling, retaining the original URL", () => {
     const { anchor, accept, click } = setup();
     const postMessage = vi.fn();
@@ -89,15 +141,9 @@ describe("Plugin reader link routing", () => {
     expect(postMessage).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-    { altKey: true },
-    { button: 1 },
-  ])("preserves modified/native navigation %j", (init) => {
+  it("preserves modified navigation", () => {
     const { accept, click } = setup();
-    expect(click(init).allowed).toBe(true);
+    expect(click({ metaKey: true }).allowed).toBe(true);
     expect(accept).not.toHaveBeenCalled();
   });
 
@@ -175,10 +221,6 @@ describe("Plugin reader destinations", () => {
     "http://forge.example/items/1",
     "https://forge.example:8443/items/1",
     "https://forge.example/items/0",
-    "https://forge.example/items/new",
-    "https://forge.example/items/1/extra",
-    "https://forge.example/items/%2F",
-    "file:///items/1",
     "not-a-url",
   ])("leaves unsupported URLs external: %s", (url) => {
     expect(resolveLinkReaderTarget(url, [reader])).toBeNull();

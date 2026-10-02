@@ -45,6 +45,23 @@ import java.util.concurrent.atomic.AtomicReference
 @Config(sdk = [34])
 class NodeRuntimeAgentSelectionTest {
   @Test
+  fun browserFocusAvailabilityFollowsOperatorHelloAndDisconnect() {
+    val runtime = createConnectedRuntime()
+    try {
+      for (capabilities in listOf(null, setOf("control-ui-browser-focus"), emptySet())) {
+        reconnectOperator(runtime, capabilities = capabilities)
+        assertEquals(capabilities?.contains("control-ui-browser-focus") == true, runtime.gatewayControlPage.value?.browserFocusAvailable)
+      }
+      reconnectOperator(runtime, capabilities = setOf("control-ui-browser-focus"))
+      val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
+      ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")("Gateway closed")
+      assertEquals(false, runtime.gatewayControlPage.value?.browserFocusAvailable)
+    } finally {
+      closeNodeRuntimeTestFixture(runtime)
+    }
+  }
+
+  @Test
   fun selectedAgentPublishesRefreshFailureAndSuccessfulEmptyResult() =
     runBlocking {
       val runtime = createConnectedRuntime()
@@ -1576,6 +1593,7 @@ class NodeRuntimeAgentSelectionTest {
   private fun reconnectOperator(
     runtime: NodeRuntime,
     disconnectCallbacks: Int = 1,
+    capabilities: Set<String>? = null,
   ) {
     val session = ReflectionHelpers.getField<GatewaySession>(runtime, "operatorSession")
     val onDisconnected = ReflectionHelpers.getField<(String) -> Unit>(session, "onDisconnected")
@@ -1588,6 +1606,7 @@ class NodeRuntimeAgentSelectionTest {
         mainSessionKey = "agent:main:main",
         updateAvailable = null,
         authScopes = listOf("operator.read"),
+        capabilities = capabilities,
       ),
     )
   }

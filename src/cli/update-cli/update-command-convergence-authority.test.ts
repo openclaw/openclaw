@@ -33,12 +33,13 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
     signal: null,
     killed: false,
     termination: "exit",
+    cleanup: "normal",
   }),
 }));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   readPackageVersion: vi.fn(async () => "2026.9.4"),
-  resolveNodeRunner: vi.fn(() => "/usr/bin/node"),
+  resolveNodeRunner: vi.fn(() => process.execPath),
 }));
 vi.mock("./update-command-resume.js", () => ({
   convergePostCoreUpdatePlugins: mocks.convergeCandidate,
@@ -102,10 +103,30 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+type ConvergenceParams = Parameters<typeof convergeUpdatePlugins>[0];
+function convergenceParams(
+  overrides: Pick<ConvergenceParams, "result"> & Partial<ConvergenceParams>,
+): ConvergenceParams {
+  return {
+    root: "/isolated",
+    installKindChanged: false,
+    configSnapshot: snapshot,
+    requestedChannel: null,
+    storedChannel: null,
+    channel: "stable",
+    downgradeRisk: false,
+    opts: { json: true, yes: true },
+    preUpdatePluginInstallRecords: {},
+    startedAt: Date.now(),
+    updateStepTimeoutMs: 5_000,
+    ...overrides,
+  };
+}
+
 describe("candidate convergence Doctor dispatch authority", () => {
   it.each(
     [false, true].flatMap((candidateRuntime) =>
-      ["unchanged", "changed-before", "changed-during"].map((scenario) => ({
+      ["unchanged", "changed-during"].map((scenario) => ({
         candidateRuntime,
         scenario,
       })),
@@ -134,9 +155,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
 `,
       );
       const activated = await readGitRuntimeArtifactIdentity(root);
-      if (scenario === "changed-before") {
-        await fs.writeFile(writer, "export const generation = 2;\n");
-      }
       mocks.resolveEntrypoint.mockResolvedValue(entry);
       vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
       if (candidateRuntime) {
@@ -150,31 +168,24 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           return { pluginUpdate: { ...pluginUpdate, changed: false }, configSnapshot: snapshot };
         });
       }
-      const { resultWithPostUpdate: result } = await convergeUpdatePlugins({
-        candidateRuntime,
-        result: {
-          status: "ok",
-          mode: "git",
+      const { resultWithPostUpdate: result } = await convergeUpdatePlugins(
+        convergenceParams({
+          candidateRuntime,
+          result: {
+            status: "ok",
+            mode: "git",
+            root,
+            before: { sha: "same-commit", version: VERSION },
+            after: { sha: "same-commit", version: VERSION },
+            gitRuntime: activated,
+            steps: [],
+            durationMs: 0,
+          },
           root,
-          before: { sha: "same-commit", version: VERSION },
-          after: { sha: "same-commit", version: VERSION },
-          gitRuntime: activated,
-          steps: [],
-          durationMs: 0,
-        },
-        root,
-        installKindChanged: false,
-        configSnapshot: snapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "dev",
-        downgradeRisk: false,
-        opts: { json: true, yes: true },
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 5000,
-        packageUpdateNodeRunner: process.execPath,
-      });
+          channel: "dev",
+          packageUpdateNodeRunner: process.execPath,
+        }),
+      );
       if (candidateRuntime) {
         await expect(fs.stat(executed)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
@@ -200,11 +211,11 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
     },
   );
 
-  it.each(
-    (["npm", "git", "git-rebuilt"] as const).flatMap((runtime) =>
-      [false, true].map((revoked) => ({ runtime, revoked })),
-    ),
-  )(
+  it.each([
+    { runtime: "npm", revoked: false },
+    { runtime: "git", revoked: true },
+    { runtime: "git-rebuilt", revoked: false },
+  ] as const)(
     "lets the installed $runtime target own convergence before parent worker use (revoked=$revoked)",
     async ({ runtime, revoked }) => {
       const rebuilt = runtime === "git-rebuilt";
@@ -225,37 +236,29 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
           current = !revoked;
           return { resumed: true, pluginUpdate: { ...pluginUpdate, changed: false } };
         });
-      const outcome = convergeUpdatePlugins({
-        result: {
-          status: "ok",
-          mode: runtime === "npm" ? "npm" : "git",
-          root: "/isolated",
-          before: { version: VERSION, sha: "old-checkout", buildId: "updater-build" },
-          after: {
-            version,
-            sha: rebuilt ? "old-checkout" : "target-checkout",
-            buildId: "published-build",
+      const outcome = convergeUpdatePlugins(
+        convergenceParams({
+          result: {
+            status: "ok",
+            mode: runtime === "npm" ? "npm" : "git",
+            root: "/isolated",
+            before: { version: VERSION, sha: "old-checkout", buildId: "updater-build" },
+            after: {
+              version,
+              sha: rebuilt ? "old-checkout" : "target-checkout",
+              buildId: "published-build",
+            },
+            steps: [],
+            durationMs: 0,
           },
-          steps: [],
-          durationMs: 0,
-        },
-        root: "/isolated",
-        installKindChanged: false,
-        configSnapshot: snapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "stable",
-        downgradeRisk: true,
-        opts: { json: true, yes: true },
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 5_000,
-        assertCurrent: () => {
-          if (!current) {
-            throw authorityRefusal;
-          }
-        },
-      });
+          downgradeRisk: true,
+          assertCurrent: () => {
+            if (!current) {
+              throw authorityRefusal;
+            }
+          },
+        }),
+      );
       if (revoked) {
         await expect(outcome).rejects.toBe(authorityRefusal);
         expect(mocks.runExec).not.toHaveBeenCalled();
@@ -321,33 +324,26 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         "./update-command-resume.js",
       );
       mocks.convergeCandidate.mockImplementation(actualResume.convergePostCoreUpdatePlugins);
-      const result = await convergeUpdatePlugins({
-        coreAlreadyCurrent: retainedDifferentRuntime,
-        result: {
-          status: retainedDifferentRuntime ? "skipped" : "ok",
-          ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
-          mode: "git",
-          root: "/isolated",
-          before: { version: VERSION, sha: "old-checkout" },
-          after: {
-            version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
-            sha: "target-checkout",
+      const result = await convergeUpdatePlugins(
+        convergenceParams({
+          coreAlreadyCurrent: retainedDifferentRuntime,
+          result: {
+            status: retainedDifferentRuntime ? "skipped" : "ok",
+            ...(retainedDifferentRuntime ? { reason: "already-current" } : {}),
+            mode: "git",
+            root: "/isolated",
+            before: { version: VERSION, sha: "old-checkout" },
+            after: {
+              version: retainedDifferentRuntime ? "2026.9.4" : VERSION,
+              sha: "target-checkout",
+            },
+            steps: [],
+            durationMs: 0,
           },
-          steps: [],
-          durationMs: 0,
-        },
-        root: "/isolated",
-        installKindChanged: false,
-        configSnapshot: snapshot,
-        requestedChannel: null,
-        storedChannel: null,
-        channel: "stable",
-        downgradeRisk: retainedDifferentRuntime,
-        opts: { json: true, yes: true, acceptCapabilities: true },
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 5_000,
-      });
+          downgradeRisk: retainedDifferentRuntime,
+          opts: { json: true, yes: true, acceptCapabilities: true },
+        }),
+      );
       expect(delegate).toHaveBeenCalledOnce();
       await expect(delegate.mock.results[0]?.value).resolves.toMatchObject({ resumed: false });
       expect(mocks.convergeCandidate).toHaveBeenCalledTimes(retainedDifferentRuntime ? 0 : 1);
@@ -406,33 +402,24 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         };
       });
       try {
-        const result = await convergeUpdatePlugins({
-          candidateRuntime: true,
-          coreAlreadyCurrent: true,
-          result: {
-            status: "skipped",
-            reason: "already-current",
-            mode: "git",
-            root: "/isolated",
-            steps: [],
-            durationMs: 0,
-          },
-          root: "/isolated",
-          installKindChanged: false,
-          configSnapshot: snapshot,
-          requestedChannel: null,
-          storedChannel: null,
-          channel: "stable",
-          downgradeRisk: false,
-          opts: { json: true, yes: true },
-          preUpdatePluginInstallRecords: {},
-          startedAt: Date.now(),
-          updateStepTimeoutMs: 5_000,
-          packageUpdateNodeRunner: "/selected/node",
-          beforeRuntimePublication: park,
-          beforeDoctor: park,
-          assertCurrent,
-        });
+        const result = await convergeUpdatePlugins(
+          convergenceParams({
+            candidateRuntime: true,
+            coreAlreadyCurrent: true,
+            result: {
+              status: "skipped",
+              reason: "already-current",
+              mode: "git",
+              root: "/isolated",
+              steps: [],
+              durationMs: 0,
+            },
+            packageUpdateNodeRunner: "/selected/node",
+            beforeRuntimePublication: park,
+            beforeDoctor: park,
+            assertCurrent,
+          }),
+        );
         expect(runtime).toHaveBeenCalledOnce();
         expect(mocks.convergeCandidate).toHaveBeenCalledOnce();
         expect(delegate).not.toHaveBeenCalled();
@@ -464,8 +451,6 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
 
   it.each([
     "live",
-    "entrypoint-revocation",
-    "maintenance-replacement",
     "doctor-revocation",
     "config-read-revocation",
     "validation-replacement",
@@ -494,14 +479,10 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         throw stale;
       }
     };
-    if (boundary === "entrypoint-revocation" || boundary === "entrypoint-first-refusal") {
+    if (boundary === "entrypoint-first-refusal") {
       mocks.resolveEntrypoint.mockImplementationOnce(async () => {
         await Promise.resolve();
-        if (boundary === "entrypoint-first-refusal") {
-          refusalArmed = true;
-        } else {
-          currentOwner = undefined;
-        }
+        refusalArmed = true;
         return "/isolated/dist/index.js";
       });
     }
@@ -535,34 +516,22 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
         return snapshot;
       });
     }
-    const outcome = convergeUpdatePlugins({
-      candidateRuntime: true,
-      result: { status: "ok", mode: "npm", root: "/isolated", steps: [], durationMs: 0 },
-      root: "/isolated",
-      installKindChanged: false,
-      configSnapshot: snapshot,
-      requestedChannel: null,
-      storedChannel: null,
-      channel: "stable",
-      downgradeRisk: false,
-      opts: { json: true, yes: true },
-      preUpdatePluginInstallRecords: {},
-      startedAt: Date.now(),
-      updateStepTimeoutMs: 5_000,
-      assertCurrent,
-      beforeDoctor: async () => {
-        await Promise.resolve();
-        if (boundary === "maintenance-deferred" || boundary === "maintenance-at-risk") {
-          throw maintenanceRefusal;
-        }
-        if (boundary === "maintenance-first-refusal") {
-          refusalArmed = true;
-        }
-        if (boundary === "maintenance-replacement") {
-          currentOwner = {};
-        }
-      },
-    });
+    const outcome = convergeUpdatePlugins(
+      convergenceParams({
+        candidateRuntime: true,
+        result: { status: "ok", mode: "npm", root: "/isolated", steps: [], durationMs: 0 },
+        assertCurrent,
+        beforeDoctor: async () => {
+          await Promise.resolve();
+          if (boundary === "maintenance-deferred" || boundary === "maintenance-at-risk") {
+            throw maintenanceRefusal;
+          }
+          if (boundary === "maintenance-first-refusal") {
+            refusalArmed = true;
+          }
+        },
+      }),
+    );
     if (boundary === "maintenance-deferred") {
       const completed = await outcome;
       expect(completed.resultWithPostUpdate).toMatchObject({

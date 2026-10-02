@@ -336,7 +336,7 @@ export async function runMemoryRemBackfill(
             workspaceSourceFiles.map(
               (scratchPath, index) =>
                 [
-                  normalizeRelativePath(scratchDir, scratchPath),
+                  path.relative(scratchDir, scratchPath).replace(/\\/g, "/"),
                   sourceFiles[index] ?? scratchPath,
                 ] as const,
             ),
@@ -494,9 +494,6 @@ async function withHistoricalMemoryWorkspace<T>(
 function extractIsoDayFromPath(filePath: string): string | null {
   const match = path.basename(filePath).match(DAILY_MEMORY_FILENAME_RE);
   return match?.[1] ?? null;
-}
-function normalizeRelativePath(baseDir: string, filePath: string): string {
-  return path.relative(baseDir, filePath).replace(/\\/g, "/");
 }
 function groundedMarkdownToDiaryLines(markdown: string): string[] {
   return markdown

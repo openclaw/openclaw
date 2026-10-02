@@ -42,10 +42,7 @@ type DesktopGenerationState = {
   rearmTimer?: NodeJS.Timeout;
   rearmDelayMs?: number;
   context?: OpenClawPluginServiceContext;
-  readFingerprint?: () => Promise<string>;
-  resolveWatchPaths?: () => string[];
-  pathExists?: (watchedPath: string) => boolean;
-  watchPath?: WatchFactory;
+  runtime?: DesktopGenerationRuntime;
 };
 
 const state = defineCodexBuildState(
@@ -83,12 +80,9 @@ export function createCodexDesktopGenerationService(
       }
       const current = state();
       current.context = ctx;
-      current.readFingerprint = runtime.readFingerprint;
-      current.resolveWatchPaths = runtime.resolveWatchPaths;
-      current.pathExists = runtime.pathExists;
-      current.watchPath = runtime.watchPath;
+      current.runtime = { ...runtime };
       current.owner = createCodexDesktopGenerationOwner({
-        readFingerprint: current.readFingerprint,
+        readFingerprint: runtime.readFingerprint,
         onGenerationChange: params.onGenerationChange,
         initialGeneration: current.lastGeneration,
       });
@@ -102,10 +96,7 @@ export function createCodexDesktopGenerationService(
       current.owner = undefined;
       current.armEpoch = (current.armEpoch ?? 0) + 1;
       current.context = undefined;
-      current.readFingerprint = undefined;
-      current.resolveWatchPaths = undefined;
-      current.pathExists = undefined;
-      current.watchPath = undefined;
+      current.runtime = undefined;
       current.watchHealthy = undefined;
       current.rearmDelayMs = undefined;
       if (current.rearmTimer) {
@@ -119,7 +110,8 @@ export function createCodexDesktopGenerationService(
 
 function armWatchers(current: DesktopGenerationState): boolean {
   const owner = current.owner;
-  if (!owner || current.watchers) {
+  const runtime = current.runtime;
+  if (!owner || !runtime || current.watchers) {
     return false;
   }
   const armEpoch = (current.armEpoch ?? 0) + 1;
@@ -130,14 +122,14 @@ function armWatchers(current: DesktopGenerationState): boolean {
     resolveMacOSDesktopCodexAppPathCandidates("darwin").map((candidate) => candidate.appName),
   );
   let complete = true;
-  for (const watchedPath of current.resolveWatchPaths?.() ?? []) {
-    if (!current.pathExists?.(watchedPath)) {
+  for (const watchedPath of runtime.resolveWatchPaths()) {
+    if (!runtime.pathExists(watchedPath)) {
       continue;
     }
     try {
       // Bundle roots need recursive invalidation: nested plugin bytes can change without
       // updating the app directory metadata that the settled fingerprint observes first.
-      const watcher = current.watchPath?.(
+      const watcher = runtime.watchPath(
         watchedPath,
         { recursive: watchedPath !== APPLICATIONS_PATH },
         (_eventType, filename) => {
@@ -155,12 +147,6 @@ function armWatchers(current: DesktopGenerationState): boolean {
           scheduleRearm(current, owner);
         },
       );
-      if (!watcher) {
-        complete = false;
-        reportWatcherFailure(current, owner, new Error(`Could not watch ${watchedPath}`));
-        scheduleRearm(current, owner);
-        continue;
-      }
       watchers.add(watcher);
       watcher.on("error", (error) => {
         if (!isCurrentArm(current, owner, watchers, armEpoch)) {

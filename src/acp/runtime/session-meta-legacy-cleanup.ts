@@ -1,5 +1,5 @@
 import { patchSessionEntryWithKey } from "../../config/sessions/session-accessor.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import {
   assertAcpSessionMutationEntry,
   type AcpSessionEntryExpectation,

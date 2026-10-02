@@ -31,46 +31,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("opens a pasted text excerpt in the side panel with the text-field action", async () => {
-  // This case verifies sidebar actions, not cold Vite transformation of the lazy parser.
-  await import("../../lib/chat/pasted-text-excerpt.ts");
-  let attachments: ChatAttachment[] = [];
-  onTestFinished(() => releaseChatAttachmentPayloads(attachments));
-  let container = renderAttachmentHarness(
-    () => attachments,
-    (next) => {
-      attachments = next;
-    },
-  );
-  const textarea = expectDefined(
-    container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
-    "composer textarea",
-  );
-  const text = `First words from a long pasted note ${"x".repeat(1100)}`;
-  textarea.dispatchEvent(createPasteEvent(text));
-  const sidebar = createAttachmentSidebarHarness();
-  container = renderChatView({ attachments, onOpenSidebar: sidebar.open });
-  document.body.append(container);
-
-  await waitForFast(() => {
-    expect(
-      container.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open")?.textContent,
-    ).toContain("First words from a long pasted…");
-  });
-  expect(attachments[0]?.origin).toBe("paste");
-  expect(container.querySelector("openclaw-chat-pasted-text openclaw-tooltip")).toBeNull();
-  expectDefined(
-    container.querySelector("openclaw-chat-pasted-text .chat-attachment-file__open"),
-    "pasted text chip",
-  ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  expect(sidebar.open).toHaveBeenCalledWith(
-    expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
-  );
-  expect(sidebar.container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
-    "Show in text field",
-  );
-});
-
 it("returns pasted text from the file card second row without opening a side panel", async () => {
   let attachments: ChatAttachment[] = [];
   onTestFinished(() => releaseChatAttachmentPayloads(attachments));
@@ -166,6 +126,12 @@ it.each(["disabled", "removed", "aborted"] as const)(
     );
     expect(action.disabled).toBe(state === "disabled");
     action.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const remove = expectDefined(
+      container.querySelector<HTMLButtonElement>(".chat-attachment-remove"),
+      "remove pasted text action",
+    );
+    expect(remove.disabled).toBe(state === "disabled");
+    remove.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onDraftChange).not.toHaveBeenCalled();
     expect(onAttachmentsChange).not.toHaveBeenCalled();
     expect(onOpenSidebar).not.toHaveBeenCalled();
@@ -201,10 +167,18 @@ it("opens the preview from the file icon and keeps sidebar removal separate", as
   await waitForFast(() =>
     expect(container.querySelector(".chat-attachment-file__icon svg")).not.toBeNull(),
   );
+  expect(
+    container.querySelector(".chat-attachment-file__open")?.closest("openclaw-tooltip"),
+  ).toBeNull();
   container
     .querySelector(".chat-attachment-file__icon svg")!
     .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-  expect(sidebar.open).toHaveBeenCalledTimes(1);
+  expect(sidebar.open).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
+  );
+  expect(sidebar.container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
+    "Show in text field",
+  );
   sidebar.container.querySelector<HTMLButtonElement>("button[aria-label^='Remove']")!.click();
   expect(attachments).toEqual([]);
   expect(getChatAttachmentDataUrl(attachment)).toBeNull();

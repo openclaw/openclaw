@@ -13,21 +13,16 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_PATH = "identity/device-auth.json";
 type DeviceAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;
-type LegacyDeviceAuthDetection = {
-  sourcePath: string;
-  sourcePresent: boolean;
-  hasLegacy: boolean;
-};
 
 /** Detect the retired device-auth store only when an explicit Doctor flow opts in. */
 export function detectLegacyDeviceAuth(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
-}): LegacyDeviceAuthDetection {
+}): LegacyStateDetection["deviceAuth"] {
   const sourcePath = path.join(params.stateDir, LEGACY_PATH);
   const sourcePresent = fs.existsSync(sourcePath);
   return {
@@ -161,7 +156,7 @@ async function importLegacyStore(params: {
 
 /** Import retired device-auth JSON while excluding Gateways that can rewrite it. */
 export async function migrateLegacyDeviceAuth(params: {
-  detected: LegacyDeviceAuthDetection;
+  detected: LegacyStateDetection["deviceAuth"];
   stateDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {

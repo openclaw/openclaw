@@ -3,12 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
-import { safeStatSync } from "@openclaw/fs-safe/path";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
+import {
+  existsDir as dirExists,
+  migrationFileExists as fileExists,
+} from "./state-migrations.fs.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
@@ -72,14 +75,6 @@ class LegacyDebugProxySessionConflictError extends Error {
   constructor(readonly sessionId: string) {
     super(`legacy debug proxy session conflicts with shared state: ${sessionId}`);
   }
-}
-
-function fileExists(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
-
-function dirExists(dirPath: string): boolean {
-  return safeStatSync(dirPath)?.isDirectory() ?? false;
 }
 
 function resolveLegacyDebugProxyCapturePaths(stateDir: string): {
@@ -297,10 +292,6 @@ function eventValues(event: LegacyCaptureEventRow): SQLInputValue[] {
   ];
 }
 
-function eventKey(values: SQLInputValue[]): string {
-  return JSON.stringify(values);
-}
-
 function archiveLegacyDebugProxySqlite(params: {
   sourcePath: string;
   changes: string[];
@@ -314,7 +305,7 @@ function archiveLegacyDebugProxySqlite(params: {
   }
   const resolutions: Array<{ sourcePath: string; targetPath: string; removed: boolean }> = [];
   for (const sourcePath of existingSources) {
-    const archivedPath = `${sourcePath}.migrated`;
+    let archivedPath = `${sourcePath}.migrated`;
     try {
       if (fileExists(archivedPath)) {
         if (fs.readFileSync(sourcePath).equals(fs.readFileSync(archivedPath))) {
@@ -326,10 +317,7 @@ function archiveLegacyDebugProxySqlite(params: {
         while (fs.existsSync(`${sourcePath}.migrated.${index}`)) {
           index++;
         }
-        const nextArchivePath = `${sourcePath}.migrated.${index}`;
-        fs.renameSync(sourcePath, nextArchivePath);
-        resolutions.push({ sourcePath, targetPath: nextArchivePath, removed: false });
-        continue;
+        archivedPath = `${sourcePath}.migrated.${index}`;
       }
       fs.renameSync(sourcePath, archivedPath);
       resolutions.push({ sourcePath, targetPath: archivedPath, removed: false });
@@ -522,7 +510,7 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
         const seenCounts = new Map<string, number>();
         for (const event of legacy.events) {
           const values = eventValues(event);
-          const key = eventKey(values);
+          const key = JSON.stringify(values);
           const seenCount = (seenCounts.get(key) ?? 0) + 1;
           seenCounts.set(key, seenCount);
           let existingCount = existingCounts.get(key);

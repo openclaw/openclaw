@@ -441,8 +441,12 @@ describe("background work admission", () => {
       const staleTask = vi.fn(async () => undefined);
       const stale = owner.enqueue(staleTask);
       const oldSignal = getGatewayRestartDrainSignal();
-      const activeRejected = expect(active).rejects.toThrow(/draining for restart|runtime reset/u);
-      const staleRejected = expect(stale).rejects.toThrow(/draining for restart|runtime reset/u);
+      const message =
+        restart === "drain"
+          ? "Gateway is restarting. Please try again shortly."
+          : "gateway runtime reset";
+      const activeRejected = expect(active).rejects.toThrow(message);
+      const staleRejected = expect(stale).rejects.toThrow(message);
       if (restart === "drain") {
         markGatewayDraining();
       } else {

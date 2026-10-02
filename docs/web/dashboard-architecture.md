@@ -131,8 +131,9 @@ sandbox proxy described below.
 - **Board widgets** are session state: bytes live in the owning agent's SQLite
   DB (`board_widgets`), served by a core gateway route
   (`/__openclaw__/board/<agentId>/<sessionKey>/<name>/`) that reads the DB.
-  Pinning a transcript widget copies the bytes. Caps: 256 KB per document,
-  8KB per native widget's JSON props, and 48 widgets per board.
+  Pinning a transcript widget copies the bytes. Caps: 10 MiB of UTF-8 HTML per
+  document including the wrapper, 256 KiB per registered widget's source,
+  8 KiB per native widget's JSON props, and 48 widgets per board.
 - **Update in place:** re-emitting a widget with the same `name` and content
   owner replaces its content, bumps `revision`, and broadcasts `board.changed`.
   Live views update that cell. Document widgets reload that iframe only.
@@ -270,8 +271,12 @@ Managed `[embed ref="..."]` previews use that authenticated path whenever their
 effective sandbox policy permits scripts, including the default with no explicit
 sandbox field. Explicit strict previews remain script-free.
 There is no completed-document cache: Canvas permits replacing named document
-IDs, so a remount reads the current source again. Reconnection retires pending
-results from the previous connection.
+IDs, so a remount reads the current source again. A transient disconnect keeps
+an already-mounted inline iframe and its local interaction state, but retires
+pending results and server-action authority from the previous connection.
+Reconnect revalidates the document: unchanged bytes preserve the frame, while
+changed content or identity replaces it. This is in-memory presentation retention,
+not a durable document cache or permission to replay widget actions.
 
 ### Website widgets
 

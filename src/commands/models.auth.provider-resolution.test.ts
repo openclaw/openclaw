@@ -410,7 +410,7 @@ describe("models auth login explicit credential selection", () => {
                           : {}),
                       },
               }),
-          list: [{ id: "main", workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         plugins: { allow: [provider], entries: { [provider]: { enabled: true } } },
         logging: { level: "info" },

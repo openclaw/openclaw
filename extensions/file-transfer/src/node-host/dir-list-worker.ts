@@ -8,6 +8,7 @@ const DIR_LIST_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 type CanonicalDirListEntry = {
   name: string;
   isDirectory: boolean;
+  isFile: boolean;
   size: number;
   mtimeMs: number;
 };
@@ -49,6 +50,7 @@ export async function listCanonicalDirectory(input: {
         !entry ||
         typeof entry.name !== "string" ||
         typeof entry.isDirectory !== "boolean" ||
+        typeof entry.isFile !== "boolean" ||
         typeof entry.size !== "number" ||
         typeof entry.mtimeMs !== "number"
       ) {
@@ -57,6 +59,7 @@ export async function listCanonicalDirectory(input: {
       entries.push({
         name: entry.name,
         isDirectory: entry.isDirectory,
+        isFile: entry.isFile,
         size: entry.size,
         mtimeMs: entry.mtimeMs,
       });

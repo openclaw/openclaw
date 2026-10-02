@@ -2,6 +2,7 @@
 
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
@@ -55,7 +56,6 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const failurePrefix = "check-export-name-collisions";
 const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
 
 function normalizeRelativePath(filePath: string) {
@@ -182,13 +182,25 @@ function parametersAreForwarded(
   });
 }
 
-function isAwaitedZeroArgumentCall(expression: ts.Expression) {
+function isAwaitedModuleLoad(expression: ts.Expression) {
   const unwrapped = unwrapExpression(expression);
   if (!ts.isAwaitExpression(unwrapped)) {
     return false;
   }
   const awaited = unwrapExpression(unwrapped.expression);
-  return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
+  if (!ts.isCallExpression(awaited)) {
+    return false;
+  }
+  // Literal imports and zero-argument loaders acquire the same lazy boundary;
+  // forwarding its unchanged arguments does not define a second behavior.
+  const [specifier] = awaited.arguments;
+  return (
+    awaited.arguments.length === 0 ||
+    (awaited.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      awaited.arguments.length === 1 &&
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier))
+  );
 }
 
 function returnCall(statement: ts.Statement | undefined) {
@@ -225,7 +237,7 @@ function isLazyModuleForwarderCall(
   if (moduleObjectName) {
     return ts.isIdentifier(target) && target.text === moduleObjectName;
   }
-  return isAwaitedZeroArgumentCall(target);
+  return isAwaitedModuleLoad(target);
 }
 
 function isForwardingOnlyFunction(
@@ -256,7 +268,7 @@ function isForwardingOnlyFunction(
         !loaded ||
         !ts.isIdentifier(loaded.name) ||
         !loaded.initializer ||
-        !isAwaitedZeroArgumentCall(loaded.initializer)
+        !isAwaitedModuleLoad(loaded.initializer)
       ) {
         return false;
       }
@@ -692,11 +704,13 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
     new Set([
       "src/agents/auth-profiles/inline-usage.worker.ts",
       "src/agents/harness/context-engine-turn-outbox.worker.ts",
+      "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
+      "src/gateway/worker-environments/transcript-commit.worker.ts",
       "src/infra/heartbeat-outcome-store.worker.ts",
     ]),
   ],
@@ -853,15 +867,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-export-name-collisions", async () => {
+    process.exitCode = await main();
+  }),
+);

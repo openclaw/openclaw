@@ -396,6 +396,117 @@ describe("plugin discovery identity and local join", () => {
     expect(items.map((item) => item.catalog.name)).toEqual(["Private Bundle"]);
   });
 
+  it.each(["bundled", "global"])(
+    "preserves derived Media membership through category filtering and hosted pagination (%s)",
+    (origin) => {
+      const provider = {
+        id: "novita",
+        name: "Novita",
+        packageName: "@openclaw/novita",
+        clawhubPackage: "@openclaw/novita",
+        origin,
+        installed: true,
+        enabled: true,
+        state: "enabled" as const,
+        categories: ["models"],
+        capabilityCategories: ["media"],
+      };
+      const local = { plugins: [provider], diagnostics: [], mutationAllowed: true };
+      const options = {
+        local,
+        intent: "all" as const,
+        includeBundledOnly: true,
+        category: "media",
+        categories: [
+          {
+            slug: "media",
+            label: "Media",
+            description: "Media",
+            icon: "palette" as const,
+            order: 0,
+          },
+        ],
+      };
+      const first = joinClawHubPluginCatalog({ ...options, remote: [] });
+      expect(first).toHaveLength(1);
+      expect(first[0]?.catalog.categories).toEqual(["models", "media"]);
+      expect(first[0]?.local).toMatchObject({ enabled: true, action: "manage" });
+      const published = {
+        ...remote,
+        packageName: provider.packageName,
+        displayName: "Novita published",
+        categories: ["models"],
+        downloads: 10,
+      };
+      const next = joinClawHubPluginCatalog({ ...options, remote: [published], cursor: "next" });
+      expect(next).toHaveLength(1);
+      expect(next[0]?.id).toBe(first[0]?.id);
+      expect(next[0]?.catalog).toMatchObject({ categories: ["models", "media"], downloads: 10 });
+      expect(joinClawHubPluginCatalog({ ...options, remote: [published] })).toHaveLength(1);
+      expect(joinClawHubPluginCatalog({ ...options, category: "voice", remote: [] })).toEqual([]);
+      expect(joinClawHubPluginCatalog({ ...options, query: "novita", remote: [] })).toHaveLength(1);
+      const disabled = {
+        ...provider,
+        enabled: false,
+        state: "disabled" as const,
+        capabilityCategories: undefined,
+      };
+      const disabledOptions = { ...options, local: { ...local, plugins: [disabled] } };
+      expect(joinClawHubPluginCatalog({ ...disabledOptions, remote: [] })).toEqual([]);
+      if (origin === "bundled") {
+        const disabledModelsLocal = joinClawHubPluginCatalog({
+          ...disabledOptions,
+          category: "models",
+          remote: [],
+        });
+        expect(disabledModelsLocal[0]?.catalog.categories).toEqual(["models"]);
+      }
+      const disabledModels = joinClawHubPluginCatalog({
+        ...disabledOptions,
+        category: "models",
+        remote: [published],
+        cursor: "next",
+      });
+      expect(disabledModels[0]?.catalog.categories).toEqual(["models"]);
+      expect(disabledModels[0]?.local).toMatchObject({ enabled: false, action: "manage" });
+      expect(provider.categories).toEqual(["models"]);
+      expect(published.categories).toEqual(["models"]);
+      const legacy = { ...provider, categories: ["models", "tools", "runtime"] };
+      const legacyItems = joinClawHubPluginCatalog({
+        ...options,
+        local: { ...local, plugins: [legacy] },
+        remote: [],
+      });
+      expect(legacyItems[0]?.catalog.categories).toEqual(["models", "tools", "runtime", "media"]);
+      expect(Value.Check(PluginDiscoveryEntrySchema, legacyItems[0])).toBe(true);
+    },
+  );
+
+  it("does not transfer capability membership through an unverified package namesake", () => {
+    const [item] = joinClawHubPluginCatalog({
+      remote: [{ ...remote, categories: ["models"] }],
+      local: {
+        mutationAllowed: true,
+        diagnostics: [],
+        plugins: [
+          {
+            id: "namesake",
+            name: "Namesake",
+            packageName: remote.packageName,
+            origin: "workspace",
+            installed: true,
+            enabled: true,
+            state: "enabled",
+            categories: ["models"],
+            capabilityCategories: ["media"],
+          },
+        ],
+      },
+    });
+    expect(item?.catalog.categories).toEqual(["models"]);
+    expect(item?.local.present).toBe(false);
+  });
+
   it("does not repeat local-only entries on remote cursor pages", () => {
     const items = joinClawHubPluginCatalog({
       remote: [remote],

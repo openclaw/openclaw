@@ -32,7 +32,7 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
-import { parseWorkspaceManifest } from "./workspace-manifest-worker.js";
+import { decodeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import { DERIVED_WORKSPACE_RSYNC_EXCLUDES } from "./workspace-path-exclusions.js";
 import { createWorkerWorkspaceQuiescence } from "./workspace-quiescence.js";
 import {
@@ -507,7 +507,7 @@ export function createWorkerWorkspaceActions(
         throw workspaceSyncError(transferred);
       }
       const raw = await readTransferredManifest(manifestPath);
-      const manifest = await parseWorkspaceManifest(raw, manifestRef, options.ownerSignal);
+      const { manifest } = await decodeWorkspaceManifest(raw, manifestRef, options.ownerSignal);
       return { raw, manifest, path: manifestPath };
     };
     try {

@@ -53,6 +53,7 @@ vi.mock("openclaw/plugin-sdk/media-store", () => ({
 
 let downloadLineMedia: typeof import("./download.js").downloadLineMedia;
 let isRetryableLineInboundMediaError: typeof import("./download.js").isRetryableLineInboundMediaError;
+let storedContentType: string;
 
 function saveMediaStreamCall(): unknown[] {
   const call = saveMediaStreamMock.mock.calls.at(0);
@@ -60,16 +61,6 @@ function saveMediaStreamCall(): unknown[] {
     throw new Error("Expected saveMediaStream call");
   }
   return call;
-}
-
-function detectMockContentType(buffer: Buffer, contentType?: string): string | undefined {
-  if (buffer[0] === 0xff && buffer[1] === 0xd8) {
-    return "image/jpeg";
-  }
-  if (buffer.toString("ascii", 4, 8) === "ftyp") {
-    return buffer.toString("ascii", 8, 12) === "M4A " ? "audio/x-m4a" : "video/mp4";
-  }
-  return contentType;
 }
 
 function expectMediaFetchError(err: unknown): MediaFetchError {
@@ -102,21 +93,20 @@ describe("downloadLineMedia", () => {
     vi.stubGlobal("fetch", fetchMock);
     fetchMock.mockReset();
     delayMock.mockReset().mockResolvedValue(undefined);
+    storedContentType = "image/jpeg";
     saveMediaStreamMock.mockReset();
-    saveMediaStreamMock.mockImplementation(
-      async (stream: AsyncIterable<Buffer>, contentType?: string, subdir?: string) => {
-        const chunksLocal: Buffer[] = [];
-        for await (const chunk of stream) {
-          chunksLocal.push(Buffer.from(chunk));
-        }
-        const buffer = Buffer.concat(chunksLocal);
-        return {
-          path: `/home/user/.openclaw/media/${subdir ?? "unknown"}/saved-media`,
-          contentType: detectMockContentType(buffer, contentType),
-          size: buffer.length,
-        };
-      },
-    );
+    saveMediaStreamMock.mockImplementation(async (stream: AsyncIterable<Buffer>) => {
+      const chunksLocal: Buffer[] = [];
+      // Consume the adapter stream so body failures, deadlines, and reader cleanup remain observable.
+      for await (const chunk of stream) {
+        chunksLocal.push(Buffer.from(chunk));
+      }
+      return {
+        path: "/home/user/.openclaw/media/inbound/saved-media",
+        contentType: storedContentType,
+        size: Buffer.concat(chunksLocal).length,
+      };
+    });
   });
 
   it("persists inbound media with the shared media store", async () => {
@@ -193,6 +183,7 @@ describe("downloadLineMedia", () => {
   });
 
   it("passes the LINE response content type to the media store", async () => {
+    storedContentType = "text/plain";
     fetchMock.mockResolvedValueOnce(
       new Response(Buffer.from("plain attachment"), {
         status: 200,
@@ -207,15 +198,14 @@ describe("downloadLineMedia", () => {
   });
 
   it("retries 202 responses and cancels every discarded body", async () => {
-    const m4aHeader = Buffer.from([
-      0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20,
-    ]);
+    storedContentType = "audio/x-m4a";
+    const media = Buffer.from("ready media");
     const first = cancellableResponse(202);
     const second = cancellableResponse(202);
     fetchMock
       .mockResolvedValueOnce(first.response)
       .mockResolvedValueOnce(second.response)
-      .mockResolvedValueOnce(responseWithChunks(200, [m4aHeader]));
+      .mockResolvedValueOnce(responseWithChunks(200, [media]));
 
     const result = await downloadLineMedia("mid-preparing", "token");
 
@@ -229,7 +219,7 @@ describe("downloadLineMedia", () => {
     expect(first.cancel).toHaveBeenCalledTimes(1);
     expect(second.cancel).toHaveBeenCalledTimes(1);
     expect(result.contentType).toBe("audio/x-m4a");
-    expect(result.size).toBe(m4aHeader.length);
+    expect(result.size).toBe(media.length);
   });
 
   it("cancels every response when content never becomes ready", async () => {

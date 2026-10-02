@@ -1,3 +1,4 @@
+import { mkdirSync } from "node:fs";
 import path from "node:path";
 import type { Bot } from "grammy";
 import type { Update } from "grammy/types";
@@ -27,13 +28,14 @@ import {
   normalizeSessionDeliveryState,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   apiCalls,
   chat,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   groupChat,
   groupCommand,
   harness,
@@ -43,13 +45,14 @@ import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.j
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
 import { resetTelegramTopicNameCacheForTest } from "./runtime.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let cfg: OpenClawConfig;
 let storePath: string;
 let updateId = 6000;
 
 beforeEach(() => {
-  storePath = path.join(tempDirs.make("telegram-context-session-"), "sessions.json");
+  const storeDir = harness.state.path("telegram-context-session");
+  mkdirSync(storeDir);
+  storePath = path.join(storeDir, "sessions.json");
   cfg = {
     session: { store: storePath },
     commands: { native: false },
@@ -98,16 +101,10 @@ function bind(
 }
 
 async function receive(bot: Bot, message: NonNullable<Update["message"]>) {
-  // Telegram JSON omits grammY's undefined-only reply fields.
-  const request = new Request("http://localhost/telegram", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      update_id: ++updateId,
-      message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
-    } satisfies Update),
+  await deliverTelegramUpdate(bot, {
+    update_id: ++updateId,
+    message: { ...message, entities: message.text?.startsWith("@") ? message.entities : [] },
   });
-  await bot.handleUpdate(await request.json());
 }
 
 describe("Telegram recorded session destinations", () => {
@@ -416,6 +413,7 @@ describe("Telegram recorded session destinations", () => {
     });
     await bot.stop();
     resetTelegramTopicNameCacheForTest();
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     setTelegramPluginStateRuntimeForTests();
     const reopened = await createBot(false, true, cfg);

@@ -14,6 +14,8 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import { bindMcpFormQuestionRecord } from "../agents/mcp-form-resource-context.js";
+import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import {
   retainGatewayRootWorkAdmissionContinuationScope,
   type GatewayRootWorkAdmissionContinuationScope,
@@ -52,7 +54,9 @@ type QuestionManagerRequest = {
   sessionKey?: string;
   runId?: string;
   timeoutMs: number;
-  onResolved?: (event: QuestionResolvedEvent, observation: QuestionObservation) => void;
+  onResolved?:
+    | ((event: QuestionResolvedEvent, observation: QuestionObservation) => void)
+    | ((event: QuestionResolvedEvent, observation: QuestionObservation) => Promise<void>);
   sessionAccess?: QuestionSessionAccess;
   isRequesterActive?: () => boolean;
   requesterRun?: OperationalRunInstanceRef;
@@ -66,8 +70,7 @@ type QuestionEntry = {
   record: QuestionRecord;
   ordinary: boolean;
   resolutionId?: string;
-  expiryTimer: ReturnType<typeof setTimeout>;
-  cleanupTimer: ReturnType<typeof setTimeout> | null;
+  job: GatewayScheduledJob;
   waiters: Set<Waiter>;
   onResolved?: QuestionManagerRequest["onResolved"];
   sessionAccess?: QuestionSessionAccess;
@@ -100,13 +103,17 @@ function waitResult(entry: QuestionEntry, includeResolutionId: boolean): Questio
   };
 }
 
-function resolvedEvent(record: QuestionRecord): QuestionResolvedEvent | null {
-  if (record.status === "pending") {
-    return null;
+function canonicalizeQuestionAnswer(question: Question, value: string): string {
+  if (question.options.some((option) => option.value !== undefined && option.value === value)) {
+    return value;
   }
-  return record.status === "answered"
-    ? { id: record.id, status: record.status, answers: record.answers ?? { answers: {} } }
-    : { id: record.id, status: record.status };
+  const preserveBytes = question.isSecret || question.presentation === "form";
+  const candidate = preserveBytes ? value : value.trim();
+  const matches = question.options.filter(
+    (option) => (preserveBytes ? option.label : option.label.trim()) === candidate,
+  );
+  const matched = matches.length === 1 ? matches[0] : undefined;
+  return matched ? (matched.value ?? matched.label) : candidate;
 }
 
 /** Process-local lifecycle owner for pending questions. */
@@ -114,8 +121,12 @@ export class QuestionManager {
   private readonly entries = new Map<string, QuestionEntry>();
   private closed = false;
   private readonly publications = new AsyncWorkScope();
+  private readonly scheduleId = `questions:${randomUUID()}`;
 
-  constructor(private readonly onPublicationError?: () => void) {}
+  constructor(
+    private readonly scheduler: GatewayScheduler,
+    private readonly onPublicationError?: () => void,
+  ) {}
 
   async drain(): Promise<void> {
     if (this.closed) {
@@ -138,7 +149,7 @@ export class QuestionManager {
         "the agent run that requested this question is no longer active",
       );
     }
-    const createdAtMs = Date.now();
+    const createdAtMs = this.scheduler.now();
     const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
     const expiresAtMs = resolveExpiresAtMsFromDurationMs(timeoutMs, { nowMs: createdAtMs });
     if (expiresAtMs === undefined) {
@@ -161,12 +172,17 @@ export class QuestionManager {
       expiresAtMs,
       status: "pending",
     };
-    const expiryTimer = setTimeout(() => this.expire(record.id), timeoutMs);
     const entry: QuestionEntry = {
       record,
       ordinary: !params.questions.some((question) => question.isSecret || question.secretStore),
-      expiryTimer,
-      cleanupTimer: null,
+      job: this.scheduler.schedule({
+        id: `${this.scheduleId}:${id}`,
+        delayMs: timeoutMs,
+        run: () => {
+          this.expire(id);
+          return this.drain();
+        },
+      }),
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
@@ -175,10 +191,16 @@ export class QuestionManager {
       admissionContinuation: retainGatewayRootWorkAdmissionContinuationScope(),
     };
     this.entries.set(record.id, entry);
+    bindMcpFormQuestionRecord(
+      record,
+      () =>
+        this.entries.get(record.id) === entry &&
+        entry.record === record &&
+        entry.record.status === "pending",
+    );
     entry.releaseHumanInputWait = params.registerHumanInputWait?.(
       () => this.get(id)?.status === "pending" && this.entries.get(id) === entry,
     );
-    entry.expiryTimer.unref?.();
     return record;
   }
 
@@ -187,7 +209,7 @@ export class QuestionManager {
     if (!entry) {
       return null;
     }
-    if (entry.record.status === "pending" && entry.record.expiresAtMs <= Date.now()) {
+    if (entry.record.status === "pending" && entry.record.expiresAtMs <= this.scheduler.now()) {
       this.expire(id);
     }
     this.refreshRequester(entry);
@@ -271,7 +293,7 @@ export class QuestionManager {
       !entry?.admissionContinuation ||
       entry.record !== record ||
       entry.record.status !== "pending" ||
-      entry.record.expiresAtMs <= Date.now()
+      entry.record.expiresAtMs <= this.scheduler.now()
     ) {
       return null;
     }
@@ -366,15 +388,12 @@ export class QuestionManager {
     this.entries.clear();
     for (const entry of entries) {
       entry.sessionAccess?.release();
-      clearTimeout(entry.expiryTimer);
+      entry.job.cancel();
       const releaseHumanInputWait = entry.releaseHumanInputWait;
       entry.releaseHumanInputWait = undefined;
       releaseHumanInputWait?.(false);
       entry.admissionContinuation?.release();
       entry.admissionContinuation = null;
-      if (entry.cleanupTimer) {
-        clearTimeout(entry.cleanupTimer);
-      }
       for (const waiter of entry.waiters) {
         waiter();
       }
@@ -386,7 +405,10 @@ export class QuestionManager {
     const record = this.get(id);
     const entry = this.entries.get(id);
     if (!record || !entry || entry.record !== record) {
-      throw this.notFound(id);
+      throw new QuestionManagerError(
+        QuestionManagerErrorCodes.NOT_FOUND,
+        `question '${id}' was not found`,
+      );
     }
     return entry;
   }
@@ -420,28 +442,33 @@ export class QuestionManager {
         ? answers.answers[question.questionId]
         : undefined;
       if (!values || values.length === 0) {
+        if (question.allowEmpty) {
+          canonical.answers[question.questionId] = [];
+          continue;
+        }
         throw this.invalidAnswer(question.questionId, "requires an answer");
       }
-      if (values.some((value) => (question.isSecret ? value.length === 0 : !value.trim()))) {
+      if (
+        values.some((value) =>
+          question.isSecret || question.presentation === "form"
+            ? value.length === 0
+            : !value.trim(),
+        )
+      ) {
         throw this.invalidAnswer(question.questionId, "contains an empty answer");
       }
       if (!question.multiSelect && values.length > 1) {
         throw this.invalidAnswer(question.questionId, "does not allow multiple answers");
       }
-      // Store the declared option label when a value matches trim-insensitively;
-      // downstream renderers compare answers to option labels exactly.
-      const canonicalValues = values.map((value) => {
-        // Masked free-text answers preserve exact bytes, including whitespace.
-        if (question.isSecret) {
-          return value;
-        }
-        const matched = question.options.find((option) => option.label.trim() === value.trim());
-        return matched ? matched.label : value.trim();
-      });
+      // Store the option's canonical value (value ?? label) so installed clients
+      // sending labels and clients sending values converge on the same answer.
+      const canonicalValues = values.map((value) => canonicalizeQuestionAnswer(question, value));
       if (
         question.options.length > 0 &&
         !question.isOther &&
-        canonicalValues.some((value) => !question.options.some((option) => option.label === value))
+        canonicalValues.some(
+          (value) => !question.options.some((option) => (option.value ?? option.label) === value),
+        )
       ) {
         throw this.invalidAnswer(question.questionId, "contains an unknown option");
       }
@@ -457,13 +484,6 @@ export class QuestionManager {
     );
   }
 
-  private notFound(id: string): QuestionManagerError {
-    return new QuestionManagerError(
-      QuestionManagerErrorCodes.NOT_FOUND,
-      `question '${id}' was not found`,
-    );
-  }
-
   private expire(id: string): void {
     const entry = this.entries.get(id);
     if (!entry || entry.record.status !== "pending") {
@@ -474,7 +494,7 @@ export class QuestionManager {
   }
 
   private finish(entry: QuestionEntry): void {
-    clearTimeout(entry.expiryTimer);
+    entry.job.cancel();
     const continuation = entry.admissionContinuation;
     entry.admissionContinuation = null;
     let settled = false;
@@ -498,9 +518,13 @@ export class QuestionManager {
       try {
         // Enter the original continuation before these callbacks can release its last parked root.
         settle();
-        const event = resolvedEvent(entry.record);
-        if (event && this.entries.get(entry.record.id) === entry) {
-          await Promise.resolve(entry.onResolved?.(event, this.observeEntry(entry)));
+        const { id, status, answers } = entry.record;
+        if (status !== "pending" && this.entries.get(id) === entry) {
+          const event: QuestionResolvedEvent =
+            status === "answered"
+              ? { id, status, answers: answers ?? { answers: {} } }
+              : { id, status };
+          await entry.onResolved?.(event, this.observeEntry(entry));
         }
       } finally {
         continuation?.release();
@@ -524,17 +548,16 @@ export class QuestionManager {
           // Worker preparation still needs this entry. Start grace only after
           // publication settles, and never resurrect an entry retired by a callback.
           if (this.entries.get(entry.record.id) === entry) {
-            const cleanupTimer = setTimeout(() => {
-              if (
-                entry.cleanupTimer === cleanupTimer &&
-                this.entries.get(entry.record.id) === entry
-              ) {
-                this.entries.delete(entry.record.id);
-                entry.sessionAccess?.release();
-              }
-            }, QUESTION_RESOLVED_ENTRY_GRACE_MS);
-            entry.cleanupTimer = cleanupTimer;
-            cleanupTimer.unref?.();
+            entry.job = this.scheduler.schedule({
+              id: `${this.scheduleId}:${entry.record.id}`,
+              delayMs: QUESTION_RESOLVED_ENTRY_GRACE_MS,
+              run: () => {
+                if (this.entries.get(entry.record.id) === entry) {
+                  this.entries.delete(entry.record.id);
+                  entry.sessionAccess?.release();
+                }
+              },
+            });
           }
         }
       })

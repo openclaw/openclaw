@@ -5,14 +5,12 @@ import {
   normalizeAccountId,
   normalizeConversationFromTarget,
   pollQaBusEvents,
-  readQaBusMessage,
   requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
 import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
 import type {
-  QaBusAttachment,
   QaBusConversation,
   QaBusCreateThreadInput,
   QaBusDeleteMessageInput,
@@ -27,7 +25,6 @@ import type {
   QaBusSearchMessagesInput,
   QaBusSnapshotConversation,
   QaBusThread,
-  QaBusToolCall,
 } from "./runtime-api.js";
 
 const DEFAULT_BOT_ID = "openclaw";
@@ -72,6 +69,14 @@ export function createQaBusState() {
     return finalized;
   };
 
+  const publishMessage = (
+    kind: "inbound-message" | "outbound-message" | "message-edited" | "message-deleted",
+    message: QaBusMessage,
+  ) => {
+    pushEvent({ kind, accountId: message.accountId, message: cloneMessage(message) });
+    return cloneMessage(message);
+  };
+
   const ensureConversation = (
     accountId: string,
     conversation: QaBusConversation,
@@ -100,23 +105,14 @@ export function createQaBusState() {
     return message;
   };
 
-  const createMessage = (params: {
-    direction: QaBusMessage["direction"];
-    accountId: string;
-    messageId?: string;
-    conversation: QaBusConversation;
-    senderId: string;
-    senderName?: string;
-    text: string;
-    isError?: boolean;
-    timestamp?: number;
-    threadId?: string;
-    threadTitle?: string;
-    replyToId?: string;
-    attachments?: QaBusAttachment[];
-    nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
-    toolCalls?: QaBusToolCall[];
-  }): QaBusMessage => {
+  const createMessage = (
+    params: QaBusInboundMessageInput & {
+      direction: QaBusMessage["direction"];
+      accountId: string;
+      messageId?: string;
+      isError?: boolean;
+    },
+  ): QaBusMessage => {
     assertWritable();
     const thread = params.threadId ? threads.get(params.threadId) : undefined;
     if (
@@ -193,12 +189,7 @@ export function createQaBusState() {
         nativeCommand: input.nativeCommand,
         toolCalls: input.toolCalls,
       });
-      pushEvent({
-        kind: "inbound-message",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("inbound-message", message);
     },
     addOutboundMessage(input: QaBusOutboundMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
@@ -217,12 +208,7 @@ export function createQaBusState() {
         attachments: input.attachments,
         toolCalls: input.toolCalls,
       });
-      pushEvent({
-        kind: "outbound-message",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("outbound-message", message);
     },
     createThread(input: QaBusCreateThreadInput) {
       assertWritable();
@@ -274,30 +260,18 @@ export function createQaBusState() {
       return cloneMessage(message);
     },
     editMessage(input: QaBusEditMessageInput) {
-      const accountId = normalizeAccountId(input.accountId);
       const message = requireActiveMessageForAccount(input);
       message.text = input.text;
       message.editedAt = input.timestamp ?? Date.now();
-      pushEvent({
-        kind: "message-edited",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("message-edited", message);
     },
     deleteMessage(input: QaBusDeleteMessageInput) {
-      const accountId = normalizeAccountId(input.accountId);
       const message = requireActiveMessageForAccount(input);
       message.deleted = true;
-      pushEvent({
-        kind: "message-deleted",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("message-deleted", message);
     },
     readMessage(input: QaBusReadMessageInput) {
-      return readQaBusMessage({ messages, input });
+      return cloneMessage(requireQaBusMessageForAccount({ messages, input }));
     },
     searchMessages(input: QaBusSearchMessagesInput) {
       return searchQaBusMessages({ messages, input });

@@ -84,22 +84,6 @@ export function mergeParamsWithApprovalOverrides(
   return originalParams;
 }
 
-const warnedDeprecatedTimeoutBehaviorPluginIds = new Set<string>();
-
-function warnDeprecatedApprovalTimeoutBehavior(approval: PluginApprovalRequest): void {
-  if (approval.timeoutBehavior !== "allow") {
-    return;
-  }
-  const pluginId = approval.pluginId ?? "unknown-plugin";
-  if (warnedDeprecatedTimeoutBehaviorPluginIds.has(pluginId)) {
-    return;
-  }
-  warnedDeprecatedTimeoutBehaviorPluginIds.add(pluginId);
-  log.warn(
-    `plugin '${pluginId}' sets deprecated requireApproval.timeoutBehavior:"allow"; the field is ignored and approvals fail closed on timeout (see docs/plugins/plugin-permission-requests.md)`,
-  );
-}
-
 function notifyPluginApprovalResolution(
   approval: PluginApprovalRequest,
   resolution: PluginApprovalResolution,
@@ -135,6 +119,7 @@ function resolvePermittedPluginApprovalResolution(
 function buildPluginApprovalFailureReason(params: {
   fallbackReason: string;
   ctx?: HookContext;
+  noRoute?: boolean;
 }): string {
   const turnSourceChannel = params.ctx?.turnSourceChannel;
   if (!turnSourceChannel?.trim()) {
@@ -153,6 +138,9 @@ function buildPluginApprovalFailureReason(params: {
   });
   if (!setupText) {
     return params.fallbackReason;
+  }
+  if (params.noRoute) {
+    return `${params.fallbackReason}\n\n${setupText}`;
   }
   const nativeDeliverySurface =
     nativePluginSurface.kind === "disabled"
@@ -207,6 +195,9 @@ async function requestPluginToolApproval(params: {
   overrideParams?: unknown;
 }): Promise<HookOutcome> {
   const approval = params.approval;
+  const policySubject = params.ctx?.toolOwnerPluginId
+    ? { pluginKey: params.ctx.toolOwnerPluginId, tool: params.toolName }
+    : undefined;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
   const allowedDecisions = resolveCanonicalPluginApprovalRequestAllowedDecisions(approval);
@@ -241,6 +232,7 @@ async function requestPluginToolApproval(params: {
           allowedDecisions: approval.allowedDecisions,
           toolName: params.toolName,
           toolCallId: params.toolCallId,
+          ...(policySubject ? { policySubject } : {}),
           agentId: params.ctx?.agentId,
           sessionKey: params.ctx?.sessionKey,
           turnSourceChannel: params.ctx?.turnSourceChannel,
@@ -310,6 +302,7 @@ async function requestPluginToolApproval(params: {
             allowedDecisions: approval.allowedDecisions,
             toolName: params.toolName,
             toolCallId: params.toolCallId,
+            ...(policySubject ? { policySubject } : {}),
             agentId: params.ctx?.agentId,
             sessionKey: params.ctx?.sessionKey,
             ...(params.ctx?.approvalReviewerDeviceId
@@ -352,6 +345,7 @@ async function requestPluginToolApproval(params: {
           reason: buildPluginApprovalFailureReason({
             fallbackReason: "Plugin approval unavailable (no approval route)",
             ctx: params.ctx,
+            noRoute: true,
           }),
           params: params.baseParams,
         };
@@ -479,7 +473,6 @@ export async function resolveBeforeToolCallApprovalOutcome(params: {
     params.result?.params === undefined
       ? undefined
       : cloneHookIsolationValue("before_tool_call", params.result.params);
-  warnDeprecatedApprovalTimeoutBehavior(approval);
   if (params.approvalMode === "defer") {
     return {
       blocked: false,

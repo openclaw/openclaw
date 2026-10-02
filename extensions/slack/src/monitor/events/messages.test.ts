@@ -527,7 +527,7 @@ describe("registerSlackMessageEvents", () => {
     expect(call?.[0]?.subtype).toBe("thread_broadcast");
     expect(call?.[0]?.channel).toBe("C1");
     expect(call?.[0]?.user).toBe("U1");
-    expect(call?.[1]).toEqual({ source: "message" });
+    expect(call?.[1]).toEqual({ source: "message", senderAuthentication: "asserted" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
 
@@ -746,7 +746,10 @@ describe("registerSlackMessageEvents", () => {
       const actualSystemEvents = await vi.importActual<
         typeof import("openclaw/plugin-sdk/system-event-runtime")
       >("openclaw/plugin-sdk/system-event-runtime");
-      actualSystemEvents.resetSystemEventsForTest();
+      const { resetSystemEventsForTest } = await vi.importActual<
+        typeof import("openclaw/plugin-sdk/test-fixtures")
+      >("openclaw/plugin-sdk/test-fixtures");
+      resetSystemEventsForTest();
       messageQueueMock.mockImplementation(
         (text: string, { sessionKey, ...options }: { sessionKey: string }) =>
           actualSystemEvents.enqueueRoutedSystemEvent(
@@ -840,7 +843,7 @@ describe("registerSlackMessageEvents", () => {
       expect(actualSystemEvents.peekSystemEventEntries(threadSessionKey)).toHaveLength(
         threadSession ? 1 : 0,
       );
-      actualSystemEvents.resetSystemEventsForTest();
+      resetSystemEventsForTest();
     },
   );
 

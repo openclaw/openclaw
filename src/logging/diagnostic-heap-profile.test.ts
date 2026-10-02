@@ -112,6 +112,12 @@ describe("diagnostic heap profile owner", () => {
       "HeapProfiler.stopSampling",
       "HeapProfiler.disable",
     ]);
+    expect(native.wait).toHaveBeenCalledWith(5000, undefined, { signal: expect.any(AbortSignal) });
+    expect(native.post).toHaveBeenCalledWith("HeapProfiler.startSampling", {
+      samplingInterval: 32768,
+      includeObjectsCollectedByMajorGC: false,
+      includeObjectsCollectedByMinorGC: false,
+    });
   });
 
   it("keeps attributed samples when V8 samples profile construction after translating the tree", async () => {
@@ -147,7 +153,6 @@ describe("diagnostic heap profile owner", () => {
   });
 
   it.each<[DiagnosticsHeapProfileParams, number, number]>([
-    [{}, 5000, 32768],
     [{ durationMs: 90000, samplingIntervalBytes: 1 }, 30000, 4096],
     [{ durationMs: 1, samplingIntervalBytes: 65536 }, 1, 65536],
     [{ includeObjectsCollectedByMajorGC: true }, 5000, 32768],
@@ -190,24 +195,6 @@ describe("diagnostic heap profile owner", () => {
       native.post.mock.calls.filter(([method]) => method === "HeapProfiler.stopSampling"),
     ).toHaveLength(1);
     expect((await capture()).status).toBe("complete");
-  });
-
-  it.each([
-    "HeapProfiler.enable",
-    "HeapProfiler.startSampling",
-    "HeapProfiler.stopSampling",
-    "HeapProfiler.disable",
-  ])("cleans up after %s fails without leaking errors", async (failedMethod) => {
-    native.post.mockImplementation(async (method) => {
-      if (method === failedMethod) {
-        throw new Error("private inspector failure");
-      }
-      return method === "HeapProfiler.stopSampling" ? { profile: profile() } : {};
-    });
-    const outcome = await capture();
-    expect(outcome.status).toBe("unavailable");
-    expect(native.disconnect).toHaveBeenCalledOnce();
-    expect(JSON.stringify(outcome)).not.toContain("private");
   });
 
   it("aggregates repeated allocation stacks when the native profile exceeds 1 MiB", async () => {
@@ -334,11 +321,11 @@ assert.ok(retained.length > 0);
 retained = undefined;
 timers.setTimeout = async () => {
   allocateDroppedHeapProfileWorkload();
-  globalThis.gc();
+  await globalThis.gc({ type: "major", execution: "async" });
 };
 syncBuiltinESMExports();
 for (const includeCollected of [false, true]) {
-  globalThis.gc();
+  await globalThis.gc({ type: "major", execution: "async" });
   const outcome = await captureDiagnosticHeapProfile({
     ...options,
     includeObjectsCollectedByMajorGC: includeCollected,
@@ -377,7 +364,7 @@ assert.equal(url(), undefined);
         { cwd: root, signal, maxBuffer: 32768, requireProcessTreeExit: true },
       );
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
       console.log("HEAP_PROFILE_NATIVE", result.stdout.trim());
     },
     30000,

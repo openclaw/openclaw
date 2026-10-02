@@ -324,10 +324,22 @@ struct LowCoverageHelperTests {
         try "<h1>Hello</h1>".write(to: index, atomically: true, encoding: .utf8)
 
         let handler = CanvasSchemeHandler(root: root)
-        let url = try #require(CanvasScheme.makeURL(session: "main", path: "index.html"))
-        let response = handler._testResponse(for: url)
-        #expect(response.mime == "text/html")
-        #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
+        for path in ["index.html", "/", ""] {
+            let url = try #require(CanvasScheme.makeURL(session: "main", path: path))
+            let response = handler._testResponse(for: url)
+            #expect(response.mime == "text/html")
+            #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
+        }
+        let documents = session.appendingPathComponent("documents", isDirectory: true)
+        try FileManager().createDirectory(at: documents, withIntermediateDirectories: false)
+        try "<h1>Nested</h1>".write(
+            to: documents.appendingPathComponent("index.htm"), atomically: true, encoding: .utf8)
+        for path in ["documents", "documents/"] {
+            let url = try #require(CanvasScheme.makeURL(session: "main", path: path))
+            let response = handler._testResponse(for: url)
+            #expect(response.mime == "text/html")
+            #expect(String(data: response.data, encoding: .utf8)?.contains("Nested") == true)
+        }
 
         let invalid = try #require(URL(string: "https://example.com"))
         let invalidResponse = handler._testResponse(for: invalid)
@@ -370,8 +382,9 @@ struct LowCoverageHelperTests {
 
     @Test @MainActor func `canvas window helper functions`() {
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
-        let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
-        let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)
+        let key = CanvasWindowController.storedFrameDefaultsKey(sessionKey: "test")
+        CanvasWindowController.storeRestoredFrame(rect, sessionKey: "test")
+        let loaded = CanvasWindowController.loadRestoredFrame(sessionKey: "test")
         UserDefaults.standard.removeObject(forKey: key)
         #expect(loaded?.size.width == rect.size.width)
     }

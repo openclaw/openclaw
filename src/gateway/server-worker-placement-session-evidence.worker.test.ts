@@ -10,7 +10,10 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WorkerTaskPool } from "../infra/worker-task-pool.js";
-import type { WorkerTaskPoolOptions } from "../infra/worker-task-pool.types.js";
+import type {
+  WorkerTaskPoolOptions,
+  WorkerTaskPoolOwnerOptions,
+} from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -36,12 +39,18 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/worker-task-pool.js")>();
   return {
     ...actual,
-    createOwnedWorkerTaskPool: <Input, Output>(options: WorkerTaskPoolOptions<Output>) => {
+    createOwnedWorkerTaskPool: <Input, Output>(
+      options: WorkerTaskPoolOptions<Output>,
+      ownerOptions?: WorkerTaskPoolOwnerOptions,
+    ) => {
       // Exercise real queue admission without retaining hundreds of megabytes.
-      const pool = actual.createOwnedWorkerTaskPool<Input, Output>({
-        ...options,
-        maxPendingBytes: 256 * 1024,
-      });
+      const pool = actual.createOwnedWorkerTaskPool<Input, Output>(
+        {
+          ...options,
+          maxPendingBytes: 256 * 1024,
+        },
+        ownerOptions,
+      );
       let observedRead = false;
       return {
         ...pool,
@@ -153,6 +162,55 @@ function isEvidenceReply(reply: unknown): boolean {
     reply.value.kind === "session-identity-evidence"
   );
 }
+
+it.each([
+  { registered: false, invalidate: false },
+  { registered: false, invalidate: true },
+  { registered: true, invalidate: false },
+  { registered: true, invalidate: true },
+])(
+  "retains only requested registry currency (registered=$registered, invalidate=$invalidate)",
+  async ({ registered, invalidate }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const subject = await placement();
+      const store = registered ? state.statePath("custom", "shared.json") : undefined;
+      const cfg: OpenClawConfig = store ? { session: { store } } : {};
+      setRuntimeConfigSnapshot(cfg, cfg);
+      replaceSessionEntrySync(
+        { ...subject, ...(store ? { storePath: store } : {}) },
+        { sessionId: subject.sessionId, updatedAt: 1 },
+      );
+      registry.readOpenClawAgentDatabaseRegistryToken();
+      const prepare = registry.prepareOpenClawAgentDatabaseRegistrySnapshotRead;
+      let registryReads = 0;
+      vi.spyOn(registry, "prepareOpenClawAgentDatabaseRegistrySnapshotRead").mockImplementation(
+        (...args) => {
+          const captured = prepare(...args);
+          return {
+            ...captured,
+            read: () => {
+              registryReads += 1;
+              return captured.read();
+            },
+          };
+        },
+      );
+      let observedEvidence = false;
+      boundary.afterReply = async (reply) => {
+        if (isEvidenceReply(reply)) {
+          observedEvidence = true;
+          if (invalidate) {
+            expect(registry.invalidateRegisteredAgentDatabasesMemo({})).toBeDefined();
+          }
+        }
+      };
+      const resolve = await createWorkerPlacementSessionEvidenceResolver([subject]);
+      expect(observedEvidence).toBe(true);
+      expect(registryReads).toBe(registered ? 1 : 0);
+      expect(await resolve(subject)).toBe(registered && invalidate ? "unknown" : "current");
+    });
+  },
+);
 
 it("charges captured discovery paths to queue capacity and recovers after refusal", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

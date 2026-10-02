@@ -16,6 +16,7 @@ import {
   prepareChannelOperatorAdmin,
   resolveChannelOperatorAdminAuthority,
   resolveUpdateChannelOperatorAdminIdentityAuthority,
+  type ResolvedChannelOperatorIdentity,
 } from "../gateway/channel-operator-authority.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -160,10 +161,6 @@ function isWildcardAllowFromEntry(entry: string): boolean {
   return entry.trim() === "*";
 }
 
-function hasWildcardAllowFrom(list: string[]): boolean {
-  return list.some((entry) => isWildcardAllowFromEntry(entry));
-}
-
 function stripWildcardAllowFrom(list: string[]): string[] {
   return list.filter((entry) => !isWildcardAllowFromEntry(entry));
 }
@@ -265,7 +262,6 @@ function resolveCommandsAllowFromList(
     return null; // Not configured, fall back to channel allowFrom
   }
 
-  // Check provider-specific list first, then fall back to global "*"
   const providerKey = params.providerId ?? "";
   const providerList = commandsAllowFrom[providerKey];
   const globalList = commandsAllowFrom["*"];
@@ -311,7 +307,7 @@ function resolveOwnerAuthorizationState(
   });
   const allowAll =
     !params.hadResolutionError &&
-    (params.allowFromList.length === 0 || hasWildcardAllowFrom(params.allowFromList));
+    (params.allowFromList.length === 0 || params.allowFromList.some(isWildcardAllowFromEntry));
   const channelCommandOwners = resolveOwnerCandidatesForCommands({ ...params, allowAll });
   const explicitOwners = Array.from(new Set(stripWildcardAllowFrom(configOwnerAllowFromList)));
   const contextCommandOwners = stripWildcardAllowFrom(contextOwnerAllowFromList);
@@ -351,7 +347,7 @@ function resolveCommandSenderAuthorization(params: {
     const commandsAllowFromList = params.commandsAllowFromList;
     const commandsAllowAll =
       !params.providerResolutionError &&
-      Boolean(commandsAllowFromList && hasWildcardAllowFrom(commandsAllowFromList));
+      Boolean(commandsAllowFromList && commandsAllowFromList.some(isWildcardAllowFromEntry));
     const matchedCommandsAllowFrom = commandsAllowFromList?.length
       ? params.senderCandidates.find((candidate) => commandsAllowFromList.includes(candidate))
       : undefined;
@@ -619,6 +615,9 @@ function captureCommandOwnerIdentity(
 
 export type PreparedCommandOwnerAuthority = Readonly<{
   source: string | undefined;
+  operatorProfile?: NonNullable<
+    Awaited<ReturnType<typeof prepareChannelOperatorAdmin>>
+  >["operatorProfile"];
   recoveryReference?: Exclude<CommandOwnerAssertion["recoveryReference"], null>;
   isCurrent: (currentCfg: OpenClawConfig) => boolean;
   /** The original additional person-policy grant, never a substitute for the current check. */
@@ -628,10 +627,23 @@ export type PreparedCommandOwnerAuthority = Readonly<{
 /** Admission and recovery share the original authority owner; final checks never touch SQLite. */
 export async function prepareCommandOwnerAuthority(
   cfg: OpenClawConfig,
-  requester: { channel?: string; accountId?: string; senderId?: string } | CommandOwnerReference,
+  requester:
+    | { channel?: string; accountId?: string; senderId?: string }
+    | CommandOwnerReference
+    | ResolvedChannelOperatorIdentity,
   stateOptions: OpenClawStateDatabaseOptions = {},
 ): Promise<PreparedCommandOwnerAuthority> {
-  const captured = "version" in requester ? undefined : { ...requester };
+  const resolved = "identity" in requester ? requester : undefined;
+  const captured =
+    "identity" in requester
+      ? {
+          channel: requester.identity.channelId,
+          accountId: requester.identity.accountId,
+          senderId: requester.identity.senderId,
+        }
+      : "version" in requester
+        ? undefined
+        : { ...requester };
   const reference = "version" in requester ? requester : undefined;
   if (reference?.version === 2 || (captured && isConfiguredCommandOwner(cfg, captured))) {
     const prepared = await prepareConfiguredCommandOwnerAuthority(
@@ -659,9 +671,11 @@ export async function prepareCommandOwnerAuthority(
           senderId: captured.senderId,
         }
       : undefined);
-  const prepared = identity && (await prepareChannelOperatorAdmin(cfg, identity, stateOptions));
+  const prepared =
+    identity && (await prepareChannelOperatorAdmin(cfg, resolved ?? identity, stateOptions));
   return Object.freeze({
     source: prepared ? `profile:${prepared.profileId}` : undefined,
+    operatorProfile: prepared?.operatorProfile,
     recoveryReference: prepared?.recoveryReference,
     ...(prepared?.signal ? { signal: prepared.signal } : {}),
     isCurrent: (currentCfg: OpenClawConfig) =>

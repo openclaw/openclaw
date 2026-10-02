@@ -1,4 +1,3 @@
-/** Session update helpers for skill snapshots and completed compaction accounting. */
 import crypto from "node:crypto";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
@@ -15,6 +14,7 @@ import { projectCompactionAccountingPatch } from "../../config/sessions/session-
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
@@ -95,10 +95,7 @@ async function persistSkillSnapshot(params: {
     },
   );
   publishSessionEntry(params, persistedEntry ?? undefined);
-  if (persistedEntry) {
-    return { entry: persistedEntry, updated };
-  }
-  return { entry: undefined, updated: false };
+  return { entry: persistedEntry ?? undefined, updated: Boolean(persistedEntry) && updated };
 }
 
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
@@ -165,9 +162,10 @@ export async function ensureSkillSnapshot(params: {
   const resolveSnapshot = (snapshot: SessionEntry["skillsSnapshot"]) =>
     resolveReusableWorkspaceSkillSnapshot({
       workspaceDir,
-      ...(params.executionWorkspaceDir
-        ? { executionWorkspaceDir: params.executionWorkspaceDir }
-        : {}),
+      ...resolveSessionSkillExecutionWorkspace(
+        nextEntry?.worktree?.canonicalWorkspaceDir,
+        params.executionWorkspaceDir,
+      ),
       config: cfg,
       agentId,
       skillFilter,
@@ -349,7 +347,7 @@ export async function incrementCompactionCount(params: {
                 }
               },
             }
-          : {}),
+          : { workerGuard: {} }),
       },
     );
   } catch (error) {

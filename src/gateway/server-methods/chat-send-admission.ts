@@ -46,6 +46,7 @@ import {
   resolveRestartSafeChatAdmission,
 } from "./chat-restart-recovery.js";
 import { assertExpectedLeafActive } from "./chat-send-active-leaf.js";
+import { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import {
   inspectGoalChatSendRetry,
   readChatSendDedupeResponse,
@@ -63,6 +64,7 @@ import {
   type PreparedChatSendSession,
 } from "./chat-send-session.js";
 import {
+  admitChatSendUploads,
   assertChatSendExclusiveAdmission,
   createChatSendWorkAdmission,
   releaseChatSendCallerAuthority,
@@ -80,6 +82,7 @@ export async function admitChatSend(
   params.assertCurrent?.();
   const { request, session, respond, context, client } = params;
   const { p, explicitOrigin, normalizedAttachments, turnKind } = request;
+  const requestIdentity = request.goalOperation?.requestFingerprint ?? request.requestIdentity;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
   const {
     rawSessionKey,
@@ -129,7 +132,14 @@ export async function admitChatSend(
       entry: context.dedupe.get(pendingChatSendKey),
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
-  const goalRetry = inspectGoalChatSendRetry(params);
+  const preparedGoalRetry = request.goalOperation
+    ? await prepareGoalChatSendRetry(params)
+    : undefined;
+  if (request.goalOperation) {
+    params.assertCurrent?.();
+    assertSessionTargetCurrent();
+  }
+  const goalRetry = inspectGoalChatSendRetry({ ...params, prepared: preparedGoalRetry });
   if (goalRetry.kind !== "new") {
     if (goalRetry.kind === "replay") {
       respond(true, { ...goalRetry.receipt, replayed: true }, undefined, {
@@ -151,13 +161,17 @@ export async function admitChatSend(
   if (!request.goalOperation && respondChatSendRetry(params)) {
     return { ok: false as const };
   }
+  const uploadAdmission = admitChatSendUploads({ params: p, client, context, respond });
+  if (!uploadAdmission.ok) {
+    return uploadAdmission;
+  }
   // Keep the run abortable while lifecycle mutation owns the session. Admission
   // must reject an expired/missing reservation instead of reviving evicted work.
   params.assertCurrent?.();
   context.dedupe.set(pendingChatSendKey, {
     ts: now,
     ok: true,
-    requestIdentity: request.requestIdentity,
+    requestIdentity,
     payload: {
       runId: clientRunId,
       attemptId: pendingAttemptId,
@@ -190,6 +204,7 @@ export async function admitChatSend(
   let admittedRunAbort: ReturnType<typeof registerChatAbortController> | undefined;
   let restartSafeAdmission: ReturnType<typeof resolveRestartSafeChatAdmission>;
   let initialSessionEntry: SessionEntry | undefined;
+  let admittedSessionEntry: SessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
   let assertInitialSkillSelection: (() => void) | undefined;
   let messageInjectionTarget: ReplyMessageInjectionTarget | undefined;
@@ -244,6 +259,7 @@ export async function admitChatSend(
     }
     const latestSession = loadCurrentChatSendSession(session);
     const latestEntry = latestSession.entry;
+    admittedSessionEntry = latestEntry;
     const requestConflict = resolveChatSendRequestConflict({
       ...params,
       session: { ...session, entry: latestEntry },
@@ -273,7 +289,9 @@ export async function admitChatSend(
         ? replyRunRegistry.resolveCurrentInterruptTarget(activeRunScopeKey)
         : undefined;
     if (p.queueMode !== "steer" && expectedLeafEntryId !== undefined) {
-      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId);
+      assertExpectedLeafActive(latestSession, agentId, expectedLeafEntryId, requestedSessionId, {
+        allowEmptyAncestor: true,
+      });
     }
     // Admission can queue behind reset. Never route a request captured
     // against the old session into the replacement transcript. Check the expected
@@ -371,6 +389,7 @@ export async function admitChatSend(
     gatewayWorkAdmission = await beginSessionWorkAdmission({
       scope: storePath,
       identities: [sessionKey, backingSessionId],
+      storeWriterIdentities: [sessionKey, session.sessionTarget.storeKey],
       assertAllowed: () => {
         params.assertCurrent?.();
         assertSessionTargetCurrent();
@@ -431,7 +450,6 @@ export async function admitChatSend(
     return { ok: false as const };
   }
   if (
-    !request.goalOperation &&
     admittedRunAbort?.registered &&
     !reservationSuperseded &&
     !readChatSendDedupeResponse(context.dedupe, clientRunId)
@@ -441,7 +459,7 @@ export async function admitChatSend(
     context.dedupe.set(`chat:${clientRunId}`, {
       ts: Date.now(),
       ok: true,
-      requestIdentity: request.requestIdentity,
+      requestIdentity,
     });
   }
   clearPendingChatSendReservation();
@@ -670,6 +688,7 @@ export async function admitChatSend(
       sessionBinding,
       onSessionPrepared,
       initialSessionEntry,
+      admittedSessionEntry,
       chatSendTraceAttributes,
       assertInitialSkillSelection,
       assertSessionTargetCurrent,
@@ -683,6 +702,7 @@ export async function admitChatSend(
       rejectSessionRoutingChanged,
       retainGatewayWorkAdmission: retainedWork.retain,
       setPendingInputCleanup: retainedWork.setPendingInputCleanup,
+      assertClientUploadAllowed: uploadAdmission.assertClientUploadAllowed,
       assertWorkAdmissionCurrent: () => {
         const queued = context.chatQueuedTurns.get(clientRunId);
         // Collect retires source cancellation while retaining the original

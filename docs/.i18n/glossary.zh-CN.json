@@ -808,8 +808,24 @@
     "target": "Kubernetes"
   },
   {
+    "source": "Cloudflare",
+    "target": "Cloudflare"
+  },
+  {
     "source": "Cloudflare Containers",
     "target": "Cloudflare Containers"
+  },
+  {
+    "source": "Cloudflare plugin",
+    "target": "Cloudflare 插件"
+  },
+  {
+    "source": "Cloudflare plugin reference",
+    "target": "Cloudflare 插件参考"
+  },
+  {
+    "source": "cloudflare",
+    "target": "cloudflare"
   },
   {
     "source": "Fly.io",
@@ -1466,6 +1482,26 @@
   {
     "source": "Zoom meetings plugin",
     "target": "Zoom 会议插件"
+  },
+  {
+    "source": "Slack huddles plugin",
+    "target": "Slack 快速通话插件"
+  },
+  {
+    "source": "Slack huddles plugin reference",
+    "target": "Slack 快速通话插件参考"
+  },
+  {
+    "source": "slack-huddles",
+    "target": "slack-huddles"
+  },
+  {
+    "source": "Slack channel",
+    "target": "Slack 频道"
+  },
+  {
+    "source": "Transcripts CLI",
+    "target": "转录 CLI"
   },
   {
     "source": "Voice call plugin",
@@ -3800,8 +3836,8 @@
     "target": "OpenAI 覆盖范围与费用"
   },
   {
-    "source": "OpenAI image and video generation",
-    "target": "OpenAI 图像与视频生成"
+    "source": "OpenAI image generation",
+    "target": "OpenAI 图像生成"
   },
   {
     "source": "OpenAI voice and speech",
@@ -4330,6 +4366,18 @@
   {
     "source": "Storage changes and release preflight",
     "target": "存储变更与发布预检"
+  },
+  {
+    "source": "storage",
+    "target": "storage"
+  },
+  {
+    "source": "Storage locations",
+    "target": "存储位置"
+  },
+  {
+    "source": "Storage CLI",
+    "target": "存储 CLI"
   },
   {
     "source": "Agent schema history",

@@ -30,6 +30,20 @@ describe("release plan contract", () => {
     expect(lockText.slice(0, -1)).toMatch(/^[\x20-\x7e]+$/u);
   });
 
+  it("rejects alpha as beta publication authority", () => {
+    const version = "2026.9.24-alpha.1";
+    expect(() =>
+      validateReleasePlan({
+        ...sourceFixture,
+        purpose: "beta-publish",
+        version,
+        tag: `v${version}`,
+        release_id: version,
+        target_context_ref: `refs/tags/v${version}`,
+      }),
+    ).toThrow("Alpha releases are retired;");
+  });
+
   it("rejects duplicate, reordered, pretty, CRLF, and non-ASCII lock bytes", () => {
     const duplicate = lockText.replace(
       '{"digest":',

@@ -17,9 +17,12 @@ import {
   type ApprovalCommandAuthorization,
 } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { commandReply, requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
+
+const log = createSubsystemLogger("auto-reply/commands-approve");
 
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
@@ -92,12 +95,6 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
 
 type ApproveCommandParams = Pick<Parameters<CommandHandler>[0], "cfg" | "command" | "ctx">;
 
-function buildResolvedByLabel(params: ApproveCommandParams): string {
-  const channel = params.command.channel;
-  const sender = params.command.senderId ?? "unknown";
-  return `${channel}:${sender}`;
-}
-
 type ApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
@@ -124,6 +121,16 @@ export async function handleApproveCommandFromContext(
     ctx: params.ctx,
     command: params.command,
   });
+  const approvalCapability = resolveChannelApprovalCapability(
+    getChannelPlugin(params.command.channel),
+  );
+  const pluginReviewerSenderId =
+    approvalCapability?.resolveReviewerSenderId?.({
+      cfg: params.cfg,
+      accountId: effectiveAccountId,
+      senderId: params.command.senderId,
+      spaceId: params.ctx.GroupSpace,
+    }) ?? params.command.senderId;
   // Probe order: legacy exec/plugin resolution reports not-found for other
   // owners; system-agent resolution reads the owner first (see below).
   const approvalKinds = ["exec", "plugin", "system-agent"] as const;
@@ -132,7 +139,7 @@ export async function handleApproveCommandFromContext(
       cfg: params.cfg,
       channel: params.command.channel,
       accountId: effectiveAccountId,
-      senderId: params.command.senderId,
+      senderId: kind === "plugin" ? pluginReviewerSenderId : params.command.senderId,
       kind,
     });
   const authorizations: Record<(typeof approvalKinds)[number], ApprovalCommandAuthorization> = {
@@ -159,9 +166,6 @@ export async function handleApproveCommandFromContext(
     return missingScope;
   }
 
-  const approvalCapability = resolveChannelApprovalCapability(
-    getChannelPlugin(params.command.channel),
-  );
   // Channels with reviewer custody let the Gateway judge the actor; elsewhere an
   // OpenClaw change needs the current configured owner, like the tool that proposed it.
   const systemAgentNeedsOwner = !approvalCapability?.authorizeActorAction;
@@ -190,7 +194,7 @@ export async function handleApproveCommandFromContext(
     return null;
   };
 
-  const resolvedBy = buildResolvedByLabel(params);
+  const resolvedBy = `${params.command.channel}:${params.command.senderId ?? "unknown"}`;
   const callApprovalMethod = async (approvalKind: ChannelApprovalKind): Promise<void> => {
     // Channel senders deciding an OpenClaw change carry their identity so the
     // Gateway's final decision guard rechecks live custody (channel approvers,
@@ -201,7 +205,7 @@ export async function handleApproveCommandFromContext(
         ? {
             channel: params.command.channel,
             accountId: effectiveAccountId,
-            senderId: params.command.senderId,
+            senderId: approvalKind === "plugin" ? pluginReviewerSenderId : params.command.senderId,
           }
         : {};
     const clientDisplayName = `Chat approval (${resolvedBy})`;
@@ -288,8 +292,14 @@ export async function handleApproveCommandFromContext(
         if (systemAgentRefusedForOwner) {
           return ownerOnlyResult;
         }
+        return commandReply(
+          "That approval is no longer available. Check the request in the Control UI.",
+        );
       }
-      return commandReply(`❌ Failed to submit approval: ${formatErrorMessage(error)}`);
+      log.warn(`Approval submission failed: ${formatErrorMessage(error)}`);
+      return commandReply(
+        "⚠️ Couldn't confirm that approval. Check the request in the Control UI before trying again.",
+      );
     }
   }
 

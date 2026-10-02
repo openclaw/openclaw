@@ -8,15 +8,16 @@ import {
   resolveSessionTranscriptDatabasePath,
 } from "../../config/sessions/session-accessor.js";
 import type {
-  SessionEntryReadSource,
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
+import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
   getOwnedSessionTranscriptWriterFence,
+  withSessionTranscriptWriteAssertion,
 } from "../../config/sessions/transcript-write-context.js";
 import { appendExactAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
@@ -26,7 +27,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { withOpenClawAgentDatabaseWrite } from "../../state/openclaw-agent-db-write.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
@@ -166,6 +166,7 @@ export async function persistCliAssistantTranscript(params: {
         : {}),
       storePath: runParams.storePath,
       idempotencyKey,
+      runId: runParams.runId,
       config: runParams.config,
       beforeMessageWrite: (write) => {
         const message = runAgentHarnessBeforeMessageWriteHook({
@@ -262,7 +263,7 @@ function captureCliBlockFallbackWrite(
     sessionKeys: [normalizedKey],
     readOnly: true,
     onReadSource: (readSource) => {
-      source = readSource;
+      source = { agentId: readSource.agentId, path: readSource.path };
     },
   })[0]?.entry;
   if (!source || !captured || captured.sessionId !== identity.sessionId) {
@@ -300,7 +301,7 @@ function captureCliBlockFallbackWrite(
       throw new SessionTranscriptWriterClaimReboundError();
     }
   };
-  return { databaseOptions: { ...readSource, env }, readScope, assertCurrent };
+  return { readScope, assertCurrent };
 }
 
 export async function persistCliRunBlock(
@@ -401,11 +402,10 @@ export async function persistCliRunBlock(
       const { restoreSessionColdTranscript } =
         await import("../../config/sessions/session-cold-storage.js");
       await restoreSessionColdTranscript(write.readScope, write.assertCurrent);
-      await withOpenClawAgentDatabaseWrite(write.databaseOptions, () => {
+      await withSessionTranscriptWriteAssertion(write.readScope, write.assertCurrent, async () => {
+        const manager = await SessionManager.openAsync(write.readScope);
         write.assertCurrent();
-        const manager = SessionManager.open(write.readScope);
-        manager.appendMessage(redactedUserMessage);
-        manager.flushPendingPersistence();
+        await manager.appendMessageAsync(redactedUserMessage);
       });
       return;
     }
@@ -414,12 +414,16 @@ export async function persistCliRunBlock(
     const cliWriter = target
       ? getCliHistoryWriter({ ...target, storePath: resolveSessionTranscriptDatabasePath(target) })
       : undefined;
-    await withSessionManagerWrite(sessionManager, () => {
+    const assertCurrent = () => {
       assertOwnedWrite?.();
       cliWriter?.assertCurrent();
-      sessionManager.appendMessage(redactedUserMessage);
-      sessionManager.flushPendingPersistence();
-    });
+    };
+    const append = () =>
+      withSessionManagerWrite(sessionManager, async () => {
+        assertCurrent();
+        await sessionManager.appendMessageAsync(redactedUserMessage);
+      });
+    await (target ? withSessionTranscriptWriteAssertion(target, assertCurrent, append) : append());
   } catch (err) {
     log.warn(
       `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(

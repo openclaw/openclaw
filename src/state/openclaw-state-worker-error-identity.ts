@@ -214,9 +214,6 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
         ? { type: node.type, reason: node.reason, missingTables: [...node.missingTables] }
         : undefined;
     case "state-owner-contention":
-      return typeof node.databasePath === "string"
-        ? { type: node.type, databasePath: node.databasePath }
-        : undefined;
     case "ownership-metadata":
       return typeof node.databasePath === "string"
         ? { type: node.type, databasePath: node.databasePath }
@@ -244,8 +241,7 @@ export function parseIdentity(node: Record<string, unknown>): ErrorIdentity | un
     case "maintenance":
       return isStartupMaintenanceKind(node.kind) ? { type: node.type, kind: node.kind } : undefined;
     case "state-migration":
-      return (node.kind === "agent-databases-composite-primary-key" ||
-        node.kind === "audit-events-v2" ||
+      return (node.kind === "audit-events-v2" ||
         node.kind === "legacy-cron-run-logs" ||
         node.kind === "legacy-workshop-review-index") &&
         typeof node.pathname === "string"

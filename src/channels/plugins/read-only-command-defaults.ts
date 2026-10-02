@@ -45,23 +45,13 @@ export function normalizeChannelCommandDefaults(
   if (!value) {
     return undefined;
   }
-  const nativeCommandsAutoEnabled =
-    typeof value.nativeCommandsAutoEnabled === "boolean"
-      ? value.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  if (nativeCommandsAutoEnabled === undefined && nativeSkillsAutoEnabled === undefined) {
-    return undefined;
-  }
   const defaults: ChannelCommandDefaults = {};
-  if (nativeCommandsAutoEnabled !== undefined) {
-    defaults.nativeCommandsAutoEnabled = nativeCommandsAutoEnabled;
+  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
+    if (typeof value[key] === "boolean") {
+      defaults[key] = value[key];
+    }
   }
-  if (nativeSkillsAutoEnabled !== undefined) {
-    defaults.nativeSkillsAutoEnabled = nativeSkillsAutoEnabled;
-  }
-  return defaults;
+  return Object.keys(defaults).length > 0 ? defaults : undefined;
 }
 
 /**

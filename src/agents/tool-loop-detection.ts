@@ -23,6 +23,7 @@ import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
 import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
@@ -65,10 +66,6 @@ function selectHistoryForScope(
   return history.filter((record) => normalizeRunId(record.runId) === runId);
 }
 
-/**
- * Hash a tool call for pattern matching.
- * Uses tool name + deterministic JSON serialization digest of params.
- */
 export function hashToolCall(toolName: string, params: unknown): string {
   // Execution titles describe presentation, not a different command or program.
   if (toolName === "exec" && isPlainObject(params)) {
@@ -287,12 +284,6 @@ function isVolatileSendResult(toolName: string, params: unknown): boolean {
   return isMessagingToolSendAction(toolName, args);
 }
 
-// Only the loop detector's own veto must not reset the streak; other blocked results
-// (plugin/approval vetoes) keep a hash so repeated identical denials still escalate.
-function isLoopVetoResult(details: Record<string, unknown>): boolean {
-  return details.status === "blocked" && details.deniedReason === "tool-loop";
-}
-
 type ToolCallOutcome = Pick<
   ToolCallRecord,
   "failureIdentityHash" | "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName"
@@ -318,10 +309,16 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
-  // A loop veto extends the prior no-progress streak but is not a real tool outcome.
-  // Keep it typed so it cannot reset the streak or collide with plugin/approval denials.
-  if (isLoopVetoResult(details)) {
+  // Only our own veto extends the prior streak without a hash. Other blocked
+  // outcomes retain hashes so repeated plugin/approval denials still escalate.
+  if (details.status === "blocked" && details.deniedReason === "tool-loop") {
     return { outcomeKind: "tool-loop-veto" };
+  }
+  if (toolName === "computer" && result.isError !== true) {
+    const outcome = getComputerToolOutcome(result);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
   }
   if (toolName === "progress_card" && result.isError !== true) {
     const outcome = getProgressCardToolOutcome(result);
@@ -519,10 +516,6 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
-/**
- * Detect if an agent is stuck in a repetitive tool call loop.
- * Checks if the same tool+params combination has been called excessively.
- */
 export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
@@ -669,10 +662,6 @@ export function detectToolCallLoop(
   return { stuck: false };
 }
 
-/**
- * Record a tool call in the session's history for loop detection.
- * Maintains sliding window of last N calls.
- */
 export function recordToolCall(
   state: SessionState,
   toolName: string,
@@ -699,9 +688,6 @@ export function recordToolCall(
   }
 }
 
-/**
- * Record a completed tool call outcome so loop detection can identify no-progress repeats.
- */
 export function recordToolCallOutcome(
   state: SessionState,
   params: {
@@ -725,38 +711,27 @@ export function recordToolCallOutcome(
   }
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
-  let recordedOutcome: ToolCallRecord | undefined;
-  for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
-    const call = state.toolCallHistory[i];
-    if (!call) {
-      continue;
-    }
-    if (normalizeRunId(call.runId) !== runId) {
-      continue;
-    }
-    if (params.toolCallId && call.toolCallId !== params.toolCallId) {
-      continue;
-    }
-    if (call.toolName !== params.toolName || call.argsHash !== argsHash) {
-      continue;
-    }
-    if (call.resultHash !== undefined || call.outcomeKind !== undefined) {
-      continue;
-    }
-    call.outcomeKind = outcome.outcomeKind;
-    call.resultHash = outcome.resultHash;
-    call.failureIdentityHash = outcome.failureIdentityHash;
+  let recordedOutcome = state.toolCallHistory.findLast(
+    (call) =>
+      call &&
+      normalizeRunId(call.runId) === runId &&
+      (!params.toolCallId || call.toolCallId === params.toolCallId) &&
+      call.toolName === params.toolName &&
+      call.argsHash === argsHash &&
+      call.resultHash === undefined &&
+      call.outcomeKind === undefined,
+  );
+  if (recordedOutcome) {
+    recordedOutcome.outcomeKind = outcome.outcomeKind;
+    recordedOutcome.resultHash = outcome.resultHash;
+    recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
     if (outcome.noProgress) {
-      call.noProgress = true;
+      recordedOutcome.noProgress = true;
     } else {
-      delete call.noProgress;
+      delete recordedOutcome.noProgress;
     }
-    call.unknownToolName = outcome.unknownToolName;
-    recordedOutcome = call;
-    break;
-  }
-
-  if (!recordedOutcome) {
+    recordedOutcome.unknownToolName = outcome.unknownToolName;
+  } else {
     const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,

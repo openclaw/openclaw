@@ -194,16 +194,13 @@ test("sessions.list preserves separate registered targets under a fixed store ow
 });
 
 test.for(
-  (["delete", "draft", "join", "leave"] as const).flatMap((change) => [
-    { change, alias: false },
-    { change, alias: true },
-  ]),
+  (["delete", "draft", "join", "leave"] as const).map((change) => ({
+    change,
+    alias: process.platform !== "win32",
+  })),
 )(
   "sessions.list refreshes $change against the selected physical database (alias=$alias)",
-  async ({ change, alias }, context) => {
-    if (alias && process.platform === "win32") {
-      context.skip();
-    }
+  async ({ change, alias }) => {
     const rootStateDir = process.env.OPENCLAW_STATE_DIR;
     if (!rootStateDir) {
       throw new Error("OPENCLAW_STATE_DIR is required for gateway session tests");
@@ -262,41 +259,43 @@ test.for(
           return published;
         });
       const projection = await createSessionRowProjection({ cfg });
-      const ensure = projection.ensureMaterialized;
-      const spy = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-        await ensure();
-        expect(
-          projection.snapshot(
-            { key, agentId: "ops" },
-            { includeDerivedTitles: true, includeLastMessage: true },
-          ).row,
-        ).toMatchObject({
-          key,
-          agentId: "ops",
-          derivedTitle: "Physical database title",
-          lastMessagePreview: "Physical database preview",
+      const prepare = projection.prepareSelection;
+      const spy = vi
+        .spyOn(projection, "prepareSelection")
+        .mockImplementationOnce(async (...args) => {
+          await prepare(...args);
+          expect(
+            projection.snapshot(
+              { key, agentId: "ops" },
+              { includeDerivedTitles: true, includeLastMessage: true },
+            ).row,
+          ).toMatchObject({
+            key,
+            agentId: "ops",
+            derivedTitle: "Physical database title",
+            lastMessagePreview: "Physical database preview",
+          });
+          if (change === "delete") {
+            await deleteSessionEntryLifecycle({
+              agentId: scope.agentId,
+              storePath,
+              target: { canonicalKey: key, storeKeys: [key] },
+              archiveTranscript: false,
+              deleteTranscriptWithoutArchive: true,
+            });
+          } else if (change === "draft") {
+            replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
+          } else if (change === "join") {
+            addSessionMember(scope, {
+              identityId: "viewer",
+              addedBy: "owner",
+              expectedSessionId: entry.sessionId,
+            });
+          } else {
+            removeSessionMember(scope, "viewer", undefined, entry.sessionId);
+          }
+          return prepare(...args);
         });
-        if (change === "delete") {
-          await deleteSessionEntryLifecycle({
-            agentId: scope.agentId,
-            storePath,
-            target: { canonicalKey: key, storeKeys: [key] },
-            archiveTranscript: false,
-            deleteTranscriptWithoutArchive: true,
-          });
-        } else if (change === "draft") {
-          replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
-        } else if (change === "join") {
-          addSessionMember(scope, {
-            identityId: "viewer",
-            addedBy: "owner",
-            expectedSessionId: entry.sessionId,
-          });
-        } else {
-          removeSessionMember(scope, "viewer", undefined, entry.sessionId);
-        }
-        await ensure();
-      });
       try {
         await previewPublished.promise;
         publication.mockRestore();
@@ -413,7 +412,7 @@ test("captured sentinel rows never substitute a later same-owner session after d
         expect(send).not.toHaveBeenCalled();
       } finally {
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
       }
       // A new selection may use the remaining physical row; the captured identity may not.
       const current = await directSessionReq<SessionsListResult>(

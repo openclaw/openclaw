@@ -36,6 +36,10 @@ that supervise the Gateway as a child process, see
 
 - WebSocket, text frames, JSON payloads.
 - First frame **must** be a `connect` request.
+- The default budget allows 128 outstanding unauthenticated connections per
+  resolved client IP. Successful authentication or closure releases the slot.
+  See [pre-auth connection limits](/gateway/security/rate-limiting#unauthenticated-websocket-connections)
+  for shared-NAT behavior and the environment override.
 - Pre-connect frames are capped at 64 KiB (`MAX_PREAUTH_PAYLOAD_BYTES`). After
   handshake, follow `hello-ok.policy.maxPayload` and
   `hello-ok.policy.maxBufferedBytes`. With diagnostics enabled, oversized
@@ -83,11 +87,20 @@ the WebSocket itself as one trace.
 
 Response errors use `{ code, message, details?, retryable?, retryAfterMs? }`.
 Authenticated operator requests share a bounded queue for starting RPC handlers.
+Ordinary requests have both aggregate and per-connection waiting limits, so
+concurrent Control UI setup can queue without giving one connection the entire
+request allowance. The aggregate serialized-byte bound still applies.
 Small `sessions.messages.subscribe` requests without approval replay and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
 including a per-connection limit. They keep the same FIFO order and yielding
 budget as other requests. Roster snapshots and approval replay retain the ordinary
 request budget.
+Session-list snapshots, catalog reads, and message subscriptions with approval
+replay share four preparation slots. A slot remains occupied until its request
+settles, and each start yields to ready socket I/O. WebSocket handshakes bypass
+the request queue, so reconnecting tabs cannot start an unbounded replay wave
+ahead of other clients' handshakes. Waiting requests retain FIFO order and the
+existing queue limits.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.

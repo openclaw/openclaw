@@ -207,9 +207,7 @@ describe("presence tool source authority", () => {
       const pending = run(authority, () =>
         createPresenceTool().execute("location", { include: ["location"] }),
       );
-      const rejected = expect(pending).rejects.toThrow(
-        "operator execution authority is no longer active",
-      );
+      const rejected = expect(pending).rejects.toThrow("presence reader revoked");
       await entered.promise;
       current = false;
       release.resolve();

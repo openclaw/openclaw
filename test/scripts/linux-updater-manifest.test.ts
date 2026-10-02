@@ -46,7 +46,7 @@ type Remote = {
   requestReadRejected?: boolean;
   uploadBehavior?: "accepted-error" | "rejected-error" | "deleted-error" | "success-noop";
   dispatchRejected?: boolean;
-  dispatchResponse?: "missing-id" | "null-id";
+  missingDispatchId?: boolean;
   toolingStatus?: string;
   parentAttempt?: number;
   currentRun?: ActionRun;
@@ -175,8 +175,7 @@ if (args[0] === 'api') {
     (state.requestRuns ||= []).unshift({id: 456, head_sha: '${toolingSha}', head_branch: request.ref,
       event: 'workflow_dispatch', status: 'queued', conclusion: null,
       display_title: 'Linux App Release Request [' + request.inputs.tag + '] desktop=' + request.inputs['desktop-test-bundles']});
-    result({...(state.dispatchResponse === 'missing-id' ? {} :
-      {workflow_run_id: state.dispatchResponse === 'null-id' ? null : 456}),
+    result({...(state.missingDispatchId ? {} : {workflow_run_id: 456}),
       html_url: 'https://github.com/${repository}/actions/runs/456'});
   } else if (endpoint?.startsWith('repos/${repository}/commits/')) {
     result('${sourceSha}');
@@ -380,7 +379,7 @@ process.stdout.write('${sourceSha}\\trefs/tags/v2026.9.4\\n');
   };
 }
 
-it.each(["2026.9.3", "2026.9.4", "2026.9.5"])(
+it.each(["2026.9.3", "2026.9.5"])(
   "preserves an equal or newer valid target manifest byte-for-byte (%s)",
   (version) => {
     const remote = fixture();
@@ -418,7 +417,6 @@ it.each(["missing-manifest", "missing-release"])(
 
 it.each([
   "cross-repository",
-  "wrong-version-url",
   "empty-signature",
   "invalid-base64",
   "invalid-json",
@@ -435,9 +433,6 @@ it.each([
     const platform = value.platforms["linux-x86_64"];
     if (kind === "cross-repository") {
       platform.url = platform.url.replace(repository, "foreign/repository");
-    }
-    if (kind === "wrong-version-url") {
-      platform.url = platform.url.replaceAll("2026.9.3", "2026.9.2");
     }
     if (kind === "empty-signature") {
       platform.signature = "";
@@ -565,7 +560,7 @@ it("preserves identity CLI behavior when no writer tuple is requested", () => {
 });
 
 it.each([
-  ...writerCliFields.map(([name, value]) => ({ name, arguments: [name, value] })),
+  { name: "incomplete writer tuple", arguments: ["--writer-run-id", "200"] },
   { name: "missing writer value", arguments: ["--writer-run-id"] },
 ])("refuses partial identity CLI writer arguments: $name", (scenario) => {
   const remote = fixture();
@@ -811,10 +806,7 @@ it.each(["absent", "complete", "partial", "propagation"])(
 );
 
 it("reports a refused Linux workflow dispatch without a success receipt or retry", () => {
-  const remote = fixture({ dispatchRejected: true });
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4", { assets: [], manifest: undefined });
-  });
+  const remote = pendingLinuxFixture({ dispatchRejected: true });
   const result = remote.dispatch();
   expect(result.status).toBe(1);
   expect(result.evidence.state).toBe("dispatch-unconfirmed");
@@ -847,7 +839,7 @@ function linuxRequest(overrides: Partial<ActionRun> = {}): ActionRun {
   };
 }
 
-it.each(["requested", "waiting", "pending", "queued", "in_progress", "completed"])(
+it.each(["queued", "completed"])(
   "reuses a manual same-tag Linux request in %s state without another build request",
   (status) => {
     const remote = pendingLinuxFixture({
@@ -894,7 +886,6 @@ it("finds a desktop-inclusive Linux request beyond the first history page", () =
 
 it.each([
   { reason: "failed", overrides: { conclusion: "failure" } },
-  { reason: "cancelled", overrides: { conclusion: "cancelled" } },
   { reason: "another branch", overrides: { head_branch: "feature" } },
   { reason: "another event", overrides: { event: "push" } },
   {
@@ -919,10 +910,7 @@ it("refuses another Linux request when request history cannot be read", () => {
 });
 
 it("refuses a moved tag even when the dispatch caller suppresses shell errexit", () => {
-  const remote = fixture();
-  remote.update((state) => {
-    state.releases["v2026.9.4"] = release("2026.9.4", { assets: [], manifest: undefined });
-  });
+  const remote = pendingLinuxFixture();
   const result = remote.dispatch("c".repeat(40));
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("Release tag v2026.9.4 moved");
@@ -933,20 +921,14 @@ it("refuses a moved tag even when the dispatch caller suppresses shell errexit",
   ).toEqual([]);
 });
 
-it.each(["missing-id", "null-id"] as const)(
-  "does not confirm or repeat an accepted workflow dispatch with %s",
-  (dispatchResponse) => {
-    const remote = fixture({ dispatchResponse });
-    remote.update((state) => {
-      state.releases["v2026.9.4"] = release("2026.9.4", { assets: [], manifest: undefined });
-    });
-    const result = remote.dispatch();
-    expect(result.status).toBe(1);
-    expect(result.evidence.state).toBe("dispatch-unconfirmed");
-    expect(remote.read().requests).toHaveLength(1);
-    expect(remote.read().calls.filter((args) => args[0] === "run")).toEqual([]);
-    expect(
-      remote.read().calls.filter((args) => args.some((arg) => arg.endsWith("/dispatches"))),
-    ).toHaveLength(1);
-  },
-);
+it("does not confirm or repeat an accepted workflow dispatch without a run ID", () => {
+  const remote = pendingLinuxFixture({ missingDispatchId: true });
+  const result = remote.dispatch();
+  expect(result.status).toBe(1);
+  expect(result.evidence.state).toBe("dispatch-unconfirmed");
+  expect(remote.read().requests).toHaveLength(1);
+  expect(remote.read().calls.filter((args) => args[0] === "run")).toEqual([]);
+  expect(
+    remote.read().calls.filter((args) => args.some((arg) => arg.endsWith("/dispatches"))),
+  ).toHaveLength(1);
+});

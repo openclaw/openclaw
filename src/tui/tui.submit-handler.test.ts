@@ -137,25 +137,6 @@ describe("createEditorSubmitHandler", () => {
     expect(editor.getText()).toBe("hello");
   });
 
-  it("preserves normal message drafts when chat is busy", () => {
-    const { editor, sendMessage, handleCommand, handleBangLine, onBlockedMessageSubmit, onSubmit } =
-      createSubmitHarness({
-        admitMessage: () => ({ status: "blocked", reason: "pending" }),
-      });
-
-    onSubmit("  wait, use c++ instead  ");
-
-    expect(editor.setText).toHaveBeenCalledWith("wait, use c++ instead");
-    expect(editor.addToHistory).not.toHaveBeenCalled();
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(handleCommand).not.toHaveBeenCalled();
-    expect(handleBangLine).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", {
-      status: "blocked",
-      reason: "pending",
-    });
-  });
-
   it("passes the submitted text to the busy gate", () => {
     const admitMessage = vi.fn((value: string) =>
       value === "please stop"
@@ -174,13 +155,15 @@ describe("createEditorSubmitHandler", () => {
     const tui = { requestRender: vi.fn() } as unknown as TUI;
     const editor = new CustomEditor(tui, editorTheme);
     const sendMessage = vi.fn();
+    const handleCommand = vi.fn();
+    const handleBangLine = vi.fn();
     const onBlockedMessageSubmit = vi.fn();
-    editor.setText("wait, use c++ instead");
+    editor.setText("  wait, use c++ instead  ");
     editor.onSubmit = createEditorSubmitHandler({
       editor,
-      handleCommand: vi.fn(),
+      handleCommand,
       sendMessage,
-      handleBangLine: vi.fn(),
+      handleBangLine,
       onSubmitError: vi.fn(),
       admitMessage: () => ({ status: "blocked", reason: "pending" }),
       onBlockedMessageSubmit,
@@ -190,10 +173,16 @@ describe("createEditorSubmitHandler", () => {
 
     expect(editor.getText()).toBe("wait, use c++ instead");
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(onBlockedMessageSubmit).toHaveBeenCalledWith("wait, use c++ instead", {
+    expect(handleCommand).not.toHaveBeenCalled();
+    expect(handleBangLine).not.toHaveBeenCalled();
+    expect(onBlockedMessageSubmit).toHaveBeenCalledWith({
       status: "blocked",
       reason: "pending",
     });
+
+    editor.setText("");
+    editor.handleInput("\u001b[A");
+    expect(editor.getText()).toBe("");
   });
 
   it("continues to route slash commands while chat is busy", () => {

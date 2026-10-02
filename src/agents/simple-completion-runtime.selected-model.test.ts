@@ -6,6 +6,7 @@ import {
   executeWorkerInference,
   type WorkerInferenceExecutionParams,
 } from "../gateway/worker-environments/inference-runtime.js";
+import * as workerTurnOwner from "../gateway/worker-environments/placement-turn-claim-events.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -145,6 +146,9 @@ module.exports = {
           storePath: state.path("unused-session-store.sqlite"),
         };
         if (mode === "worker") {
+          vi.spyOn(workerTurnOwner, "readWorkerTurnPromptCacheContext").mockReturnValue({
+            boundaryCount: 0,
+          });
           vi.spyOn(sessionAccessor, "loadSessionEntry").mockImplementation((target) => {
             expect(target).toEqual(sessionTarget);
             return { sessionId: "selected-test", updatedAt: 0 };

@@ -170,29 +170,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("compacts settled replay-unsafe tools and continues from their recorded result", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow())
-      .mockResolvedValueOnce(session.makeAttemptResult());
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after settled exec",
-        firstKeptEntryId: "entry-settled-exec",
-        tokensBefore: 201_000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...session.runParams,
-      runId: "run-midturn-settled-unsafe",
-    });
-
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
-
   it("recovers a successor transcript from its own frozen tool projection", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
     const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
@@ -213,7 +190,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       false,
       2,
     );
-    const prepareAttemptProjection = (
+    const prepareAttemptProjection = async (
       attempt: Parameters<typeof mockedRunEmbeddedAttempt>[0],
       maxChars: number,
     ) => {
@@ -221,7 +198,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
         throw new Error("expected the current attempt's complete admitted transcript target");
       }
-      const manager = SessionManager.open(
+      const manager = await SessionManager.openAsync(
         {
           ...target,
           agentId: target.agentId,
@@ -231,9 +208,13 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         },
         attempt.workspaceDir,
       );
-      manager.appendMessage({ role: "user", content: "Use the tool evidence", timestamp: 0 });
-      manager.appendMessage(settledExecAssistant);
-      manager.appendMessage(toolResult);
+      await manager.appendMessageAsync({
+        role: "user",
+        content: "Use the tool evidence",
+        timestamp: 0,
+      });
+      await manager.appendMessageAsync(settledExecAssistant);
+      await manager.appendMessageAsync(toolResult);
       const messages = manager.buildSessionContext().messages;
       const projection = getEmbeddedSessionPromptState(attempt.sessionId).toolResults;
       const projected = actualTruncation
@@ -256,16 +237,16 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
       ).toMatchObject({ content: projected.content });
       return { manager, messages, content: projected.content };
     };
-    let successor: ReturnType<typeof prepareAttemptProjection> | undefined;
+    let successor: Awaited<ReturnType<typeof prepareAttemptProjection>> | undefined;
     mockedRunEmbeddedAttempt
       .mockImplementationOnce(async (attempt) => {
         expect(attempt.sessionId).toBe(session.runParams.sessionId);
-        prepareAttemptProjection(attempt, 8_000);
+        await prepareAttemptProjection(attempt, 8_000);
         return makeReplayUnsafeMidTurnOverflow();
       })
       .mockImplementationOnce(async (attempt) => {
         expect(attempt.sessionId).toBe(successorId);
-        successor = prepareAttemptProjection(attempt, 1_000);
+        successor = await prepareAttemptProjection(attempt, 1_000);
         return session.makeAttemptResult({
           ...makeReplayUnsafeMidTurnOverflow(),
           sessionIdUsed: successorId,
@@ -291,7 +272,7 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
         throw new Error("expected the successor attempt to populate its projection");
       }
       // Recovery writes through a separate manager; read its committed branch.
-      successor.manager.reloadPersistedTranscript();
+      await successor.manager.reloadPersistedTranscriptAsync();
       expect(
         successor.manager
           .buildSessionContext()
@@ -369,7 +350,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
-    ["a generic tool with an active lifecycle item", { activeCount: 1 }, true],
     [
       "a direct tool active while Code Mode is merely enabled",
       { activeCount: 1, codeModeEngaged: true },

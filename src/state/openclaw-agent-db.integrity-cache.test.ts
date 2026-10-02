@@ -16,7 +16,10 @@ import {
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
 import * as verifier from "./openclaw-database-verify.js";
-import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
+import {
+  clearOpenClawAgentIntegrityVerification,
+  readOpenClawAgentIntegrityVerification,
+} from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 import { createUnsafeIndexDrift } from "./sqlite-index-drift.test-support.js";
 
@@ -28,7 +31,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("retains admission after the last writer closes with a reader-pinned WAL", async () => {
+it("retains admission through pinned WAL eviction and certifies the final checkpointed close", async () => {
   const options = {
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-integrity-pinned-") },
@@ -79,6 +82,11 @@ it("retains admission after the last writer closes with a reader-pinned WAL", as
   } finally {
     reader.close();
   }
+  closeOpenClawAgentDatabasesForTest();
+  expect(readOpenClawAgentIntegrityVerification(pathname, options.env)?.clean_close).toBe(1);
+  openOpenClawAgentDatabase(options);
+  expect(checks + worker.mock.calls.length).toBe(1);
+  expect(quickCheck).toHaveBeenCalledOnce();
 });
 
 it.each(["sync", "async", "admitted"] as const)(

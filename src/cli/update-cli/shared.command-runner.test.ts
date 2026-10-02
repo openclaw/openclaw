@@ -2,7 +2,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   ensureGitCheckout,
@@ -82,6 +87,19 @@ describe("update CLI shared helpers", () => {
         stderrTail: "Command failed",
         exitCode: 1,
       }),
+    );
+  });
+
+  it("can close a package install's stdin without supplying interactive approval", async () => {
+    await runUpdateStep({
+      name: "package-install",
+      argv: ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      input: "",
+    });
+
+    expect(runCommandWithTimeout).toHaveBeenCalledWith(
+      ["pnpm", "add", "-g", "openclaw@2.0.0"],
+      expect.objectContaining({ input: "" }),
     );
   });
 
@@ -255,7 +273,7 @@ describe("update CLI shared helpers", () => {
           "complete\n",
         );
         await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-        await expect(fs.readdir(checkoutDir)).resolves.toEqual([".git", "checkout.marker"]);
+        expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
         expect(runCommandWithTimeout).toHaveBeenCalledWith(
           [
             "git",
@@ -616,19 +634,24 @@ describe("update CLI shared helpers", () => {
   );
 
   it.each([
-    { callbackFails: false, cleanupFailure: "remove" },
-    { callbackFails: true, cleanupFailure: "remove" },
-    { callbackFails: false, cleanupFailure: "inspect" },
-    { callbackFails: true, cleanupFailure: "inspect" },
+    { callbackFails: false, cleanupFailure: "remove", reportingUnknown: false },
+    { callbackFails: true, cleanupFailure: "remove", reportingUnknown: false },
+    { callbackFails: false, cleanupFailure: "inspect", reportingUnknown: false },
+    { callbackFails: true, cleanupFailure: "inspect", reportingUnknown: false },
+    { callbackFails: false, cleanupFailure: "remove", reportingUnknown: true },
+    { callbackFails: true, cleanupFailure: "remove", reportingUnknown: true },
   ])(
-    "preserves the published update outcome when clone cleanup fails ($cleanupFailure, callback fails: $callbackFails)",
-    async ({ callbackFails, cleanupFailure }) => {
+    "preserves clone cleanup outcomes ($cleanupFailure, callback fails: $callbackFails, reporting unknown: $reportingUnknown)",
+    async ({ callbackFails, cleanupFailure, reportingUnknown }) => {
       await withTestDir({ prefix: "openclaw-update-clone-cleanup-" }, async (base) => {
         const checkoutDir = path.join(base, "openclaw");
         const callbackError = new Error("candidate operation failed");
-        const onStepComplete = vi.fn((step: { name: string }) => {
+        const reportingError = reportingUnknown
+          ? new CommandProcessCleanupError()
+          : new Error("cleanup warning ledger unavailable");
+        const onStepComplete = vi.fn(async (step: { name: string }) => {
           if (step.name === "git-clone-staging-cleanup") {
-            throw new Error("cleanup warning ledger unavailable");
+            throw reportingError;
           }
         });
         let retained = "";
@@ -671,7 +694,17 @@ describe("update CLI shared helpers", () => {
               }
             },
           });
-          if (callbackFails) {
+          if (reportingUnknown) {
+            const error = await update.catch((cause: unknown) => cause);
+            expect(hasCommandProcessCleanupError(error)).toBe(true);
+            expect(collectNestedErrorCandidates(error)).toContain(reportingError);
+            if (callbackFails) {
+              expect(collectNestedErrorCandidates(error)).toContain(callbackError);
+              expect(error).toMatchObject({ cause: callbackError });
+            } else {
+              expect(error).toBe(reportingError);
+            }
+          } else if (callbackFails) {
             await expect(update).rejects.toBe(callbackError);
           } else {
             await expect(update).resolves.toMatchObject({
@@ -705,6 +738,37 @@ describe("update CLI shared helpers", () => {
       });
     },
   );
+
+  it("retains an unpublished clone when its staged callback reports uncertain cleanup", async () => {
+    await withTestDir({ prefix: "openclaw-update-clone-uncertain-" }, async (base) => {
+      const checkoutDir = path.join(base, "openclaw");
+      const failure = new CommandProcessCleanupError();
+      let stagedFile = "";
+      runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+        stagedFile = path.join(cloneTarget(argv), "checkout.marker");
+        await fs.writeFile(stagedFile, "retain candidate bytes\n");
+        return successfulCommandResult;
+      });
+      const useStagedCheckout = vi.fn(async (stagingDir: string) => {
+        expect(stagedFile).toBe(path.join(stagingDir, "checkout.marker"));
+        await expect(fs.readFile(stagedFile, "utf8")).resolves.toBe("retain candidate bytes\n");
+        throw failure;
+      });
+
+      await expect(
+        ensureGitCheckout({
+          dir: checkoutDir,
+          timeoutMs: 1_000,
+          env: process.env,
+          useStagedCheckout,
+        }),
+      ).rejects.toBe(failure);
+
+      expect(useStagedCheckout).toHaveBeenCalledOnce();
+      await expect(fs.readFile(stagedFile, "utf8")).resolves.toBe("retain candidate bytes\n");
+      await expect(fs.access(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
 
   it("retains recovery files when publication and rollback both fail", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-rollback-" }, async (base) => {

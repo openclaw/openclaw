@@ -7,7 +7,6 @@ import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
-import type { TelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
 import {
   buildSyntheticContext,
   promptContextBoundaryOptions,
@@ -32,41 +31,16 @@ import {
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import { emitTelegramLiveLocationMessageHook } from "./location-message-hook.js";
 
-type TelegramMessageHandlerParams = Pick<
-  RegisterTelegramHandlerParams,
-  "accountId" | "bot" | "shouldSkipUpdate"
-> & {
-  opts: Pick<RegisterTelegramHandlerParams["opts"], "botInfo">;
-  runtime: Pick<RegisterTelegramHandlerParams["runtime"], "error">;
-};
-
-type TelegramMessageHandlerRuntime = Pick<
-  TelegramMessagePipeline,
-  | "releaseDispatchDedupeClaims"
-  | "claimMessageDispatchDedupe"
-  | "resolveTelegramSessionState"
-  | "resolvePromptContextAmbientWatermark"
-> & {
-  recordMessageForReplyChain: (
-    ...args: Parameters<TelegramMessagePipeline["recordMessageForReplyChain"]>
-  ) => Promise<unknown>;
-};
-
-interface TelegramInboundHandlers {
-  handleMessage: (ctx: Context) => Promise<TelegramInboundDisposition>;
-  handleEditedMessage: (
-    ctx: Context,
-    kind: "edited_message" | "edited_channel_post",
-  ) => Promise<TelegramInboundDisposition>;
-  handleChannelPost: (ctx: Context) => Promise<TelegramInboundDisposition>;
-}
-
-function createTelegramInboundHandlers(
-  { accountId, bot, opts, runtime, shouldSkipUpdate }: TelegramMessageHandlerParams,
-  messageRuntime: TelegramMessageHandlerRuntime,
-  authorizationRuntime: Pick<TelegramHandlerAuthorization, "authorizeInboundMessage">,
-  inboundRuntime: Pick<TelegramInboundProcessing, "processInboundMessage">,
-): TelegramInboundHandlers {
+export function createTelegramInboundPipeline({
+  params: handlerParams,
+  message: messageRuntime,
+  authorization: authorizationRuntime,
+}: {
+  params: RegisterTelegramHandlerParams;
+  message: TelegramMessagePipeline;
+  authorization: TelegramHandlerAuthorization;
+}): TelegramInboundPipeline {
+  const { accountId, bot, opts, runtime, shouldSkipUpdate } = handlerParams;
   const {
     releaseDispatchDedupeClaims,
     claimMessageDispatchDedupe,
@@ -75,7 +49,10 @@ function createTelegramInboundHandlers(
     recordMessageForReplyChain,
   } = messageRuntime;
   const { authorizeInboundMessage } = authorizationRuntime;
-  const { processInboundMessage } = inboundRuntime;
+  const { processInboundMessage } = createTelegramInboundProcessing({
+    params: handlerParams,
+    message: messageRuntime,
+  });
   const getChat: TelegramGetChat = bot.api.getChat.bind(bot.api);
   const resolveBotUserId = (ctx: { me?: { id?: number } }): number => {
     const botUserId = ctx.me?.id ?? opts.botInfo?.id;
@@ -226,7 +203,6 @@ function createTelegramInboundHandlers(
         msg: event.msg,
         chatId: event.chatId,
         isGroup: event.isGroup,
-        isForum: event.isForum,
         threadSpec,
         dmPolicy,
         storeAllowFrom,
@@ -310,7 +286,10 @@ function createTelegramInboundHandlers(
     });
   };
 
-  const handleEditedMessage: TelegramInboundHandlers["handleEditedMessage"] = async (ctx, kind) => {
+  const handleEditedMessage = async (
+    ctx: Context,
+    kind: "edited_message" | "edited_channel_post",
+  ): Promise<TelegramInboundDisposition> => {
     const isChannelPost = kind === "edited_channel_post";
     const msg = isChannelPost ? ctx.editedChannelPost : ctx.editedMessage;
     if (!msg) {
@@ -358,33 +337,19 @@ function createTelegramInboundHandlers(
     });
   };
 
-  return { handleMessage, handleEditedMessage, handleChannelPost };
-}
-
-export function createTelegramInboundPipeline({
-  params,
-  message,
-  authorization,
-}: {
-  params: RegisterTelegramHandlerParams;
-  message: TelegramMessagePipeline;
-  authorization: TelegramHandlerAuthorization;
-}): TelegramInboundPipeline {
-  const processing = createTelegramInboundProcessing({ params, message });
-  const handlers = createTelegramInboundHandlers(params, message, authorization, processing);
   return {
     handle: async (ctx) => {
       if (ctx.message) {
-        return await handlers.handleMessage(ctx);
+        return await handleMessage(ctx);
       }
       if (ctx.editedMessage) {
-        return await handlers.handleEditedMessage(ctx, "edited_message");
+        return await handleEditedMessage(ctx, "edited_message");
       }
       if (ctx.channelPost) {
-        return await handlers.handleChannelPost(ctx);
+        return await handleChannelPost(ctx);
       }
       if (ctx.editedChannelPost) {
-        return await handlers.handleEditedMessage(ctx, "edited_channel_post");
+        return await handleEditedMessage(ctx, "edited_channel_post");
       }
       return { kind: "ignored" };
     },

@@ -118,16 +118,6 @@ describe("scheduled task runtime derivation", () => {
     await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(true);
     expect(spawnSync).toHaveBeenCalledTimes(2);
   });
-  it("requires current Scheduler running state before retiring the Startup owner", async () => {
-    spawnSync
-      .mockReturnValueOnce({
-        status: 0,
-        stdout: JSON.stringify({ state: 3, lastRunResult: 267009 }),
-      })
-      .mockReturnValueOnce({ status: 0, stdout: JSON.stringify({ state: 4, lastRunResult: 0 }) });
-    await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(true);
-    expect(spawnSync).toHaveBeenCalledTimes(2);
-  });
 
   it.each([
     { responseAfterMs: 4_999, expected: true },

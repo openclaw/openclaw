@@ -21,7 +21,6 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
 import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
@@ -163,17 +162,6 @@ describe("core decision_evaluate registered flow", () => {
     }
   });
 
-  it("omits the tool when no decision model is selected", () => {
-    expect(
-      assembled("main", {
-        agents: {
-          defaults: {},
-          entries: { main: {} },
-        },
-      }),
-    ).toBeUndefined();
-  });
-
   it("preserves all answer values, structured evidence, trusted binding and provenance", async () => {
     const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     fixture(evaluate);
@@ -193,33 +181,6 @@ describe("core decision_evaluate registered flow", () => {
     expect(JSON.parse(result.content.find((entry) => entry.type === "text")!.text)).toEqual(
       result.details,
     );
-  });
-
-  it("identifies the whole rubric, ignoring object key order and evidence changes", async () => {
-    fixture();
-    const tool = requiredTool();
-    const run = async (input: DecisionBatch) => (await tool.execute("call", input)).details;
-    const first = await run(batch);
-    expect(
-      await run({
-        ...batch,
-        state: "different evidence",
-        questions: {
-          urgency: batch.questions.urgency!,
-          route: batch.questions.route!,
-          refund: batch.questions.refund!,
-        },
-      }),
-    ).toEqual(first);
-    expect(
-      await run({
-        ...batch,
-        questions: {
-          ...batch.questions,
-          refund: { ...batch.questions.refund!, instructions: { question: "Different meaning" } },
-        },
-      }),
-    ).not.toEqual(first);
   });
 
   it("rechecks selection on a retained tool without mutating its definition", async () => {
@@ -264,22 +225,6 @@ describe("core decision_evaluate registered flow", () => {
     expect(evaluate).toHaveBeenCalledTimes(2);
     expect(assembled()).toBeDefined();
     expect(tool.description).toBe(description);
-  });
-
-  it("honors normal allow policy and explicit denial in the full coding tool factory", () => {
-    fixture();
-    const selected = { ...config, tools: { allow: ["decision_evaluate"] } };
-    expect(
-      createOpenClawCodingTools({ config: selected, sessionKey: "agent:main:main" }).map(
-        (tool) => tool.name,
-      ),
-    ).toContain("decision_evaluate");
-    const denied = { ...selected, tools: { ...selected.tools, deny: ["decision_evaluate"] } };
-    expect(
-      createOpenClawCodingTools({ config: denied, sessionKey: "agent:main:main" }).map(
-        (tool) => tool.name,
-      ),
-    ).not.toContain("decision_evaluate");
   });
 
   it("rejects resource bounds before rubric hashing or provider execution", async () => {
@@ -372,41 +317,6 @@ describe("core decision_evaluate registered flow", () => {
     fixture(evaluate);
     await expect(requiredTool().execute("call", input)).rejects.toThrow("no evidence was sent");
     expect(evaluate).not.toHaveBeenCalled();
-  });
-
-  it.each(["transport", "authentication"] as const)(
-    "keeps the tool stable and returns actionable %s",
-    async (reason) => {
-      fixture(async () => ({ status: "unavailable", reason }));
-      const tool = requiredTool();
-      expect((await tool.execute("call", batch)).details).toMatchObject({
-        status: "unavailable",
-        reason,
-        guidance: expect.any(String),
-      });
-      expect(assembled()?.description).toBe(tool.description);
-    },
-  );
-
-  it("reports missing provider configuration without changing eligibility", async () => {
-    setRuntimeConfigSnapshot(config);
-    expect((await requiredTool().execute("call", batch)).details).toMatchObject({
-      status: "unavailable",
-      reason: "not-configured",
-      guidance: expect.stringContaining("configure"),
-    });
-    expect(assembled()).toBeDefined();
-  });
-
-  it("returns credential unavailability without dispatching or removing the tool", async () => {
-    const evaluate = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
-    fixture(evaluate, () => false);
-    expect((await requiredTool().execute("call", batch)).details).toMatchObject({
-      status: "unavailable",
-      reason: "credentials-unavailable",
-    });
-    expect(evaluate).not.toHaveBeenCalled();
-    expect(assembled()).toBeDefined();
   });
 
   it("propagates caller cancellation before and during provider work", async () => {

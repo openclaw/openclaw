@@ -8,9 +8,9 @@ import {
   materializeBundleMcpToolsForRun,
 } from "./agent-bundle-mcp-materialize.js";
 import type { McpCatalogTool, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "./embedded-agent-runner/effective-tool-policy.js";
-import { splitSdkTools } from "./embedded-agent-runner/tool-split.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 
 // Regression #76063: configured MCP tools must survive materialization, policy, and SDK splitting.
@@ -69,7 +69,7 @@ async function buildConfiguredMcpToolNamesAtRequestBoundary(params: {
     conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: params.cfg }),
     warn: () => {},
   });
-  const { customTools } = splitSdkTools({ tools: filtered, sandboxEnabled: false });
+  const customTools = toToolDefinitions(filtered, undefined, undefined);
   return customTools.map((tool) => tool.name);
 }
 
@@ -105,7 +105,7 @@ describe("configured MCP tools reach the request boundary (#76063)", () => {
       conversationCapabilityProfile: resolveConversationCapabilityProfile({ config: cfg }),
       warn: () => {},
     });
-    const { customTools } = splitSdkTools({ tools: filtered, sandboxEnabled: false });
+    const customTools = toToolDefinitions(filtered, undefined, undefined);
 
     expect(customTools.map((tool) => tool.name)).toEqual([
       "userMcp__alpha_tool",

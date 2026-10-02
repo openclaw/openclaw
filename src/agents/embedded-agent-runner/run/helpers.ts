@@ -71,20 +71,14 @@ export function resolveReportedModelRef(params: {
 } {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
-  if (!assistantProvider) {
-    return {
-      provider: params.provider,
-      model: assistantModel || params.model,
-    };
-  }
-  if (assistantProvider.toLowerCase() === "openclaw") {
+  if (assistantProvider?.toLowerCase() === "openclaw") {
     return {
       provider: params.provider,
       model: params.model,
     };
   }
   return {
-    provider: assistantProvider,
+    provider: assistantProvider || params.provider,
     model: assistantModel || params.model,
   };
 }
@@ -146,12 +140,7 @@ export function buildUsageAgentMetaFields(params: {
   };
 }
 
-/**
- * Build agentMeta for error return paths, preserving accumulated usage so that
- * session totalTokens reflects the actual context size rather than going stale.
- * Without this, error returns omit usage and the session keeps whatever
- * totalTokens was set by the previous successful run.
- */
+/** Error returns retain usage so the session does not keep an older context total. */
 export function buildErrorAgentMeta(params: {
   sessionId: string;
   sessionFile?: string;

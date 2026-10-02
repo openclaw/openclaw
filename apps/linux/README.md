@@ -271,6 +271,12 @@ to loopback when possible. See the
 [remote access guide](https://docs.openclaw.ai/gateway/remote) for Gateway
 authentication and network requirements.
 
+The remote **Primary Gateway** dashboard uses the native app's approved operator
+identity and granted permissions, so it does not require a second device approval.
+The native connection must be ready before its dashboard can authenticate. Saved
+Gateways that are not Primary keep their independent browser sign-in; local
+Gateways continue to use the CLI's dashboard sign-in handoff.
+
 Use **Connection Settings** in the native tray menu to edit a remote connection.
 Opening settings reads only the saved address and transport settings; it does not
 resolve credentials, and token and password fields stay empty. **Retry** reconnects
@@ -440,7 +446,7 @@ Quick Chat pins its native request identity before sending, so activity from oth
 
 ## Installer resource
 
-`tauri.conf.json` bundles the repository's canonical `scripts/install-cli.sh` directly as `install-cli.sh`. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
+The Rust build assembles the repository's `scripts/install-cli.sh` and shared `scripts/install-policy.sh` into the standalone `install-cli.sh` resource. The app never keeps a forked copy. Stable, beta, and dev installs select `latest`, `beta`, and a managed Git `main` checkout respectively, always under `~/.openclaw`.
 
 ## Icons
 
@@ -513,8 +519,8 @@ Regular stable publication automatically requests Linux bundles after the
 GitHub release becomes visible. `OpenClaw Release Publish` and `OpenClaw Release
 Button` both use the same Linux release owner; the request can finish before
 the build, signing, and publication do. Their summaries report Linux as pending
-until its own assets verify. Beta and alpha prereleases, and extended-stable
-publication, do not request Linux bundles.
+until its own assets verify. Beta prereleases and extended-stable publication do
+not request Linux bundles.
 
 For independent recovery, manually dispatch `Linux App Release Request` from `main`. Provide the existing
 stable release tag in `tag`; prerelease tags are rejected because their semver

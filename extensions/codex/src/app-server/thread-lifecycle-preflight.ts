@@ -28,7 +28,10 @@ import {
   assertCodexNativeHookRelayAllowed,
   CodexManagedHooksOnlyError,
 } from "./native-hook-relay.js";
-import { resolveCodexNativeModelInputTools } from "./native-model-input-tools.js";
+import {
+  resolveCodexNativeModelInputTools,
+  type CodexNativeModelInputTools,
+} from "./native-model-input-tools.js";
 import { resolveCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { mergeCodexNativeProjectDocThreadConfig } from "./project-doc-thread-config.js";
@@ -51,6 +54,7 @@ import { createCodexThreadLifecycleTimingTracker } from "./thread-lifecycle-timi
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
+  CodexThreadFinalConfigPatchResult,
   CodexThreadRequestContext,
 } from "./thread-lifecycle-types.js";
 import { resolveCodexAppServerThreadModelSelection } from "./thread-model-selection.js";
@@ -212,6 +216,48 @@ export function resolveCodexThreadAgentDir(params: CodexStartOrResumeThreadParam
   );
 }
 
+export function buildCodexThreadBindingPolicy(
+  params: CodexStartOrResumeThreadParams,
+  preflight: Pick<
+    CodexThreadRequestContext,
+    | "dynamicToolsFingerprint"
+    | "dynamicToolsContainDeferred"
+    | "nativeSkillIsolationFingerprint"
+    | "userMcpServersFingerprint"
+    | "networkProxyConfigFingerprint"
+    | "contextEngineBinding"
+    | "environmentSelectionFingerprint"
+  >,
+) {
+  return {
+    dynamicToolsFingerprint: preflight.dynamicToolsFingerprint,
+    dynamicToolsContainDeferred: preflight.dynamicToolsContainDeferred,
+    nativeSkillIsolationFingerprint: preflight.nativeSkillIsolationFingerprint,
+    userMcpServersFingerprint: preflight.userMcpServersFingerprint,
+    configuredMcpOwnershipVersion: params.configuredMcpOwnershipVersion,
+    networkProxyProfileName: params.appServer.networkProxy?.profileName,
+    networkProxyConfigFingerprint: preflight.networkProxyConfigFingerprint,
+    contextEngine: preflight.contextEngineBinding,
+    environmentSelectionFingerprint: preflight.environmentSelectionFingerprint,
+  } satisfies Partial<CodexAppServerThreadBinding>;
+}
+
+export async function prepareCodexThreadFinalConfigPatch(
+  params: CodexStartOrResumeThreadParams,
+  nativeModelInputTools: CodexNativeModelInputTools | undefined,
+  binding?: CodexAppServerThreadBinding,
+): Promise<CodexThreadFinalConfigPatchResult> {
+  return (
+    (await params.buildFinalConfigPatch?.({
+      ...(binding ? { action: "resume", binding } : { action: "start" }),
+      ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
+    })) ?? {
+      configPatch: params.finalConfigPatch,
+      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
+    }
+  );
+}
+
 export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrResumeThreadParams) {
   let effectiveConfig = await assertCodexModelBackedReviewerEffectiveConfig({
     client: params.client,
@@ -308,9 +354,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const restrictedToolSurface =
     ringZeroActive ||
     messageOnlySourceReply ||
+    params.params.requireWorkspaceOnly === true ||
     params.params.pluginHarnessToolPolicyRestricted === true;
   const allowConfiguredManagedHooks =
     params.params.pluginHarnessToolPolicyRestricted === true &&
+    params.params.requireWorkspaceOnly !== true &&
     !ringZeroActive &&
     !messageOnlySourceReply &&
     params.params.scheduledRuntimeAuthority === undefined;
@@ -345,9 +393,11 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
           requiredNativeShell: params.nativeCodeModeEnabled !== false,
           additionalDeniedFeatures: imageGenerationDenied ? ["image_generation"] : undefined,
           allowedManagedRequirementsFingerprint:
-            readScheduledCodexAppManagedRequirementsFingerprint(
-              params.params.scheduledRuntimeAuthority,
-            ),
+            params.params.requireWorkspaceOnly === true
+              ? undefined
+              : readScheduledCodexAppManagedRequirementsFingerprint(
+                  params.params.scheduledRuntimeAuthority,
+                ),
           // Plugin policy restricts model-visible tools, while configured hooks are
           // administrator policy. Stricter and detached surfaces remain fail closed.
           allowConfiguredManagedHooks,

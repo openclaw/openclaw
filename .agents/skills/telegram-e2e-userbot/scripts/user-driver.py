@@ -105,6 +105,9 @@ def env_or_config(env_name, config, key, default=""):
 
 
 def load_config():
+    # TDLib creates its database under the process umask; retained-lease recovery
+    # refuses credential state that is readable beyond its owner.
+    os.umask(0o077)
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     STATE_DIR.chmod(stat.S_IRWXU)
     config = read_json(CONFIG_PATH)
@@ -162,7 +165,7 @@ def extract_prebuilt_archive(tar, destination):
     tar.extractall(destination)
 
 
-def ensure_prebuilt_tdjson():
+def ensure_prebuilt_tdjson(*, download=True):
     entry = TDLIB_PREBUILT.get((platform.system().lower(), platform.machine().lower()))
     if not entry:
         return None
@@ -173,6 +176,8 @@ def ensure_prebuilt_tdjson():
     lib = cache_dir / "package" / libname
     if lib.exists():
         return lib
+    if not download:
+        return None
     url = (
         f"https://registry.npmjs.org/@prebuilt-tdlib/{package}"
         f"/-/{package}-{TDLIB_PACKAGE_VERSION}.tgz"
@@ -235,22 +240,44 @@ def find_tdjson(config):
     return None
 
 
-def telegram_bot(token, method, payload=None, test_dc=False):
-    data = json.dumps(payload or {}).encode()
-    request = urllib.request.Request(
-        f"https://api.telegram.org/bot{token}/{'test/' if test_dc else ''}{method}",
-        data=data,
-        headers={"content-type": "application/json"},
-        method="POST",
-    )
+def telegram_bot(token, method, payload=None, test_dc=False, *, files=None):
     try:
+        content_type = "application/json"
+        data = json.dumps(payload or {}).encode()
+        if files:
+            boundary = secrets.token_hex(16)
+            parts = []
+            for name, value in (payload or {}).items():
+                value = value if isinstance(value, str) else json.dumps(value)
+                parts.append(f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"\r\n\r\n{value}\r\n'.encode())
+            for name, path in files.items():
+                parts.extend([
+                    f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"; filename="upload"\r\nContent-Type: application/octet-stream\r\n\r\n'.encode(),
+                    Path(path).read_bytes(), b"\r\n",
+                ])
+            parts.append(f"--{boundary}--\r\n".encode())
+            data = b"".join(parts)
+            content_type = f"multipart/form-data; boundary={boundary}"
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/{'test/' if test_dc else ''}{method}",
+            data=data,
+            headers={"content-type": content_type},
+            method="POST",
+        )
         with urllib.request.urlopen(request, timeout=15) as response:
             body = json.loads(response.read().decode())
     except (OSError, ValueError):
         raise DriverError(f"Telegram Bot API {method} request failed") from None
     if not body.get("ok"):
-        raise DriverError(body.get("description") or f"{method} failed")
+        raise DriverError((body.get("description") or f"{method} failed").replace(token, "<redacted>"))
     return body["result"]
+
+
+def photo_file(path):
+    photo_path = Path(path).expanduser().resolve()
+    if not photo_path.is_file():
+        raise DriverError(f"Photo file not found: {photo_path}")
+    return photo_path
 
 
 def resolve_sut(config, bot_config):
@@ -744,9 +771,7 @@ class UserDriver:
         }
 
     def photo_content(self, path, caption=""):
-        photo_path = Path(path).expanduser().resolve()
-        if not photo_path.is_file():
-            raise DriverError(f"Photo file not found: {photo_path}")
+        photo_path = photo_file(path)
         return {
             "@type": "inputMessagePhoto",
             "photo": {
@@ -816,6 +841,45 @@ class UserDriver:
             timeout=60,
         )
         return [self.settle_sent_message(message) for message in response.get("messages", [])]
+
+    def post_forward_sources(self, text, photo_path):
+        photo = photo_file(photo_path)
+        me = self.client.request({"@type": "getMe"})
+        token = self.bot_config["sutBotToken"]
+        test_dc = self.config.get("testDc") is True
+        telegram_bot(token, "sendMessage", {
+            "chat_id": me["id"], "text": text, "disable_notification": True,
+        }, test_dc=test_dc)
+        telegram_bot(token, "sendPhoto", {
+            "chat_id": me["id"], "disable_notification": True,
+        }, test_dc=test_dc, files={"photo": photo})
+
+    def forward_messages(self, chat_id, from_chat_id, message_ids):
+        response = self.client.request(
+            {
+                "@type": "forwardMessages",
+                "chat_id": chat_id,
+                "topic_id": None,
+                "from_chat_id": from_chat_id,
+                "message_ids": message_ids,
+                "options": {
+                    "@type": "messageSendOptions",
+                    "disable_notification": True,
+                    "from_background": False,
+                    "scheduling_state": None,
+                },
+                "send_copy": False,
+                "remove_caption": False,
+            },
+            timeout=30,
+        )
+        messages = response.get("messages") or []
+        if len(messages) != len(message_ids) or any(message is None for message in messages):
+            raise DriverError("Telegram did not return every forwarded message")
+        settled = [self.settle_sent_message(message) for message in messages]
+        if any(not message.get("forward_info") for message in settled):
+            raise DriverError("Telegram attached no forward origin; the burst cannot exercise the SUT forward lane")
+        return settled
 
     def settle_sent_message(self, message, timeout=30):
         if not message.get("sending_state"):

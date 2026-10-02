@@ -6,9 +6,9 @@ import {
 import type { WorkerProfile, WorkerSshEndpoint } from "../../plugins/types.js";
 import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
 import type { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
-import {
+import type {
   createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementRecord,
+  WorkerSessionPlacementRecord,
 } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 

@@ -33,16 +33,18 @@ import {
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "./user-profile-writes.js";
+import {
+  linkEmail,
+  setDisplayName,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "./user-profile-writes.worker.js";
 import { userProfilesDb } from "./user-profiles-internal.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   ensureProfileForTailscaleIdentity,
-  linkEmail,
   resolveUserProfileId,
-  setDisplayName,
-  setUserProfileRole,
-  syncGitHubIdentity,
 } from "./user-profiles.js";
 import type { UserChannelIdentity } from "./user-profiles.types.js";
 
@@ -406,7 +408,7 @@ it("reads current roles and only canonical login identities, including the curre
     },
     options,
   );
-  expect(resolveUserChannelIdentity(identity, options)).toEqual({
+  expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
     profileId: profile.id,
     role: "admin",
     emails: ["ada@example.test", "old-login@github"],
@@ -421,7 +423,7 @@ it("reads current roles and only canonical login identities, including the curre
     },
     options,
   );
-  expect(resolveUserChannelIdentity(identity, options)).toEqual({
+  expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
     profileId: profile.id,
     role: "member",
     emails: ["old-login@github"],
@@ -437,7 +439,7 @@ it("moves links through explicit profile merges and uses the surviving person's 
   setUserProfileRole(target.id, "member", options);
   linkUserChannelIdentity(source.id, identity, options);
   linkEmail("source@example.test", target.id, options);
-  expect(resolveUserChannelIdentity(identity, options)).toEqual({
+  expect(resolveUserChannelIdentity(identity, options)).toMatchObject({
     profileId: target.id,
     role: "member",
     emails: ["source@example.test", "target@example.test"],

@@ -17,7 +17,7 @@ import {
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -68,7 +68,7 @@ export async function setupCommand(
     !snapshot.exists ||
     (!hasResolvedRosterBeforeMigrations(snapshot) && !configIncludeOwnsAgentRoster(snapshot));
   const cfg = shouldPersistRoster
-    ? (migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig)
+    ? (applyImplicitAgentRosterDefaults(snapshot.sourceConfig) as OpenClawConfig)
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
@@ -136,33 +136,27 @@ export async function setupCommand(
       agents: { ...agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
     };
   }
-  if (shouldWriteWorkspace) {
-    if (!writeInheritedWorkspaceOverride) {
-      const roster = structuredClone(listAgentEntries(next));
-      if (!snapshot.exists || Boolean(defaultEntryWorkspace)) {
-        for (const entry of roster) {
-          if (
-            snapshot.exists &&
-            defaultEntryWorkspace &&
-            normalizeAgentId(entry.id) === selectedAgentId
-          ) {
-            // An explicit workspace follows the resolved setup owner. Fresh and inherited
-            // workspaces stay in defaults so setup does not duplicate them into the roster.
-            entry.workspace = workspace;
-          }
+  if (shouldWriteWorkspace && !writeInheritedWorkspaceOverride) {
+    const roster = structuredClone(listAgentEntries(next));
+    if (snapshot.exists && defaultEntryWorkspace) {
+      for (const entry of roster) {
+        if (normalizeAgentId(entry.id) === selectedAgentId) {
+          // An explicit workspace follows the resolved setup owner. Fresh and inherited
+          // workspaces stay in defaults so setup does not duplicate them into the roster.
+          entry.workspace = workspace;
         }
       }
-      const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
-      const { list: _legacyList, ...agents } = next.agents ?? {};
-      next = {
-        ...next,
-        agents: {
-          ...agents,
-          defaults: { ...agents.defaults, workspace },
-          ...(entries ? { entries } : {}),
-        },
-      };
     }
+    const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
+    const { list: _legacyList, ...agents } = next.agents ?? {};
+    next = {
+      ...next,
+      agents: {
+        ...agents,
+        defaults: { ...agents.defaults, workspace },
+        ...(entries ? { entries } : {}),
+      },
+    };
   }
   if (shouldWriteGatewayMode && !writeInheritedGatewayModeOverride) {
     next = { ...next, gateway: { ...next.gateway, mode: "local" } };

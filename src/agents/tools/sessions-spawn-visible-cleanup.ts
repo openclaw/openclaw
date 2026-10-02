@@ -23,8 +23,7 @@ export async function cleanupVisibleSpawnSession(params: {
   expectedLifecycleRevision?: string;
 }): Promise<string> {
   const outcome = await deleteSubagentSessionForCleanup({
-    callGateway: ({ method, params: cleanupParams, timeoutMs }) =>
-      params.callGateway(method, cleanupParams, { timeoutMs }),
+    callGateway: ({ method, params: cleanupParams }) => params.callGateway(method, cleanupParams),
     childSessionKey: params.childSessionKey,
     expectedSessionId: params.expectedSessionId,
     expectedLifecycleRevision: params.expectedLifecycleRevision,

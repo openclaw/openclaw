@@ -16,7 +16,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "./event-ledger-bytes.js";
 import {
-  cloneAcpLedgerValue,
   createAcpPromptUpdates,
   normalizeAcpLedgerEvent,
   normalizeAcpLedgerOptions,
@@ -438,7 +437,7 @@ function appendSqliteUpdate(
     complete: false,
   });
   const now = state.now();
-  const updateJson = JSON.stringify(cloneAcpLedgerValue(params.update));
+  const updateJson = JSON.stringify(structuredClone(params.update));
   const eventBytes = estimateAcpEventRowBytes({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

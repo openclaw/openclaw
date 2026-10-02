@@ -7,6 +7,7 @@ import type {
   ThemesGetResult,
   ThemesListResult,
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
+import type { UsersSelfResult } from "../../../packages/gateway-protocol/src/schema/users.ts";
 import {
   BUILTIN_THEMES,
   type ThemeDescriptor,
@@ -40,6 +41,22 @@ const definition = createThemeDefinitionFixture({
   dark: createThemePaletteFixture({ background: "#111122" }),
 });
 
+function selfProfile(id: string): UsersSelfResult {
+  return {
+    profile: {
+      id,
+      displayName: null,
+      emails: [],
+      avatarMime: null,
+      hasAvatar: false,
+      githubIdentity: null,
+      mergedInto: null,
+      createdAt: 1,
+      updatedAt: 2,
+    },
+  };
+}
+
 function catalog(themeDefinition = definition): ThemesListResult {
   return {
     themes: [...BUILTIN_THEMES, descriptor],
@@ -51,6 +68,14 @@ function catalog(themeDefinition = definition): ThemesListResult {
       scope: "profile",
       overrides: { id: descriptor.id },
     },
+  };
+}
+
+function builtinCatalog(themes: readonly ThemeDescriptor[] = [descriptor]): ThemesListResult {
+  return {
+    themes: [...BUILTIN_THEMES, ...themes],
+    theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
+    current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
   };
 }
 
@@ -74,27 +99,25 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each(["claw", "knot"] as const)(
-  "resolves %s branding before the palette and catalog load",
-  (id) => {
-    patchSettings({ theme: id });
-    setCurrentThemeBranding({ mascot: "none", critters: [] });
-    const { gateway } = createGatewayStoreTestStore();
-    const theme = createApplicationTheme(loadSettings(), gateway);
-    try {
-      expect(theme.branding).toEqual({
-        mascot: "claw",
-        workingPhrases: undefined,
-        critters: [],
-        avatarHat: undefined,
-      });
-      expect(currentThemeBranding()).toEqual(theme.branding);
-    } finally {
-      theme.dispose();
-      document.getElementById(`openclaw-theme-palette-${id}`)?.remove();
-    }
-  },
-);
+it("resolves built-in branding before the palette and catalog load", () => {
+  const id = "knot";
+  patchSettings({ theme: id });
+  setCurrentThemeBranding({ mascot: "none", critters: [] });
+  const { gateway } = createGatewayStoreTestStore();
+  const theme = createApplicationTheme(loadSettings(), gateway);
+  try {
+    expect(theme.branding).toEqual({
+      mascot: "claw",
+      workingPhrases: undefined,
+      critters: [],
+      avatarHat: undefined,
+    });
+    expect(currentThemeBranding()).toEqual(theme.branding);
+  } finally {
+    theme.dispose();
+    document.getElementById(`openclaw-theme-palette-${id}`)?.remove();
+  }
+});
 
 it("notifies leaf branding consumers when a newly selected built-in palette loads", async () => {
   const { gateway, current } = createGatewayStoreTestStore();
@@ -256,22 +279,22 @@ it("discards a palette response after the requesting profile changes", async () 
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   const retired = createDeferred<ThemesListResult>();
-  current().request.mockReturnValue(retired.promise);
+  current().request.mockImplementation((method) =>
+    method === "users.self" ? Promise.resolve(selfProfile("first")) : retired.promise,
+  );
   current().opts.onHello?.({
     ...GATEWAY_STORE_TEST_HELLO,
+    auth: { role: "operator", scopes: ["operator.read"] },
     snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
   });
   try {
     await vi.waitFor(() => expect(current().request).toHaveBeenCalledWith("themes.list", {}));
-    current().request.mockResolvedValue({
-      themes: [...BUILTIN_THEMES],
-      theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
-      current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-    } satisfies ThemesListResult);
+    const nextCatalog = builtinCatalog([]);
+    current().request.mockImplementation(async (method) =>
+      method === "users.self" ? selfProfile("second") : nextCatalog,
+    );
     current().opts.onEvent?.(
-      createGatewayEvent("presence", {
-        presence: [{ instanceId: current().instanceId, user: { id: "second" } }],
-      }),
+      createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
     );
     await vi.waitFor(() => expect(applicationTheme.catalog?.themes).toEqual(BUILTIN_THEMES));
     retired.resolve(catalog());
@@ -293,11 +316,7 @@ it("retries a failed selected palette only after an explicit catalog retry", asy
   let paletteReads = 0;
   current().request.mockImplementation(async (method) => {
     if (method === "themes.list") {
-      return {
-        themes: [...BUILTIN_THEMES, descriptor],
-        theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
-        current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-      } satisfies ThemesListResult;
+      return builtinCatalog();
     }
     if (method === "themes.get") {
       paletteReads += 1;
@@ -342,10 +361,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
     description: replacement.description,
     dark: createThemePaletteFixture({ background: "#332211" }),
   });
-  const selected: ThemesGetResult = {
-    theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
-    current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-  };
+  const selected = builtinCatalog([descriptor, replacement]);
   const retired = createDeferred<ThemesGetResult>();
   const { gateway, current } = createGatewayStoreTestStore();
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
@@ -353,10 +369,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
   let paletteReads = 0;
   current().request.mockImplementation((method, params) => {
     if (method === "themes.list") {
-      return Promise.resolve({
-        ...selected,
-        themes: [...BUILTIN_THEMES, descriptor, replacement],
-      } satisfies ThemesListResult);
+      return Promise.resolve(selected);
     }
     if (method === "themes.get") {
       paletteReads += 1;
@@ -402,11 +415,7 @@ it("does not report a previous palette failure after a local theme switch", asyn
 
 it("keeps a local palette selected during catalog refresh and reloads later versions", async () => {
   patchSettings({ theme: "claw" });
-  const response: ThemesListResult = {
-    themes: [...BUILTIN_THEMES, descriptor],
-    theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
-    current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-  };
+  const response = builtinCatalog();
   const refreshing = createDeferred<ThemesListResult>();
   const { gateway, current } = createGatewayStoreTestStore();
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
@@ -496,11 +505,7 @@ it.each(["success", "failure"] as const)(
   "ignores a late palette %s after its plugin disappears during refresh",
   async (outcome) => {
     patchSettings({ theme: "claw" });
-    const response: ThemesListResult = {
-      themes: [...BUILTIN_THEMES, descriptor],
-      theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
-      current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-    };
+    const response = builtinCatalog();
     const refreshing = createDeferred<ThemesListResult>();
     const retired = createDeferred<ThemesGetResult>();
     const { gateway, current } = createGatewayStoreTestStore();
@@ -560,20 +565,21 @@ it.each(["profile", "client"] as const)(
       modes: ["dark"],
     };
     patchSettings({ theme: personal.id });
-    const response: ThemesListResult = {
-      themes: [...BUILTIN_THEMES, personal],
-      theme: expectDefined(BUILTIN_THEMES[0], "default built-in theme"),
-      current: { id: "claw", mode: "system", scope: "profile", overrides: {} },
-    };
+    const response = builtinCatalog([personal]);
     const retired = createDeferred<ThemesGetResult>();
     const { gateway, current } = createGatewayStoreTestStore();
     const applicationTheme = createApplicationTheme(loadSettings(), gateway);
     gateway.start();
     current().request.mockImplementation((method) =>
-      method === "themes.get" ? retired.promise : Promise.resolve(response),
+      method === "users.self"
+        ? Promise.resolve(selfProfile("first"))
+        : method === "themes.get"
+          ? retired.promise
+          : Promise.resolve(response),
     );
     current().opts.onHello?.({
       ...GATEWAY_STORE_TEST_HELLO,
+      auth: { role: "operator", scopes: ["operator.read"] },
       snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
     });
     try {
@@ -583,23 +589,27 @@ it.each(["profile", "client"] as const)(
       if (boundary === "client") {
         gateway.connect();
       }
-      current().request.mockResolvedValue({
+      const nextCatalog = {
         ...response,
         theme: personal,
         definition: createThemeDefinitionFixture({
           dark: createThemePaletteFixture({ background: "#443355" }),
         }),
         current: { ...response.current, id: personal.id },
-      } satisfies ThemesListResult);
+      } satisfies ThemesListResult;
+      current().request.mockImplementation(async (method) =>
+        method === "users.self"
+          ? selfProfile(boundary === "profile" ? "second" : "first")
+          : nextCatalog,
+      );
       if (boundary === "profile") {
         current().opts.onEvent?.(
-          createGatewayEvent("presence", {
-            presence: [{ instanceId: current().instanceId, user: { id: "second" } }],
-          }),
+          createGatewayEvent("sessions.changed", { reason: "profile-identity" }),
         );
       } else {
         current().opts.onHello?.({
           ...GATEWAY_STORE_TEST_HELLO,
+          auth: { role: "operator", scopes: ["operator.read"] },
           snapshot: { presence: [{ instanceId: current().instanceId, user: { id: "first" } }] },
         });
       }

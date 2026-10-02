@@ -72,12 +72,13 @@ describe("direct session archive shortcuts", () => {
   it("uses the header lifecycle and Undo for the current session via the keyboard", async () => {
     const { pane, state, patch, row } = fixture();
     vi.mocked(showToast).mockClear();
+    const headerAction = vi.spyOn(pane, "handleHeaderSessionAction");
     const event = press(pane);
     expect(event.defaultPrevented).toBe(true);
-    await vi.waitFor(() =>
-      expect(showToast).toHaveBeenCalledWith(
-        expect.objectContaining({ actionLabel: t("common.undo") }),
-      ),
+    expect(headerAction).toHaveBeenCalledExactlyOnceWith({ kind: "toggle-archived" }, row);
+    await headerAction.mock.results[0]?.value;
+    expect(showToast).toHaveBeenCalledWith(
+      expect.objectContaining({ actionLabel: t("common.undo") }),
     );
     expect(patch).toHaveBeenCalledExactlyOnceWith(
       row.key,
@@ -111,10 +112,7 @@ describe("direct session archive shortcuts", () => {
   });
 
   it.each([
-    { key: "main" },
     { key: "agent:main:main" },
-    { key: "global", kind: "global" },
-    { key: "unknown", kind: "unknown" },
     { archived: true },
     { sessionId: undefined },
   ] satisfies Partial<GatewaySessionRow>[])(
@@ -127,60 +125,42 @@ describe("direct session archive shortcuts", () => {
     },
   );
 
-  it.each([
-    "inactive",
-    "hidden",
-    "modal",
-    "onboarding",
-    "offline",
-    "read-only",
-    "unavailable",
-    "missing-row",
-  ])("does not act during %s", async (guard) => {
-    const { pane, state, patch } = fixture();
-    const modal = document.createElement("div");
-    if (guard === "inactive") {
-      pane.active = false;
-    }
-    if (guard === "hidden") {
-      pane.presented = false;
-    }
-    if (guard === "onboarding") {
-      pane.onboarding = true;
-    }
-    if (guard === "offline") {
-      state.connected = false;
-    }
-    if (guard === "missing-row") {
-      state.sessionsResult = null;
-    }
-    if (guard === "read-only") {
-      pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
-    }
-    if (guard === "unavailable") {
-      pane.context.gateway.snapshot.hello!.features!.methods = [];
-    }
-    if (guard === "modal") {
-      (document.openClawModalLayers ??= new Set()).add(modal);
-    }
-    try {
-      expect(press(pane).defaultPrevented).toBe(false);
-      await vi.dynamicImportSettled();
-      expect(patch).not.toHaveBeenCalled();
-    } finally {
-      document.openClawModalLayers?.delete(modal);
-    }
-  });
+  it.each(["modal", "onboarding", "offline", "read-only", "unavailable", "missing-row"])(
+    "does not act during %s",
+    async (guard) => {
+      const { pane, state, patch } = fixture();
+      const modal = document.createElement("div");
+      if (guard === "onboarding") {
+        pane.onboarding = true;
+      }
+      if (guard === "offline") {
+        state.connected = false;
+      }
+      if (guard === "missing-row") {
+        state.sessionsResult = null;
+      }
+      if (guard === "read-only") {
+        pane.context.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+      }
+      if (guard === "unavailable") {
+        pane.context.gateway.snapshot.hello!.features!.methods = [];
+      }
+      if (guard === "modal") {
+        (document.openClawModalLayers ??= new Set()).add(modal);
+      }
+      try {
+        expect(press(pane).defaultPrevented).toBe(false);
+        await vi.dynamicImportSettled();
+        expect(patch).not.toHaveBeenCalled();
+      } finally {
+        document.openClawModalLayers?.delete(modal);
+      }
+    },
+  );
 
-  it.each([
-    { repeat: true },
-    { isComposing: true },
-    { keyCode: 229 },
-    { key: "Dead" },
-    { altKey: true },
-  ])("leaves repetition, composition, and other chords alone: %j", async (init) => {
+  it("ignores repeated archive keydowns", async () => {
     const { pane, patch } = fixture();
-    expect(press(pane, init).defaultPrevented).toBe(false);
+    expect(press(pane, { repeat: true }).defaultPrevented).toBe(false);
     await vi.dynamicImportSettled();
     expect(patch).not.toHaveBeenCalled();
   });

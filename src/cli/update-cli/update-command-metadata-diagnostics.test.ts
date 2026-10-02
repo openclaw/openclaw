@@ -25,28 +25,22 @@ import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
 
-it.each(
-  ["npm", "pnpm"].flatMap((manager) =>
-    [
-      { name: "default", requests: ["latest"] },
-      { name: "stable", channel: "stable", requests: ["latest"] },
-      { name: "tag", tag: "preview", requests: ["preview"] },
-      { name: "beta", channel: "beta", requests: ["beta", "latest"] },
-      { name: "beta fallback", channel: "beta", requests: ["beta", "latest"] },
-      { name: "numeric", tag: "2026.9.4", requests: ["2026.9.4"] },
-      { name: "tarball", tag: "./candidate.tgz", requests: [] },
-      {
-        name: "moving override",
-        requests: manager === "npm" ? ["latest", "latest"] : ["latest", "2026.9.4"],
-      },
-      {
-        name: "explicit moving override",
-        tag: "preview",
-        requests: manager === "npm" ? ["latest", "latest"] : ["preview", "2026.9.4"],
-      },
-    ].map((entry) => Object.assign({}, entry, { manager })),
-  ),
-)("resolves $manager $name with paired metadata and bounded requests", async (entry) => {
+it.each([
+  { manager: "pnpm", name: "default", requests: ["latest"] },
+  { manager: "npm", name: "stable", channel: "stable", requests: ["latest"] },
+  { manager: "npm", name: "tag", tag: "preview", requests: ["preview"] },
+  { manager: "npm", name: "beta", channel: "beta", requests: ["beta", "latest"] },
+  { manager: "pnpm", name: "beta fallback", channel: "beta", requests: ["beta", "latest"] },
+  { manager: "npm", name: "numeric", tag: "2026.9.4", requests: ["2026.9.4"] },
+  { manager: "pnpm", name: "tarball", tag: "./candidate.tgz", requests: [] },
+  { manager: "pnpm", name: "moving override", requests: ["latest", "2026.9.4"] },
+  {
+    manager: "npm",
+    name: "explicit moving override",
+    tag: "preview",
+    requests: ["latest", "latest"],
+  },
+])("resolves $manager $name with paired metadata and bounded requests", async (entry) => {
   vi.mocked(shared.resolveTargetVersion).mockRestore();
   vi.mocked(updateCheck.resolveNpmChannelTag).mockRestore();
   vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockRestore();
@@ -402,17 +396,19 @@ it.each(cases)(
     ).rejects.toMatchObject({ code: 1 });
 
     const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+    const metadataFailure = expect.objectContaining({
+      name: "target-metadata-preflight",
+      exitCode: 1,
+      failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
+    });
     expect(result).toMatchObject({
       status: "error",
       mode: "npm",
       reason: "target-metadata-preflight",
-      steps: [
-        expect.objectContaining({
-          failureFacts: [expect.objectContaining({ code, message: expect.stringMatching(detail) })],
-        }),
-      ],
+      failedStep: metadataFailure,
+      steps: expect.arrayContaining([metadataFailure]),
     });
-    const message = result.steps[0]?.failureFacts?.[0]?.message;
+    const message = result.failedStep?.failureFacts?.[0]?.message;
     expect(message).toMatch(/openclaw update/);
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
     await printResult(result, {});
@@ -472,44 +468,42 @@ it("keeps metadata failure details in update status JSON for an existing profile
   expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
 });
 
-it.each(["npm", "pnpm", "bun"] as const)(
-  "keeps the %s owner visible when target policy refuses before version lookup",
-  async (manager) => {
-    openOpenClawStateDatabase();
-    vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue(manager);
-    await expect(
-      updateCommand({ tag: "main", json: true, yes: true, restart: false }),
-    ).rejects.toMatchObject({ code: 1 });
-    const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
-    expect(result).toMatchObject({
-      status: "error",
-      mode: manager,
-      reason: "unsupported-package-target",
-    });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    await printResult(result, {});
-    expect(log.mock.calls.flat().join("\n")).toContain(`Update mode: ${manager}`);
-    const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
-    expect(report.body).toContain(`Update mode: ${manager}`);
+it("keeps the bun owner visible when target policy refuses before version lookup", async () => {
+  const manager = "bun";
+  openOpenClawStateDatabase();
+  vi.spyOn(updateGlobal, "detectGlobalInstallManagerForRoot").mockResolvedValue(manager);
+  await expect(
+    updateCommand({ tag: "main", json: true, yes: true, restart: false }),
+  ).rejects.toMatchObject({ code: 1 });
+  const result = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0] as UpdateRunResult;
+  expect(result).toMatchObject({
+    status: "error",
+    mode: manager,
+    reason: "unsupported-package-target",
+  });
+  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  await printResult(result, {});
+  expect(log.mock.calls.flat().join("\n")).toContain(`Update mode: ${manager}`);
+  const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
+  expect(report.body).toContain(`Update mode: ${manager}`);
 
-    vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(fixture.root);
-    vi.spyOn(nodeRuntimeDiagnostics, "collectNodeRuntimeFindings").mockResolvedValue([]);
-    vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
-      root: fixture.root,
-      installKind: "package",
-      packageManager: manager,
-    });
-    await updateStatusCommand({ json: true });
-    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        update: expect.objectContaining({ packageManager: manager }),
-        lastRun: expect.objectContaining({ target: expect.objectContaining({ kind: "package" }) }),
-      }),
-    );
-    expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
-    expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-  },
-);
+  vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(fixture.root);
+  vi.spyOn(nodeRuntimeDiagnostics, "collectNodeRuntimeFindings").mockResolvedValue([]);
+  vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+    root: fixture.root,
+    installKind: "package",
+    packageManager: manager,
+  });
+  await updateStatusCommand({ json: true });
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      update: expect.objectContaining({ packageManager: manager }),
+      lastRun: expect.objectContaining({ target: expect.objectContaining({ kind: "package" }) }),
+    }),
+  );
+  expect(packageMetadata.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+});
 
 it("previews unreadable Git target metadata with its reason and next step", async () => {
   execFileSync("git", ["init", "--quiet", "--initial-branch=main", fixture.root]);

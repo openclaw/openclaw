@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core";
 import { patchSettings, type UiSettings } from "../../app/settings.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
 import { updateSidebarSessionLayout } from "./sidebar-layout-persistence.ts";
 import { openSlot, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
@@ -39,14 +40,6 @@ function migrationIsComplete(storage: Storage): boolean {
   }
 }
 
-function defaultStorage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Move the shipped global Browser/Desktop visibility into the current session
  * once. A marker prevents that global preference from opening unrelated future
@@ -60,7 +53,7 @@ export function migrateLegacyDockVisibility(params: {
   storage?: Storage | null;
 }): UiSettings {
   const sessionKey = params.sessionKey.trim();
-  const storage = params.storage === undefined ? defaultStorage() : params.storage;
+  const storage = params.storage === undefined ? getSafeLocalStorage() : params.storage;
   if (!sessionKey || !storage || migrationIsComplete(storage)) {
     return params.settings;
   }

@@ -26,16 +26,14 @@ import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   credential,
-  measureLaunchTurn,
   openSessionManager,
   placements,
   root,
@@ -49,10 +47,7 @@ function harness() {
   const launches: WorkerLaunchPlan[] = [];
   const remoteFiles = new Map<string, Buffer>();
   const environment = attachedEnvironment();
-  const tunnel: WorkerTurnTunnelHandle = {
-    environmentId: ENVIRONMENT_ID,
-    ownerEpoch: OWNER_EPOCH,
-    runWorkspaceCommand: vi.fn(),
+  const tunnel: WorkerTurnTunnelHandle = createWorkerTurnTunnel({
     syncWorkspace: vi.fn(async () => {
       throw new Error("must not resync active workspace");
     }),
@@ -68,31 +63,20 @@ function harness() {
       }
     }),
     quiesceWorkspace: vi.fn(async () => ({ assertActive: async () => {}, resume: async () => {} })),
-    reconcileWorkspace: vi.fn(async (request) => {
-      if (request.source.kind !== "local") {
-        throw new Error("expected a local workspace source");
-      }
-      request.source.journal.commit(MANIFEST_REF);
-      return {
-        manifestRef: MANIFEST_REF,
-        changed: false,
-        verifyStable: async () => {},
-        verifyLocalStable: async () => {},
-      };
-    }),
-    stop: vi.fn(async () => {}),
-    measureLaunchTurn,
+    reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
     launchTurn: vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
       launches.push(structuredClone(request.plan));
       request.onDispatchReady?.();
-      const leaf = openSessionManager().appendMessage(
+      const leaf = await (
+        await openSessionManager()
+      ).appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "image received" }],
           timestamp: Date.now(),
         }),
       );
       const seq = request.plan.assignment.transcript.nextSeq;
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
+      await createWorkerSessionPlacementGate(placements).updateAckCursors({
         claim: request.turnClaim,
         transcriptSeq: seq,
         liveSeq: request.plan.assignment.liveEvents.nextSeq,
@@ -110,7 +94,7 @@ function harness() {
         termination: "exit",
       };
     }),
-  };
+  });
   const provider = createWorkerSessionTurnPlacementProvider({
     placements,
     environments: {
@@ -233,7 +217,7 @@ describe("cloud turn media boundary", () => {
       replay?.content.filter((part) => part.type === "image").map((part) => part.data),
     ).toEqual([png.toString("base64"), inline.data]);
     expect(replay?.content).toEqual(content);
-    const users = openSessionManager()
+    const users = (await openSessionManager())
       .getBranch()
       .flatMap((entry) =>
         entry.type === "message" && entry.message.role === "user" ? [entry.message] : [],
@@ -247,7 +231,7 @@ describe("cloud turn media boundary", () => {
     expect(imageOnly).toEqual(expect.arrayContaining([wireInline]));
     expect(rig.inputFiles().size).toBe(4);
     expect(
-      openSessionManager()
+      (await openSessionManager())
         .getBranch()
         .filter((entry) => entry.type === "message" && entry.message.role === "user"),
     ).toHaveLength(3);
@@ -317,7 +301,9 @@ describe("cloud turn media boundary", () => {
       ...turn("structured-history"),
       userTurnTranscriptRecorder: historyRecorder,
     });
-    const canonicalHistory = structuredClone(openSessionManager().buildSessionContext().messages);
+    const canonicalHistory = structuredClone(
+      (await openSessionManager()).buildSessionContext().messages,
+    );
     const rawHistory = canonicalHistory[0];
     if (rawHistory?.role !== "user") {
       throw new Error("missing raw user history");
@@ -370,7 +356,7 @@ describe("cloud turn media boundary", () => {
       .soft(replayUsers.flatMap((message) => message.content).some((part) => part.type === "image"))
       .toBe(false);
     expect(replayUsers[0]?.content).toEqual([{ type: "text", text: "raw image" }]);
-    const canonical = openSessionManager().buildSessionContext().messages;
+    const canonical = (await openSessionManager()).buildSessionContext().messages;
     expect(canonical.slice(0, canonicalHistory.length)).toEqual(canonicalHistory);
     expect(readPersistedMediaFacts(canonical.at(-2)!)?.map((fact) => fact.url)).toEqual(
       media.map((fact) => fact.url),
@@ -398,7 +384,9 @@ describe("cloud turn media boundary", () => {
       input: { text: "inspect the image", media },
     });
     await rig.execute({ ...turn("before-expiry"), userTurnTranscriptRecorder: recorder });
-    const canonical = structuredClone(openSessionManager().buildSessionContext().messages[0]);
+    const canonical = structuredClone(
+      (await openSessionManager()).buildSessionContext().messages[0],
+    );
     expect(readPersistedMediaFacts(canonical!)?.map((fact) => fact.url)).toEqual(
       media.map((fact) => fact.url),
     );
@@ -434,7 +422,7 @@ describe("cloud turn media boundary", () => {
     });
     expect(rig.tunnel.stageAttachments).toHaveBeenCalledTimes(1);
     expect(rig.inputFiles()).toEqual(privateInputs);
-    expect(openSessionManager().buildSessionContext().messages[0]).toEqual(canonical);
+    expect((await openSessionManager()).buildSessionContext().messages[0]).toEqual(canonical);
     expect(warning.mock.calls).toEqual([
       ["worker-media: Omitted an unavailable historical attachment source"],
     ]);
@@ -491,7 +479,9 @@ describe("cloud turn media boundary", () => {
       const rig = harness();
       const input = turn("expired-authority");
       const controller = new AbortController();
-      openSessionManager().appendMessage(
+      await (
+        await openSessionManager()
+      ).appendMessageAsync(
         buildPersistedUserTurnMessage({
           text: "described image",
           media: [
@@ -617,7 +607,9 @@ describe("cloud turn media boundary", () => {
       await seedActivePlacement();
       const rig = harness();
       const saved = await saveMediaBuffer(Buffer.from("document"), "text/plain", "inbound");
-      openSessionManager().appendMessage(
+      await (
+        await openSessionManager()
+      ).appendMessageAsync(
         buildPersistedUserTurnMessage({
           text: "read the document",
           media: [{ url: `media://inbound/${saved.id}`, contentType: "text/plain" }],
@@ -652,13 +644,15 @@ describe("cloud turn media boundary", () => {
     await seedActivePlacement();
     const rig = harness();
     const unavailable = { path: path.join(root, "missing.png"), contentType: "image/png" };
-    const manager = openSessionManager();
-    manager.appendMessage(buildPersistedUserTurnMessage({ text: "old", media: [unavailable] }));
+    const manager = await openSessionManager();
+    await manager.appendMessageAsync(
+      buildPersistedUserTurnMessage({ text: "old", media: [unavailable] }),
+    );
     for (let index = 0; index < 4; index++) {
-      manager.appendMessage(
+      await manager.appendMessageAsync(
         makeAgentAssistantMessage({ content: [{ type: "text", text: "processed" }] }),
       );
-      manager.appendMessage(buildPersistedUserTurnMessage({ text: "next" }));
+      await manager.appendMessageAsync(buildPersistedUserTurnMessage({ text: "next" }));
     }
     const png = createSolidPngBuffer(2, 2, { r: 0, g: 255, b: 0 });
     const saved = await saveMediaBuffer(png, "image/png", "inbound");

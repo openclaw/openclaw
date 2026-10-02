@@ -21,25 +21,15 @@ const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
   it("moves corrupt SQLite database files aside during recovery", async () => {
-    const store = createLegacyStore();
-    const sqlitePath = path.join(
-      store.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
-    fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
+    const { sqlitePath, recover } = createRecoveryStore();
+    fs.writeFileSync(sqlitePath, "not a sqlite database\n", {
+      mode: process.platform === "win32" ? 0o600 : 0o400,
+    });
     fs.writeFileSync(`${sqlitePath}-wal`, "wal", { mode: 0o600 });
     fs.writeFileSync(`${sqlitePath}-shm`, "shm", { mode: 0o600 });
     fs.writeFileSync(`${sqlitePath}-journal`, "journal", { mode: 0o600 });
 
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "recover",
-      store: store.storePath,
-    });
+    const report = await recover();
 
     expect(report.totals.issues).toBe(0);
     expect(report.targets[0]?.corruptRecovery?.movedFiles).toHaveLength(4);
@@ -54,52 +44,12 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "recovers owner-readable corrupt SQLite database files",
-    async () => {
-      const store = createLegacyStore();
-      const sqlitePath = path.join(
-        store.stateDir,
-        "agents",
-        "main",
-        "agent",
-        "openclaw-agent.sqlite",
-      );
-      fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
-      fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o400 });
-
-      const report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "recover",
-        store: store.storePath,
-      });
-
-      expect(report.totals.issues).toBe(0);
-      expect(report.targets[0]?.corruptRecovery?.movedFiles).toEqual([
-        expect.stringMatching(/openclaw-agent\.sqlite\.corrupt-/u),
-      ]);
-      expect(fs.existsSync(sqlitePath)).toBe(false);
-    },
-  );
-
   it("moves orphaned SQLite sidecars aside during recovery", async () => {
-    const store = createLegacyStore();
-    const sqlitePath = path.join(
-      store.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { sqlitePath, recover } = createRecoveryStore();
     fs.writeFileSync(`${sqlitePath}-wal`, "wal", { mode: 0o600 });
     fs.writeFileSync(`${sqlitePath}-journal`, "journal", { mode: 0o600 });
 
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "recover",
-      store: store.storePath,
-    });
+    const report = await recover();
 
     expect(report.totals.issues).toBe(0);
     expect(report.targets[0]?.corruptRecovery?.movedFiles).toHaveLength(2);
@@ -112,15 +62,7 @@ describe("runDoctorSessionSqlite", () => {
   });
 
   it("rolls back every completed corrupt-file move when a later rename fails", async () => {
-    const store = createLegacyStore();
-    const sqlitePath = path.join(
-      store.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+    const { sqlitePath, recover } = createRecoveryStore();
     const expectedContents = new Map<string, string>();
     for (const [candidate, contents] of [
       [sqlitePath, "not a sqlite database\n"],
@@ -143,11 +85,7 @@ describe("runDoctorSessionSqlite", () => {
 
     let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
     try {
-      report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "recover",
-        store: store.storePath,
-      });
+      report = await recover();
     } finally {
       renameSpy.mockRestore();
     }
@@ -167,21 +105,10 @@ describe("runDoctorSessionSqlite", () => {
   });
 
   it("does not move SQLite paths aside for non-corruption recovery inspection failures", async () => {
-    const store = createLegacyStore();
-    const sqlitePath = path.join(
-      store.stateDir,
-      "agents",
-      "main",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
+    const { sqlitePath, recover } = createRecoveryStore();
     fs.mkdirSync(sqlitePath, { recursive: true });
 
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "recover",
-      store: store.storePath,
-    });
+    const report = await recover();
 
     expect(report.totals.issues).toBe(1);
     expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_recovery_inspect_failed");
@@ -192,15 +119,7 @@ describe("runDoctorSessionSqlite", () => {
   it.each(["maintenance", "inspection"])(
     "preserves recovery state when the %s SQLite loader fails",
     async (failure) => {
-      const store = createLegacyStore();
-      const sqlitePath = path.join(
-        store.stateDir,
-        "agents",
-        "main",
-        "agent",
-        "openclaw-agent.sqlite",
-      );
-      fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+      const { sqlitePath, recover } = createRecoveryStore();
       fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
       const openDatabase = nodeSqlite.openNodeSqliteDatabase;
       const openSqlite = vi
@@ -215,11 +134,7 @@ describe("runDoctorSessionSqlite", () => {
 
       let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
       try {
-        const recovery = runDoctorSessionSqlite({
-          env: store.env,
-          mode: "recover",
-          store: store.storePath,
-        });
+        const recovery = recover();
         if (failure === "maintenance") {
           await expect(recovery).rejects.toThrow(
             "failed to acquire agent database maintenance lease",
@@ -305,34 +220,6 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
-  it("reports a malformed non-newline-terminated final JSONL record", async () => {
-    const store = createLegacyStore();
-    fs.writeFileSync(
-      store.transcriptPath,
-      '{"type":"session","sessionId":"session-1"}\n{"type":"message"',
-      { mode: 0o600 },
-    );
-
-    const report = await importLegacyStore(store);
-
-    expect(report.totals).toMatchObject({
-      importedEntries: 1,
-      importedTranscriptEvents: 1,
-      issues: 1,
-      sqliteEntries: 1,
-    });
-    expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
-    expect(
-      loadTranscriptEventsSync({
-        agentId: "main",
-        sessionId: "session-1",
-        sessionKey: "agent:main:main",
-        storePath: store.storePath,
-      }),
-    ).toHaveLength(1);
-    expect(fs.existsSync(store.transcriptPath)).toBe(false);
-  });
-
   it.each([false, true])(
     "reports malformed transcripts while importing the session entry (existing prefix: %s)",
     async (existingPrefix) => {
@@ -340,6 +227,9 @@ describe("runDoctorSessionSqlite", () => {
         agentDirName: "token=supersecret",
         transcriptLines: ['{"type":"session","sessionId":"session-1"}', "{bad"],
       });
+      if (!existingPrefix) {
+        fs.truncateSync(store.transcriptPath, fs.statSync(store.transcriptPath).size - 1);
+      }
       const original = fs.readFileSync(store.transcriptPath);
       if (existingPrefix) {
         await importSqliteSessionRows({
@@ -434,3 +324,14 @@ describe("runDoctorSessionSqlite", () => {
     });
   });
 });
+
+function createRecoveryStore() {
+  const store = createLegacyStore();
+  const sqlitePath = path.join(store.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  fs.mkdirSync(path.dirname(sqlitePath), { recursive: true });
+  return {
+    sqlitePath,
+    recover: () =>
+      runDoctorSessionSqlite({ env: store.env, mode: "recover", store: store.storePath }),
+  };
+}

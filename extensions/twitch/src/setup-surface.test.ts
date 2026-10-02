@@ -6,7 +6,6 @@ import { getAccountConfig } from "./config.js";
 import { setTwitchRuntime } from "./runtime.js";
 import {
   configureWithEnvToken,
-  promptChannelName,
   promptRefreshTokenSetup,
   promptToken,
   setTwitchAccount,
@@ -111,19 +110,6 @@ describe("setup surface helpers", () => {
       expect(capturedValidate("")).toBe("Required");
       expect(capturedValidate("notoauth")).toBe("Token should start with 'oauth:'");
       expect(capturedValidate("oauth:goodtoken")).toBeUndefined();
-    });
-  });
-
-  describe("promptChannelName", () => {
-    it("should require a non-empty channel name", async () => {
-      mockPromptText.mockResolvedValue("");
-
-      await promptChannelName(mockPrompter, null);
-
-      const { validate } = requireFirstTextPromptArgs();
-      expect(validate?.("")).toBe("Required");
-      expect(validate?.("   ")).toBe("Required");
-      expect(validate?.("#chan")).toBeUndefined();
     });
   });
 
@@ -440,6 +426,10 @@ describe("setup surface helpers", () => {
       expect(twitch?.accounts?.secondary?.username).toBe("secondary-bot");
       expect(twitch?.accounts?.secondary?.accessToken).toBe("oauth:secondary");
       expect(twitch?.accounts?.default?.username).toBe("default-bot");
+      const channelPrompt = mockPromptText.mock.calls[3]?.[0];
+      expect(channelPrompt?.validate("")).toBe("Required");
+      expect(channelPrompt?.validate("   ")).toBe("Required");
+      expect(channelPrompt?.validate("#chan")).toBeUndefined();
     });
 
     it("persists a token instead of using env-token shortcut for non-default finalize", async () => {

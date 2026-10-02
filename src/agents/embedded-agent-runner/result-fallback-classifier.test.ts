@@ -2,8 +2,10 @@
 import { describe, expect, it } from "vitest";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { resolveEmbeddedCyberFailoverConfig } from "./embedded-cyber-failover.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
+import { buildPayloads } from "./run/payloads.test-helpers.js";
 
 const supplementalSpeechPayload = {
   mediaUrl: "file:///tmp/answer.mp3",
@@ -212,59 +214,91 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it.each([
     {
       name: "a generic external runner failure",
-      payload: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+      createPayloads: () => [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
       code: "generic_external_run_failure",
+      reason: "format",
     },
     {
       name: "a transient status notice without a final reply",
-      payload: { text: "Still working", isStatusNotice: true },
+      createPayloads: () => [{ text: "Still working", isStatusNotice: true }],
       code: "empty_result",
+      reason: "format",
     },
     {
       name: "supplemental speech without a final reply",
-      payload: supplementalSpeechPayload,
+      createPayloads: () => [supplementalSpeechPayload],
       code: "empty_result",
-    },
-  ])("advances to the configured fallback after $name", async ({ payload, code }) => {
-    const runs: Array<{ provider: string; model: string }> = [];
-    const result = await runWithModelFallback({
-      cfg: undefined,
-      provider: "external",
-      model: "primary",
-      fallbacksOverride: ["external/fallback"],
-      skipAuthProfileRuntime: true,
-      run: async (provider, model) => {
-        runs.push({ provider, model });
-        return runs.length === 1
-          ? {
-              payloads: [payload],
-              meta: { durationMs: 1 },
-            }
-          : { payloads: [{ text: "fallback ok" }], meta: { durationMs: 1 } };
-      },
-      classifyResult: ({ provider, model, result: runResult }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: runResult,
-        }),
-    });
-
-    expect(runs).toEqual([
-      { provider: "external", model: "primary" },
-      { provider: "external", model: "fallback" },
-    ]);
-    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
-    expect(result.attempts[0]).toMatchObject({
-      provider: "external",
-      model: "primary",
       reason: "format",
-      code,
-    });
-    if (code === "generic_external_run_failure") {
-      expect(result.attempts[0]?.error).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
-    }
-  });
+    },
+    ...[
+      {
+        name: "a concise rate-limit reply",
+        errorMessage: "429 Too Many Requests PRIVATE_CANARY",
+        reason: "rate_limit",
+      },
+      {
+        name: "a concise sign-in reply",
+        errorMessage: "401 Unauthorized: invalid api key PRIVATE_CANARY",
+        reason: "auth",
+      },
+    ].map(({ name, errorMessage, reason }) => ({
+      name,
+      reason,
+      code: "embedded_error_payload",
+      createPayloads: () =>
+        buildPayloads({
+          provider: "external",
+          providerOwner: { id: "external" },
+          lastAssistant: makeAssistantMessageFixture({
+            provider: "external",
+            model: "primary",
+            errorMessage,
+          }),
+        }),
+    })),
+  ])(
+    "advances to the configured fallback after $name",
+    async ({ createPayloads, code, reason }) => {
+      const runs: Array<{ provider: string; model: string }> = [];
+      const result = await runWithModelFallback({
+        cfg: undefined,
+        provider: "external",
+        model: "primary",
+        fallbacksOverride: ["external/fallback"],
+        skipAuthProfileRuntime: true,
+        run: async (provider, model) => {
+          runs.push({ provider, model });
+          return runs.length === 1
+            ? {
+                payloads: createPayloads(),
+                meta: { durationMs: 1 },
+              }
+            : { payloads: [{ text: "fallback ok" }], meta: { durationMs: 1 } };
+        },
+        classifyResult: ({ provider, model, result: runResult }) =>
+          classifyEmbeddedAgentRunResultForModelFallback({
+            provider,
+            model,
+            result: runResult,
+          }),
+      });
+
+      expect(runs).toEqual([
+        { provider: "external", model: "primary" },
+        { provider: "external", model: "fallback" },
+      ]);
+      expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+      expect(result.attempts[0]).toMatchObject({
+        provider: "external",
+        model: "primary",
+        reason,
+        code,
+      });
+      if (code === "generic_external_run_failure") {
+        expect(result.attempts[0]?.error).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+      }
+    },
+  );
 
   it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
     const errorText =

@@ -4,7 +4,6 @@ import {
   closeSync,
   constants,
   fstatSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -26,6 +25,8 @@ import { z } from "zod";
 import {
   crabboxArtifactEvidenceSchema,
   crabboxArtifactIdentitySchema,
+  flushDescriptor as syncFile,
+  flushDirectory as syncDirectory,
   preserveCrabboxArtifacts,
   verifyPreservedCrabboxArtifacts,
   type CrabboxArtifactEvidence,
@@ -238,49 +239,6 @@ function readBounded(path: string, limit: number) {
     return bytes;
   } finally {
     closeSync(fd);
-  }
-}
-
-function syncDirectory(path: string) {
-  // Windows does not expose a directory flush through this Node API. Such
-  // receipts remain useful for inspection, but never authorize orphan removal.
-  if (process.platform === "win32") {
-    return false;
-  }
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_DIRECTORY);
-    fsyncSync(fd);
-    return true;
-  } catch (error) {
-    if (
-      ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(
-        (error as NodeJS.ErrnoException).code ?? "",
-      )
-    ) {
-      return false;
-    }
-    throw error;
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
-  }
-}
-
-function syncFile(fd: number) {
-  try {
-    fsyncSync(fd);
-    return true;
-  } catch (error) {
-    if (
-      ["EINVAL", "ENOTSUP", "EOPNOTSUPP", "ENOSYS"].includes(
-        (error as NodeJS.ErrnoException).code ?? "",
-      )
-    ) {
-      return false;
-    }
-    throw error;
   }
 }
 
@@ -1762,21 +1720,19 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
         const slot = join(syncRoot, "mirrors", key);
         if (recordedDisposal && !lstatSync(root, { throwIfNoEntry: false })) {
           const present = lstatSync(slot, { throwIfNoEntry: false });
-          if (!present || !sameIdentity(identity(slot), slotIdentity)) {
-            if (present) {
-              // A later recorded owner may already have allocated this key.
-              // Its slot is never modified while finishing the old tombstone.
-              const newer = mirrorSlot(syncRoot, key);
-              if (!newer.receipt || newer.id === id) {
-                throw new Error("Source mirror disposal slot identity changed.");
-              }
-            }
+          const current = present ? mirrorSlot(syncRoot, key, id) : undefined;
+          // Filesystems can reuse an inode for a new generation. Validate its
+          // receipt before comparing identities; never modify the successor slot.
+          if (!current || (current.receipt && current.id !== id)) {
             removeDisposal(syncRoot, recordedDisposal);
             return {
               id,
               recovered: true,
               reason: "Completed source mirror disposal record removed.",
             };
+          }
+          if (!sameIdentity(current.slotIdentity, slotIdentity)) {
+            throw new Error("Source mirror disposal slot identity changed.");
           }
         }
         victim = claimIdleMirror(syncRoot, key, id);
@@ -1939,6 +1895,7 @@ async function recoverStaging(syncRoot: string, id: string, options: RecoveryOpt
       source: manifest.source,
       witness: selectedWitness!,
       payloadRoot: root,
+      automatic: options.automatic,
       signal: options.signal,
     });
     if (!witness.ok) {

@@ -24,10 +24,8 @@ import {
 import { looksLikeSessionId } from "../../sessions/session-id.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
-
-type GatewayCaller = AgentToolGatewayRequestCaller;
 
 const CURRENT_SESSION_CLIENT_ALIAS_IDS = new Set<string>([
   GATEWAY_CLIENT_IDS.TUI,
@@ -53,7 +51,6 @@ export function resolveDisplaySessionKey(params: { key: string; alias: string; m
 export function resolveInternalSessionKey(params: {
   key: string;
   alias: string;
-  mainKey: string;
   requesterInternalKey?: string;
 }) {
   if (params.key === "current") {
@@ -147,7 +144,6 @@ export async function lookupRequesterSessionOwnership(params: {
 
 function looksLikeSessionKey(value: string): boolean {
   const raw = normalizeOptionalString(value) ?? "";
-  // These are canonical key shapes that should never be treated as sessionIds.
   return (
     raw === "main" ||
     raw === "global" ||
@@ -165,7 +161,6 @@ function looksLikeSessionKey(value: string): boolean {
 }
 
 export function shouldResolveSessionIdInput(value: string): boolean {
-  // Treat anything that doesn't look like a well-formed key as a sessionId candidate.
   return looksLikeSessionId(value) || !looksLikeSessionKey(value);
 }
 
@@ -176,7 +171,7 @@ type SessionReferenceResolution =
       key: string;
       displayKey: string;
       resolvedViaSessionId: boolean;
-      requesterOwned?: boolean;
+      requesterOwned: boolean;
     }
   | { ok: false; status: "error" | "forbidden"; error: string; notFound?: boolean };
 
@@ -372,7 +367,6 @@ export async function resolveSessionReference(params: {
   const resolvedKey = resolveInternalSessionKey({
     key: raw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
   const semanticAliasAgentId =
@@ -417,9 +411,7 @@ export async function resolveVisibleSessionReference(params: {
     params.resolvedSession.agentId ?? parseAgentSessionKey(resolvedKey)?.agentId;
   let displayKey = params.resolvedSession.displayKey;
   let missing = false;
-  const requesterOwnedByResolution =
-    params.resolvedSession.requesterOwned ??
-    (params.restrictToSpawned && params.resolvedSession.resolvedViaSessionId);
+  const requesterOwnedByResolution = params.resolvedSession.requesterOwned;
   // Cross-session tools persist their results into the caller transcript; an
   // incognito target must remain unreachable even from an incognito requester.
   if (isIncognitoSessionKey(resolvedKey)) {
@@ -463,7 +455,7 @@ export async function resolveVisibleSessionReference(params: {
         missing = true;
       }
     } catch (error) {
-      if (params.concealResolutionError && !params.restrictToSpawned) {
+      if (params.concealResolutionError) {
         return {
           ok: false,
           status: "forbidden",

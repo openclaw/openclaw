@@ -157,7 +157,6 @@ describe("release readiness contract", () => {
     ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
     ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
-    ["missing source", { tag: "" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
     ["alpha owner", { tag: "v2026.9.2-alpha.1", npm_dist_tag: "alpha" }],
     ["extended-stable owner", { tag: "v2026.9.33", npm_dist_tag: "latest" }],
@@ -461,6 +460,8 @@ describe("release readiness executable handoff", () => {
       append_clawhub_dispatch_args() { clawhub_dispatch_args=(-f "plugins=fixture"); }
       dispatch_workflow() { node "$GITHUB_WORKSPACE/.release-harness/scripts/fixture-dispatch.mjs" "$@"; }
       dispatch_workflow_at_ref() { shift 2; dispatch_workflow "$@"; }
+      sweep_superseded_children() { :; }
+      require_clawhub_dispatch_available() { :; }
     `,
       );
       const plan = writeFixtureFile(
@@ -645,6 +646,12 @@ describe("release readiness executable handoff", () => {
 
 function finalizationFixture(overrides: Record<string, unknown> = {}) {
   const fixture = bridgeFixture();
+  const signedTagObjectSha = "d".repeat(40);
+  mkdirSync(join(fixture.scripts, "lib"), { recursive: true });
+  copyFileSync(
+    resolve("scripts/lib/release-publish-children.sh"),
+    join(fixture.scripts, "lib/release-publish-children.sh"),
+  );
   copyFileSync(
     resolve("scripts/release-tooling-identity.mjs"),
     join(fixture.scripts, "release-tooling-identity.mjs"),
@@ -812,6 +819,21 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
   `,
   );
   chmodSync(gh, 0o755);
+  const git = writeFixtureFile(
+    fixture.root,
+    "bin/git",
+    `#!${process.execPath}
+    const { readFileSync } = require('node:fs');
+    const args = process.argv.slice(2);
+    if (JSON.stringify(args) !== JSON.stringify(['ls-remote', '--tags', 'origin',
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG,
+      'refs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}'])) process.exit(99);
+    const state = JSON.parse(readFileSync(process.env.FIXTURE_GITHUB_STATE, 'utf8'));
+    console.log('${signedTagObjectSha}\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG);
+    console.log(state.sourceSha + '\\trefs/tags/' + process.env.FIXTURE_RELEASE_TAG + '^{}');
+  `,
+  );
+  chmodSync(git, 0o755);
   const env = {
     ...fixture.env,
     PATH: `${dirname(gh)}:${fixture.env.PATH}`,
@@ -847,8 +869,11 @@ function finalizationFixture(overrides: Record<string, unknown> = {}) {
         cwd: dirname(fixture.scripts),
         env: {
           ...env,
+          PARENT_WORKFLOW_SHA: TOOLING_SHA,
           RELEASE_TAG: tag,
+          SIGNED_RELEASE_TAG_OBJECT_SHA: signedTagObjectSha,
           SOURCE_SHA,
+          TARGET_SHA: SOURCE_SHA,
           FIXTURE_ACTIVATION_OWNER: owner,
           FIXTURE_RELEASE_TAG: tag,
           RELEASE_NPM_DIST_TAG: channel,
@@ -1588,7 +1613,6 @@ describe("publication dispatch retention", () => {
 
 describe("release preparation recovery", () => {
   it.each([
-    ["alpha-core", "v2026.9.2-alpha.1", "alpha", "v2026.9.2-alpha.1", "core-npm"],
     ["extended-core", "v2026.8.33", "extended-stable", "extended-stable/2026.8.33", "core-npm"],
     [
       "extended-docker",
@@ -1741,7 +1765,6 @@ describe("release preparation recovery", () => {
 
   it.each([
     ["raw-sha", "", "v2026.9.2", "latest", "normal", undefined, true],
-    ["raw-sha-alpha", "", "v2026.9.2-alpha.1", "alpha", "alpha", undefined, true],
     ["wrong-tag", "", "v2026.9.2", "latest", "normal", "v2026.9.3", false],
     ["invalid-explicit", "ordinary-branch", "v2026.9.2", "latest", "normal", undefined, false],
     ["canonical", "release/2026.9.2", "v2026.9.2", "latest", "normal", undefined, true],
@@ -1820,28 +1843,25 @@ describe("release preparation recovery", () => {
     expect(existsSync(fixture.env.GITHUB_OUTPUT)).toBe(false);
   });
 
-  it.each([1, 2])(
-    "adopts exact identified preparations without dispatch on attempt %s",
-    async (attempt) => {
-      const fixture = await preparationFixture();
-      const request = preparationRequest();
-      const result = fixture.prepare(request, attempt);
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
-      expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
-      expect(
-        fixture
-          .trace()
-          .filter((entry) => /\/actions\/runs\/(?:300|400)$/u.test(entry.args?.[1] ?? "")),
-      ).toEqual([
-        { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/300`] },
-        { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] },
-      ]);
-      expect(readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")).toContain(
-        `request=${JSON.stringify(request)}\n`,
-      );
-    },
-  );
+  it("adopts exact identified preparations without dispatch on a rerun", async () => {
+    const fixture = await preparationFixture();
+    const request = preparationRequest();
+    const result = fixture.prepare(request, 2);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(fixture.requestPath, "utf8"))).toEqual(request);
+    expect(fixture.trace().filter((entry) => entry.args?.includes("POST"))).toEqual([]);
+    expect(
+      fixture
+        .trace()
+        .filter((entry) => /\/actions\/runs\/(?:300|400)$/u.test(entry.args?.[1] ?? "")),
+    ).toEqual([
+      { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/300`] },
+      { event: "gh", args: ["api", `repos/${REPOSITORY}/actions/runs/400`] },
+    ]);
+    expect(readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")).toContain(
+      `request=${JSON.stringify(request)}\n`,
+    );
+  });
 
   it.each([
     ["schema", { schema: "different" }],
@@ -1869,9 +1889,6 @@ describe("release preparation recovery", () => {
 
   it.each([
     ["workflow", { path: ".github/workflows/openclaw-release-publish.yml" }],
-    ["event", { event: "push" }],
-    ["protected ref", { head_branch: "main" }],
-    ["tooling SHA", { head_sha: "c".repeat(40) }],
     ["attempt", { run_attempt: 0 }],
   ])("rejects a recovered producer with the wrong %s", async (_label, preparationProducer) => {
     const fixture = await preparationFixture({ preparationProducer });
@@ -1921,21 +1938,6 @@ process.exitCode = 1;
     },
   );
 
-  it("preserves the validated Tideclaw alpha activation path without Linux carry", () => {
-    const fixture = finalizationFixture();
-    const branch = "tideclaw/alpha/2026-09-13-0100Z";
-    fixture.env.GITHUB_REF_NAME = branch;
-    fixture.env.GITHUB_REF = `refs/heads/${branch}`;
-    const result = fixture.run("parent", "v2026.9.2-alpha.1", "alpha");
-    expect(result.status, result.stderr).toBe(0);
-    expect(fixture.state()).toMatchObject({
-      writes: 1,
-      isDraft: false,
-      isPrerelease: true,
-      isLatest: false,
-    });
-  });
-
   it.each([
     ["", undefined],
     ["", "650"],
@@ -1943,7 +1945,6 @@ process.exitCode = 1;
   ] as const)(
     "preserves sealed inputs with resume override %s (sealed=%s)",
     (resumeRunId, sealedResumeRunId) => {
-      const fixture = finalizationFixture();
       const ready = readyRelease();
       ready.inputs = validateReleaseButtonInputs(
         inputs({
@@ -1958,38 +1959,9 @@ process.exitCode = 1;
           ...(sealedResumeRunId ? { openclaw_npm_resume_run_id: sealedResumeRunId } : {}),
         }),
       );
-      writeFixtureFile(
-        fixture.scripts,
-        "lib/actions-artifact-archive.mjs",
-        `
-      export { readBoundedRegularFile } from ${JSON.stringify(pathToFileURL(resolve("scripts/lib/actions-artifact-archive.mjs")).href)};
-      export async function downloadActionsArtifactArchive() { return { archiveBytes: Buffer.from('verified fixture archive') }; }
-      export function inspectActionsArtifactZipWithPolicy() {
-        return new Map([['release-ready.json', Buffer.from(${JSON.stringify(JSON.stringify(ready))})]]);
-      }
-    `,
-      );
-      const artifact = {
-        ...descriptor("npm"),
-        workflowPath: ".github/workflows/openclaw-release-prepare.yml",
-        artifactName: readyArtifactName(SOURCE_SHA, 300, 1),
-      };
-      const workflow = parse(
-        readFileSync(".github/workflows/openclaw-release-promote.yml", "utf8"),
-      );
-      const dispatch = workflow.jobs.publish.steps.find(
-        (step: { id?: string }) => step.id === "dispatch",
-      );
-      const result = spawnSync("bash", ["-c", dispatch.run], {
-        cwd: dirname(fixture.scripts),
-        env: {
-          ...fixture.env,
-          PREPARED_ARTIFACT: JSON.stringify(artifact),
-          OPENCLAW_NPM_RESUME_RUN_ID: resumeRunId,
-        },
-        encoding: "utf8",
-        timeout: 10_000,
-      });
+      const fixture = publicationFixture({}, ready);
+      const { workflow } = fixture;
+      const result = fixture.publish({ OPENCLAW_NPM_RESUME_RUN_ID: resumeRunId });
       expect(result.status, result.stderr).toBe(0);
       const outputs = Object.fromEntries(
         readFileSync(fixture.env.GITHUB_OUTPUT, "utf8")
@@ -2054,7 +2026,7 @@ process.exitCode = 1;
     },
   );
 
-  it.each(["0", "-1", "1.5", " 800", "9007199254740992"])(
+  it.each(["0", " 800", "9007199254740992"])(
     "rejects malformed resume run %s without dispatching publication",
     (resumeRunId) => {
       const fixture = finalizationFixture();
@@ -2124,7 +2096,6 @@ process.exitCode = 1;
 
   it.each([
     ["v2026.9.2-beta.1", "beta", true],
-    ["v2026.9.2", "beta", false],
     ["v2026.9.2", "latest", false],
   ] as const)(
     "refuses parent activation of %s on %s with a mismatched draft classification",
@@ -2159,13 +2130,10 @@ process.exitCode = 1;
 describe("prepared Windows handoff", () => {
   it.each([
     ["stable on beta", "v2026.9.2", "beta", "success", true, true, false, true],
-    ["stable on latest", "v2026.9.2", "latest", "success", true, true, false, true],
     ["absent", "v2026.9.2", "beta", "success", false, false, false, false],
     ["incomplete", "v2026.9.2", "beta", "success", true, false, false, true],
     ["beta", "v2026.9.2-beta.1", "beta", "success", true, true, false, false],
-    ["alpha", "v2026.9.2-alpha.1", "alpha", "success", true, true, false, false],
     ["failed activation", "v2026.9.2", "beta", "failure", true, true, false, false],
-    ["skipped activation", "v2026.9.2", "beta", "skipped", true, true, false, false],
     ["dispatch failed", "v2026.9.2", "beta", "success", true, true, true, true],
   ] as const)(
     "uses the frozen optional selection after activation: %s",

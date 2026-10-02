@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
 import {
@@ -12,6 +13,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { hasErrnoCode, isErrno } from "../../infra/errno.js";
 import { ensureAbsoluteDirectory, root, walkDirectory } from "../../infra/fs-safe.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { parseSkillFrontmatter } from "../loading/frontmatter.js";
 import { SkillLibraryError } from "./errors.js";
 
@@ -126,9 +128,7 @@ function validateSkillBundlePath(filePath: string): void {
         part === "." ||
         part === ".." ||
         /[\\<>:"|?*]/u.test(part) ||
-        Array.from(part).some(
-          (character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127,
-        ) ||
+        containsAsciiControlCharacter(part) ||
         /[ .]$/u.test(part) ||
         part !== part.normalize("NFC") ||
         /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(part) ||
@@ -280,7 +280,12 @@ export async function stageSkillLibraryBundle(
   skillId: string,
   bundle: PreparedSkillLibraryBundle,
   env?: NodeJS.ProcessEnv,
+  assertFileMutationAllowed?: () => void,
 ) {
+  const assertCurrent = assertFileMutationAllowed
+    ? retainMutationAuthority(assertFileMutationAllowed)
+    : undefined;
+  assertCurrent?.();
   const destination = skillLibraryRevisionDir(skillId, bundle.revision, env);
   const parent = path.dirname(destination);
   const ensured = await ensureAbsoluteDirectory(parent, { mode: 0o700 });
@@ -288,12 +293,14 @@ export async function stageSkillLibraryBundle(
     throw ensured.error;
   }
   await cleanAbandonedSkillStaging(parent);
+  assertCurrent?.();
   const staging = await fs.mkdtemp(path.join(parent, `.staging-${process.pid}-`));
   try {
-    const stagingRoot = await root(staging);
+    const stagingRoot = await root(staging, { assertBeforeMutation: assertCurrent });
     const directories = new Set([staging]);
     for (const file of bundle.files) {
       const target = path.join(staging, file.path);
+      assertCurrent?.();
       await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
       let directory = path.dirname(target);
       while (directory !== parent) {
@@ -312,6 +319,7 @@ export async function stageSkillLibraryBundle(
     return {
       staging,
       async publish() {
+        assertCurrent?.();
         try {
           await fs.rename(staging, destination);
         } catch (error) {

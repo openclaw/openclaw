@@ -277,7 +277,8 @@ samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
 Starting a CPU profile synchronously scans V8's heap to build its code map. On a
-large Gateway this can block the main event loop for seconds on every capture,
+large Gateway this can block the main event loop for seconds on every capture
+(about 3.5 seconds has been observed with a 3 GB heap),
 before regular sampling begins. Keeping the inspector domain enabled or sending
 the request from a Worker does not avoid that main-isolate work.
 `startBlockedMs` measures the synchronous start call with a monotonic clock,
@@ -294,6 +295,82 @@ The RPC cannot discover arbitrary third-party in-process inspector sessions;
 do not run it alongside another debugger, profiler, tracer, or coverage owner. An unavailable
 response names the reason and whether cleanup failed. If cleanup remains uncertain,
 further captures are refused; the RPC never restarts the Gateway automatically.
+
+## Full heap snapshot
+
+An operator with `operator.admin` can explicitly capture the Gateway's main V8
+isolate, including objects allocated before the request:
+
+```bash
+openclaw gateway call diagnostics.heapSnapshot --params '{"reason":"retention baseline"}' --timeout 180000 --json
+```
+
+This Node-only RPC accepts only an optional `reason` (at most 256 characters),
+recorded in the warning before capture. No configuration switch is needed. It
+writes `<state>/diagnostics/heap-<timestamp>.heapsnapshot` with owner-only file
+permissions and returns `path`, `sizeBytes`, `heapUsedBefore`, `heapUsedAfter`
+(bytes), and `elapsedMs` (native capture wall time). Snapshot contents never travel
+over the WebSocket or enter the diagnostics export. Worker isolates are excluded.
+
+**Take snapshots in a quiet window.** A 3 GB heap snapshot can block the main
+thread for tens of seconds. V8 may need roughly twice the heap's memory while
+capturing; sufficient memory and disk headroom remain the operator's responsibility.
+The RPC refuses heaps above 6 GiB, overlapping captures, and another capture within
+60 seconds of a native attempt finishing. These admission guards do not impose a
+hard duration, output-size, or memory limit: synchronous `writeHeapSnapshot()`
+cannot be interrupted by a timeout, disconnection, or shutdown once started.
+A client timeout does not mean capture stopped; inspect the host directory before
+retrying. Failed captures remove partial files when possible; `cleanupFailed`
+reports whether removal failed.
+
+Snapshots are **unredacted** and can contain credentials, prompts, and private
+messages. Keep them on the host, review any transfer separately, and delete them
+manually after analysis. Successful snapshots are retained until removed; there
+is no automatic snapshot collection or retention job.
+
+Capture two points in the same process, then compare them from a source checkout:
+
+```bash
+node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot
+```
+
+The tool reports retained bytes by constructor/class and the largest changes by
+dominator (the object through which all strong root paths pass). It streams input
+and analyzes snapshots sequentially, but still needs memory proportional to the
+object graph; run large diffs on a separate analysis host with enough memory.
+Weak and shortcut edges are excluded. Class totals count nested instances of the
+same class once; totals across different classes can overlap. Object IDs match
+only within the same isolate/process. Use Chrome DevTools for interactive retaining
+paths and V8-specific weak/ephemeron semantics; the script is a strong-edge graph
+summary. `--json` produces machine-readable output. Treat diff output as sensitive
+too: it contains unredacted heap names.
+
+Add `--top 40 --max-depth 60` to include named strong retaining paths and
+dominator chains for the largest growers. `--node <id>` selects a particular
+object in the later snapshot. A shortest root path shows reachability;
+the separate dominator chain identifies exclusive retention in that graph.
+
+From a built source checkout, an isolated synthetic workload can collect a
+comparable pair without connecting to an existing Gateway:
+
+```bash
+node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
+```
+
+Run this on a dedicated host with enough memory for snapshots. It starts the
+dist Gateway and local mock model servers on loopback ports 19548–19550,
+seeds 2,000 sessions across two agents, and drives ten reconnecting Control UI
+WebSocket clients plus mock model, Code Mode, and subagent turns. A synthetic
+catalog plugin exercises Gateway projection and publication ownership; it does
+not emulate a native provider's caches or remote-node transport.
+The root must be new. All state, logs, minute samples, and snapshots stay there.
+The rig stops its children on completion or interruption and retains evidence.
+Successful RPC counts and any retried refusals are recorded separately. If
+`projects.list` refuses a read because access facts changed, the rig retries it
+once; a second refusal or another error stops the run.
+Use the same script and settings with another Node binary for a runtime control;
+choose another root and three-port block for each run. Raw minute samples include
+allocation churn; compare the snapshot `heapUsedAfter` anchors for post-GC growth.
 
 ## Sampling heap profile
 

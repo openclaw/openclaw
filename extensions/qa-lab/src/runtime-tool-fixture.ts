@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
 import { resolveQaLiveTurnTimeoutMs as liveTurnTimeoutMs } from "./live-timeout.js";
+import { readQaNativeWorkspaceBehaviorId } from "./native-workspace-behavior.js";
 import {
   qaMockRequestCursorUrl,
   qaMockRequestsAfterUrl,
@@ -25,6 +26,10 @@ import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
+import {
+  formatCodexNativeWorkspaceDetails,
+  runCodexNativeWorkspaceFixture,
+} from "./runtime-tool-native-workspace.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -51,10 +56,6 @@ function runtimeParitySessionKeyDetails(...sessionKeys: string[]) {
   return sessionKeys.map(
     (sessionKey) => `${RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX}${sessionKey}`,
   );
-}
-
-function runtimeToolFixtureDetails(details: string, ...sessionKeys: string[]) {
-  return [details, ...runtimeParitySessionKeyDetails(...sessionKeys)].join("\n");
 }
 
 function runtimeToolFixtureError(error: unknown, ...sessionKeys: string[]) {
@@ -125,19 +126,19 @@ function requestHasFailureLikeToolOutput(request: QaRuntimeToolFixtureRequest) {
   );
 }
 
+function redactRuntimePatchDiagnostic(text: string) {
+  return text
+    .replace(
+      /\b(?:bearer\s+[a-z\d._~+/-]+=*|(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*["']?[^\s"',;]+)/giu,
+      "[REDACTED]",
+    )
+    .replace(/\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu, "[REDACTED]");
+}
+
 function formatRuntimePatchFailureOutput(request: QaRuntimeToolFixtureRequest): string {
   const text =
     typeof request.toolOutput === "string"
-      ? request.toolOutput
-          .replace(
-            /\b(?:bearer\s+[a-z\d._~+/-]+=*|(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*["']?[^\s"',;]+)/giu,
-            "[REDACTED]",
-          )
-          .replace(
-            /\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu,
-            "[REDACTED]",
-          )
-          .slice(0, 240)
+      ? redactRuntimePatchDiagnostic(request.toolOutput).slice(0, 240)
       : undefined;
   return JSON.stringify({ text, structuredError: request.toolOutputStructuredError === true });
 }
@@ -182,10 +183,10 @@ function matchesRuntimePatchInput(
   ) {
     return false;
   }
+  // Update hunks may use a contextual @@ marker or omit the first marker entirely.
   return operation === "add"
     ? lines.includes("+runtime patch")
-    : lines.includes("@@") &&
-        lines.includes(`-${RUNTIME_PATCH_DENIED_CONTENTS.trimEnd()}`) &&
+    : lines.includes(`-${RUNTIME_PATCH_DENIED_CONTENTS.trimEnd()}`) &&
         lines.includes("+runtime patch outside the workspace");
 }
 
@@ -303,15 +304,7 @@ async function formatRuntimePatchMutationDiagnostics(params: {
       ),
     )
     .slice(-6)
-    .map((line) =>
-      line
-        .replace(
-          /\b(?:bearer\s+[a-z\d._~+/-]+=*|(?:api[_-]?key|access[_-]?token|authorization|password|secret)\s*[:=]\s*["']?[^\s"',;]+)/giu,
-          "[REDACTED]",
-        )
-        .replace(/\b(?:sk|sess|ghp|gho|github_pat|xox[baprs])[-_][a-z\d_-]{8,}\b/giu, "[REDACTED]")
-        .slice(0, 200),
-    );
+    .map((line) => redactRuntimePatchDiagnostic(line).slice(0, 200));
   const mockRequests = params.env.mock
     ? await params.deps
         .fetchJson(qaMockRequestsAfterUrl(params.env.mock.baseUrl, params.requestCursor))
@@ -402,28 +395,13 @@ function requestLinksPlannedToolOutput(
   );
 }
 
-function findPlannedRequest(params: {
+function findToolRequestEvidence(params: {
   requests: readonly QaRuntimeToolFixtureRequest[];
   promptSnippet: string;
   excludedPromptSnippet?: string;
   toolName: string;
 }) {
-  return params.requests.find(
-    (request) =>
-      requestMatchesPrompt(request, params.promptSnippet) &&
-      (!params.excludedPromptSnippet ||
-        !requestMatchesPrompt(request, params.excludedPromptSnippet)) &&
-      request.plannedToolName === params.toolName,
-  );
-}
-
-function findExecutedRequest(params: {
-  requests: readonly QaRuntimeToolFixtureRequest[];
-  promptSnippet: string;
-  excludedPromptSnippet?: string;
-  toolName: string;
-}) {
-  let plannedRequest: QaRuntimeToolFixtureRequest | undefined;
+  const plannedRequests: QaRuntimeToolFixtureRequest[] = [];
   for (const request of params.requests) {
     if (!requestMatchesPrompt(request, params.promptSnippet)) {
       continue;
@@ -435,21 +413,25 @@ function findExecutedRequest(params: {
       continue;
     }
     if (request.plannedToolName === params.toolName) {
-      plannedRequest ??= request;
-      if (requestHasToolOutput(request) && requestLinksPlannedToolOutput(request, request)) {
-        return { plannedRequest, outputRequest: request };
-      }
+      plannedRequests.push(request);
+    }
+    if (!requestHasToolOutput(request)) {
       continue;
     }
-    if (
-      plannedRequest &&
-      requestHasToolOutput(request) &&
-      requestLinksPlannedToolOutput(plannedRequest, request)
-    ) {
-      return { plannedRequest, outputRequest: request };
+    const executedRequest =
+      request.plannedToolName === params.toolName
+        ? requestLinksPlannedToolOutput(request, request)
+          ? request
+          : undefined
+        : plannedRequests.find((planned) => requestLinksPlannedToolOutput(planned, request));
+    if (executedRequest) {
+      return {
+        plannedRequest: plannedRequests[0],
+        execution: { plannedRequest: executedRequest, outputRequest: request },
+      };
     }
   }
-  return null;
+  return { plannedRequest: plannedRequests[0], execution: null };
 }
 
 function formatKnownBrokenDetails(
@@ -474,28 +456,6 @@ function formatExpectedUnavailableDetails(toolName: string, tools: Set<string>) 
     `expected-unavailable ${toolName}: this fixture is report-only for the current profile`,
     `available tools: ${[...tools].toSorted().join(", ")}`,
   ].join("\n");
-}
-
-function formatCodexNativeWorkspaceDetails(params: {
-  toolName: string;
-  tools: Set<string>;
-  reason?: string;
-  happyRequest?: QaRuntimeToolFixtureRequest;
-  failureRequest?: QaRuntimeToolFixtureRequest;
-}) {
-  return [
-    `codex-native-workspace ${params.toolName}: OpenClaw dynamic exposure is intentionally omitted because Codex owns this workspace operation natively`,
-    params.reason ? `reason: ${params.reason}` : undefined,
-    `available OpenClaw dynamic tools: ${[...params.tools].toSorted().join(", ")}`,
-    params.happyRequest
-      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`
-      : undefined,
-    params.failureRequest
-      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`
-      : undefined,
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 function formatReportOnlyMockDetails(params: {
@@ -550,25 +510,36 @@ export async function runRuntimeToolFixture(
   if (config.ensureImageGeneration === true) {
     await deps.ensureImageGenerationConfigured(env);
   }
+  const metadata = readRuntimeToolCoverageMetadata({ config });
+  const forcedCodexNativeWorkspace =
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
+    metadata.expectedLayer === "codex-native-workspace";
+
+  const nativeWorkspaceBehaviorId = forcedCodexNativeWorkspace
+    ? readQaNativeWorkspaceBehaviorId(config.nativeWorkspaceBehavior)
+    : undefined;
   await fs.writeFile(
     path.join(env.gateway.workspaceDir, "runtime-tool-fixture-edit.txt"),
     "before edit\n",
     "utf8",
   );
 
+  const stableSessionKeyPrefix = nativeWorkspaceBehaviorId
+    ? undefined
+    : `agent:qa:runtime-tool:${toolName}`;
   const happySessionKey = await deps.createSession(
     env,
     `Runtime tool fixture: ${toolName} happy`,
-    `agent:qa:runtime-tool:${toolName}:happy`,
+    stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:happy` : undefined,
   );
   const failureSessionKey = await deps.createSession(
     env,
     `Runtime tool fixture: ${toolName} failure`,
-    `agent:qa:runtime-tool:${toolName}:failure`,
+    stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:failure` : undefined,
   );
   const sessionKeys = [happySessionKey, failureSessionKey] as const;
   const withSessionDetails = (details: string) =>
-    runtimeToolFixtureDetails(details, ...sessionKeys);
+    [details, ...runtimeParitySessionKeyDetails(...sessionKeys)].join("\n");
   const skipFixture = (details: string): never => {
     throw new QaSuiteScenarioSkipError(withSessionDetails(details));
   };
@@ -587,12 +558,23 @@ export async function runRuntimeToolFixture(
     }
   };
   const tools = await runFixtureOperation(() => deps.readEffectiveTools(env, happySessionKey));
-  const metadata = readRuntimeToolCoverageMetadata({
-    config,
-  });
-  const forcedCodexNativeWorkspace =
-    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
-    metadata.expectedLayer === "codex-native-workspace";
+  if (forcedCodexNativeWorkspace) {
+    const nativeDetails = await runCodexNativeWorkspaceFixture({
+      env,
+      behaviorId: nativeWorkspaceBehaviorId,
+      required: metadata.required,
+      happySessionKey,
+      failureSessionKey,
+      runAgentPrompt: deps.runAgentPrompt,
+      readEvidence: (sessionKey, nativeToolName) =>
+        readLiveToolEvidence({ env, sessionKey, toolName: nativeToolName }),
+      fixtureError,
+      failFixture,
+    });
+    if (nativeDetails) {
+      return withSessionDetails(nativeDetails);
+    }
+  }
   // Effective tool discovery may advertise the native name. The forced
   // runtime and scenario owner, not inventory absence, decide who executes it.
   const dynamicExposureIntentionallyExcluded = forcedCodexNativeWorkspace && !tools.has(toolName);
@@ -812,28 +794,18 @@ export async function runRuntimeToolFixture(
       await deps.fetchJson(qaMockRequestsAfterUrl(activeMockBaseUrl, requestCursorBefore)),
     ),
   );
-  const happyPlannedRequest = findPlannedRequest({
+  const { plannedRequest: happyPlannedRequest, execution: happyRequest } = findToolRequestEvidence({
     requests,
     promptSnippet,
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
-  const happyRequest = findExecutedRequest({
-    requests,
-    promptSnippet,
-    excludedPromptSnippet: failurePromptSnippet,
-    toolName,
-  });
-  const failurePlannedRequest = findPlannedRequest({
-    requests,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
-  const failureRequest = findExecutedRequest({
-    requests,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
+  const { plannedRequest: failurePlannedRequest, execution: failureRequest } =
+    findToolRequestEvidence({
+      requests,
+      promptSnippet: failurePromptSnippet,
+      toolName,
+    });
   if (
     isAsyncReportOnlyMockCoverage(metadata) &&
     happyPlannedRequest &&
@@ -859,13 +831,12 @@ export async function runRuntimeToolFixture(
       }),
     );
   }
-  const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
-  if (!happyRequest && happyPlannedOnly) {
-    skipFixture(
-      `${toolName} mock provider report-only: a planned call without a linked successful result is not product execution evidence`,
-    );
-  }
-  if (!happyRequest && !happyPlannedOnly) {
+  if (!happyRequest) {
+    if (happyPlannedRequest && !happyPathOutputRequired) {
+      skipFixture(
+        `${toolName} mock provider report-only: a planned call without a linked successful result is not product execution evidence`,
+      );
+    }
     if (dynamicExposureIntentionallyExcluded && !requireCodexNativePatchCoverage) {
       skipFixture(
         formatCodexNativeWorkspaceDetails({
@@ -882,13 +853,12 @@ export async function runRuntimeToolFixture(
         : `expected mock happy-path request for ${toolName}`,
     );
   }
-  if (happyRequest && requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
+  if (requestHasHappyPathFailureToolOutput(happyRequest.outputRequest)) {
     failFixture(`expected mock happy-path successful tool output for ${toolName}`);
   }
   if (
     toolName === "apply_patch" &&
     metadata.required &&
-    happyRequest &&
     !matchesRuntimePatchArguments({
       args: happyRequest.plannedRequest.plannedToolArgs,
       workspaceDir: env.gateway.workspaceDir,
@@ -918,17 +888,12 @@ export async function runRuntimeToolFixture(
     );
   }
   if (!requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
-    if (isRecord(config.knownHarnessGap)) {
-      skipFixture(formatKnownHarnessGapDetails(toolName, config));
-    }
     const patchFailureDiagnostics =
       toolName === "apply_patch"
         ? `; received ${formatRuntimePatchFailureOutput(failureRequest.outputRequest)}`
         : "";
-    throw fixtureError(
-      new Error(
-        `expected mock failure-path tool failure output for ${toolName}${patchFailureDiagnostics}`,
-      ),
+    failFixture(
+      `expected mock failure-path tool failure output for ${toolName}${patchFailureDiagnostics}`,
     );
   }
   if (
@@ -959,7 +924,7 @@ export async function runRuntimeToolFixture(
         toolName,
         tools,
         reason: metadata.reason,
-        happyRequest: happyRequest?.plannedRequest ?? happyPlannedRequest,
+        happyRequest: happyRequest.plannedRequest,
         failureRequest: failureRequest.plannedRequest,
       }),
     );
@@ -967,7 +932,7 @@ export async function runRuntimeToolFixture(
 
   return withSessionDetails(
     [
-      `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs((happyRequest?.plannedRequest ?? happyPlannedRequest)?.plannedToolArgs)}`,
+      `${toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(happyRequest.plannedRequest.plannedToolArgs)}`,
       happyPathOutputRequired
         ? undefined
         : `${toolName} mock provider happy direct output not required for this async fixture`,

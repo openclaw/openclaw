@@ -65,6 +65,13 @@ supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
 
+Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
+throughout the workflow, including native and installed Scheduled Task proof jobs.
+This skips only the workspace and Node process exclusions; proof selection,
+isolation checks, native lifecycle tests, cleanup, and evidence upload remain
+unchanged. The default is `false`, preserving the existing best-effort exclusions
+for Windows CI and exact replay.
+
 For both proofs, set `target_ref` to an exact 40-character commit SHA. Both jobs
 check out that target, and native proof verifies checkout equality before running
 the lifecycle test. Native preflight runs before setup and requires an interactive
@@ -182,7 +189,7 @@ cell and never substitutes successful runner teardown for worker qualification.
 The same workflow can measure one immutable npm package on the selected Windows
 runner. Set `target_ref` to the full tooling commit, `run_windows_ci=false`,
 `keepalive_minutes=0`, and `startup_node_version` to an exact Node version
-(default `26.8.2`). Leave WSL and Defender inputs at their defaults. The optional
+(default `26.9.0`). Leave WSL and Defender inputs at their defaults. The optional
 `installed_startup_package` input is a JSON object with `runId`, `runAttempt`,
 `workflowSha`, `artifactId`, `artifactDigest`, `packageSha256`, and `sourceSha`.
 Use the immutable `package-under-test-<runId>-<runAttempt>` artifact from a

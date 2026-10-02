@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import * as avatarImage from "./avatar-image.ts";
 import { resetIdentityDraft, saveIdentityDraft, selectIdentityAvatar } from "./identity-actions.ts";
@@ -27,6 +29,50 @@ function host(): Parameters<typeof resetIdentityDraft>[0] {
 }
 
 describe("agent identity actions", () => {
+  it("rejects disabled avatar reads and results finishing after policy changes", async () => {
+    const base = createApplicationConfigCapability({ resourceBasePath: "" });
+    const config = { ...base, current: { ...base.current, uploadsEnabled: false } };
+    const state = host();
+    selectIdentityAvatar(state, {} as File, config);
+    expect(fileToAvatarDataUrlMock).not.toHaveBeenCalled();
+    expect(state.identityError).toBe(uploadsDisabledMessage());
+
+    config.current.uploadsEnabled = true;
+    let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
+    fileToAvatarDataUrlMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveAvatar = resolve;
+      }),
+    );
+    selectIdentityAvatar(state, {} as File, config);
+    config.current.uploadsEnabled = false;
+    resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,aA==" });
+    await Promise.resolve();
+    expect(state.identityDraft.avatar).toBeNull();
+    expect(state.identityError).toBe(uploadsDisabledMessage());
+  });
+
+  it("does not dispatch an already selected avatar after uploads are disabled", async () => {
+    const base = createApplicationConfigCapability({ resourceBasePath: "" });
+    const config = { ...base, current: { ...base.current, uploadsEnabled: false } };
+    const state = host();
+    state.identityDraft.avatar = "data:image/png;base64,aA==";
+    const runExternalMutation = vi.fn();
+    await saveIdentityDraft({
+      host: state,
+      config,
+      expectedClient: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      agentId: "main",
+      agents: {} as ApplicationContext["agents"],
+      agentIdentity: {} as ApplicationContext["agentIdentity"],
+      runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
+      canDispatch: () => true,
+      isCurrent: () => true,
+      onSaved: vi.fn(),
+    });
+    expect(runExternalMutation).not.toHaveBeenCalled();
+    expect(state.identityError).toBe(uploadsDisabledMessage());
+  });
   it("keeps unsupported blank edits visible without sending an update", async () => {
     const state = host();
     state.identityDraft.name = "  ";

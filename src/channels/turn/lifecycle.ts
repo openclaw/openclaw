@@ -105,12 +105,6 @@ type PendingChannelDeliveryAttempt = {
   | { state: "rejected"; error: unknown }
 );
 
-function resolvePartialChannelDeliveryResult(
-  error: unknown,
-): (ChannelDeliveryOutcome & { visibleReplySent: true }) | undefined {
-  return isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-}
-
 export function assembleResolvedChannelTurn<
   TDispatchResult,
   TDelivery extends ChannelTurnDeliveryAdapter,
@@ -120,18 +114,16 @@ export function assembleResolvedChannelTurn<
   if (!("route" in value)) {
     return value;
   }
-  const { cfg, route } = value;
+  const { cfg, route, ...turn } = value;
   const routing = {
     ctxPayload: applyRouteDmScope(value.ctxPayload, route.dmScope),
     routeSessionKey: route.sessionKey,
     storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: route.agentId }),
     recordInboundSession,
   };
-  if ("runDispatch" in value) {
-    const { cfg: _cfg, route: _route, ...turn } = value;
+  if ("runDispatch" in turn) {
     return { ...turn, ...routing };
   }
-  const { cfg: _cfg, route: _route, ...turn } = value;
   return { ...turn, ...routing, cfg, agentId: route.agentId };
 }
 
@@ -172,15 +164,6 @@ function resolveAssembledReplyPipeline(
   };
 }
 
-function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    !Array.isArray(result) &&
-    (result as { visibleReplySent?: unknown }).visibleReplySent === false
-  );
-}
-
 function markChannelDeliveryErrorVisible(error: unknown): unknown {
   if (isRecord(error)) {
     try {
@@ -207,7 +190,7 @@ async function runChannelDeliveryObserver(params: {
   try {
     await params.onDelivered(params.payload, params.info, params.result);
   } catch (error: unknown) {
-    throw isExplicitlyNonVisibleChannelDelivery(params.result)
+    throw params.result?.visibleReplySent === false
       ? error
       : markChannelDeliveryErrorVisible(error);
   }
@@ -237,8 +220,8 @@ async function settleChannelDeliveryAttempts(
       // retain provider identity and do not retry an already-visible logical payload.
       if (
         preferredSettlementError === undefined ||
-        (resolvePartialChannelDeliveryResult(error) !== undefined &&
-          resolvePartialChannelDeliveryResult(preferredSettlementError) === undefined)
+        (isChannelPartialDeliveryError(error) &&
+          !isChannelPartialDeliveryError(preferredSettlementError))
       ) {
         preferredSettlementError = error;
       }
@@ -275,7 +258,7 @@ async function settleChannelDeliveryAttempt(
   onFinalizationError?: (error: unknown) => Promise<void> | void,
 ): Promise<void> {
   const emitFailure = (error: unknown): void => {
-    const partial = resolvePartialChannelDeliveryResult(error);
+    const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
     if (!isPlatformMessageNotDispatchedError(error)) {
       attempt.emitMessageSent?.({
         success: false,
@@ -308,7 +291,7 @@ async function settleChannelDeliveryAttempt(
   }
 
   const pending = isReplyDispatchDeliveryPending(finalized);
-  if (!pending && !isExplicitlyNonVisibleChannelDelivery(finalized)) {
+  if (!pending && finalized?.visibleReplySent !== false) {
     attempt.emitMessageSent?.({
       success: true,
       content: finalized?.content ?? attempt.payload.text ?? "",
@@ -319,11 +302,7 @@ async function settleChannelDeliveryAttempt(
   if (completion) {
     await settlePendingFinalDelivery(
       completion,
-      pending
-        ? "unknown"
-        : isExplicitlyNonVisibleChannelDelivery(finalized)
-          ? "suppressed"
-          : "delivered",
+      pending ? "unknown" : finalized?.visibleReplySent === false ? "suppressed" : "delivered",
     );
   }
   await runChannelDeliveryObserver({
@@ -397,8 +376,8 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const adoption = params.turnAdoptionLifecycle ?? params.replyOptions?.turnAdoptionLifecycle;
   const delivery =
     params.admission?.kind === "observeOnly" ? createObserveOnlyDeliveryAdapter() : params.delivery;
-  const pendingDeliveryAttempts: PendingChannelDeliveryAttempt[] = [];
-  const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
+  const pendingAttempts: PendingChannelDeliveryAttempt[] = [];
+  const suppressedAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
   const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
@@ -585,7 +564,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
     if (result?.finalization) {
       // Observe rejection while the dispatcher unwinds; settlement awaits the same promise.
       void result.finalization.catch(() => undefined);
-      pendingDeliveryAttempts.push(attempt);
+      pendingAttempts.push(attempt);
     } else {
       await settleChannelDeliveryAttempt(attempt, delivery.onDelivered);
     }
@@ -656,7 +635,7 @@ async function dispatchChannelTurnWithDeliveryOwner(
                       return;
                     }
                     const { reason: _reason, ...deliveryInfo } = info;
-                    normalizationSuppressionAttempts.push({
+                    suppressedAttempts.push({
                       state: "fulfilled",
                       payload,
                       info: deliveryInfo,
@@ -687,16 +666,15 @@ async function dispatchChannelTurnWithDeliveryOwner(
 
         let settlementError: unknown;
         try {
-          await settleChannelDeliveryAttempts(normalizationSuppressionAttempts, delivery);
-          await settleChannelDeliveryAttempts(pendingDeliveryAttempts, delivery);
+          await settleChannelDeliveryAttempts(
+            [...suppressedAttempts, ...pendingAttempts],
+            delivery,
+          );
         } catch (error: unknown) {
           settlementError = error;
         }
         // Preserve deferred provider receipts so callers do not retry an accepted send.
-        if (
-          settlementError !== undefined &&
-          resolvePartialChannelDeliveryResult(settlementError) !== undefined
-        ) {
+        if (settlementError !== undefined && isChannelPartialDeliveryError(settlementError)) {
           throw toErrorObject(settlementError, "channel delivery settlement failed");
         }
         if (dispatchError !== undefined) {

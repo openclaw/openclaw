@@ -1,4 +1,3 @@
-// Local package and development-manifest reader for Claws.
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -6,6 +5,7 @@ import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
@@ -42,7 +42,6 @@ async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> 
   const read = await fileRoot.read(basename(path), {
     hardlinks: "reject",
     maxBytes,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   return read.buffer;
@@ -121,7 +120,7 @@ async function buildDevelopmentSnapshot(params: {
   };
   const snapshotFile = (bytes: Buffer) => ({
     byteLength: bytes.byteLength,
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    digest: digestClawBytes(bytes),
   });
   const manifest = snapshotFile(params.manifestRaw);
   const openClawProfile = params.openClawProfile
@@ -151,7 +150,6 @@ async function buildDevelopmentSnapshot(params: {
       const read = await sourceRoot.read("BOOTSTRAP.md", {
         hardlinks: "reject",
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        nonBlockingRead: true,
         symlinks: "reject",
       });
       const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
@@ -162,7 +160,7 @@ async function buildDevelopmentSnapshot(params: {
           "$.bootstrap",
         );
       }
-      const digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
+      const digest = digestClawBytes(read.buffer);
       add("bootstrap:BOOTSTRAP.md", read.buffer);
       packageBootstrap = {
         sourcePath: "BOOTSTRAP.md",
@@ -250,7 +248,7 @@ async function buildDevelopmentSnapshot(params: {
         );
       }
       const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
-      const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+      const digest = digestClawBytes(bytes);
       add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
       workspaceSources.push({
         sourcePath: normalizedSourcePath,

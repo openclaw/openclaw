@@ -95,16 +95,6 @@ internal data class WearLaunchState(
   }
 }
 
-@Composable
-internal fun WearLaunchContent(
-  launchState: WearLaunchState,
-  content: @Composable (WearHomePage, WearNavigationRequest?) -> Unit,
-) {
-  // Warm launches are pager events. Keeping this composition identity stable preserves
-  // pending-reply, autospeak, and real-time UI state owned below this boundary.
-  content(launchState.initialTarget.initialPage, launchState.navigationRequest)
-}
-
 internal fun shouldRecreateForScreenshotMode(
   currentScene: WearScreenshotScene?,
   intent: Intent?,
@@ -131,19 +121,17 @@ class MainActivity : ComponentActivity() {
     setContent {
       val scene = screenshotScene
       if (scene == null) {
-        WearLaunchContent(launchState) { initialPage, navigationRequest ->
-          OpenClawWearApp(
-            viewModel = viewModel,
-            settingsStore = remember { WearSettingsStore(applicationContext) },
-            speaker = remember { WearReplySpeaker(applicationContext) },
-            initialPage = initialPage,
-            navigationRequest = navigationRequest,
-            onMessageSubmitted = { launchState = launchState.navigate(WearLaunchTarget.Chat) },
-            onNavigationRequestHandled = { requestId ->
-              launchState = launchState.handled(requestId)
-            },
-          )
-        }
+        OpenClawWearApp(
+          viewModel = viewModel,
+          settingsStore = remember { WearSettingsStore(applicationContext) },
+          speaker = remember { WearReplySpeaker(applicationContext) },
+          initialPage = launchState.initialTarget.initialPage,
+          navigationRequest = launchState.navigationRequest,
+          onMessageSubmitted = { launchState = launchState.navigate(WearLaunchTarget.Chat) },
+          onNavigationRequestHandled = { requestId ->
+            launchState = launchState.handled(requestId)
+          },
+        )
       } else {
         OpenClawWearScreenshotApp(scene)
       }
@@ -229,17 +217,10 @@ internal fun OpenClawWearApp(
       interaction = WearInteractionState.READY
       return
     }
-    if (!state.canSubmitReply) {
-      interaction = WearInteractionState.READY
-      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
-      return
-    }
-    if (!state.connected || sessionId == null) {
-      interaction = WearInteractionState.READY
-      view.performHapticFeedback(HapticFeedbackConstants.REJECT)
-      return
-    }
-    if (!viewModel.sendReply(message) { awaitingReplyRunId = it }) {
+    if (
+      !state.canSubmitReply || !state.connected || sessionId == null ||
+      !viewModel.sendReply(message) { awaitingReplyRunId = it }
+    ) {
       interaction = WearInteractionState.READY
       view.performHapticFeedback(HapticFeedbackConstants.REJECT)
       return

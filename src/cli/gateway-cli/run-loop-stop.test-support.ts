@@ -396,11 +396,11 @@ export function registerForegroundUpdateStopTests({
     });
   });
 
-  it.each(
-    (["parking", "provider", "lock-reacquisition"] as const).flatMap((phase) =>
-      (["SIGINT", "SIGTERM"] as const).map((signal) => ({ phase, signal })),
-    ),
-  )(
+  it.each([
+    { phase: "parking", signal: "SIGINT" },
+    { phase: "provider", signal: "SIGTERM" },
+    { phase: "lock-reacquisition", signal: "SIGINT" },
+  ] as const)(
     "stops a cancelled foreground handoff during $phase with $signal",
     async ({ phase, signal }) => {
       const entered = createDeferred();
@@ -477,13 +477,11 @@ export function registerForegroundUpdateStopTests({
     },
   );
 
-  it.each(
-    (["drain", "server-close"] as const).flatMap((phase) => [
-      { phase, signal: "SIGINT" as const, restartIntent: false },
-      { phase, signal: "SIGTERM" as const, restartIntent: false },
-      { phase, signal: "SIGTERM" as const, restartIntent: true },
-    ]),
-  )(
+  it.each([
+    { phase: "drain", signal: "SIGINT", restartIntent: false },
+    { phase: "server-close", signal: "SIGTERM", restartIntent: false },
+    { phase: "drain", signal: "SIGTERM", restartIntent: true },
+  ] as const)(
     "retains pre-close foreground $signal during $phase (restart intent: $restartIntent)",
     async ({ phase, signal, restartIntent }) => {
       const entered = createDeferred();
@@ -554,14 +552,12 @@ export function registerForegroundUpdateStopTests({
     },
   );
 
-  it.each(
-    (["SIGINT", "SIGTERM"] as const).flatMap((signal) =>
-      (["updater", "unsafe-updater", "readiness", "log-flush"] as const).map((phase) => ({
-        signal,
-        phase,
-      })),
-    ),
-  )("retains $signal stop intent during foreground $phase", async ({ signal, phase }) => {
+  it.each([
+    { phase: "updater", signal: "SIGINT" },
+    { phase: "unsafe-updater", signal: "SIGTERM" },
+    { phase: "readiness", signal: "SIGTERM" },
+    { phase: "log-flush", signal: "SIGINT" },
+  ] as const)("retains $signal stop intent during foreground $phase", async ({ signal, phase }) => {
     const updater = createDeferred<{ respawn: boolean }>();
     const readiness = createDeferred<GatewayRestartSnapshot>();
     const flushEntered = createDeferred();

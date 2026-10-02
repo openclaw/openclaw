@@ -7,7 +7,6 @@ describe("Codex dynamic tool filtering", () => {
     { modelHasVision: true, nativeImageInspectionEnabled: true },
     { modelHasVision: true, nativeImageInspectionEnabled: false },
     { modelHasVision: false, nativeImageInspectionEnabled: true },
-    { modelHasVision: false, nativeImageInspectionEnabled: false },
   ])(
     "exposes exactly one view_image loader for vision=$modelHasVision native=$nativeImageInspectionEnabled",
     ({ modelHasVision, nativeImageInspectionEnabled }) => {

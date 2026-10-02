@@ -3,7 +3,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { CommandExplanation, CommandRisk } from "../command-explainer/types.js";
 import type { ExecCommandSegment } from "../exec-approvals-analysis.js";
-import { analyzeCommandForPolicy } from "./policy.js";
+import { analyzeArgvCommand } from "../exec-argv-analysis.js";
 import { detectCommandCarrierArgv, detectInlineEvalInSegments } from "./risks.js";
 
 /** Compact command explanation summary shown in approval UI. */
@@ -93,14 +93,13 @@ export async function resolveCommandAnalysisSummaryForDisplay(params: {
           if (!Array.isArray(params.commandArgv) || params.commandArgv.length === 0) {
             return null;
           }
-          const analysis = analyzeCommandForPolicy({
-            source: "argv",
+          const analysis = analyzeArgvCommand({
             argv: params.commandArgv,
             cwd: params.cwd ?? undefined,
           });
           return analysis.ok ? summarizeCommandSegmentsForDisplay(analysis.segments) : null;
         })()
-      : (await explainCommandForDisplay(params.commandText))?.summary;
+      : await explainCommandForDisplay(params.commandText);
   if (!summary) {
     return null;
   }
@@ -118,11 +117,11 @@ export async function resolveCommandAnalysisSummaryForDisplay(params: {
 
 async function explainCommandForDisplay(
   command: string,
-): Promise<{ explanation: CommandExplanation; summary: CommandExplanationSummary } | null> {
+): Promise<CommandExplanationSummary | null> {
   try {
     const { explainShellCommand } = await import("../command-explainer/extract.js");
     const explanation = await explainShellCommand(command);
-    return { explanation, summary: summarizeCommandExplanation(explanation) };
+    return summarizeCommandExplanation(explanation);
   } catch {
     return null;
   }

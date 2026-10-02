@@ -77,12 +77,7 @@ describe("runDoctorSessionSqlite", () => {
       }
       expect(disappeared).toBe(true);
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
       for (const original of originals) {
         const locations = [
@@ -156,12 +151,7 @@ describe("runDoctorSessionSqlite", () => {
         expect(loadSessionEntry(scope)).toEqual(entry);
       }
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       expect(retired.totals.removedFiles).toBe(separateIndexes ? 5 : 4);
     },
   );
@@ -237,12 +227,7 @@ describe("runDoctorSessionSqlite", () => {
       const indexBytes = fs.readFileSync(workIndex);
       const report = await runDoctorSessionSqlite({ cfg, env, agent: "main", mode: "import" });
       closeOpenClawAgentDatabasesForTest();
-      const cleanup = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const cleanup = await retireRecovery(cfg, env);
       expect(fs.existsSync(workSource)).toBe(true);
       expect(fs.readFileSync(workSource)).toEqual(original);
       expect(fs.readFileSync(workIndex)).toEqual(indexBytes);
@@ -263,12 +248,7 @@ describe("runDoctorSessionSqlite", () => {
         const retry = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
         expect(retry.targets.flatMap((target) => target.issues)).toEqual([]);
         closeOpenClawAgentDatabasesForTest();
-        const retired = await retireSessionSqliteRecovery({
-          env,
-          preview: inspectSessionSqliteRecovery({ cfg, env }),
-          readConfig: async () => cfg,
-          confirm: async () => true,
-        });
+        const retired = await retireRecovery(cfg, env);
         const current = readMigrationManifest(retry.migrationRun?.manifestPath);
         for (const move of current.targets
           .flatMap((target) => target.completedMoves)
@@ -334,12 +314,7 @@ describe("runDoctorSessionSqlite", () => {
         manifest.targets.find((target) => target.agentId === "work")?.validationBeforeArchive,
       ).toBe("failed");
       closeOpenClawAgentDatabasesForTest();
-      const cleanup = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const cleanup = await retireRecovery(cfg, env);
       const originalLocations = [
         transcriptPath,
         ...manifest.targets.flatMap((target) =>
@@ -372,12 +347,7 @@ describe("runDoctorSessionSqlite", () => {
       const retried = await runDoctorSessionSqlite({ cfg, env, allAgents: true, mode: "import" });
       expect(retried.targets.flatMap((target) => target.issues)).toEqual([]);
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       const latest = readMigrationManifest(retried.migrationRun?.manifestPath);
       const protectedSources = new Set<string>();
       for (const move of latest.targets.flatMap((target) => target.completedMoves)) {
@@ -436,16 +406,23 @@ describe("runDoctorSessionSqlite", () => {
         );
       }
       closeOpenClawAgentDatabasesForTest();
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview: inspectSessionSqliteRecovery({ cfg, env }),
-        readConfig: async () => cfg,
-        confirm: async () => true,
-      });
+      const retired = await retireRecovery(cfg, env);
       expect(retired.totals.removedFiles).toBe(6);
     },
   );
 });
+
+function retireRecovery(
+  cfg: ReturnType<typeof createSharedRecoveryFixture>["cfg"],
+  env: NodeJS.ProcessEnv,
+) {
+  return retireSessionSqliteRecovery({
+    env,
+    preview: inspectSessionSqliteRecovery({ cfg, env }),
+    readConfig: async () => cfg,
+    confirm: async () => true,
+  });
+}
 
 function createSharedRecoveryFixture(params: {
   separateIndexes: boolean;

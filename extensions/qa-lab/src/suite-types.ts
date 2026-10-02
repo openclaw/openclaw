@@ -3,7 +3,6 @@ import type {
   QaEvidenceOccurrence,
   QaEvidenceRttMeasurement,
   QaEvidenceTiming,
-  QaEvidenceSummaryJson,
   QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
@@ -16,7 +15,8 @@ import type {
   QaTransportId,
 } from "./qa-transport-registry.js";
 import type { QaReportCheck } from "./report.js";
-import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
+import type { RuntimeId } from "./runtime-id.js";
+import type { RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardChannelDriver, QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import type { QaSuiteRoundTripProbe } from "./suite-round-trip.js";
@@ -108,7 +108,7 @@ export type QaSuiteRunParams = {
 };
 
 export type QaSuiteResult = {
-  evidence?: QaEvidenceSummaryJson;
+  evidence: QaEvidenceSummaryV3Json;
   outputDir: string;
   evidencePath: string;
   reportPath: string;
@@ -123,9 +123,7 @@ export type QaSuiteResult = {
 export type QaSuiteRunner = (params?: QaSuiteRunParams) => Promise<QaSuiteResult>;
 export type QaSuiteScenarioRunner = (
   env: QaSuiteEnvironment,
-  scenario: ReturnType<
-    typeof import("./scenario-catalog.js").readQaBootstrapScenarioCatalog
-  >["scenarios"][number],
+  scenario: QaSeedScenarioWithSource,
 ) => Promise<QaSuiteScenarioResult>;
 
 export type QaSuiteResolvedRunContext = {
@@ -133,9 +131,7 @@ export type QaSuiteResolvedRunContext = {
   repoRoot: string;
   outputDir: string;
   transportId: QaTransportId;
-  selectedScenarios: ReturnType<
-    typeof import("./scenario-catalog.js").readQaBootstrapScenarioCatalog
-  >["scenarios"];
+  selectedScenarios: QaSeedScenarioWithSource[];
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;

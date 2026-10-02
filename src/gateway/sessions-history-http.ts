@@ -551,16 +551,19 @@ export async function handleSessionHistoryHttpRequest(
     pendingRefresh = undefined;
     queueStreamWork(async () => {
       let refresh = false;
+      const append = sseState.shouldRefreshForTranscriptPath(updatePath)
+        ? undefined
+        : await sseState.prepareInlineMessage({
+            message: update.message,
+            messageId: update.messageId,
+            messageSeq: update.messageSeq,
+          });
       await publishStream((presentation) => {
-        refresh = sseState.shouldRefreshForTranscriptPath(updatePath);
-        if (refresh) {
+        if (!append) {
+          refresh = true;
           return;
         }
-        const nextEvent = sseState.appendInlineMessage({
-          message: update.message,
-          messageId: update.messageId,
-          messageSeq: update.messageSeq,
-        });
+        const nextEvent = append();
         refresh = nextEvent?.shouldRefresh === true;
         if (refresh || nextEvent?.message === undefined) {
           return;

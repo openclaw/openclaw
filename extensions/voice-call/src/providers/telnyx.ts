@@ -19,14 +19,8 @@ import type {
 } from "../types.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
-import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
+import { guardedJsonApiRequest, readProviderCallStatus } from "./shared/guarded-json-api.js";
 
-/**
- * Telnyx Voice API provider implementation.
- *
- * Uses Telnyx Call Control API v2 for managing calls.
- * @see https://developers.telnyx.com/docs/api/v2/call-control
- */
 interface TelnyxProviderOptions {
   /** Skip webhook signature verification (development only, NOT for production) */
   skipVerification?: boolean;
@@ -35,16 +29,13 @@ interface TelnyxProviderOptions {
 function normalizeTelnyxDirection(
   direction: string | undefined,
 ): "inbound" | "outbound" | undefined {
-  switch (direction) {
-    case "incoming":
-    case "inbound":
-      return "inbound";
-    case "outgoing":
-    case "outbound":
-      return "outbound";
-    default:
-      return undefined;
+  if (direction === "incoming" || direction === "inbound") {
+    return "inbound";
   }
+  if (direction === "outgoing" || direction === "outbound") {
+    return "outbound";
+  }
+  return undefined;
 }
 
 function normalizeBase64ForCompare(value: string): string {
@@ -104,17 +95,9 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
-    const result = verifyTelnyxWebhook(ctx, this.publicKey, {
+    return verifyTelnyxWebhook(ctx, this.publicKey, {
       skipVerification: this.options.skipVerification,
     });
-
-    return {
-      ok: result.ok,
-      reason: result.reason,
-      isReplay: result.isReplay,
-      verifiedRequestKey: result.verifiedRequestKey,
-      releaseReplay: result.releaseReplay,
-    };
   }
 
   parseWebhookEvent(
@@ -140,7 +123,6 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   private normalizeEvent(data: TelnyxEvent, dedupeKey?: string): NormalizedEvent | null {
-    // Decode client_state from Base64 (we encode it in initiateCall)
     let callId = "";
     if (data.payload?.client_state) {
       callId = decodeClientStateBase64(data.payload.client_state) ?? data.payload.client_state;
@@ -162,13 +144,9 @@ export class TelnyxProvider implements VoiceCallProvider {
 
     switch (data.event_type) {
       case "call.initiated":
-        return { ...baseEvent, type: "call.initiated" };
-
       case "call.ringing":
-        return { ...baseEvent, type: "call.ringing" };
-
       case "call.answered":
-        return { ...baseEvent, type: "call.answered" };
+        return { ...baseEvent, type: data.event_type };
 
       case "call.bridged":
         return { ...baseEvent, type: "call.active" };
@@ -208,10 +186,6 @@ export class TelnyxProvider implements VoiceCallProvider {
           type: "call.dtmf",
           digits: data.payload?.digit || "",
         };
-
-      case "streaming.started":
-      case "streaming.stopped":
-        return null;
 
       default:
         return null;
@@ -264,9 +238,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       webhook_url_method: "POST",
       client_state: Buffer.from(input.callId).toString("base64"),
       timeout_secs: 30,
-      ...(input.streamUrl
-        ? buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken)
-        : {}),
+      ...buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken),
     };
     const result = await this.apiRequest<TelnyxCallResponse>("/calls", body);
 
@@ -287,9 +259,7 @@ export class TelnyxProvider implements VoiceCallProvider {
   async answerCall(input: AnswerCallInput): Promise<void> {
     const body: Record<string, unknown> = {
       command_id: `openclaw-answer-${input.callId}`,
-      ...(input.streamUrl
-        ? buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken)
-        : {}),
+      ...buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken),
     };
     await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, body);
   }
@@ -319,41 +289,38 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   async getCallStatus(input: GetCallStatusInput): Promise<GetCallStatusResult> {
-    try {
-      const data = await guardedJsonApiRequest<{ data?: { state?: string; is_alive?: boolean } }>({
-        url: `${this.baseUrl}/calls/${input.providerCallId}`,
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        allowNotFound: true,
-        allowedHostnames: [this.apiHost],
-        auditContext: "telnyx-get-call-status",
-        errorPrefix: "Telnyx get call status error",
-      });
-
-      if (!data) {
-        return { status: "not-found", isTerminal: true };
-      }
-
-      const state = data.data?.state ?? "unknown";
-      const isAlive = data.data?.is_alive;
-      // If is_alive is missing, treat as unknown rather than terminal (P1 fix)
-      if (isAlive === undefined) {
-        return { status: state, isTerminal: false, isUnknown: true };
-      }
-      return { status: state, isTerminal: !isAlive };
-    } catch {
-      return { status: "error", isTerminal: false, isUnknown: true };
-    }
+    return readProviderCallStatus(
+      () =>
+        guardedJsonApiRequest<{ data?: { state?: string; is_alive?: boolean } }>({
+          url: `${this.baseUrl}/calls/${input.providerCallId}`,
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${this.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          allowNotFound: true,
+          allowedHostnames: [this.apiHost],
+          auditContext: "telnyx-get-call-status",
+          errorPrefix: "Telnyx get call status error",
+        }),
+      (data) => {
+        const status = data.data?.state ?? "unknown";
+        const isAlive = data.data?.is_alive;
+        return isAlive === undefined
+          ? { status, isTerminal: false, isUnknown: true }
+          : { status, isTerminal: !isAlive };
+      },
+    );
   }
 }
 
 function buildTelnyxStreamingFields(
-  streamUrl: string,
+  streamUrl: string | undefined,
   streamAuthToken: string | undefined,
 ): Record<string, unknown> {
+  if (!streamUrl) {
+    return {};
+  }
   return {
     stream_url: streamUrl,
     stream_track: "inbound_track",
@@ -393,9 +360,5 @@ interface TelnyxEvent {
 interface TelnyxCallResponse {
   data: {
     call_control_id: string;
-    call_leg_id: string;
-    call_session_id: string;
-    is_alive: boolean;
-    record_type: string;
   };
 }

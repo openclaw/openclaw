@@ -1,4 +1,26 @@
+import type { AuthenticatedUser } from "../app/user-profile.ts";
 import type { ControlUiSessionFixture } from "./control-ui-session-fixtures.ts";
+
+export type ControlUiMockPresenceUser = {
+  self?: boolean;
+  id: string;
+  identity?: AuthenticatedUser["identity"];
+  name?: string;
+  email?: string;
+  avatarUrl?: string;
+  deviceFamily?: string;
+  host?: string;
+  ip?: string;
+  instanceId?: string;
+  lastInputSeconds?: number;
+  onlineSince?: number;
+  lastActivityAt?: number;
+  timeZone?: string;
+  mode?: string;
+  platform?: string;
+  ts?: number;
+  watchedSessions?: string[];
+};
 
 export type MockGatewayRequest = {
   id: string;
@@ -55,6 +77,8 @@ export type ControlUiMockRequestHandler = (request: {
 }) => void;
 
 export type ControlUiMockGateway = {
+  readonly online: boolean;
+  initialRosterDelivered: boolean;
   closeLatest: (code?: number, reason?: string) => void;
   deliverLatest: (frame: unknown) => void;
   deferNext: (method: string, match?: Record<string, unknown>) => void;

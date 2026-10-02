@@ -8,11 +8,8 @@ import {
   writeOutboxPayload,
   type OutboxPayloadFailure,
 } from "../../lib/chat/outbox-payload-store.runtime.ts";
-import {
-  storageTargetForGateway,
-  type ChatComposerScope,
-  type StoredChatOutboxScope,
-} from "../../lib/chat/outbox-store.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts";
+import { storageTargetForGateway, type ChatComposerScope } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { isIncognitoComposerScope } from "./composer-persistence-state.ts";
 import {
@@ -225,7 +222,7 @@ export async function prepareOutboxPayload(
     reference.recoveryScope,
     scope,
     host.settings?.gatewayUrl,
-    host.client?.recoveryScope,
+    observeOutboxRecoveryOwner(host),
     purpose,
     item.attachments?.map(({ mimeType, fileName, sizeBytes, origin }) => [
       mimeType,

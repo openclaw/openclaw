@@ -94,6 +94,7 @@ describe("startManagedGatewayConfigReloader hotReloadStatus plumbing", () => {
       configRevisionProjector: {
         projectRawHash: (hash) => `opaque:${hash}`,
         projectResolvedHash: (hash) => `resolved:${hash}`,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
       minimalTestGateway: false,
       initialConfig,

@@ -1,6 +1,7 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
 
 const containerMocks = vi.hoisted(() => ({ execContainer: vi.fn() }));
@@ -18,11 +19,6 @@ vi.mock("./container-engine.js", async (importOriginal) => ({
 vi.mock("./registry.js", () => registryMocks);
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let ensureSandboxContainer: typeof import("./docker.js").ensureSandboxContainer;
-
-beforeAll(async () => {
-  ({ ensureSandboxContainer } = await import("./docker.js"));
-});
 
 beforeEach(() => {
   registryMocks.readRegistryEntry.mockReset().mockResolvedValue(null);

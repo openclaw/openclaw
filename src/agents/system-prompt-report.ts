@@ -46,17 +46,12 @@ function buildToolSchemaStats(
   } catch {
     schemaJson = "";
   }
+  const properties = (parameters as Record<string, unknown>).properties;
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256Hex(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount:
+      properties && typeof properties === "object" ? Object.keys(properties).length : null,
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
   // so report generation stays cheap during frequent prompt rebuilds.
@@ -99,6 +94,33 @@ function measureRenderedProjectContextChars(systemPrompt: string): number {
   return (end === -1 ? systemPrompt.length : end) - start;
 }
 
+function resolveRenderedSkillsPrompt(systemPrompt: string, skillsPrompt: string): string {
+  const catalog = skillsPrompt.trim();
+  if (!catalog) {
+    return "";
+  }
+  // Use the renderer's workspace preamble; provider guidance can use the same
+  // heading names. Workspace examples are not the injected skills catalog.
+  const workspaceStart = systemPrompt.indexOf(
+    "\n## Workspace Files (injected)\nUser-editable; OpenClaw loads below as Project Context.\n",
+  );
+  for (const heading of systemPrompt.matchAll(/(?:^|\n)## Skills\n/g)) {
+    const sectionStart = heading.index + heading[0].length;
+    const catalogStart = systemPrompt.indexOf(catalog, sectionStart);
+    const nextSection = systemPrompt.indexOf("\n#", sectionStart);
+    // Match the whole known catalog, allowing headings inside its descriptions,
+    // only when it starts in a Skills section before injected workspace content.
+    if (
+      catalogStart >= 0 &&
+      (nextSection < 0 || catalogStart < nextSection) &&
+      (workspaceStart < 0 || catalogStart < workspaceStart)
+    ) {
+      return catalog;
+    }
+  }
+  return "";
+}
+
 /** Builds the stored report for a rendered system prompt and its inputs. */
 export function buildSystemPromptReport(params: {
   source: SessionSystemPromptReport["source"];
@@ -122,7 +144,8 @@ export function buildSystemPromptReport(params: {
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
   const toolsEntries = buildToolsEntries(params.tools);
   const toolsSchemaChars = toolsEntries.reduce((sum, t) => sum + (t.schemaChars ?? 0), 0);
-  const skillsEntries = parseSkillBlocks(params.skillsPrompt);
+  const skillsPrompt = resolveRenderedSkillsPrompt(params.systemPrompt, params.skillsPrompt);
+  const skillsEntries = parseSkillBlocks(skillsPrompt);
 
   return {
     source: params.source,
@@ -145,8 +168,8 @@ export function buildSystemPromptReport(params: {
     ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: params.injectedWorkspaceFiles,
     skills: {
-      promptChars: params.skillsPrompt.length,
-      hash: sha256Hex(params.skillsPrompt),
+      promptChars: skillsPrompt.length,
+      hash: sha256Hex(skillsPrompt),
       entries: skillsEntries,
     },
     tools: {

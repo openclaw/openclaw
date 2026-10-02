@@ -15,7 +15,10 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
+import {
+  WORKER_BUNDLE_ARTIFACT_PATHS,
+  WORKER_BUNDLE_CHUNK_PATH_PATTERN,
+} from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -89,6 +92,8 @@ describe("worker deploy build plugin", () => {
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
+          // Declaration partitions repeat the root entries; they are not runtime siblings.
+          !(typeof candidate.dts === "object" && candidate.dts.emitDtsOnly) &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
           Object.keys(candidate.entry).length > 0 &&
@@ -125,7 +130,7 @@ export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owne
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
-export { saveExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { updateExecApprovalsSync, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
@@ -153,12 +158,27 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         const builtEntries = vi
           .mocked(build)
           .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
-        expect(builtEntries.length).toBe(workerEntryNames.length);
-        expect(builtEntries.toSorted()).toEqual(workerEntryNames.toSorted());
-        // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
-        expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
-          "worker/worker.mjs",
-        ]);
+        expect(builtEntries.length).toBe(workerEntryNames.length + 1);
+        expect(builtEntries.toSorted()).toEqual(
+          [...workerEntryNames, "worker/worker-chunk-highlight"].toSorted(),
+        );
+        const chunks = bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName));
+        expect(chunks).toContain("worker/worker.mjs");
+        expect(chunks.length).toBeGreaterThan(2);
+        expect(
+          chunks.every(
+            (file) =>
+              file === "worker/worker.mjs" ||
+              (file.startsWith("worker/") && WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(file.slice(7))),
+          ),
+        ).toBe(true);
+        expect(
+          bundles.flatMap((bundle) =>
+            bundle.chunks.flatMap((chunk) =>
+              chunk.type === "chunk" ? [...chunk.imports, ...chunk.dynamicImports] : [],
+            ),
+          ),
+        ).not.toContain("ws");
         const { collectWorkerDeployArtifactErrors } =
           await import("../../scripts/check-cli-bootstrap-imports.mts");
         expect(
@@ -199,13 +219,13 @@ const entry = process.argv[1];
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   commitExecAuthorizationLocked,
-  saveExecApprovals,
+  updateExecApprovalsSync,
   readExecApprovalsSnapshot,
   closeOpenClawStateDatabaseAsync,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
-saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } });
+updateExecApprovalsSync({ update: () => ({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } }) });
 try {
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,
@@ -391,6 +411,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
       const result = await promisify(execFile)(
         process.execPath,
         [
+          ...(process.versions.bun ? ["--no-install"] : []),
           "--input-type=module",
           "--eval",
           `
@@ -620,10 +641,8 @@ try {
 } finally { session.close(); }
 console.log("relocated worker WebSocket and transcription passed");
 `;
-        const result = await promisify(execFile)(
-          process.execPath,
+        const result = await runNodeScript(
           [
-            ...(process.versions.bun ? ["--no-install"] : []),
             "--input-type=module",
             "--eval",
             probe,
@@ -631,20 +650,19 @@ console.log("relocated worker WebSocket and transcription passed");
             `ws://127.0.0.1:${address.port}`,
           ],
           {
-            cwd: relocated,
-            timeout: 30_000,
-            env: {
-              PATH: process.env.PATH,
-              SystemRoot: process.env.SystemRoot,
-              WINDIR: process.env.WINDIR,
-              HOME: root,
-              USERPROFILE: root,
-              TMPDIR: root,
-              TMP: root,
-              TEMP: root,
-            },
+            PATH: process.env.PATH,
+            SystemRoot: process.env.SystemRoot,
+            WINDIR: process.env.WINDIR,
+            HOME: root,
+            USERPROFILE: root,
+            TMPDIR: root,
+            TMP: root,
+            TEMP: root,
           },
+          30_000,
+          { cwd: relocated },
         );
+        expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.trim()).toBe("relocated worker WebSocket and transcription passed");
         expect(requests).toEqual([
           { path: "/client", header: "client-header" },

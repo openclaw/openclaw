@@ -7,6 +7,44 @@ import {
 
 describe("Control UI focus locations", () => {
   it.each([
+    {
+      query: "sessionKey=agent%3Amain%3Awork&target=host&profile=work.profile&targetId=tab%2F1",
+      tab: { target: "host", profile: "work.profile", targetId: "tab/1" },
+    },
+    {
+      query: "sessionKey=agent%3Amain%3Awork&target=node&node=node%2Fone&profile=work&targetId=..",
+      tab: { target: "node", node: "node/one", profile: "work", targetId: ".." },
+    },
+  ])(
+    "preserves an exact browser address in a base-path document ($tab.target)",
+    ({ query, tab }) => {
+      expect(
+        parseControlUiFocusLocation({ pathname: "/openclaw/focus/browser", search: `?${query}` }),
+      ).toEqual({
+        status: "valid",
+        basePath: "/openclaw",
+        target: { kind: "browser", sessionKey: "agent:main:work", tab },
+      });
+    },
+  );
+
+  it.each([
+    "",
+    "sessionKey=agent%3Amain%3Awork&target=host&profile=work",
+    "sessionKey=agent%3Amain%3Awork&target=node&profile=work&targetId=one",
+    "sessionKey=agent%3Amain%3Awork&target=host&node=other&profile=work&targetId=one",
+    "sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=one&targetId=two",
+    "sessionKey=%20&target=host&profile=work&targetId=one",
+  ])("rejects incomplete or ambiguous browser identities (%s)", (query) => {
+    expect(
+      parseControlUiFocusLocation({ pathname: "/focus/browser", search: `?${query}` }),
+    ).toEqual({
+      status: "unsupported",
+      basePath: "",
+    });
+  });
+
+  it.each([
     [
       "dashboard short reference",
       "/focus/dashboard/roboclaw/the-daily-claw-6d7c9ccb",
@@ -114,6 +152,21 @@ describe("Control UI focus locations", () => {
 });
 
 describe("buildControlUiFocusPath", () => {
+  it("encodes browser selectors as query data, never a website URL or path segment", () => {
+    expect(
+      buildControlUiFocusPath(
+        {
+          kind: "browser",
+          sessionKey: "agent:main:work",
+          tab: { target: "node", node: "worker/a", profile: "work", targetId: ".." },
+        },
+        "/openclaw",
+      ),
+    ).toBe(
+      "/openclaw/focus/browser?sessionKey=agent%3Amain%3Awork&target=node&profile=work&targetId=..&node=worker%2Fa",
+    );
+  });
+
   it.each([
     [
       "dashboard",

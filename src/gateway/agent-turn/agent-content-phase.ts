@@ -35,6 +35,7 @@ import {
 } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
@@ -43,6 +44,7 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
+import { AgentRequestReservationEndedError } from "./agent-dedupe.js";
 import type { AgentTurnContext } from "./types.js";
 
 type ExplicitRecipientSession = Awaited<
@@ -226,6 +228,7 @@ export async function prepareAgentContentPhase(params: {
         log: params.context.logGateway,
         supportsInlineImages,
         acceptNonImage: false,
+        assertCurrent: params.assertAdmissionCurrent,
       });
       message = parsed.message.trim();
       images = parsed.images;
@@ -233,14 +236,21 @@ export async function prepareAgentContentPhase(params: {
       media = parsed.media;
       offloadedRefs = parsed.offloadedRefs;
     } catch (err) {
+      if (err instanceof AgentRequestReservationEndedError) {
+        throw err;
+      }
       logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", err);
       params.respond(
         false,
         undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
+        err instanceof SessionMutationAuthorizationChangedError
+          ? err.error
+          : errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
       );
       return undefined;
     }

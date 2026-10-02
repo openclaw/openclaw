@@ -153,7 +153,9 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           : {};
     return html`
       <div
-        class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
+        class="chat-assistant-attachment-card chat-assistant-attachment-card--video ${
+          loading ? "chat-assistant-attachment-card--loading" : ""
+        }"
         aria-busy=${loading ? "true" : nothing}
         ${ref(this.viewport.setElement)}
         ?data-openable=${Boolean(onExpand)}

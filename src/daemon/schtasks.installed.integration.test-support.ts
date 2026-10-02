@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { z } from "zod";
 import {
@@ -16,6 +17,7 @@ import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../cli/daemon-cli/restart-healt
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { run, type CommandRecord } from "./schtasks.installed-command.test-support.js";
 import {
+  assertInstalledSiblingBuildRefusal,
   doctorReportSchema,
   inspectDisabledDiscoveryTasks,
   inspectInstalledUpdateFailure,
@@ -40,6 +42,11 @@ import {
   samePath,
   verifyPreparedInstall,
 } from "./schtasks.installed-package.test-support.js";
+import {
+  inspectInstalledSelectedStartupFallback,
+  inspectInstalledStartupAliasBuildRefusal,
+  inspectInstalledStartupSiblings,
+} from "./schtasks.installed-startup.test-support.js";
 
 type Lifetime = ReturnType<typeof createFixtureLifetime>;
 type Owners = {
@@ -77,6 +84,7 @@ export async function runInstalledLifecycle(
     readTaskXml,
     readRelatedProcessDiagnostics,
   } = await import("./schtasks.integration-observation.test-support.js");
+  const { waitForProcessExit } = await import("./schtasks.task-supervisor.native-test-support.js");
   const key = z.enum(keys).parse(process.env.CI_WINDOWS_SCHTASKS_INSTALLED_CELL);
   const cellIndex = keys.indexOf(key);
   const input = await readInput(inputPath);
@@ -90,10 +98,8 @@ export async function runInstalledLifecycle(
   samePath(path.dirname(proofPath), cellEvidence(inputPath, key));
   await fs.mkdir(path.dirname(proofPath), { recursive: true });
   const admissions: Array<Record<string, unknown>> = [];
-  const results: Array<Record<string, unknown>> = [];
   const defaultBefore = await owners.readTaskDefinitionSnapshot("OpenClaw Gateway");
   const admissionPath = path.join(path.dirname(proofPath), "installed-cleanup.json");
-  let failure: Error | undefined;
   const rootDir = path.join(input.stateRoot, key);
   await fs.mkdir(rootDir);
   const installRoot = prefix(input, key);
@@ -165,24 +171,26 @@ export async function runInstalledLifecycle(
     await recordProgress(`${phase}:ready`);
   };
   const doctor = async (task: Task, expectedExit = 1) =>
-    doctorReportSchema.parse(
-      JSON.parse(
-        await cli(
-          task,
-          [
-            "doctor",
-            "--lint",
-            "--deep",
-            "--only",
-            "core/doctor/gateway-services/extra",
-            "--severity-min",
-            "info",
-            "--json",
-          ],
-          expectedExit,
+    doctorReportSchema
+      .extend({ ok: z.literal(expectedExit === 0) })
+      .parse(
+        JSON.parse(
+          await cli(
+            task,
+            [
+              "doctor",
+              "--lint",
+              "--deep",
+              "--only",
+              "core/doctor/gateway-services/extra",
+              "--severity-min",
+              "info",
+              "--json",
+            ],
+            expectedExit,
+          ),
         ),
-      ),
-    );
+      );
   const cleanupTask = (
     task: Pick<Task, "rootDir" | "stateDir" | "scriptPath" | "taskName">,
     probePath: string,
@@ -318,6 +326,7 @@ export async function runInstalledLifecycle(
     const before = await status(selected, beforeIdentity);
     observations.before = before;
     await recordProgress("selected-status-verified");
+    let candidateStatus = before;
     const configBefore = await fs.readFile(selected.configPath);
     if (key !== "fresh") {
       const peer = await createTask("peer");
@@ -328,6 +337,26 @@ export async function runInstalledLifecycle(
       const peerConfig = await fs.readFile(peer.configPath);
       const peerInstallBefore = await hashInstall(peer.installRoot);
       await recordProgress("peer-before-update:hash-verified");
+      if (key === "2026.9.4") {
+        observations.siblingBuildRefusal = await assertInstalledSiblingBuildRefusal({
+          toolingEntry: path.resolve("scripts/run-node.mjs"),
+          selected,
+          peer,
+          commands,
+          signal,
+          recordProgress,
+          verifyContinuity: async () => {
+            assert.equal(
+              (await status(selected, beforeIdentity)).service.runtime.pid,
+              before.service.runtime.pid,
+            );
+            assert.equal(
+              (await status(peer, peerIdentity)).service.runtime.pid,
+              peerBefore.service.runtime.pid,
+            );
+          },
+        });
+      }
       const driverBefore = await hashFile(selected.entry);
       observations.driver = {
         version: key,
@@ -355,6 +384,7 @@ export async function runInstalledLifecycle(
       const after = await status(selected, candidateIdentity);
       assert.notEqual(after.service.runtime.pid, before.service.runtime.pid);
       observations.after = after;
+      candidateStatus = after;
       assert.deepEqual(
         JSON.parse(await fs.readFile(selected.configPath, "utf8")).gateway,
         JSON.parse(configBefore.toString()).gateway,
@@ -379,6 +409,34 @@ export async function runInstalledLifecycle(
       assert.deepEqual(await hashInstall(peer.installRoot), peerInstallBefore);
       await recordProgress("peer-after-update:hash-verified");
       observations.peerPreserved = true;
+      observations.startupSiblings = await inspectInstalledStartupSiblings({
+        selected,
+        launcher: peer,
+        expectedStatus: after,
+        doctor,
+        deepStatus: async (task) =>
+          JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
+        lifetime,
+        admissions,
+        admissionPath,
+      });
+      if (key === "2026.9.4") {
+        observations.startupAliasBuildRefusal = await inspectInstalledStartupAliasBuildRefusal({
+          toolingEntry: path.resolve("scripts/run-node.mjs"),
+          selected,
+          peer,
+          expectedSelected: after,
+          expectedPeer: peerAfter,
+          readStatus: async (task) => JSON.parse(await cli(task, ["gateway", "status", "--json"])),
+          commands,
+          signal,
+          lifetime,
+          admissions,
+          admissionPath,
+          waitForLoopbackPortRelease: owners.waitForLoopbackPortRelease,
+          recordProgress,
+        });
+      }
       await cli(peer, ["gateway", "stop", "--force", "--json"]);
       await owners.waitForLoopbackPortRelease(peer.gatewayPort);
       await cli(peer, ["gateway", "uninstall", "--json"]);
@@ -405,7 +463,36 @@ export async function runInstalledLifecycle(
         admissionPath,
         recordProgress,
       });
+      observations.startupSiblings = await inspectInstalledStartupSiblings({
+        selected,
+        launcher: selected,
+        expectedStatus: before,
+        doctor,
+        deepStatus: async (task) =>
+          JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
+        lifetime,
+        admissions,
+        admissionPath,
+      });
     }
+    const beforeRestartPid = candidateStatus.service.runtime.pid;
+    const beforeRestartXml = await readTaskXml(selected.taskName);
+    assert.ok(beforeRestartXml);
+    const restartIdentity = await readInstalledBuildIdentity(installRoot, input.candidate.version);
+    await cli(selected, ["gateway", "restart", "--json"]);
+    await waitForProcessExit(beforeRestartPid);
+    await awaitReadiness(selected, "candidate-restart");
+    const restarted = await status(selected, restartIdentity);
+    assert.notEqual(restarted.service.runtime.pid, beforeRestartPid);
+    assert.equal(await readTaskXml(selected.taskName), beforeRestartXml);
+    observations.restart = {
+      beforePid: beforeRestartPid,
+      after: restarted,
+      oldProcessExited: true,
+      taskDefinitionUnchanged: true,
+    };
+    candidateStatus = restarted;
+    await recordProgress("candidate-restart-verified");
     const configBeforePreview = await fs.readFile(selected.configPath);
     const healthy = await preview();
     assert.equal(
@@ -414,6 +501,42 @@ export async function runInstalledLifecycle(
     );
     await cli(selected, ["gateway", "stop", "--force", "--json"]);
     await owners.waitForLoopbackPortRelease(selected.gatewayPort);
+    observations.selectedStartupFallback = await inspectInstalledSelectedStartupFallback({
+      ...(key === "2026.9.4"
+        ? {
+            observeFingerprint: async () => {
+              const observation = JSON.parse(
+                await run(
+                  [
+                    "--import",
+                    pathToFileURL(path.resolve("scripts/tsx.mjs")).href,
+                    path.resolve(
+                      "src/daemon/schtasks.installed-fingerprint-observer.test-support.mts",
+                    ),
+                    inputPath,
+                  ],
+                  selected.env,
+                  process.cwd(),
+                  commands,
+                  0,
+                  signal,
+                ),
+              );
+              await recordProgress("fingerprint-result");
+              return observation;
+            },
+          }
+        : {}),
+      selected,
+      expectedCommand: candidateStatus.service.command.programArguments,
+      doctor,
+      deepStatus: async (task) =>
+        JSON.parse(await cli(task, ["gateway", "status", "--deep", "--json"])),
+      canBindLoopbackPort: owners.canBindLoopbackPort,
+      lifetime,
+      admissions,
+      admissionPath,
+    });
     if (key === "2026.9.3") {
       assert.ok(authorityPeerRoot);
       const { inspectInstalledTaskAuthority } =
@@ -556,33 +679,29 @@ export async function runInstalledLifecycle(
     );
   }
   await fs.writeFile(path.join(rootDir, "commands.json"), JSON.stringify(commands, null, 2));
-  results.push({
+  const result = {
     key,
     result: cellFailure ? "failed" : "passed",
     commands,
     observations,
     failure: cellFailure ? describeFailure(cellFailure) : undefined,
-  });
-  if (cellFailure) {
-    failure = cellFailure;
-  }
+  };
   await fs.writeFile(
     proofPath,
     JSON.stringify(
       {
-        result: failure ? "failed" : "pass",
+        result: cellFailure ? "failed" : "pass",
         head: input.toolingSha,
         candidate: input.candidate,
         published: input.published,
         cell: key,
-        cells: results,
+        cells: [result],
       },
       null,
       2,
     ),
   );
-  if (failure) {
-    throw failure;
+  if (cellFailure) {
+    throw cellFailure;
   }
-  assert.equal(results.length, 1);
 }

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { getAdmittedRunDelegatedAuthority } from "../agents/admitted-run-context.js";
@@ -23,6 +23,7 @@ import {
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
@@ -115,7 +116,9 @@ it("keeps embedded completion pending until its incognito pause fences the next 
         await release.promise;
       });
       await entered.promise;
-      const owner = createSessionLifecyclePersistenceOwner();
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      const owner = createSessionLifecyclePersistenceOwner(scheduler);
       const persistence = owner.observe({
         sessionKey: target.sessionKey,
         agentId: "main",

@@ -723,7 +723,10 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-      const effortSelect = pane.locator('[data-chat-thinking-select="true"]');
+      // Summary click actionability does not wait for our history-loading disabled state.
+      const effortSelect = pane.locator(
+        '[data-chat-thinking-select="true"][aria-disabled="false"]',
+      );
       await effortSelect.click();
       const thinkingSlider = pane.locator('[data-chat-thinking-slider="true"]');
       await thinkingSlider.waitFor({ state: "visible" });
@@ -885,9 +888,8 @@ suite.define(() => {
       const search = main.locator('[data-chat-model-search="true"]');
       await expect
         .poll(() => search.evaluate((element) => element === document.activeElement))
-        .toBe(false);
-      await search.focus();
-      await search.fill("anthropic");
+        .toBe(true);
+      await page.keyboard.type("anthropic");
       const anthropicModel = main.locator('[data-chat-model-option="anthropic/claude-fable-5"]');
       await expect.poll(() => anthropicModel.isVisible()).toBe(true);
       await expect

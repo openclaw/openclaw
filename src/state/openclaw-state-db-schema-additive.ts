@@ -24,7 +24,7 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const repositoryWorkspacePendingSchemas = new WeakSet<DatabaseSync>();
 
-export function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
+function hasRepositoryWorkspacePendingResultSchema(database: DatabaseSync): boolean {
   if (repositoryWorkspacePendingSchemas.has(database)) {
     return true;
   }

@@ -10,6 +10,7 @@ import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
+import { assert } from "../fixtures/common.mjs";
 import {
   applyMockOpenAiModelConfig,
   parseMockOpenAiPort,
@@ -120,12 +121,6 @@ function configPath() {
     process.env.OPENCLAW_CONFIG_PATH ??
     path.join(process.env.HOME ?? "", ".openclaw", "openclaw.json")
   );
-}
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
 }
 
 function writeConfig(cfg) {

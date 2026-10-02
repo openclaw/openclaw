@@ -5,6 +5,7 @@ import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk
 import type { RealtimeVoiceSelectionHandle } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { Client } from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
 import { buildDiscordGroupSystemPrompt } from "../monitor/inbound-context.js";
@@ -28,11 +29,6 @@ export type DiscordVoiceIngressContext = {
   isCurrent?: () => boolean;
   senderIsOwner: boolean;
   speakerLabel: string;
-};
-
-type DiscordVoiceAgentTurnResult = {
-  context: DiscordVoiceIngressContext;
-  text: string;
 };
 
 function summarizeAgentTurnPayloads(payloads: readonly unknown[]): string {
@@ -78,12 +74,14 @@ export async function resolveDiscordVoiceIngressContext(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   admissionAllowFrom?: string[];
-  fetchGuildName: (guildId: string) => Promise<string | undefined>;
+  client: Client;
   speakerContext: DiscordVoiceSpeakerContextResolver;
 }): Promise<DiscordVoiceIngressContext | null> {
   const { entry, userId } = params;
   if (!entry.guildName) {
-    entry.guildName = await params.fetchGuildName(entry.guildId);
+    const guild = await params.client.fetchGuild(entry.guildId).catch(() => null);
+    entry.guildName =
+      guild && typeof guild.name === "string" && guild.name.trim() ? guild.name : undefined;
   }
   const speaker = await params.speakerContext.resolveContext(entry.guildId, userId);
   const speakerIdentity = await params.speakerContext.resolveIdentity(entry.guildId, userId);
@@ -127,7 +125,7 @@ export async function runDiscordVoiceAgentTurn(params: {
   toolsAllow?: string[];
   voiceSelection?: RealtimeVoiceSelectionHandle;
   signal?: AbortSignal;
-}): Promise<DiscordVoiceAgentTurnResult | null> {
+}): Promise<string | null> {
   const { context } = params;
   if (
     params.entry.captureOnly ||
@@ -190,10 +188,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       `discord voice: agent turn produced no speakable payloads guild=${params.entry.guildId} channel=${params.entry.channelId} voiceSession=${params.entry.voiceSessionKey} supervisorSession=${params.entry.route.sessionKey} agent=${params.entry.route.agentId} user=${params.userId} ${summarizeAgentTurnPayloads(payloads)}`,
     );
   }
-  return {
-    context,
-    text,
-  };
+  return text;
 }
 
 export async function resolveDiscordVoiceRealtimeAgentContext(params: {

@@ -12,7 +12,6 @@ import {
 import type {
   NativeSubagentMonitorClient,
   NativeTurnEnd,
-  NativeTurnObservation,
   NativeTurnState,
   RecoveredCompletion,
   ThreadRecovery,
@@ -73,7 +72,6 @@ export class CodexNativeSubagentHistoryRecovery {
       predecessorNativeTurnId?: string;
       initialAssignment?: boolean;
       recordedCompletion?: RecoveredCompletion;
-      observedTurns?: readonly NativeTurnObservation[];
     },
   ): Promise<ThreadRecovery> {
     const { childThreadId } = assignment;
@@ -87,8 +85,9 @@ export class CodexNativeSubagentHistoryRecovery {
     if (!thread || readString(thread, "id")?.trim() !== childThreadId) {
       return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
     }
+    const rawTurns = Array.isArray(thread.turns) ? thread.turns : [];
     if (options.predecessorNativeTurnId) {
-      const turns = Array.isArray(thread.turns) ? thread.turns.filter(isJsonObject) : [];
+      const turns = rawTurns.filter(isJsonObject);
       const predecessor = turns.findIndex(
         (turn) => readString(turn, "id") === options.predecessorNativeTurnId,
       );
@@ -101,38 +100,17 @@ export class CodexNativeSubagentHistoryRecovery {
         return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
       }
     }
-    const firstObserved = options.observedTurns?.[0];
-    // Forked history can begin with copied parent turns. Only a native child
-    // end observed before successor starts can anchor an unlocated predecessor.
-    const observedPredecessor =
-      options.resumeInterrupted &&
-      firstObserved?.state &&
-      firstObserved.state !== "active" &&
-      !firstObserved.startObserved
-        ? firstObserved.turnId
-        : undefined;
     let initialTurnId: string | undefined;
     if (options.initialAssignment && !assignment.nativeTurnId && !recordedCompletion) {
       const forkedFromId = readString(thread, "forkedFromId");
-      if (forkedFromId) {
-        // Codex snapshots inherited history at fork time. A later parent read
-        // reflects rollback, not that immutable prefix; subtraction can label a
-        // copied parent final as child output. Wait for an observed child turn
-        // or native completion receipt instead of inventing its first turn.
-        return {
-          parentThreadId: readThreadParentThreadId(thread),
-          resumable: false,
-          threadState: "unavailable",
-          observedPendingTurns: [],
-        };
-      }
-      for (const turn of Array.isArray(thread.turns) ? thread.turns : []) {
-        const id = readString(turn, "id");
-        if (id) {
-          initialTurnId = id;
-          break;
-        }
-      }
+      // Fork history contains a parent's immutable prefix, not child results.
+      // Only an observed turn or native completion receipt can anchor that child.
+      initialTurnId = forkedFromId
+        ? undefined
+        : readString(
+            rawTurns.find((turn) => readString(turn, "id")),
+            "id",
+          );
       if (!initialTurnId) {
         return {
           parentThreadId: readThreadParentThreadId(thread),
@@ -142,14 +120,11 @@ export class CodexNativeSubagentHistoryRecovery {
         };
       }
     }
-    const turnId = assignment.nativeTurnId ?? initialTurnId ?? observedPredecessor;
-    const pendingTurnIds = new Set([
-      ...this.queries.getPendingTurnIds(childThreadId),
-      ...(options.observedTurns?.map((turn) => turn.turnId) ?? []),
-    ]);
+    const turnId = assignment.nativeTurnId ?? initialTurnId;
+    const pendingTurnIds = new Set(this.queries.getPendingTurnIds(childThreadId));
     const unresolvedAssignment = options.resumeInterrupted && !turnId && pendingTurnIds.size > 0;
     const observedPendingTurns: ThreadRecovery["observedPendingTurns"] = [];
-    for (const turn of Array.isArray(thread.turns) ? thread.turns : []) {
+    for (const turn of rawTurns) {
       const pendingTurnId = readString(turn, "id");
       if (pendingTurnId && pendingTurnIds.has(pendingTurnId)) {
         observedPendingTurns.push({ turnId: pendingTurnId, state: readNativeTurnState(turn) });
@@ -174,7 +149,7 @@ export class CodexNativeSubagentHistoryRecovery {
     if (unresolvedAssignment) {
       threadState = "unavailable";
     } else if (turnId) {
-      const turns = Array.isArray(thread.turns) ? thread.turns.filter(isJsonObject) : [];
+      const turns = rawTurns.filter(isJsonObject);
       let index = turns.findIndex((turn) => readString(turn, "id") === turnId);
       // A missed resume notification can leave an unfinished assignment on an
       // interrupted turn. Stop at its first terminal turn, before any later assignment.
@@ -194,7 +169,7 @@ export class CodexNativeSubagentHistoryRecovery {
       resumable = turnStatus === "interrupted";
       threadState = turnStatus === "inprogress" ? "active" : turnStatus ? "other" : "unavailable";
     } else if (threadStatus === "active") {
-      const turn = Array.isArray(thread.turns) ? thread.turns.at(-1) : undefined;
+      const turn = rawTurns.at(-1);
       if (normalizeIdentifier(readString(turn, "status")) === "inprogress") {
         nativeTurnId = readString(turn, "id");
         nativeTurnState = "active";
@@ -275,7 +250,6 @@ export class CodexNativeSubagentHistoryRecovery {
     };
     return {
       ...lineage,
-      assignmentTurnId: turnId,
       nativeTurnId,
       nativeTurnState,
       observedPendingTurns,

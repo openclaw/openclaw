@@ -200,6 +200,12 @@ export const GatewayConfigSchema = z
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
       })
       .optional(),
+    uploads: z
+      .strictObject({
+        /** Allow client file/image uploads to the Gateway (default true). Hot-applies. */
+        enabled: z.boolean().optional(),
+      })
+      .optional(),
     cliAgents: z
       .strictObject({
         /** Show catalog-backed CLI agents in the new-session model picker. Default: true. */

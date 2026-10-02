@@ -3,6 +3,8 @@ import { prepareAgentRequestPreflight } from "../agent-turn/agent-request-prefli
 import { createAgentTurnService } from "../agent-turn/agent-turn-service.js";
 import { createAgentTurnIo } from "../agent-turn/io.js";
 import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "../agent-turn/principal.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -17,6 +19,12 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   hasCurrentClientAuthority,
   sessionMutationCommitGuard,
 }) => {
+  const assertUploadAllowed = captureGatewayClientUploadCommitGuard({
+    method: "agent",
+    requestParams: params,
+    client,
+    context,
+  });
   const assertAdmissionCurrent = () => {
     sessionMutationCommitGuard?.();
     if (hasCurrentClientAuthority?.() === false) {
@@ -54,6 +62,7 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
   try {
     await createAgentTurnService({ context, isWebchatConnect }).startTurn({
       assertAdmissionCurrent: runtimeAuthority.commitGuard,
+      assertInputCommitAllowed: assertUploadAllowed,
       hasCurrentClientAuthority,
       preflight,
       principal,
@@ -61,6 +70,10 @@ export const agentRunHandler: GatewayRequestHandlers["agent"] = async ({
       onRunObserved,
     });
   } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      respond(false, undefined, error.error);
+      return;
+    }
     runtimeAuthority.handleClosedError(error);
   }
 };

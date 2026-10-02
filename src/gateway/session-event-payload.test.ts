@@ -21,6 +21,16 @@ it("clears a saved dashboard default in subscribed session metadata", () => {
   expect({ ...previous, ...cleared }).toMatchObject({ boardPresentation: null });
 });
 
+it("publishes snooze metadata and clears it when a subscribed session wakes", () => {
+  const sessionRow = { key: "agent:main:dashboard", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionSnapshot({
+    sessionRow: { ...sessionRow, snoozedUntil: 3_600_000, snoozedAt: 1 },
+  });
+  expect(previous).toMatchObject({ snoozedUntil: 3_600_000, snoozedAt: 1 });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow });
+  expect({ ...previous, ...cleared }).toMatchObject({ snoozedUntil: null, snoozedAt: null });
+});
+
 it("projects session actors and explicitly clears absent attribution", () => {
   expect(
     buildGatewaySessionSnapshot({

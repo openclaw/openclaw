@@ -1,4 +1,5 @@
 import type { webhook } from "@line/bot-sdk";
+import { firstDefined } from "openclaw/plugin-sdk/allow-from";
 import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
@@ -41,7 +42,7 @@ import {
   normalizeOptionalString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
+import { normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
   buildLinePostbackContext,

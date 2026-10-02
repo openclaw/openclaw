@@ -1,6 +1,6 @@
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -117,25 +117,12 @@ export function resolveTelegramToken(
 
   // Account IDs are normalized for routing (e.g. lowercased). Config keys may not
   // be normalized, so resolve per-account config by matching normalized IDs.
-  const resolveAccountCfg = (id: string): TelegramAccountConfig | undefined => {
-    const accounts = telegramCfg?.accounts;
-    return Array.isArray(accounts)
-      ? undefined
-      : resolveNormalizedAccountEntry(accounts, id, normalizeAccountId);
-  };
+  const accountCfg = Array.isArray(telegramCfg?.accounts)
+    ? undefined
+    : resolveNormalizedAccountEntry(telegramCfg?.accounts, accountId, normalizeAccountId);
 
-  const accountCfg = resolveAccountCfg(accountId);
-
-  // When a non-default accountId is explicitly specified but not found in config,
-  // decide whether to fall through to channel-level defaults based on whether
-  // the config has an explicit accounts section (multi-bot setup).
-  //
-  // Multi-bot: accounts section exists with entries → block fallthrough to prevent
-  // routing via the wrong bot's token.
-  //
-  // Single-bot: no accounts section (or empty) → allow fallthrough so that
-  // binding-created accountIds inherit the channel-level token.
-  // See: https://github.com/openclaw/openclaw/issues/53876
+  // Unknown accounts may inherit the single-bot token, but must not select
+  // another bot's credentials in a multi-bot setup (#53876).
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
     const accounts = telegramCfg?.accounts;
     const hasConfiguredAccounts =

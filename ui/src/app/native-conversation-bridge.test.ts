@@ -16,7 +16,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-function fixture() {
+function fixture(features: string[] = []) {
   const messages: Record<string, unknown>[] = [];
   const listeners = new Set<() => void>();
   const subscribe = (listener: () => void) => {
@@ -58,7 +58,7 @@ function fixture() {
     formFactor: "desktop",
     surface: "conversation",
   });
-  vi.stubGlobal("__OPENCLAW_NATIVE_CONVERSATION__", { contract: 1 });
+  vi.stubGlobal("__OPENCLAW_NATIVE_CONVERSATION__", { contract: 1, features });
   const reply = vi.fn((_message: Record<string, unknown>): Promise<unknown> =>
     Promise.resolve({ ok: true }),
   );
@@ -106,6 +106,143 @@ async function flush() {
 }
 
 describe("native conversation contract", () => {
+  it("publishes bounded change-only sidebar facts only to an opted-in current document", async () => {
+    const old = fixture();
+    old.bridge.publishSessionFacts([]);
+    await flush();
+    expect(old.messages.some((message) => message.type === "session-facts")).toBe(false);
+    old.bridge.dispose();
+    const f = fixture(["session-facts-v1", "unknown-feature"]);
+    const row = {
+      agentId: "work",
+      sessionKey: "agent:work:other",
+      hasComposerDraft: true,
+      outboxAttentionCount: 61,
+    };
+    f.bridge.publishSessionFacts([row]);
+    f.bridge.publishSessionFacts([{ ...row }]);
+    await flush();
+    expect(f.messages[0]).toMatchObject({
+      capabilities: ["navigate", "presentation", "focus-composer", "session-facts-v1"],
+    });
+    expect(f.messages.filter((message) => message.type === "session-facts")).toEqual([
+      {
+        contract: 1,
+        documentId: f.documentId,
+        type: "session-facts",
+        revision: 1,
+        sessions: [row],
+      },
+    ]);
+    f.bridge.publishSessionFacts([]);
+    await flush();
+    expect(f.messages.at(-1)).toMatchObject({ revision: 2, sessions: [] });
+    for (const invalid of [
+      [{ ...row, outboxAttentionCount: -1 }],
+      [{ ...row, outboxAttentionCount: Number.MAX_SAFE_INTEGER + 1 }],
+      [{ ...row, sessionKey: "🦞".repeat(1025) }],
+      Array.from({ length: 65 }, (_, index) => ({ ...row, sessionKey: String(index) })),
+      Array.from({ length: 64 }, (_, index) => ({
+        ...row,
+        sessionKey: `${index}${"x".repeat(1024)}`,
+      })),
+    ]) {
+      f.bridge.publishSessionFacts(invalid);
+      await flush();
+      expect(f.messages.at(-1)).toMatchObject({ type: "session-facts", sessions: null });
+    }
+    f.bridge.dispose();
+    const count = f.messages.length;
+    f.bridge.publishSessionFacts([row]);
+    await flush();
+    expect(f.messages).toHaveLength(count);
+  });
+
+  it("rejects unadvertised or hidden session action commands before navigation", async () => {
+    const old = fixture();
+    old.command("open-session-actions", old.data);
+    await flush();
+    expect(old.navigateAndWait).not.toHaveBeenCalled();
+    expect(old.messages.find((message) => message.type === "command-result")).toMatchObject({
+      error: "unsupported",
+    });
+    old.bridge.dispose();
+    const f = fixture(["session-actions-v1"]);
+    f.command("presentation", { visible: false, active: false });
+    await flush();
+    f.command(
+      "open-session-actions",
+      { agentId: "main", sessionKey: f.data.sessionKey },
+      { requestId: "hidden" },
+    );
+    await flush();
+    expect(f.navigateAndWait).not.toHaveBeenCalled();
+    expect(
+      f.messages.find(
+        (message) => message.type === "command-result" && message.requestId === "hidden",
+      ),
+    ).toMatchObject({
+      type: "command-result",
+      requestId: "hidden",
+      error: "unavailable",
+    });
+  });
+
+  it.each(["current", "superseded", "detached", "retired"] as const)(
+    "waits for rendered session actions without opening a stale menu (%s)",
+    async (owner) => {
+      const f = fixture(["session-actions-v1"]);
+      const page = document.createElement("openclaw-chat-page");
+      const pane = document.createElement("openclaw-chat-pane");
+      pane.sessionKey = f.data.sessionKey;
+      pane.classList.add("chat-pane-cache__pane--active");
+      page.append(pane);
+      document.body.append(page);
+      const results = () => f.messages.filter((message) => message.type === "command-result");
+      f.command("open-session-actions", {
+        agentId: f.data.agentId,
+        sessionKey: f.data.sessionKey,
+      });
+      await flush();
+      await vi.dynamicImportSettled();
+      await flush();
+      expect(results()).toEqual([]);
+
+      if (owner === "superseded") {
+        f.data.sessionKey = "agent:main:other";
+        f.changed();
+        // The pane cache retains the prior session's pane and moves only its class.
+        pane.classList.remove("chat-pane-cache__pane--active");
+      } else if (owner === "detached") {
+        pane.remove();
+      } else if (owner === "retired") {
+        f.bridge.dispose();
+      }
+      await flush();
+      // A retired pane settles the command now, not at the response deadline.
+      expect(results()).toMatchObject(
+        owner === "superseded" || owner === "detached"
+          ? [{ requestId: "request-1", ok: false, error: "unavailable" }]
+          : [],
+      );
+      const menu = document.createElement("openclaw-chat-header-session-menu");
+      const dropdown = document.createElement("wa-dropdown");
+      dropdown.open = false;
+      menu.append(dropdown);
+      pane.append(menu);
+      await flush();
+      expect(dropdown.open).toBe(owner === "current");
+      if (owner === "current") {
+        expect(results()).toEqual([]);
+        dropdown.dispatchEvent(new Event("wa-after-show"));
+        await flush();
+        expect(results()).toMatchObject([{ requestId: "request-1", ok: true }]);
+      } else {
+        expect(results()).toHaveLength(owner === "retired" ? 0 : 1);
+      }
+    },
+  );
+
   it("requires the conversation capability and a callable handler", () => {
     const f = fixture();
     f.bridge.dispose();

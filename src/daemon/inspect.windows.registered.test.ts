@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
-import { beforeEach, expect, it, vi } from "vitest";
-import { findExtraGatewayServices } from "./inspect.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { findExtraGatewayServices, listManagedOpenClawGatewayServices } from "./inspect.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 
 const spawnSync = vi.hoisted(() => vi.fn());
@@ -9,6 +10,67 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawnSync,
 }));
 beforeEach(() => spawnSync.mockReset());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it.each([
+  "single foreign launcher",
+  "multiple foreign launchers",
+  "later Gateway launcher",
+  "later wrapped Gateway launcher",
+])("qualifies complete inventory failures from launcher evidence: %s", async (kind) => {
+  const taskName = "\\Microsoft\\Windows\\Hotpatch\\Monitoring";
+  const first = "C:\\fixtures\\maintenance.cmd";
+  const second = "C:\\fixtures\\assistant.vbs";
+  const wrapped = kind === "later wrapped Gateway launcher";
+  const gateway = `C:\\fixtures\\assistant.${wrapped ? "bat" : "cmd"}`;
+  const task = {
+    taskPath: taskName,
+    state: 4,
+    actions: (kind === "single foreign launcher" ? [first] : [first, second]).map((pathname) => ({
+      type: 0,
+      path: pathname === second && wrapped ? "C:\\Windows\\System32\\cmd.exe" : pathname,
+      arguments: pathname === second && wrapped ? `/d /c "${gateway}"` : "",
+      workingDirectory: "",
+    })),
+  };
+  spawnSync
+    .mockReturnValueOnce({ status: 0, stdout: JSON.stringify([task]) })
+    .mockReturnValue({ status: 0, stdout: JSON.stringify(task) });
+  const readFile = vi.spyOn(fs, "readFile").mockImplementation(async (pathname) => {
+    if (pathname === second) {
+      return Buffer.from(
+        `Set shell = CreateObject("WScript.Shell")\r\nWScript.Quit shell.Run("""${gateway}""", 0, True)`,
+      );
+    }
+    if (pathname === gateway && kind.startsWith("later")) {
+      return Buffer.from(
+        '@echo off\r\n"C:\\Node\\node.exe" "C:\\OpenClaw\\openclaw.mjs" --profile rescue gateway run\r\n',
+      );
+    }
+    if (pathname !== first && pathname !== gateway) {
+      throw new Error("Unexpected launcher read");
+    }
+    return Buffer.from('@echo off\r\nif "%HOTPATCH_ENABLED%"=="1" call maintenance.exe\r\n');
+  });
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+  try {
+    const inventory = await listManagedOpenClawGatewayServices(
+      { USERPROFILE: "C:\\Users\\test", APPDATA: tempDirs.make("foreign-task-startup-") },
+      { requireComplete: true },
+    );
+    expect(inventory).toEqual({
+      services: [],
+      errors: kind.startsWith("later")
+        ? [{ source: taskName, message: expect.stringContaining("could not be inspected") }]
+        : [],
+    });
+  } finally {
+    readFile.mockRestore();
+    Object.defineProperty(process, "platform", platform);
+  }
+});
+
 it("excludes a static non-Gateway runtime command without admitting its missing profile", async () => {
   const taskName = "\\OpenClaw Helper (non-gateway)";
   const scriptPath = "C:\\openclaw-schtasks\\non-gateway\\non-gateway.cmd";
@@ -30,6 +92,7 @@ it("excludes a static non-Gateway runtime command without admitting its missing 
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
   const env = {
     USERPROFILE: "C:\\Users\\test",
+    APPDATA: tempDirs.make("unrelated-task-startup-"),
   };
   try {
     await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
@@ -151,7 +214,11 @@ it.each([
   });
   const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
   Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-  const env = { USERPROFILE: "C:\\Users\\test", OPENCLAW_PROFILE: profile };
+  const env = {
+    USERPROFILE: "C:\\Users\\test",
+    APPDATA: tempDirs.make("registered-task-startup-"),
+    OPENCLAW_PROFILE: profile,
+  };
   try {
     await expect(findExtraGatewayServices(env, { deep: true })).resolves.toEqual({
       services: [

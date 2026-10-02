@@ -15,6 +15,15 @@ type WorkerInferenceFrameContext = {
   seq: number;
 };
 
+const TERMINAL_ERROR_MESSAGES = new Map<WorkerInferenceErrorReason, string>([
+  ["model-not-approved", "Model is not approved"],
+  ["invalid-context", "Inference context is invalid"],
+  ["epoch-mismatch", "Inference ownership changed"],
+  ["session-not-attached", "Session is not attached"],
+  ["provider-error", "Provider request failed"],
+  ["cancelled", "Inference cancelled"],
+]);
+
 export function terminalError(
   reason: WorkerInferenceErrorReason,
   outcome?: WorkerInferenceTerminalOutcome,
@@ -26,27 +35,10 @@ export function terminalError(
       : outcome?.type === "error"
         ? outcome.usage
         : undefined;
-  const message = (() => {
-    switch (reason) {
-      case "model-not-approved":
-        return "Model is not approved";
-      case "invalid-context":
-        return "Inference context is invalid";
-      case "epoch-mismatch":
-        return "Inference ownership changed";
-      case "session-not-attached":
-        return "Session is not attached";
-      case "provider-error":
-        return "Provider request failed";
-      case "cancelled":
-        return "Inference cancelled";
-    }
-    return "Provider request failed";
-  })();
   return {
     type: "error",
     reason,
-    message: errorMessage ?? message,
+    message: errorMessage ?? TERMINAL_ERROR_MESSAGES.get(reason) ?? "Provider request failed",
     ...(usage ? { usage } : {}),
   };
 }
@@ -56,11 +48,7 @@ export function validFrameBytes(
   validate: (data: unknown) => boolean,
 ): number | null {
   const measured = boundedJsonUtf8Bytes(frame, WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES);
-  if (
-    measured.complete &&
-    measured.bytes <= WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES &&
-    validate(frame)
-  ) {
+  if (measured.complete && validate(frame)) {
     return measured.bytes;
   }
   return null;

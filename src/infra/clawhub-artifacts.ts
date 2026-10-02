@@ -13,7 +13,7 @@ import {
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
 import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
-import { sha256Base64, sha256Hex } from "./crypto-digest.js";
+import { sha256Hex } from "./crypto-digest.js";
 import { createTempDownloadTarget } from "./temp-download.js";
 
 const DEFAULT_GITHUB_CODELOAD_URL = "https://codeload.github.com";
@@ -49,15 +49,6 @@ function buildGitHubZipUrl(repo: string, commit: string): string {
   return url.toString();
 }
 
-function formatSha512Integrity(bytes: Uint8Array): string {
-  const digest = createHash("sha512").update(bytes).digest("base64");
-  return `sha512-${digest}`;
-}
-
-function formatSha1Hex(bytes: Uint8Array): string {
-  return createHash("sha1").update(bytes).digest("hex");
-}
-
 function safePackageTarballName(name: string, version: string): string {
   const base = name
     .replace(/^@/, "")
@@ -73,8 +64,7 @@ async function stageClawHubArchive(params: {
   sha256Hex?: string;
   result?: Omit<ClawHubDownloadResult, "archivePath" | "integrity" | "sha256Hex" | "cleanup">;
 }): Promise<ClawHubDownloadResult> {
-  const sha256Digest =
-    params.sha256Hex ?? Buffer.from(sha256Base64(params.bytes), "base64").toString("hex");
+  const sha256Digest = params.sha256Hex ?? sha256Hex(params.bytes);
   const target = await createTempDownloadTarget(params);
   try {
     await fs.writeFile(target.path, params.bytes);
@@ -132,8 +122,8 @@ export async function downloadClawHubPackageArchive(
       `ClawPack download for ${params.name}@${params.version}`,
     );
     const sha256Digest = sha256Hex(bytes);
-    const npmIntegrity = formatSha512Integrity(bytes);
-    const npmShasum = formatSha1Hex(bytes);
+    const npmIntegrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+    const npmShasum = createHash("sha1").update(bytes).digest("hex");
     const headerSha256 = normalizeClawHubSha256Hex(
       headers.get("X-ClawHub-Artifact-Sha256") ?? headers.get("X-ClawHub-ClawPack-Sha256") ?? "",
     );
@@ -172,9 +162,7 @@ export async function downloadClawHubPackageArchive(
       result: {
         artifact: "clawpack",
         clawpackHeaderSha256: headerSha256,
-        ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
-          ? { clawpackHeaderSpecVersion: specVersion }
-          : {}),
+        ...(specVersion !== undefined ? { clawpackHeaderSpecVersion: specVersion } : {}),
         npmIntegrity,
         npmShasum,
         npmTarballName,

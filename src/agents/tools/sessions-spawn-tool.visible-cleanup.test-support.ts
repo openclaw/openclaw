@@ -40,18 +40,13 @@ export function registerSessionsSpawnVisibleCleanupTests({
         childSessionKey: "agent:main:dashboard:child",
       });
       expect(callGateway).toHaveBeenCalledTimes(2);
-      expect(callGateway).toHaveBeenNthCalledWith(
-        2,
-        "sessions.delete",
-        {
-          key: "agent:main:dashboard:child",
-          expectedSessionId: "created-child",
-          expectedLifecycleRevision: "birth-revision",
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-        },
-        { timeoutMs: 10_000 },
-      );
+      expect(callGateway).toHaveBeenNthCalledWith(2, "sessions.delete", {
+        key: "agent:main:dashboard:child",
+        expectedSessionId: "created-child",
+        expectedLifecycleRevision: "birth-revision",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      });
       expect(registerRun).toHaveBeenCalledTimes(failure === "registration" ? 1 : 0);
     },
   );

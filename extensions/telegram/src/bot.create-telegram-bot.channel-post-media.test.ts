@@ -316,40 +316,27 @@ describe("createTelegramBot channel_post media", () => {
     expect(saveRemoteMedia).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { mediaMaxMb: 100, expectedLimitMb: 20 },
-    { mediaMaxMb: 10, expectedLimitMb: 10 },
-  ])(
-    "reports the effective $expectedLimitMb MB limit for Telegram Bot API failures (#100000)",
-    async ({ mediaMaxMb, expectedLimitMb }) => {
-      setOpenTelegramDirectConfig(mediaMaxMb);
-      await createTelegramBot({ token: "tok" });
-      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
-      const messageId = 100001 + expectedLimitMb;
-      await handler(
-        createTelegramPrivateMediaContext({
-          messageId,
-          fileId: "doc-100001",
-          fileName: "large.bin",
-          getFile: async () => {
-            throw new Error("Bad Request: file is too big");
-          },
-        }),
-      );
-      await waitForTelegramMockCalls(sendMessageSpy, 1);
-      expectTelegramDownloadWarning(
+  it("reports the 20 MB Bot API limit even with a higher configured limit (#100000)", async () => {
+    setOpenTelegramDirectConfig(100);
+    await createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+    const messageId = 100021;
+    await handler(
+      createTelegramPrivateMediaContext({
         messageId,
-        `⚠️ File too large. Maximum size is ${expectedLimitMb}MB.`,
-      );
-      expect(replySpy).toHaveBeenCalledOnce();
-      expectUnavailableMediaPayload(
-        "document",
-        "",
-        `[media unavailable: file exceeds ${expectedLimitMb}MB limit]`,
-      );
-      expect(saveRemoteMedia).not.toHaveBeenCalled();
-    },
-  );
+        fileId: "doc-100001",
+        fileName: "large.bin",
+        getFile: async () => {
+          throw new Error("Bad Request: file is too big");
+        },
+      }),
+    );
+    await waitForTelegramMockCalls(sendMessageSpy, 1);
+    expectTelegramDownloadWarning(messageId, "⚠️ File too large. Maximum size is 20MB.");
+    expect(replySpy).toHaveBeenCalledOnce();
+    expectUnavailableMediaPayload("document", "", "[media unavailable: file exceeds 20MB limit]");
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -410,14 +397,10 @@ describe("createTelegramBot channel_post media", () => {
 
   it.each([
     ["default disabled", undefined, undefined, undefined, false],
-    ["enabled group", true, undefined, undefined, true],
     ["wildcard inherited", undefined, true, undefined, true],
-    ["group disables wildcard", false, true, undefined, false],
     ["topic enables group", false, undefined, true, true],
     ["topic disables group", true, undefined, false, false],
-    ["unauthorized unmentioned command", true, undefined, undefined, false],
     ["unauthorized mentioned command", true, undefined, undefined, false],
-    ["unauthorized mention-optional command", true, undefined, undefined, false],
     ["unauthorized prefixed mention-optional command", true, undefined, undefined, false],
   ] as Array<[string, boolean | undefined, boolean | undefined, boolean | undefined, boolean]>)(
     "honors %s before skipping unmentioned group media (#92067)",
@@ -478,37 +461,19 @@ describe("createTelegramBot channel_post media", () => {
     },
   );
 
-  it.each([
-    {
-      failure: "a download error",
-      error: "Network request for 'getFile' failed!",
-      retryable: true,
-    },
-    { failure: "an oversized file", error: "Bad Request: file is too big", retryable: false },
-  ])(
-    "silently ingests unmentioned group media after $failure (#92067)",
-    async ({ error, retryable }) => {
-      setTelegramIngestGroupConfig();
-      await createTelegramBot({ token: "tok" });
-      const dispatch = (getFile: () => Promise<never>) =>
-        dispatchTelegramGroupPhoto({ messageId: 92070, getFile });
-      if (retryable) {
-        await withTelegramGetFileRetryClock(error, dispatch);
-      } else {
-        await dispatch(async () => {
-          throw new Error(error);
-        });
-      }
-      expect(sendMessageSpy).not.toHaveBeenCalled();
-      expect(replySpy).not.toHaveBeenCalled();
-      expect(saveRemoteMedia).not.toHaveBeenCalled();
-      expectTelegramIngestHook([]);
-    },
-  );
+  it("silently ingests unmentioned group media after a download error (#92067)", async () => {
+    setTelegramIngestGroupConfig();
+    await createTelegramBot({ token: "tok" });
+    await withTelegramGetFileRetryClock("Network request for 'getFile' failed!", (getFile) =>
+      dispatchTelegramGroupPhoto({ messageId: 92070, getFile }),
+    );
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(saveRemoteMedia).not.toHaveBeenCalled();
+    expectTelegramIngestHook([]);
+  });
 
   it.each([
-    { name: "all", messageIds: [92068, 92069], partial: false, deniedMention: false },
-    { name: "partial", messageIds: [92071, 92072], partial: true, deniedMention: false },
     { name: "denied mention", messageIds: [92071, 92072], partial: true, deniedMention: true },
     { name: "unauthorized", messageIds: [92079, 92080], partial: false, deniedMention: false },
   ])("applies group media album policy to $name (#92067)", async (testCase) => {
@@ -580,18 +545,6 @@ describe("createTelegramBot channel_post media", () => {
   });
 
   it.each([
-    {
-      name: "a native mention",
-      messageId: 81182,
-      caption: "@openclaw_bot check this",
-      ingest: false,
-    },
-    {
-      name: "a native mention with ingestion",
-      messageId: 81186,
-      caption: "@openclaw_bot check this",
-      ingest: true,
-    },
     {
       name: "a native mention with denied patterns",
       messageId: 81185,

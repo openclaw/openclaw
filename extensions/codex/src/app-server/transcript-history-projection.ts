@@ -2,10 +2,13 @@ import { Buffer } from "node:buffer";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import type { SessionTranscriptMessageEntry } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readCodexAsyncQuestions } from "./async-questions.js";
-import { codexProviderRefusalDetails, readCodexProviderRefusal } from "./event-projector-values.js";
+import {
+  codexProviderRefusalDiagnostics,
+  readCodexProviderRefusal,
+} from "./event-projector-values.js";
 import type { CodexThread, CodexTurn, JsonValue } from "./protocol.js";
 import { attachCodexMirrorIdentity } from "./upstream-prompt-provenance.js";
 
@@ -13,9 +16,7 @@ const CODEX_HISTORY_IMPORT_MAX_MESSAGES = 200;
 const CODEX_HISTORY_IMPORT_MAX_BYTES = 512 * 1024;
 const CODEX_HISTORY_IMPORT_MAX_MESSAGE_BYTES = 64 * 1024;
 const CODEX_HISTORY_TRUNCATION_SUFFIX = "\n\n[Message truncated during Codex history import.]";
-const CODEX_HISTORY_ASSISTANT_API = "openai-chatgpt-responses" as const;
 const CODEX_HISTORY_ASSISTANT_PROVIDER = "openai";
-const CODEX_HISTORY_ASSISTANT_MODEL = "native-history";
 const CODEX_HISTORY_ZERO_USAGE: Usage = {
   input: 0,
   output: 0,
@@ -69,10 +70,7 @@ function projectCodexHistoryMessage(
 }
 
 function normalizeImportedHistoryText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const text = value.trim();
+  const text = normalizeOptionalString(value);
   if (!text) {
     return undefined;
   }
@@ -89,11 +87,10 @@ export function projectCodexUserItemText(item: Record<string, unknown>): string 
     return undefined;
   }
   const parts: string[] = [];
-  for (const value of item.content) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
+  for (const input of item.content) {
+    if (!isRecord(input)) {
       continue;
     }
-    const input = value as Record<string, unknown>;
     if (input.type === "text") {
       const text = normalizeImportedHistoryText(input.text);
       if (text) {
@@ -149,6 +146,15 @@ function projectCodexThreadHistory(params: {
   includeErrorOnlyTurns?: boolean;
 }): ProjectedCodexHistoryMessage[] {
   const projected: ProjectedCodexHistoryMessage[] = [];
+  const assistantFields = {
+    api: "openai-chatgpt-responses" as const,
+    provider:
+      normalizeOptionalString(params.modelProvider) ??
+      normalizeOptionalString(params.thread.modelProvider) ??
+      CODEX_HISTORY_ASSISTANT_PROVIDER,
+    model: "native-history",
+    usage: CODEX_HISTORY_ZERO_USAGE,
+  };
   const threadTimestamp =
     typeof params.thread.createdAt === "number" && Number.isFinite(params.thread.createdAt)
       ? params.thread.createdAt * 1000
@@ -164,8 +170,7 @@ function projectCodexThreadHistory(params: {
           })
         : undefined;
     let hasAssistantMessage = false;
-    for (const value of turn.items) {
-      const item = value;
+    for (const item of turn.items) {
       const itemId = normalizeOptionalString(item.id);
       const identity = `${turn.id}:${itemId ?? itemOffset}`;
       const timestampSeconds =
@@ -204,13 +209,7 @@ function projectCodexThreadHistory(params: {
               {
                 role,
                 content: [{ type: "text", text }],
-                api: CODEX_HISTORY_ASSISTANT_API,
-                provider:
-                  normalizeOptionalString(params.modelProvider) ??
-                  normalizeOptionalString(params.thread.modelProvider) ??
-                  CODEX_HISTORY_ASSISTANT_PROVIDER,
-                model: CODEX_HISTORY_ASSISTANT_MODEL,
-                usage: CODEX_HISTORY_ZERO_USAGE,
+                ...assistantFields,
                 stopReason:
                   turn.status === "interrupted"
                     ? "aborted"
@@ -220,17 +219,10 @@ function projectCodexThreadHistory(params: {
                 ...(turn.status === "failed" && turn.error?.message
                   ? { errorMessage: turn.error.message }
                   : {}),
-                ...(refusal && terminalAssistant
-                  ? {
-                      diagnostics: [
-                        {
-                          type: "provider_refusal",
-                          timestamp,
-                          details: codexProviderRefusalDetails(refusal),
-                        },
-                      ],
-                    }
-                  : {}),
+                ...codexProviderRefusalDiagnostics(
+                  terminalAssistant ? refusal : undefined,
+                  timestamp,
+                ),
                 ...(phase ? { phase } : {}),
                 ...(asyncDelivery && itemId
                   ? { openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) } }
@@ -254,26 +246,10 @@ function projectCodexThreadHistory(params: {
         {
           role: "assistant",
           content: [],
-          api: CODEX_HISTORY_ASSISTANT_API,
-          provider:
-            normalizeOptionalString(params.modelProvider) ??
-            normalizeOptionalString(params.thread.modelProvider) ??
-            CODEX_HISTORY_ASSISTANT_PROVIDER,
-          model: CODEX_HISTORY_ASSISTANT_MODEL,
-          usage: CODEX_HISTORY_ZERO_USAGE,
+          ...assistantFields,
           stopReason: "error",
           errorMessage: text,
-          ...(refusal
-            ? {
-                diagnostics: [
-                  {
-                    type: "provider_refusal",
-                    timestamp,
-                    details: codexProviderRefusalDetails(refusal),
-                  },
-                ],
-              }
-            : {}),
+          ...codexProviderRefusalDiagnostics(refusal, timestamp),
           timestamp,
         },
         `${turn.id}:assistant`,

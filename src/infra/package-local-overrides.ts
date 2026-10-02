@@ -29,6 +29,7 @@ import {
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
 export { captureLocalPackageOverrides } from "./package-local-overrides-capture.js";
@@ -110,6 +111,7 @@ async function runRequiredFsSafeMove(params: {
     execFile(
       process.execPath,
       [
+        ...resolveRuntimeArgs(),
         "--input-type=module",
         "--eval",
         REQUIRED_FS_SAFE_OPERATION_SCRIPT,
@@ -392,6 +394,25 @@ async function deleteLocalOverrideTarget(params: {
   }
 }
 
+function appliedLocalOverridesResult(
+  plan: LocalPackageOverridesPlan,
+  conflicts: LocalPackageOverridesResult["conflicts"],
+  applied: number,
+): LocalPackageOverridesResult {
+  return {
+    ...plan.result,
+    status: conflicts.length > 0 ? "conflict" : "applied",
+    applied,
+    conflicts,
+    warnings:
+      conflicts.length > 0
+        ? [
+            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
+          ]
+        : [],
+  };
+}
+
 export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
@@ -459,18 +480,7 @@ export async function applyLocalPackageOverrides(params: {
     changesToApply.push(change);
   }
   if (changesToApply.length === 0) {
-    return {
-      ...params.plan.result,
-      status: conflicts.length > 0 ? "conflict" : "applied",
-      applied: 0,
-      conflicts,
-      warnings:
-        conflicts.length > 0
-          ? [
-              "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-            ]
-          : [],
-    };
+    return appliedLocalOverridesResult(params.plan, conflicts, 0);
   }
 
   let rollbackDir: string | null = null;
@@ -638,16 +648,5 @@ export async function applyLocalPackageOverrides(params: {
     }
   }
 
-  return {
-    ...params.plan.result,
-    status: conflicts.length > 0 ? "conflict" : "applied",
-    applied,
-    conflicts,
-    warnings:
-      conflicts.length > 0
-        ? [
-            "Local OpenClaw changes were preserved but not reapplied because the update changed the same file(s).",
-          ]
-        : [],
-  };
+  return appliedLocalOverridesResult(params.plan, conflicts, applied);
 }

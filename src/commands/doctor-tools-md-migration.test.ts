@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -179,7 +180,7 @@ describe("TOOLS.md migration", () => {
     );
   });
 
-  it("appends customized content verbatim under the existing Tools section and is idempotent", async () => {
+  it("preserves customized content and ownership under restrictive umask and is idempotent", async () => {
     const fixture = await createFixture();
     const agents = "# Agent\n\n## Tools\n\nExisting notes.\n\n## Safety\n\nBe careful.\n";
     const tools = "### Cameras\n\n- kitchen → wide angle\n\nKeep trailing spaces.  \n";
@@ -192,14 +193,47 @@ describe("TOOLS.md migration", () => {
     await fs.writeFile(fixture.toolsPath, tools);
     if (process.platform !== "win32") {
       await fs.chmod(fixture.workspace, 0o751);
+      const currentGroup = (await fs.stat(fixture.agentsPath)).gid;
+      const otherGroup = process.getgroups?.().find((group) => group !== currentGroup);
+      if (otherGroup !== undefined) {
+        await fs.chown(fixture.agentsPath, -1, otherGroup);
+        await fs.chown(fixture.toolsPath, -1, otherGroup);
+      }
       await fs.chmod(fixture.agentsPath, 0o640);
+      await fs.chmod(fixture.toolsPath, 0o640);
     }
+    const originalAgentsStat = await fs.stat(fixture.agentsPath);
 
-    const result = await maybeMigrateToolsMd({
-      cfg: fixture.cfg,
-      shouldRepair: true,
-      env: fixture.env,
+    const child = await runCliProcessChild({
+      nodeArgs: [
+        "--import",
+        "./scripts/tsx.mjs",
+        "--input-type=module",
+        "--eval",
+        `
+          import { maybeMigrateToolsMd } from ${JSON.stringify(new URL("./doctor-tools-md-migration.ts", import.meta.url).href)};
+          if (process.platform !== "win32") process.umask(0o077);
+          const result = await maybeMigrateToolsMd({
+            cfg: ${JSON.stringify(fixture.cfg)},
+            shouldRepair: true,
+          });
+          process.stdout.write(JSON.stringify(result));
+        `,
+      ],
+      env: {
+        PATH: process.env.PATH,
+        SystemRoot: process.env.SystemRoot,
+        HOME: fixture.root,
+        USERPROFILE: fixture.root,
+        OPENCLAW_STATE_DIR: fixture.stateDir,
+        OPENCLAW_SUPPRESS_NOTES: "1",
+        TMPDIR: fixture.root,
+        TEMP: fixture.root,
+        TMP: fixture.root,
+      },
     });
+    expect(child.code, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout);
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(1);
@@ -209,6 +243,10 @@ describe("TOOLS.md migration", () => {
     if (process.platform !== "win32") {
       expect((await fs.stat(fixture.workspace)).mode & 0o777).toBe(0o751);
       expect((await fs.stat(fixture.agentsPath)).mode & 0o777).toBe(0o640);
+      expect(await fs.stat(fixture.agentsPath)).toMatchObject({
+        uid: originalAgentsStat.uid,
+        gid: originalAgentsStat.gid,
+      });
     }
 
     await expect(
@@ -222,6 +260,145 @@ describe("TOOLS.md migration", () => {
     expect(rerunAgents).toBe(expected);
     expect(rerunAgents.match(/migrated from TOOLS\.md/gu)).toHaveLength(1);
   });
+
+  it.skipIf(process.platform === "win32").each([
+    { when: "before migration", mode: 0o600, warning: "additional POSIX readers" },
+    { when: "during source revalidation", mode: 0o640, warning: "TOOLS.md changed" },
+  ])(
+    "retains notes made private $when without granting destination readers",
+    async ({ mode, warning }) => {
+      const fixture = await createFixture();
+      const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+      const tools = "Private local notes.\n";
+      await fs.writeFile(fixture.agentsPath, agents);
+      await fs.writeFile(fixture.toolsPath, tools);
+      await fs.chmod(fixture.agentsPath, 0o640);
+      await fs.chmod(fixture.toolsPath, mode);
+      const original = await fs.stat(fixture.agentsPath);
+      let replacementOpened = false;
+      let sourceTightened = false;
+      let grantedGroupRead = false;
+      const open = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]).startsWith(`${fixture.agentsPath}.doctor-writing-`)) {
+          replacementOpened = true;
+          const chmod = handle.chmod.bind(handle);
+          vi.spyOn(handle, "chmod").mockImplementation(async (newMode) => {
+            await chmod(newMode);
+            grantedGroupRead ||= ((await handle.stat()).mode & 0o040) !== 0;
+          });
+        } else if (
+          String(args[0]) === fixture.toolsPath &&
+          replacementOpened &&
+          mode === 0o640 &&
+          !sourceTightened
+        ) {
+          const readFile = handle.readFile.bind(handle);
+          vi.spyOn(handle, "readFile").mockImplementationOnce(async () => {
+            const content = await readFile();
+            await fs.chmod(fixture.toolsPath, 0o600);
+            sourceTightened = true;
+            return content;
+          });
+        }
+        return handle;
+      });
+
+      try {
+        const result = await maybeMigrateToolsMd({
+          cfg: fixture.cfg,
+          shouldRepair: true,
+          env: fixture.env,
+        });
+
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([expect.stringContaining(warning)]);
+        expect(sourceTightened).toBe(mode === 0o640);
+        expect(grantedGroupRead).toBe(false);
+        await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(agents);
+        await expect(fs.readFile(fixture.toolsPath, "utf8")).resolves.toBe(tools);
+        expect(await fs.stat(fixture.agentsPath)).toMatchObject({
+          uid: original.uid,
+          gid: original.gid,
+          mode: original.mode,
+        });
+        expect((await fs.readdir(fixture.workspace)).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
+
+  it("creates a private destination for private notes when AGENTS.md is absent", async () => {
+    const fixture = await createFixture();
+    const tools = "Private local notes.\n";
+    await fs.writeFile(fixture.toolsPath, tools);
+    if (process.platform !== "win32") {
+      await fs.chmod(fixture.toolsPath, 0o600);
+    }
+
+    const result = await maybeMigrateToolsMd({
+      cfg: fixture.cfg,
+      shouldRepair: true,
+      env: fixture.env,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toHaveLength(1);
+    await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(
+      `## Tools\n\n### Local notes (migrated from TOOLS.md)\n\n${tools}`,
+    );
+    if (process.platform !== "win32") {
+      expect((await fs.stat(fixture.agentsPath)).mode & 0o777).toBe(0o600);
+    }
+    await expectMissing(fixture.toolsPath);
+    await expect(readOnlyArchive(fixture.stateDir)).resolves.toEqual(Buffer.from(tools));
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "retains both files when replacement ownership cannot be preserved",
+    async () => {
+      const fixture = await createFixture();
+      const agents = "# Agent\n\n## Tools\n\nExisting notes.\n";
+      const tools = "Local tool notes.\n";
+      await fs.writeFile(fixture.agentsPath, agents);
+      await fs.writeFile(fixture.toolsPath, tools);
+      await fs.chmod(fixture.agentsPath, 0o640);
+      await fs.chmod(fixture.toolsPath, 0o644);
+      const original = await fs.stat(fixture.agentsPath);
+      const open = fs.open.bind(fs);
+      const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (String(args[0]).startsWith(`${fixture.agentsPath}.doctor-writing-`)) {
+          vi.spyOn(handle, "chown").mockImplementation(async () => {
+            expect((await handle.stat()).mode & 0o7777).toBe(0);
+            throw new Error("synthetic chown refusal");
+          });
+        }
+        return handle;
+      });
+      try {
+        const result = await maybeMigrateToolsMd({
+          cfg: fixture.cfg,
+          shouldRepair: true,
+          env: fixture.env,
+        });
+        expect(result.changes).toEqual([]);
+        expect(result.warnings).toEqual([expect.stringContaining("synthetic chown refusal")]);
+        await expect(fs.readFile(fixture.agentsPath, "utf8")).resolves.toBe(agents);
+        await expect(fs.readFile(fixture.toolsPath, "utf8")).resolves.toBe(tools);
+        expect(await fs.stat(fixture.agentsPath)).toMatchObject({
+          uid: original.uid,
+          gid: original.gid,
+          mode: original.mode,
+        });
+        expect((await fs.readdir(fixture.workspace)).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
+      } finally {
+        openSpy.mockRestore();
+      }
+    },
+  );
 
   it("checks every agent budget while migrating a shared workspace once", async () => {
     const fixture = await createFixture();

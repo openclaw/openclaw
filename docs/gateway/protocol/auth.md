@@ -97,13 +97,20 @@ Owner page: [Gateway authentication](/gateway/authentication) — auth modes, to
     `wait_then_retry`, `review_auth_configuration`
     (`packages/gateway-protocol/src/connect-error-details.ts`).
 - Client behavior for `AUTH_TOKEN_MISMATCH`:
-  - Trusted clients may attempt one bounded retry with a cached per-device
-    token.
+  - Native Apple clients require `canRetryWithDeviceToken=true` before one
+    bounded retry with a cached per-device token on a trusted endpoint. A false
+    or missing flag pauses automatic retries and keeps the stored device token
+    out of a later shared-token connection.
   - If that retry fails, stop automatic reconnect loops and surface operator
     action guidance.
 - `AUTH_SCOPE_MISMATCH` means the device token was recognized but does not
   cover the requested role/scopes. Do not present this as a bad token; prompt
   the operator to re-pair or approve the narrower/broader scope contract.
+- `OPERATOR_ACCESS_DENIED` means the person authenticated, but the Gateway's
+  operator access policy (for example, a role bound to an `accessPolicyPlugin`)
+  currently grants no access. This is not a credential problem. Keep reconnecting
+  with backoff so newly granted access applies without user action, and show
+  administrator guidance to assign a role or grant access.
 
 ## Device identity and pairing
 

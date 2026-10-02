@@ -9,7 +9,7 @@
 
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
-import type { MdAst } from "./ast.js";
+import type { AstBlock, AstItem, MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import { resolveJsoncPositionalSegment } from "./jsonc/resolve-value.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
@@ -24,7 +24,6 @@ import {
   isOrdinalSeg,
   isPositionalSeg,
   isPredicateSeg,
-  isQuotedSeg,
   isUnionSeg,
   parseArrayIndexSegment,
   parseOrdinalSeg,
@@ -150,7 +149,10 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
 // Per-kind ops the dispatcher uses to drive recursion. Each kind's
 // walker fills these in; the dispatcher handles every segment shape.
 interface WalkOps<T, Child = T> {
-  enumerate(node: T): Iterable<{ keySub: string; child: Child }>;
+  enumerate(
+    node: T,
+    matches?: (child: Child) => boolean,
+  ): Iterable<{ keySub: string; child: Child }>;
   lookup(node: T, key: string): { keySub: string; child: Child } | null;
   positional(node: T, seg: string): { keySub: string; child: Child } | null;
   predicate(node: T, pred: PredicateSpec): Iterable<{ keySub: string; child: Child }>;
@@ -255,14 +257,18 @@ function walkJsonc(
 }
 
 const jsoncOps: WalkOps<JsoncValue> = {
-  *enumerate(node) {
+  *enumerate(node, matches) {
     if (node.kind === "object") {
       for (const e of node.entries) {
-        yield { keySub: quoteSeg(e.key), child: e.value };
+        if (!matches || matches(e.value)) {
+          yield { keySub: quoteSeg(e.key), child: e.value };
+        }
       }
     } else if (node.kind === "array") {
       for (const [idx, child] of node.items.entries()) {
-        yield { keySub: String(idx), child };
+        if (!matches || matches(child)) {
+          yield { keySub: String(idx), child };
+        }
       }
     }
   },
@@ -270,7 +276,7 @@ const jsoncOps: WalkOps<JsoncValue> = {
     if (node.kind === "object") {
       // Entry keys are unquoted in the AST; strip quotes from a quoted
       // path key so the walker matches the resolver's behavior.
-      const lookupKey = isQuotedSeg(key) ? unquoteSeg(key) : key;
+      const lookupKey = unquoteSeg(key);
       const e = node.entries.find((entry) => entry.key === lookupKey);
       return e === undefined ? null : { keySub: key, child: e.value };
     }
@@ -298,19 +304,9 @@ const jsoncOps: WalkOps<JsoncValue> = {
     return { keySub: quoteSeg(concrete), child: match.child };
   },
   *predicate(node, pred) {
-    if (node.kind === "object") {
-      for (const e of node.entries) {
-        if (jsoncChildMatchesPredicate(e.value, pred)) {
-          yield { keySub: quoteSeg(e.key), child: e.value };
-        }
-      }
-    } else if (node.kind === "array") {
-      for (const [idx, child] of node.items.entries()) {
-        if (jsoncChildMatchesPredicate(child, pred)) {
-          yield { keySub: String(idx), child };
-        }
-      }
-    }
+    yield* jsoncOps.enumerate(node, (child) =>
+      evaluatePredicate(jsoncChildFieldText(child, pred.key), pred),
+    );
   },
   walk: walkJsonc,
 };
@@ -336,9 +332,9 @@ function walkJsonl(
 }
 
 const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
-  *enumerate(ast) {
+  *enumerate(ast, matches) {
     for (const l of ast.lines) {
-      if (l.kind === "value") {
+      if (l.kind === "value" && (!matches || matches(l))) {
         yield { keySub: `L${l.line}`, child: l };
       }
     }
@@ -355,15 +351,11 @@ const jsonlOps: WalkOps<JsonlAst, JsonlLine> = {
     return jsonlOps.lookup(ast, seg);
   },
   *predicate(ast, pred) {
-    for (const l of ast.lines) {
-      if (l.kind !== "value") {
-        continue;
-      }
-      const actual = topLevelLeafText(l.value, pred.key);
-      if (evaluatePredicate(actual, pred)) {
-        yield { keySub: `L${l.line}`, child: l };
-      }
-    }
+    yield* jsonlOps.enumerate(
+      ast,
+      (line) =>
+        line.kind === "value" && evaluatePredicate(topLevelLeafText(line.value, pred.key), pred),
+    );
   },
   // Union alternatives revisit the file; consumed line slots descend into JSONC.
   walk(child, subs, i, walked, onMatch) {
@@ -418,18 +410,18 @@ function walkYaml(
 }
 
 const yamlOps: WalkOps<Node> = {
-  *enumerate(node) {
+  *enumerate(node, matches) {
     if (isMap(node)) {
       for (const p of (node as { items: readonly Pair[] }).items) {
         const k = isScalar(p.key) ? p.key.value : p.key;
-        if (p.value !== null) {
+        if (p.value !== null && (!matches || matches(p.value as Node))) {
           yield { keySub: quoteSeg(String(k)), child: p.value as Node };
         }
       }
     } else if (isSeq(node)) {
       for (let idx = 0; idx < node.items.length; idx++) {
         const child = node.items[idx];
-        if (child !== null) {
+        if (child !== null && (!matches || matches(child as Node))) {
           yield { keySub: String(idx), child: child as Node };
         }
       }
@@ -437,7 +429,7 @@ const yamlOps: WalkOps<Node> = {
   },
   lookup(node, key) {
     if (isMap(node)) {
-      const lookupKey = isQuotedSeg(key) ? unquoteSeg(key) : key;
+      const lookupKey = unquoteSeg(key);
       const pair = (node as { items: readonly Pair[] }).items.find((p) => {
         const k = isScalar(p.key) ? p.key.value : p.key;
         return String(k) === lookupKey;
@@ -464,28 +456,12 @@ const yamlOps: WalkOps<Node> = {
     return concrete === null ? null : yamlOps.lookup(node, concrete);
   },
   *predicate(node, pred) {
-    if (isMap(node)) {
-      for (const p of (node as { items: readonly Pair[] }).items) {
-        const k = isScalar(p.key) ? p.key.value : p.key;
-        if (p.value !== null && yamlChildMatchesPredicate(p.value as Node, pred)) {
-          yield { keySub: quoteSeg(String(k)), child: p.value as Node };
-        }
-      }
-    } else if (isSeq(node)) {
-      for (let idx = 0; idx < node.items.length; idx++) {
-        const child = node.items[idx];
-        if (child !== null && yamlChildMatchesPredicate(child as Node, pred)) {
-          yield { keySub: String(idx), child: child as Node };
-        }
-      }
-    }
+    yield* yamlOps.enumerate(node, (child) =>
+      evaluatePredicate(yamlChildFieldText(child, pred.key), pred),
+    );
   },
   walk: walkYaml,
 };
-
-function yamlChildMatchesPredicate(node: Node, pred: PredicateSpec): boolean {
-  return evaluatePredicate(yamlChildFieldText(node, pred.key), pred);
-}
 
 function yamlChildFieldText(node: Node, key: string): string | null {
   if (!isMap(node)) {
@@ -526,13 +502,10 @@ function yamlScalarToText(value: unknown): string | null {
 
 // ---------- Markdown walker -----------------------------------------------
 
-type MdItem = MdAst["blocks"][number]["items"][number];
-type MdBlock = MdAst["blocks"][number];
-
 type MdLevel =
   | { readonly kind: "root"; readonly ast: MdAst }
-  | { readonly kind: "block"; readonly block: MdBlock; readonly ast: MdAst }
-  | { readonly kind: "item"; readonly item: MdItem; readonly ast: MdAst };
+  | { readonly kind: "block"; readonly block: AstBlock }
+  | { readonly kind: "item"; readonly item: AstItem };
 
 function walkMd(
   level: MdLevel,
@@ -563,7 +536,7 @@ function walkMd(
       }
       return;
     }
-    const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
+    const fmKey = unquoteSeg(next.value);
     const entry = level.ast.frontmatter.find((e) => e.key === fmKey);
     if (entry === undefined) {
       return;
@@ -585,7 +558,7 @@ function walkMd(
 }
 
 function walkMdItemField(
-  item: MdItem,
+  item: AstItem,
   cur: SlotSub,
   walked: readonly SlotSub[],
   onMatch: OnMatch,
@@ -625,7 +598,7 @@ function walkMdItemField(
   }
 }
 
-function blockSlugCounts(items: readonly MdItem[]): Map<string, number> {
+function blockSlugCounts(items: readonly AstItem[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const item of items) {
     counts.set(item.slug, (counts.get(item.slug) ?? 0) + 1);
@@ -636,10 +609,13 @@ function blockSlugCounts(items: readonly MdItem[]): Map<string, number> {
 // `mdOps` only handles root / block levels. Item-level dispatch is
 // terminal and runs inline in `walkMd` (see `walkMdItemField`).
 const mdOps: WalkOps<MdLevel> = {
-  *enumerate(level) {
+  *enumerate(level, matches) {
     if (level.kind === "root") {
       for (const block of level.ast.blocks) {
-        yield { keySub: block.slug, child: { kind: "block", block, ast: level.ast } };
+        const child = { kind: "block" as const, block };
+        if (!matches || matches(child)) {
+          yield { keySub: block.slug, child };
+        }
       }
       return;
     }
@@ -648,8 +624,11 @@ const mdOps: WalkOps<MdLevel> = {
       // path round-trips through resolveOcPath to its own item.
       const counts = blockSlugCounts(level.block.items);
       for (const [idx, item] of level.block.items.entries()) {
-        const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
-        yield { keySub: seg, child: { kind: "item", item, ast: level.ast } };
+        const child = { kind: "item" as const, item };
+        if (!matches || matches(child)) {
+          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
+          yield { keySub: seg, child };
+        }
       }
     }
   },
@@ -657,9 +636,7 @@ const mdOps: WalkOps<MdLevel> = {
     if (level.kind === "root") {
       const target = key.toLowerCase();
       const block = level.ast.blocks.find((b) => b.slug === target);
-      return block === undefined
-        ? null
-        : { keySub: key, child: { kind: "block", block, ast: level.ast } };
+      return block === undefined ? null : { keySub: key, child: { kind: "block", block } };
     }
     if (level.kind === "block") {
       // Ordinal `#N` short-circuits slug lookup.
@@ -673,15 +650,12 @@ const mdOps: WalkOps<MdLevel> = {
           child: {
             kind: "item",
             item: expectDefined(level.block.items[n], "validated Markdown ordinal is in bounds"),
-            ast: level.ast,
           },
         };
       }
       const target = key.toLowerCase();
       const item = level.block.items.find((it) => it.slug === target);
-      return item === undefined
-        ? null
-        : { keySub: key, child: { kind: "item", item, ast: level.ast } };
+      return item === undefined ? null : { keySub: key, child: { kind: "item", item } };
     }
     return null;
   },
@@ -702,31 +676,19 @@ const mdOps: WalkOps<MdLevel> = {
       level.block.items[Number(concrete)],
       "resolved Markdown position is in bounds",
     );
-    return { keySub: seg, child: { kind: "item", item, ast: level.ast } };
+    return { keySub: seg, child: { kind: "item", item } };
   },
   *predicate(level, pred) {
-    if (level.kind === "root") {
-      for (const block of level.ast.blocks) {
-        if (block.items.some((item) => mdItemMatchesPredicate(item, pred))) {
-          yield { keySub: block.slug, child: { kind: "block", block, ast: level.ast } };
-        }
-      }
-      return;
-    }
-    if (level.kind === "block") {
-      const counts = blockSlugCounts(level.block.items);
-      for (const [idx, item] of level.block.items.entries()) {
-        if (mdItemMatchesPredicate(item, pred)) {
-          const seg = (counts.get(item.slug) ?? 0) > 1 ? `#${idx}` : item.slug;
-          yield { keySub: seg, child: { kind: "item", item, ast: level.ast } };
-        }
-      }
-    }
+    yield* mdOps.enumerate(level, (child) =>
+      child.kind === "block"
+        ? child.block.items.some((item) => mdItemMatchesPredicate(item, pred))
+        : child.kind === "item" && mdItemMatchesPredicate(child.item, pred),
+    );
   },
   walk: walkMd,
 };
 
-function mdItemMatchesPredicate(item: MdItem, pred: PredicateSpec): boolean {
+function mdItemMatchesPredicate(item: AstItem, pred: PredicateSpec): boolean {
   if (item.kv === undefined) {
     return false;
   }
@@ -734,10 +696,6 @@ function mdItemMatchesPredicate(item: MdItem, pred: PredicateSpec): boolean {
     return false;
   }
   return evaluatePredicate(item.kv.value, pred);
-}
-
-function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): boolean {
-  return evaluatePredicate(jsoncChildFieldText(node, pred.key), pred);
 }
 
 function jsoncChildFieldText(node: JsoncValue, key: string): string | null {

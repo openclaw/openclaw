@@ -14,7 +14,9 @@ vi.mock("node:fs", async (original) => ({
 const gatewayPid = process.pid + 1_000;
 const groupRows = (group = 900, session = 0) =>
   `${process.pid} ${group} ${session}\n${gatewayPid} 900 ${session}\n`;
-const coalition = (id: number, name: string) => `pid/123 = {
+const procStat = (pid: number, group: number, comm = "synthetic worker") =>
+  `${pid} (${comm}) S 1 ${group} 1 0 -1 ${Array(44).fill(0).join(" ")}\n`;
+const coalition = (id: number, name: string, pid = process.pid) => `pid/${pid} = {
   type = pid
   resource coalition = {
     ID = ${id}
@@ -25,6 +27,7 @@ const coalition = (id: number, name: string) => `pid/123 = {
     bundle ID = example.synthetic
   }
 }`;
+const uncontained = (pid: number) => `pid/${pid} = {\n  type = pid\n}`;
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -36,12 +39,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("launchd process membership", () => {
-  it("recognizes a reparented process in the Gateway process group without a coalition query", () => {
-    native.spawn.mockImplementation((command: string) =>
-      command === "ps" ? { status: 0, stdout: groupRows() } : { status: 1, stdout: "" },
-    );
-    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("inside");
-  });
+  it.each(["darwin", "linux"] as const)(
+    "recognizes a reparented %s process in the Gateway process group without a native service identity",
+    (platform) => {
+      native.read.mockImplementation((file: string) =>
+        file === `/proc/${process.pid}/stat`
+          ? procStat(process.pid, 900)
+          : file === `/proc/${gatewayPid}/stat`
+            ? procStat(gatewayPid, 900)
+            : "0::/",
+      );
+      native.spawn.mockImplementation((command: string) =>
+        command === "ps" ? { status: 0, stdout: groupRows() } : { status: 1, stdout: "" },
+      );
+      expect(inspectServiceProcessMembershipSync(gatewayPid, platform)).toBe("inside");
+    },
+  );
 
   it.each([
     { label: "same coalition", callerId: 1203, callerName: "example.child", expected: "inside" },
@@ -57,9 +70,17 @@ describe("launchd process membership", () => {
       callerName: "com.apple.Terminal",
       expected: "outside",
     },
+    {
+      label: "same coalition with opaque service rows",
+      callerId: 1203,
+      callerName: "example.child",
+      expected: "inside",
+      services:
+        "  services = {\n    42 0 example.synthetic.worker (A)\n    43 0 example.synthetic.helper (D)\n  }",
+    },
   ])(
     "uses $label after detached process groups, even with a shared session",
-    ({ callerId, callerName, expected }) => {
+    ({ callerId, callerName, expected, services }) => {
       vi.stubEnv("OPENCLAW_LAUNCHD_LABEL", "ai.openclaw.gateway");
       vi.stubEnv("OPENCLAW_SERVICE_MARKER", "openclaw");
       native.spawn.mockImplementation((command: string, args: string[]) => ({
@@ -68,12 +89,32 @@ describe("launchd process membership", () => {
           command === "ps"
             ? groupRows(901, 77)
             : args[1] === `pid/${process.pid}`
-              ? coalition(callerId, callerName)
-              : coalition(1203, "ai.openclaw.gateway"),
+              ? coalition(callerId, callerName).replace(/\n}$/, `\n${services ?? ""}\n}`)
+              : coalition(1203, "ai.openclaw.gateway", gatewayPid),
       }));
       expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
     },
   );
+
+  it.each([
+    { label: "neither PID has a coalition", caller: false, gateway: false, expected: "absent" },
+    { label: "only the caller has a coalition", caller: true, gateway: false, expected: "absent" },
+    { label: "caller outside the known job", caller: false, gateway: true, expected: "outside" },
+  ])("recognizes $label from complete native records", ({ caller, gateway, expected }) => {
+    native.spawn.mockImplementation((command: string, args: string[]) => {
+      if (command === "ps") {
+        return { status: 0, stdout: groupRows(901) };
+      }
+      const pid = Number(args[1]?.slice("pid/".length));
+      return {
+        status: 0,
+        stdout: (pid === process.pid ? caller : gateway)
+          ? coalition(1203, "ai.openclaw.gateway", pid)
+          : uncontained(pid),
+      };
+    });
+    expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
+  });
 
   it.each([
     { label: "missing caller", stdout: `${gatewayPid} 900 0\n` },
@@ -87,12 +128,35 @@ describe("launchd process membership", () => {
   });
 
   it.each([
-    { label: "missing block", stdout: "pid/123 = { type = pid }" },
+    { label: "empty response", stdout: "" },
+    { label: "wrong PID", stdout: uncontained(gatewayPid + 1) },
+    { label: "truncated PID record", stdout: uncontained(process.pid).slice(0, -1) },
+    {
+      label: "wrong record type",
+      stdout: uncontained(process.pid).replace("type = pid", "type = domain"),
+    },
+    {
+      label: "malformed record",
+      stdout: uncontained(process.pid).replace("type = pid", "type = pid\n  unreadable"),
+    },
     {
       label: "wrong coalition type",
       stdout: coalition(1203, "ai.openclaw.gateway").replace("type = resource", "type = jetsam"),
     },
-    { label: "duplicate coalition", stdout: coalition(1203, "a") + coalition(1204, "b") },
+    {
+      label: "duplicate coalition",
+      stdout: coalition(1203, "a").replace(
+        /\n}$/,
+        `\n${coalition(1204, "b").split("\n").slice(2, -1).join("\n")}\n}`,
+      ),
+    },
+    {
+      label: "malformed coalition",
+      stdout: uncontained(process.pid).replace(
+        "type = pid",
+        "type = pid\n  resource coalition = unavailable",
+      ),
+    },
     {
       label: "duplicate identity",
       stdout: coalition(1203, "a").replace("ID = 1203", "ID = 1203\n    ID = 1204"),
@@ -105,8 +169,10 @@ describe("launchd process membership", () => {
       error: new Error("maxBuffer"),
     },
   ])("does not treat $label as proof of escape", ({ stdout, ...result }) => {
-    native.spawn.mockImplementation((command: string) =>
-      command === "ps" ? { status: 0, stdout: groupRows(901) } : { status: 0, stdout, ...result },
+    native.spawn.mockImplementation((command: string, args: string[]) =>
+      command === "ps"
+        ? { status: 0, stdout: groupRows(901) }
+        : { status: 0, stdout: stdout.replaceAll(`pid/${process.pid}`, args[1]!), ...result },
     );
     expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("unknown");
   });
@@ -231,6 +297,170 @@ describe("systemd process membership", () => {
   });
   it("keeps denied procfs inspection unknown", () => {
     expect(inspectServiceProcessMembershipSync(gatewayPid, "linux", root)).toBe("unknown");
+  });
+
+  it.each([
+    {
+      label: "unified namespace root",
+      controlGroup: undefined,
+      caller: "0::/",
+      gateway: "0::/",
+      expected: "absent",
+    },
+    {
+      label: "observed root ControlGroup",
+      controlGroup: "/",
+      caller: "0::/",
+      gateway: "0::/",
+      expected: "absent",
+    },
+    {
+      label: "legacy systemd hierarchy root",
+      controlGroup: undefined,
+      caller: "1:name=systemd:/",
+      gateway: "1:name=systemd:/",
+      expected: "absent",
+    },
+    {
+      label: "valid v1 without systemd",
+      controlGroup: undefined,
+      caller: "2:cpu,cpuacct:/caller\n3:memory:/caller",
+      gateway: "2:cpu,cpuacct:/\n3:memory:/",
+      expected: "absent",
+    },
+    {
+      label: "non-root v1 without systemd",
+      controlGroup: undefined,
+      caller: "2:cpu,cpuacct:/caller\n3:memory:/caller",
+      gateway: "2:cpu,cpuacct:/gateway\n3:memory:/",
+      expected: "unknown",
+    },
+    {
+      label: "unobserved non-root unit",
+      controlGroup: undefined,
+      caller: "0::/",
+      gateway: `0::${root}`,
+      expected: "unknown",
+    },
+    {
+      label: "empty proc response",
+      controlGroup: undefined,
+      caller: "",
+      gateway: "",
+      expected: "unknown",
+    },
+    {
+      label: "malformed v1 row",
+      controlGroup: undefined,
+      caller: "2:cpu:/\nunreadable",
+      gateway: "2:cpu:/",
+      expected: "unknown",
+    },
+    {
+      label: "duplicate hierarchy",
+      controlGroup: undefined,
+      caller: "0::/\n0::/",
+      gateway: "0::/",
+      expected: "unknown",
+    },
+    {
+      label: "invalid v1 controller",
+      controlGroup: undefined,
+      caller: "2::/",
+      gateway: "2::/",
+      expected: "unknown",
+    },
+    {
+      label: "mismatched hierarchy",
+      controlGroup: undefined,
+      caller: "0::/",
+      gateway: "1:name=systemd:/",
+      expected: "unknown",
+    },
+    {
+      label: "denied caller proc",
+      controlGroup: undefined,
+      caller: undefined,
+      gateway: "0::/",
+      expected: "unknown",
+    },
+    {
+      label: "vanished Gateway proc",
+      controlGroup: undefined,
+      caller: "0::/",
+      gateway: undefined,
+      expected: "unknown",
+    },
+  ])(
+    "distinguishes $label from unreadable containment",
+    ({ controlGroup, caller, gateway, expected }) => {
+      native.read.mockImplementation((file: string) => {
+        if (file === `/proc/${process.pid}/stat`) {
+          return procStat(process.pid, 901);
+        }
+        if (file === `/proc/${gatewayPid}/stat`) {
+          return procStat(gatewayPid, 900);
+        }
+        const value = file === `/proc/${process.pid}/cgroup` ? caller : gateway;
+        if (value === undefined) {
+          throw new Error("native observation unavailable");
+        }
+        return value;
+      });
+      expect(inspectServiceProcessMembershipSync(gatewayPid, "linux", controlGroup)).toBe(expected);
+    },
+  );
+
+  it.each([
+    { label: "reparented same group", caller: procStat(process.pid, 900), expected: "inside" },
+    { label: "distinct groups without ps", caller: procStat(process.pid, 901), expected: "absent" },
+    {
+      label: "command with parentheses and newline",
+      caller: procStat(process.pid, 901, "worker ) (child\nprocess)"),
+      expected: "absent",
+    },
+    { label: "wrong PID", caller: procStat(gatewayPid, 901), expected: "unknown" },
+    {
+      label: "missing opening parenthesis",
+      caller: `${process.pid} worker) S 1 901`,
+      expected: "unknown",
+    },
+    {
+      label: "missing closing parenthesis",
+      caller: `${process.pid} (worker S 1 901`,
+      expected: "unknown",
+    },
+    { label: "truncated group fields", caller: `${process.pid} (worker) S 1`, expected: "unknown" },
+    { label: "zero group", caller: procStat(process.pid, 0), expected: "unknown" },
+    {
+      label: "unsafe group",
+      caller: procStat(process.pid, Number.MAX_SAFE_INTEGER + 1),
+      expected: "unknown",
+    },
+    { label: "unreadable caller", caller: undefined, expected: "unknown" },
+    {
+      label: "vanished Gateway",
+      caller: procStat(process.pid, 901),
+      missingGateway: true,
+      expected: "unknown",
+    },
+  ])("checks $label before admitting root-only cgroups", ({ caller, expected, missingGateway }) => {
+    native.read.mockImplementation((file: string) => {
+      if (file.endsWith("/cgroup")) {
+        return "0::/";
+      }
+      const value =
+        file === `/proc/${process.pid}/stat`
+          ? caller
+          : missingGateway
+            ? undefined
+            : procStat(gatewayPid, 900);
+      if (value === undefined) {
+        throw new Error("native stat observation unavailable");
+      }
+      return value;
+    });
+    expect(inspectServiceProcessMembershipSync(gatewayPid, "linux")).toBe(expected);
   });
 });
 

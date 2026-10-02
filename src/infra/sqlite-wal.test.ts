@@ -6,7 +6,6 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { probeTreeClone } from "@openclaw/fs-safe/copy";
 import { expectDefined } from "@openclaw/normalization-core";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -551,16 +550,17 @@ describe("sqlite WAL maintenance", () => {
   });
 
   it("runs periodic maintenance outside request contexts and TRUNCATE on close", async () => {
+    vi.useFakeTimers();
     const requestScope = new AsyncLocalStorage<object>();
     const sessionScope = new AsyncLocalStorage<object>();
     const request = {};
     const session = {};
     const timerContexts: Array<[object | undefined, object | undefined]> = [];
     const periodic = createDeferredCore<[object | undefined, object | undefined]>();
-    const setIntervalNative = globalThis.setInterval;
-    vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) => {
+    const setTimeoutNative = globalThis.setTimeout;
+    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) => {
       timerContexts.push([requestScope.getStore(), sessionScope.getStore()]);
-      return setIntervalNative(callback, delay, ...args);
+      return setTimeoutNative(callback, delay, ...args);
     });
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
@@ -580,18 +580,18 @@ describe("sqlite WAL maintenance", () => {
           expect(timerContexts).toEqual([[undefined, undefined]]);
           expect(db["exec"]).toHaveBeenCalledTimes(3);
 
+          await vi.advanceTimersByTimeAsync(5);
           expect(await periodic.promise).toEqual([undefined, undefined]);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
           expect(db["exec"]).toHaveBeenCalledWith("PRAGMA incremental_vacuum(8);");
+          await maintenance.stop();
           expect(maintenance.close()).toBe(true);
           expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(TRUNCATE);");
           expect(requestScope.getStore()).toBe(request);
           expect(sessionScope.getStore()).toBe(session);
           const statementsAfterClose = vi.mocked(db).exec.mock.calls.length;
 
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 10);
-          });
+          await vi.advanceTimersByTimeAsync(10);
           expect(db["exec"]).toHaveBeenCalledTimes(statementsAfterClose);
         }),
       );
@@ -648,7 +648,7 @@ describe("sqlite WAL maintenance", () => {
       throw new Error("process abort intercepted");
     });
 
-    await expect(vi.advanceTimersByTimeAsync(100)).rejects.toThrow("process abort intercepted");
+    await vi.advanceTimersByTimeAsync(100);
 
     expect(kill).toHaveBeenCalledWith(process.pid, "SIGKILL");
     expect(abort).toHaveBeenCalledOnce();
@@ -872,9 +872,8 @@ describe("sqlite WAL maintenance", () => {
     },
   );
 
-  it("clamps oversized checkpoint intervals before arming timers", () => {
+  it("does not run an oversized checkpoint interval immediately", async () => {
     vi.useFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const db = createMockDb();
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 
@@ -882,7 +881,12 @@ describe("sqlite WAL maintenance", () => {
       checkpointIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(maintenance.health).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA wal_checkpoint(PASSIVE);");
+    expect(db["exec"]).not.toHaveBeenCalledWith("PRAGMA incremental_vacuum(8);");
+    await maintenance.stop();
     maintenance.close();
   });
 

@@ -1,8 +1,3 @@
-/**
- * Sandbox configuration resolver.
- *
- * Merges global and agent settings into normalized Docker, SSH, browser, prune, scope, and tool-policy config.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -51,7 +46,7 @@ function resolveDangerousSandboxDockerBooleans(
   agentDocker?: Partial<SandboxDockerConfig>,
   globalDocker?: Partial<SandboxDockerConfig>,
 ): DangerousSandboxDockerBooleans {
-  const resolved = {} as DangerousSandboxDockerBooleans;
+  const resolved: DangerousSandboxDockerBooleans = {};
   for (const key of DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS) {
     resolved[key] = agentDocker?.[key] ?? globalDocker?.[key];
   }
@@ -228,7 +223,10 @@ export function resolveSandboxConfigForAgent(
     scope: agentSandbox?.scope ?? agent?.scope,
   });
 
-  const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
+  const { sources: _toolPolicySources, ...toolPolicy } = resolveSandboxToolPolicyForAgent(
+    cfg,
+    agentId,
+  );
   const scopedAgentDocker = scope === "shared" ? undefined : agentSandbox?.docker;
 
   return {
@@ -257,10 +255,7 @@ export function resolveSandboxConfigForAgent(
       globalBrowser: agent?.browser,
       agentBrowser: agentSandbox?.browser,
     }),
-    tools: {
-      allow: toolPolicy.allow,
-      deny: toolPolicy.deny,
-    },
+    tools: toolPolicy,
     prune: resolveSandboxPruneConfig({
       scope,
       globalPrune: agent?.prune,

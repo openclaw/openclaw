@@ -1,6 +1,16 @@
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { NodePath } from "@babel/traverse";
+import type {
+  CallExpression,
+  ExportAllDeclaration,
+  ExportNamedDeclaration,
+  ImportDeclaration,
+  Node,
+  Program as BabelProgram,
+} from "@babel/types";
 import { parse, type AnyNode, type Program } from "acorn";
+import { moduleResolve } from "import-meta-resolve";
 import type { createJiti } from "jiti";
 
 export function capturedPluginModuleUrl(
@@ -19,6 +29,60 @@ export function capturedPluginModuleUrl(
     url.hash = requested.hash;
   }
   return url;
+}
+
+/** Package metadata selects a target before its deferred body has been captured. */
+export function resolvePluginPackageMapTarget(
+  specifier: string,
+  importer: string,
+  conditions: readonly string[],
+): string | undefined {
+  let selected: URL;
+  try {
+    selected = moduleResolve(specifier, pathToFileURL(importer), new Set(conditions));
+  } catch (error) {
+    if (!(error instanceof Error) || !("code" in error) || error.code !== "ERR_MODULE_NOT_FOUND") {
+      throw error;
+    }
+    if (!("url" in error) || typeof error.url !== "string") {
+      return undefined;
+    }
+    // Node chose this target from immutable metadata; only its body is still uncaptured.
+    selected = new URL(error.url);
+  }
+  return selected.protocol === "file:" ? fileURLToPath(selected) : undefined;
+}
+
+/** Missing physical inputs stay absent without poisoning another condition's selected target. */
+export function createPluginPackageMapReferences() {
+  const missingTargets = new Set<string>();
+  const recordMissingTarget = (filename: string) => {
+    missingTargets.add(path.resolve(filename));
+  };
+  return {
+    recordMissingTarget,
+    hasMissingTarget: (filename: string) => missingTargets.has(path.resolve(filename)),
+    resolveReference(specifier: string, importer: string, conditions: readonly string[]) {
+      try {
+        return moduleResolve(specifier, pathToFileURL(importer), new Set(conditions)).href;
+      } catch (error) {
+        if (
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "ERR_MODULE_NOT_FOUND" &&
+          "url" in error &&
+          typeof error.url === "string"
+        ) {
+          const target = new URL(error.url);
+          if (target.protocol === "file:") {
+            recordMissingTarget(fileURLToPath(target));
+          }
+        }
+        // Optional invalid metadata is reported only when its branch is executed.
+        return undefined;
+      }
+    },
+  };
 }
 
 type StaticStringNode = {
@@ -41,29 +105,8 @@ function staticString(node: StaticStringNode | null | undefined): string | undef
   return undefined;
 }
 
-type RequireReferencePath = {
-  node:
-    | (StaticStringNode & {
-        name?: string;
-        computed?: boolean;
-        source?: StaticStringNode;
-        specifiers?: readonly unknown[];
-      })
-    | null;
-  scope: {
-    getBinding(name: string): { constant: boolean; path: RequireReferencePath } | undefined;
-  };
-  key: string | number | null;
-  parentPath: RequireReferencePath | null;
-  get(key: "arguments"): RequireReferencePath[];
-  get(key: string): RequireReferencePath;
-  referencesImport(source: string, name: string): boolean;
-  matchesPattern(pattern: string): boolean;
-  replaceWith(node: { type: "Identifier"; name: string }): void;
-};
-
 /** Whether this expression receives a value, directly or through a destructuring pattern. */
-function isAssignmentTarget(target: RequireReferencePath): boolean {
+function isAssignmentTarget(target: NodePath): boolean {
   let child = target;
   for (let parent = target.parentPath; parent?.node; parent = parent.parentPath) {
     switch (parent.node.type) {
@@ -91,18 +134,15 @@ function isAssignmentTarget(target: RequireReferencePath): boolean {
   return false;
 }
 
-function unwrapReferenceArgument(input: RequireReferencePath | undefined) {
+function unwrapReferenceArgument(input: NodePath | undefined) {
   let argument = input;
   // TypeScript erases these wrappers without evaluating another value.
   while (
-    argument &&
-    [
-      "TSAsExpression",
-      "TSTypeAssertion",
-      "TSNonNullExpression",
-      "TSSatisfiesExpression",
-      "TSInstantiationExpression",
-    ].includes(argument.node?.type ?? "")
+    argument?.isTSAsExpression() ||
+    argument?.isTSTypeAssertion() ||
+    argument?.isTSNonNullExpression() ||
+    argument?.isTSSatisfiesExpression() ||
+    argument?.isTSInstantiationExpression()
   ) {
     argument = argument.get("expression");
   }
@@ -131,17 +171,7 @@ export function inspectPluginTypeScriptExecutionFacts(
     babel: {
       plugins: [
         {
-          pre(file: {
-            path: {
-              traverse(visitor: {
-                CallExpression(call: RequireReferencePath): void;
-                ImportDeclaration(declaration: RequireReferencePath): void;
-                ExportNamedDeclaration(declaration: RequireReferencePath): void;
-                ExportAllDeclaration(declaration: RequireReferencePath): void;
-                ImportExpression(expression: RequireReferencePath): void;
-              }): void;
-            };
-          }) {
+          pre(file: { path: NodePath<BabelProgram> }) {
             file.path.traverse({
               ImportDeclaration(declaration) {
                 const specifier = staticString(declaration.get("source").node);
@@ -191,23 +221,23 @@ export function inspectPluginTypeScriptExecutionFacts(
 }
 
 /** Read the native factory binding before Jiti rewrites modules and import.meta. */
-function isCurrentFileRequire(call: RequireReferencePath): boolean {
+function isCurrentFileRequire(call: NodePath<CallExpression>): boolean {
   const callee = call.get("callee");
   const reference =
-    callee.node?.type === "MemberExpression" &&
+    callee.isMemberExpression() &&
     !callee.node.computed &&
-    callee.get("property").node?.name === "resolve"
+    callee.get("property").isIdentifier({ name: "resolve" })
       ? callee.get("object")
       : callee;
-  let init = reference;
-  if (reference.node?.type === "Identifier" && reference.node.name) {
+  let init: NodePath<Node | null> = reference;
+  if (reference.isIdentifier() && reference.node.name) {
     const binding = reference.scope.getBinding(reference.node.name);
-    if (!binding?.constant || binding.path.node?.type !== "VariableDeclarator") {
+    if (!binding?.constant || !binding.path.isVariableDeclarator()) {
       return false;
     }
     init = binding.path.get("init");
   }
-  if (init.node?.type !== "CallExpression") {
+  if (!init.isCallExpression()) {
     return false;
   }
   const args = init.get("arguments");
@@ -215,7 +245,7 @@ function isCurrentFileRequire(call: RequireReferencePath): boolean {
   if (
     !anchor ||
     !(
-      (anchor.node?.type === "MemberExpression" &&
+      (anchor.isMemberExpression() &&
         !anchor.node.computed &&
         anchor.get("object").node?.type === "MetaProperty" &&
         anchor.matchesPattern("import.meta.url")) ||
@@ -230,9 +260,9 @@ function isCurrentFileRequire(call: RequireReferencePath): boolean {
   return ["module", "node:module"].some(
     (source) =>
       factory.referencesImport(source, "createRequire") ||
-      (factory.node?.type === "MemberExpression" &&
+      (factory.isMemberExpression() &&
         !factory.node.computed &&
-        factory.get("property").node?.name === "createRequire" &&
+        factory.get("property").isIdentifier({ name: "createRequire" }) &&
         factory.get("object").referencesImport(source, "default")),
   );
 }
@@ -382,7 +412,8 @@ export function visitPluginSourceReferences(
   sourceText: string,
   resolver: ReturnType<typeof createJiti>,
   visitReference: (reference: string, kind: "asset" | "import" | "require") => void,
-): void {
+): ReadonlySet<string> {
+  const authoredStaticImports = new Set<string>();
   const visitDirectoryAsset = (name: string, parts: readonly (string | undefined)[]) => {
     if (
       (name === "join" || name === "resolve") &&
@@ -406,15 +437,34 @@ export function visitPluginSourceReferences(
         babel: {
           plugins: [
             {
-              pre(file: {
-                path: {
-                  traverse(visitor: {
-                    CallExpression(call: RequireReferencePath): void;
-                    MemberExpression(member: RequireReferencePath): void;
-                  }): void;
-                };
-              }) {
+              pre(file: { path: NodePath<BabelProgram> }) {
                 file.path.traverse({
+                  // Native type erasure retains empty requests from specifier-only type syntax.
+                  ImportDeclaration(declaration) {
+                    if (
+                      declaration.node.importKind !== "type" &&
+                      declaration.node.specifiers.length > 0 &&
+                      declaration.node.specifiers.every(
+                        (specifier) =>
+                          specifier.type === "ImportSpecifier" && specifier.importKind === "type",
+                      )
+                    ) {
+                      authoredStaticImports.add(declaration.node.source.value);
+                    }
+                  },
+                  ExportNamedDeclaration(declaration) {
+                    if (
+                      declaration.node.source &&
+                      declaration.node.exportKind !== "type" &&
+                      declaration.node.specifiers.length > 0 &&
+                      declaration.node.specifiers.every(
+                        (specifier) =>
+                          specifier.type === "ExportSpecifier" && specifier.exportKind === "type",
+                      )
+                    ) {
+                      authoredStaticImports.add(declaration.node.source.value);
+                    }
+                  },
                   MemberExpression(member) {
                     // Jiti inlines import.meta.url, dirname and filename as strings, also
                     // where valid code assigns to them. Inspection reads only references,
@@ -431,15 +481,14 @@ export function visitPluginSourceReferences(
                     // Jiti replaces this anchor with a string; capture its meaning before rewriting.
                     if (unwrapReferenceArgument(args[0])?.matchesPattern("import.meta.dirname")) {
                       const callee = call.get("callee");
-                      const member =
-                        callee.node?.type === "MemberExpression" ? callee.get("property") : callee;
+                      const member = callee.isMemberExpression() ? callee.get("property") : callee;
                       const name =
                         ["join", "resolve"].find((method) =>
                           ["path", "node:path"].some((moduleName) =>
                             callee.referencesImport(moduleName, method),
                           ),
                         ) ??
-                        member.node?.name ??
+                        (member.isIdentifier() ? member.node.name : undefined) ??
                         "";
                       visitDirectoryAsset(
                         name,
@@ -458,6 +507,20 @@ export function visitPluginSourceReferences(
                   },
                 });
               },
+              // Jiti runs these after TypeScript erasure and before lowering module declarations.
+              visitor: {
+                ImportDeclaration(declaration: NodePath<ImportDeclaration>) {
+                  authoredStaticImports.add(declaration.node.source.value);
+                },
+                ExportNamedDeclaration(declaration: NodePath<ExportNamedDeclaration>) {
+                  if (declaration.node.source) {
+                    authoredStaticImports.add(declaration.node.source.value);
+                  }
+                },
+                ExportAllDeclaration(declaration: NodePath<ExportAllDeclaration>) {
+                  authoredStaticImports.add(declaration.node.source.value);
+                },
+              },
             },
           ],
         },
@@ -474,6 +537,7 @@ export function visitPluginSourceReferences(
       const reference = staticString(statement.source);
       if (reference !== undefined) {
         staticImports.add(reference);
+        authoredStaticImports.add(reference);
       }
     }
   }
@@ -526,4 +590,5 @@ export function visitPluginSourceReferences(
     }
   };
   visit(tree);
+  return authoredStaticImports;
 }

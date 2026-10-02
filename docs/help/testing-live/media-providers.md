@@ -100,7 +100,7 @@ request. Plugin dependencies are expected to be present before runtime load.
 - Enable: `OPENCLAW_LIVE_TEST=1 pnpm test:live -- extensions/video-generation-providers.live.test.ts`
 - Harness: `pnpm test:live:media video`
 - Scope:
-  - Exercises the shared bundled video-generation provider path across `alibaba`, `byteplus`, `deepinfra`, `fal`, `google`, `minimax`, `openai`, `openrouter`, `pixverse`, `qwen`, `runway`, `together`, `vydra`, `xai`
+  - Exercises the shared bundled video-generation provider path across `alibaba`, `byteplus`, `deepinfra`, `fal`, `google`, `minimax`, `openrouter`, `pixverse`, `qwen`, `runway`, `together`, `vydra`, `xai`
   - Defaults to the release-safe smoke path: one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
   - Skips FAL by default because provider-side queue latency can dominate release time; pass `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` (or clear the skip list) to run it explicitly
   - Uses already-exported provider env vars before probing
@@ -123,10 +123,10 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Current `videoToVideo` live coverage:
     - `runway` only when the selected model resolves to `gen4_aleph`
   - Current declared-but-skipped `videoToVideo` providers in the shared sweep:
-    - `alibaba`, `google`, `openai`, `qwen`, `xai` because those paths currently require remote `http(s)` reference URLs rather than buffer-backed local input
+    - `alibaba`, `google`, `qwen`, `xai` because those paths currently require remote `http(s)` reference URLs rather than buffer-backed local input
 - Optional narrowing:
-  - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="deepinfra,google,openai,runway"`
-  - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="deepinfra,google,runway,xai"`
+  - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,xai/grok-imagine-video,runway/gen4_aleph"`
   - `OPENCLAW_LIVE_VIDEO_GENERATION_SKIP_PROVIDERS=""` to include every provider in the default sweep, including FAL
   - `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS=60000` to reduce each provider operation cap for an aggressive smoke run
 - Optional auth behavior:
@@ -147,6 +147,6 @@ request. Plugin dependencies are expected to be present before runtime load.
   - `--quiet` / `--no-quiet` passed through to `test:live`
 - Examples:
   - `pnpm test:live:media`
-  - `pnpm test:live:media image video --providers openai,google,minimax`
-  - `pnpm test:live:media video --video-providers openai,runway --all-providers`
+  - `pnpm test:live:media image video --providers google,minimax,xai`
+  - `pnpm test:live:media video --video-providers runway,xai --all-providers`
   - `pnpm test:live:media music --quiet`

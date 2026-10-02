@@ -15,14 +15,14 @@ import {
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { partitionMcpServersByConnectionScope } from "./mcp-connection-resolver.js";
 
 type MergedBundleMcpConfig = {
   config: BundleMcpConfig;
   diagnostics: BundleMcpDiagnostic[];
+  pluginIdsByServer?: Record<string, string>;
   prepareDataDirsByServer: Record<string, BundleMcpDataDirOwnership>;
 };
-
-type BundleMcpServerMapper = (server: BundleMcpServerConfig, name: string) => BundleMcpServerConfig;
 
 const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   "streamable-http": "http",
@@ -30,6 +30,26 @@ const OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE: Record<string, string> = {
   sse: "sse",
   stdio: "stdio",
 };
+
+/** Session-shared harness connections must exclude requester-owned credentials. */
+export function loadStaticBundleMcpConfig(
+  params: Parameters<typeof loadMergedBundleMcpConfig>[0],
+): MergedBundleMcpConfig & { requesterScopedServerNames: string[] } {
+  const loaded = loadMergedBundleMcpConfig(params);
+  const { staticServers, requesterScopedServerNames } = partitionMcpServersByConnectionScope(
+    loaded.config.mcpServers,
+  );
+  return {
+    ...loaded,
+    config: { mcpServers: staticServers },
+    prepareDataDirsByServer: Object.fromEntries(
+      Object.entries(loaded.prepareDataDirsByServer).filter(([name]) =>
+        Object.hasOwn(staticServers, name),
+      ),
+    ),
+    requesterScopedServerNames,
+  };
+}
 
 export function prepareOwnedBundleMcpDataDirs(params: {
   config: BundleMcpConfig;
@@ -59,23 +79,19 @@ export function prepareOwnedBundleMcpDataDirs(params: {
 /**
  * User config stores OpenClaw MCP transport names, while CLI backends such as
  * Claude Code and Gemini expect a downstream `type` field. Keep this adapter
- * out of the generic merge path because embedded OpenClaw still consumes the raw
- * OpenClaw `transport` shape directly.
+ * at the output boundary so OAuth and runtime policy keep canonical transport.
  */
 export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): BundleMcpServerConfig {
-  const next = { ...server } as Record<string, unknown>;
+  const next = { ...server };
   const rawTransport = next.transport;
   delete next.transport;
-  if (typeof next.type === "string") {
-    return next as BundleMcpServerConfig;
-  }
   if (typeof rawTransport === "string") {
     const mapped = OPENCLAW_TRANSPORT_TO_CLI_BUNDLE_TYPE[rawTransport];
     if (mapped) {
       next.type = mapped;
     }
   }
-  return next as BundleMcpServerConfig;
+  return next;
 }
 
 /** Loads enabled bundled MCP servers and overlays user config by server name. */
@@ -83,7 +99,6 @@ export function loadMergedBundleMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
-  mapConfiguredServer?: BundleMcpServerMapper;
   toolOverrides?: Pick<SessionToolOverrides, "mcpServers">;
 }): MergedBundleMcpConfig {
   const bundleMcp = loadEnabledBundleMcpConfig({
@@ -112,7 +127,6 @@ export function loadMergedBundleMcpConfig(params: {
       ([name]) => readServerOverride(name) !== false && !disabledConfiguredNames.has(name),
     ),
   );
-  const mapConfiguredServer = params.mapConfiguredServer ?? ((server) => server);
   const prepareDataDirsByServer = Object.fromEntries(
     Object.entries(bundleMcp.prepareDataDirsByServer ?? {}).filter(
       ([name]) =>
@@ -124,21 +138,17 @@ export function loadMergedBundleMcpConfig(params: {
     config: {
       // OpenClaw config is the owner-managed layer, so it overrides bundle defaults.
       mcpServers: {
-        ...Object.fromEntries(
-          Object.entries(enabledBundleMcp).map(([name, server]) => [
-            name,
-            mapConfiguredServer(server as BundleMcpServerConfig, name),
-          ]),
-        ),
-        ...Object.fromEntries(
-          Object.entries(enabledConfiguredMcp).map(([name, server]) => [
-            name,
-            mapConfiguredServer(server as BundleMcpServerConfig, name),
-          ]),
-        ),
+        ...enabledBundleMcp,
+        ...enabledConfiguredMcp,
       } satisfies BundleMcpConfig["mcpServers"],
     },
     diagnostics: bundleMcp.diagnostics,
+    pluginIdsByServer: Object.fromEntries(
+      Object.entries(bundleMcp.pluginIdsByServer).filter(
+        ([name]) =>
+          Object.hasOwn(enabledBundleMcp, name) && !Object.hasOwn(enabledConfiguredMcp, name),
+      ),
+    ),
     prepareDataDirsByServer,
   };
 }

@@ -45,7 +45,7 @@ final class GatewayRequestCancellationGate: @unchecked Sendable {
 
 extension GatewayChannelActor {
     struct PendingRequest {
-        let continuation: CheckedContinuation<GatewayFrame, Error>
+        let continuation: CheckedContinuation<ResponseFrame, Error>
         var timeoutTask: Task<Void, Never>?
         let transportLifetime = WebSocketRequestLifetime()
     }
@@ -114,6 +114,7 @@ extension GatewayChannelActor.SelectedConnectAuth {
         }
         return GatewayAuthBinding(
             source: self.authSource,
-            credentialFingerprint: credentialFingerprint)
+            credentialFingerprint: credentialFingerprint,
+            deviceId: deviceId)
     }
 }

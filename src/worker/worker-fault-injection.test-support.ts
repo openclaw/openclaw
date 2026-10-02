@@ -18,6 +18,10 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  captureSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
@@ -35,7 +39,7 @@ import {
 } from "../gateway/worker-environments/placement-worker-gate.js";
 import * as workerEnv from "../gateway/worker-environments/service.js";
 import * as envStore from "../gateway/worker-environments/store.js";
-import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
 import { onAgentRuntimeEvent } from "../infra/agent-events.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
@@ -177,6 +181,10 @@ export class ComposedGatewayHarness {
   transcriptGate: TranscriptGate | undefined;
   providerPlan: ProviderPlan = { kind: "immediate", text: "done" };
 
+  // The simulated worker changes process.env; Gateway storage must survive service restarts.
+  private readonly gatewayStorageEnvironment = captureSessionTranscriptStorageEnvironment(
+    process.env,
+  );
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly connectionWork = new GatewayConnectionWork();
@@ -321,7 +329,7 @@ export class ComposedGatewayHarness {
       source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
       this.turnSources.set(claim.claimId, source);
     }
-    return {
+    const descriptor: WorkerLaunchDescriptor = {
       version: 4,
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
@@ -354,6 +362,8 @@ export class ComposedGatewayHarness {
         },
       },
     };
+    source.setToolAssignment(descriptor.assignment);
+    return descriptor;
   }
 
   async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {
@@ -364,7 +374,6 @@ export class ComposedGatewayHarness {
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
-      requestTimeoutMs: 2_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
     return {
@@ -556,7 +565,13 @@ export class ComposedGatewayHarness {
           gate.entered.resolve();
           await gate.release.promise;
         }
-        const result = await committer.commit(params);
+        const result = await committer.commit({
+          ...params,
+          sessionTarget: captureSessionTranscriptTargetBinding({
+            ...params.sessionTarget,
+            env: this.gatewayStorageEnvironment,
+          }),
+        });
         if (gate?.phase === "after-apply") {
           gate.entered.resolve();
           await gate.release.promise;

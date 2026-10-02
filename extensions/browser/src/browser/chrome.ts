@@ -1,9 +1,3 @@
-/**
- * OpenClaw-managed Chrome lifecycle and CDP helpers.
- *
- * Builds launch args, starts/stops managed Chrome, probes CDP readiness, and
- * resolves WebSocket endpoints for browser control.
- */
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -44,6 +38,7 @@ import {
   normalizeCdpHttpBaseForJsonEndpoints,
   scopeCdpPolicyToConfiguredEndpoint,
   withCdpSocket,
+  type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
@@ -445,7 +440,6 @@ function clearChromeSingletonArtifacts(userDataDir: string) {
   }
 }
 
-/** Remove stale Chrome singleton lock files from a user-data-dir. */
 function clearStaleChromeSingletonLocks(userDataDir: string, hostname = os.hostname()): boolean {
   const lock = readSingletonLockTarget(userDataDir);
   if (lock.status !== "owner" || lock.hostname !== hostname || isPidAlive(lock.pid)) {
@@ -701,13 +695,11 @@ function chromeLaunchHints(params: {
   return hints.length > 0 ? `\nHint: ${hints.join("\nHint: ")}` : "";
 }
 
-/** Running managed Chrome process and resolved control metadata. */
 export type RunningChrome = {
   pid: number;
   exe: BrowserExecutable;
   userDataDir: string;
   cdpPort: number;
-  startedAt: number;
   proc: ChildProcess;
   headless?: boolean;
   headlessSource?: ManagedBrowserHeadlessSource;
@@ -738,12 +730,10 @@ function resolveBrowserExecutable(
   );
 }
 
-/** Resolve the user-data-dir path for a managed OpenClaw Chrome profile. */
 export function resolveOpenClawUserDataDir(profileName = DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME) {
   return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 
-/** Build Chrome launch arguments for the managed OpenClaw browser. */
 function buildOpenClawChromeLaunchArgs(params: {
   resolved: ResolvedBrowserConfig;
   profile: ResolvedBrowserProfile;
@@ -796,17 +786,15 @@ function buildOpenClawChromeLaunchArgs(params: {
   return args;
 }
 
-type ChromeCdpEndpointPin = NonNullable<Awaited<ReturnType<typeof assertCdpEndpointAllowed>>>;
-
 export type ChromeWebSocketEndpoint = {
   url: string;
-  lookup?: ChromeCdpEndpointPin["lookup"];
+  lookup?: CdpEndpointPin["lookup"];
 };
 
 async function canOpenWebSocket(
   url: string,
   timeoutMs: number,
-  lookup?: ChromeCdpEndpointPin["lookup"],
+  lookup?: CdpEndpointPin["lookup"],
   signal?: AbortSignal,
 ): Promise<boolean> {
   try {
@@ -822,7 +810,6 @@ async function canOpenWebSocket(
   }
 }
 
-/** Return true when a Chrome CDP endpoint is reachable over HTTP. */
 export async function isChromeReachable(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -873,7 +860,6 @@ async function fetchChromeVersion(
   }
 }
 
-/** Resolve a usable Chrome DevTools WebSocket endpoint from a CDP endpoint. */
 export async function getChromeWebSocketEndpoint(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -917,7 +903,6 @@ export async function getChromeWebSocketEndpoint(
   return { url: normalizedWsUrl, lookup: discoveredPin?.lookup };
 }
 
-/** Return true when a Chrome CDP endpoint has a healthy WebSocket command path. */
 export async function isChromeCdpReady(
   cdpUrl: string,
   timeoutMs = CHROME_REACHABILITY_TIMEOUT_MS,
@@ -957,7 +942,6 @@ async function waitForManagedLaunchPoll(delayMs: number, signal?: AbortSignal): 
   }
 }
 
-/** Launch or attach to the managed OpenClaw Chrome profile. */
 export async function launchOpenClawChrome(
   resolved: ResolvedBrowserConfig,
   profile: ResolvedBrowserProfile,
@@ -1115,13 +1099,11 @@ export async function launchOpenClawChrome(
     };
   };
 
-  const startedAt = Date.now();
   const runningForProcess = (proc: ChildProcess, pid: number): RunningChrome => ({
     pid,
     exe,
     userDataDir,
     cdpPort: profile.cdpPort,
-    startedAt,
     proc,
     headless: headlessMode.headless,
     headlessSource: headlessMode.source,
@@ -1577,7 +1559,6 @@ export async function stopOwnedOpenClawChrome(
   return { status: "stopped" };
 }
 
-/** Stop a managed Chrome process and wait for shutdown. */
 export async function stopOpenClawChrome(
   running: RunningChrome,
   timeoutMs = CHROME_STOP_TIMEOUT_MS,

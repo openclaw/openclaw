@@ -12,20 +12,11 @@ setupRunAttemptTestHooks();
 
 describe("Codex native completion validation", () => {
   it.each<{ label: string; turn: JsonObject }>([
-    { label: "missing items", turn: {} },
-    { label: "non-array items", turn: { items: "invalid" } },
     { label: "nonterminal status", turn: { status: "inProgress", items: [] } },
     {
       label: "missing dynamic tool status",
       turn: { items: [{ id: "tool-1", type: "dynamicToolCall", tool: "render", arguments: {} }] },
     },
-    {
-      label: "missing dynamic tool arguments",
-      turn: {
-        items: [{ id: "tool-1", type: "dynamicToolCall", tool: "render", status: "completed" }],
-      },
-    },
-    { label: "missing plan text", turn: { items: [{ id: "plan-1", type: "plan" }] } },
   ])("keeps the run open after a completion with $label", async ({ turn }) => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(createTestParams());

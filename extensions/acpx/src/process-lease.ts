@@ -3,6 +3,7 @@ import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { asOptionalObjectRecord, asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { renderAgentCommand, splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
 import { ACPX_PROCESS_LEASE_MAX_ENTRIES, ACPX_PROCESS_LEASE_NAMESPACE } from "./state.js";
 
@@ -68,11 +69,9 @@ type AcpxProcessLeaseFile = {
 };
 
 export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | undefined {
-  if (typeof value !== "object" || value === null) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
+  const record = asOptionalObjectRecord(value);
   if (
+    !record ||
     typeof record.leaseId !== "string" ||
     typeof record.gatewayInstanceId !== "string" ||
     typeof record.sessionKey !== "string" ||
@@ -100,8 +99,7 @@ export function normalizeAcpxProcessLease(value: unknown): AcpxProcessLease | un
 }
 
 export function normalizeAcpxProcessLeaseFile(value: unknown): AcpxProcessLeaseFile {
-  const root =
-    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const root = asRecord(value);
   const leases = Array.isArray(root.leases)
     ? root.leases
         .map(normalizeAcpxProcessLease)

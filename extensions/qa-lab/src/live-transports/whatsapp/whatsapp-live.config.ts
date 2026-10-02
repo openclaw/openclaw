@@ -3,14 +3,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { buildLiveQaApprovalForwardingConfig } from "../shared/live-approval-config.js";
+import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import type { WhatsAppQaConfigOverrides, WhatsAppQaRuntimeEnv } from "./whatsapp-live.contracts.js";
 
-const WHATSAPP_QA_ENV_KEYS = [
-  "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164",
-  "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164",
-  "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
-  "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64",
-] as const;
 const whatsappQaCredentialPayloadSchema = z.object({
   driverPhoneE164: z.string().trim().min(1),
   sutPhoneE164: z.string().trim().min(1),
@@ -18,14 +13,6 @@ const whatsappQaCredentialPayloadSchema = z.object({
   sutAuthArchiveBase64: z.string().trim().min(1),
   groupJid: z.string().trim().min(1).optional(),
 });
-
-function resolveEnvValue(env: NodeJS.ProcessEnv, key: (typeof WHATSAPP_QA_ENV_KEYS)[number]) {
-  const value = env[key]?.trim();
-  if (!value) {
-    throw new Error(`Missing ${key}.`);
-  }
-  return value;
-}
 
 function normalizePhone(value: string, label: string) {
   const normalized = normalizeE164(value);
@@ -56,13 +43,13 @@ export function resolveWhatsAppQaRuntimeEnv(
 ): WhatsAppQaRuntimeEnv {
   return validateWhatsAppQaRuntimeEnv(
     {
-      driverPhoneE164: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164"),
-      sutPhoneE164: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164"),
-      driverAuthArchiveBase64: resolveEnvValue(
+      driverPhoneE164: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_DRIVER_PHONE_E164"),
+      sutPhoneE164: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_SUT_PHONE_E164"),
+      driverAuthArchiveBase64: requireLiveQaEnv(
         env,
         "OPENCLAW_QA_WHATSAPP_DRIVER_AUTH_ARCHIVE_BASE64",
       ),
-      sutAuthArchiveBase64: resolveEnvValue(env, "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64"),
+      sutAuthArchiveBase64: requireLiveQaEnv(env, "OPENCLAW_QA_WHATSAPP_SUT_AUTH_ARCHIVE_BASE64"),
       groupJid: env.OPENCLAW_QA_WHATSAPP_GROUP_JID?.trim() || undefined,
     },
     "OPENCLAW_QA_WHATSAPP",

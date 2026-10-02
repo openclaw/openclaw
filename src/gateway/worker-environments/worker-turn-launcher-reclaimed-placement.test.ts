@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createEmbeddedRunLaneController } from "../../agents/embedded-agent-runner/run/lane-controller.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { runFallbackAttempt } from "../../agents/model-fallback-attempt.js";
+import {
+  isAgentRunRestartAbortReason,
+  resolveAgentRunErrorLifecycleFields,
+} from "../../agents/run-termination.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
@@ -21,18 +26,16 @@ import {
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { getCommandLaneSnapshot, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
-import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import {
-  ENVIRONMENT_ID,
-  MANIFEST_REF,
-  OWNER_EPOCH,
+  createWorkerTurnTunnel,
+  reconcileUnchangedLocalWorkspace,
+  acknowledgeCompletedWorkerTurn,
   SESSION_ID,
   SESSION_KEY,
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
-  measureLaunchTurn,
   credential,
   openSessionManager,
   placements,
@@ -119,62 +122,25 @@ describe("worker turn launcher reclaimed placement", () => {
         state: "active",
         turnClaim: { owner: "worker", runId },
       });
-      const completed = openSessionManager();
-      const leafId = completed.appendMessage(
+      const completed = await openSessionManager();
+      const leafId = await completed.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Redispatched worker reply" }],
           timestamp: 51,
         }),
       );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     });
     const environments: WorkerTurnEnvironmentService = {
       get: vi.fn(() => attachedEnvironment()),
       acquireTurnCredential: vi.fn(async () => credential()),
       acknowledgeCredentialDelivery: vi.fn(async () => true),
-      startTunnel: vi.fn(async () => ({
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        quiesceWorkspace: vi.fn(async () => ({
-          assertActive: vi.fn(async () => {}),
-          resume: vi.fn(async () => {}),
-        })),
-        runWorkspaceCommand: vi.fn(),
-        measureLaunchTurn,
-        launchTurn,
-        syncWorkspace: vi.fn(async () => {
-          throw new Error("unexpected workspace sync");
+      startTunnel: vi.fn(async () =>
+        createWorkerTurnTunnel({
+          launchTurn,
+          reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
         }),
-        reconcileWorkspace: vi.fn(async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected a local workspace source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        }),
-        stop: vi.fn(async () => {}),
-      })),
+      ),
       stopTunnel: vi.fn(async () => {}),
       destroy: vi.fn(async () => attachedEnvironment()),
     };
@@ -367,88 +333,141 @@ describe("worker turn launcher reclaimed placement", () => {
     }
   });
 
-  it("rejects an actual worker turn when its lifecycle rotates during placement admission", async () => {
-    await seedActivePlacement();
-    const runId = "run-worker-rotated-during-admission";
-    const registeredAt = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
-    let lifecycleGeneration = getAgentEventLifecycleGeneration();
-    const onLaneWait = vi.fn<NonNullable<RunEmbeddedAgentParams["onLaneWait"]>>();
-    let params: RunEmbeddedAgentParams & { sessionFile: string } = {
-      ...turn(runId),
-      lifecycleGeneration,
-      trigger: "user",
-      onLaneWait,
-    };
-    registerAgentRunContext(runId, { lifecycleGeneration, registeredAt, sessionKey: SESSION_KEY });
-
-    const workspaceResolutionStarted = createDeferred();
-    const resumeWorkspaceResolution = createDeferred();
-    const environments = unusedEnvironments();
-    const provider = createWorkerSessionTurnPlacementProvider({
-      environments,
-      placements,
-      resolveWorkspace: async () => {
-        workspaceResolutionStarted.resolve();
-        await resumeWorkspaceResolution.promise;
-        return { kind: "local", path: root };
-      },
-    });
-    const uninstallPlacement = installSessionPlacementAdmissionProvider(provider);
-    const controller = createEmbeddedRunLaneController({
-      getLifecycleGeneration: () => lifecycleGeneration,
-      getParams: () => params,
-      globalLane: `global:${runId}`,
-      initialQueuedLifecycleGeneration: lifecycleGeneration,
-      sessionLane: `session:${runId}`,
-      setLifecycleGeneration: (generation) => {
-        lifecycleGeneration = generation;
-      },
-      setParams: (next) => {
-        params = next;
-      },
-    });
-    const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
-    const pending = controller.enqueueSession(() => controller.enqueueGlobal(runLocal));
-
-    try {
-      await workspaceResolutionStarted.promise;
-      clock.mockReturnValue(registeredAt + 30 * 60 * 1000 + 1);
-      const replacementGeneration = rotateAgentEventLifecycleGeneration();
-      expect(sweepStaleRunContexts()).toBe(1);
+  it.each(["placement admission", "worker preparation"] as const)(
+    "rejects an actual worker turn when its lifecycle rotates during %s",
+    async (phase) => {
+      await seedActivePlacement();
+      const runId = "run-worker-rotated-during-admission";
+      const registeredAt = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(registeredAt);
+      let lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const onLaneWait = vi.fn<NonNullable<RunEmbeddedAgentParams["onLaneWait"]>>();
+      let params: RunEmbeddedAgentParams & { sessionFile: string } = {
+        ...turn(runId),
+        lifecycleGeneration,
+        trigger: "user",
+        onLaneWait,
+      };
       registerAgentRunContext(runId, {
-        lifecycleGeneration: replacementGeneration,
-        registeredAt: Date.now(),
-        sessionId: "replacement-session",
-        sessionKey: "agent:main:replacement",
+        lifecycleGeneration,
+        registeredAt,
+        sessionKey: SESSION_KEY,
       });
-      const replacementContext = getAgentRunContext(runId);
 
-      resumeWorkspaceResolution.resolve();
-      // The admission guard rejects before the lane can hand off the stale run.
-      await expect(pending.catch(isAgentRunStaleLifecycleError)).resolves.toBe(true);
-      expect(
-        getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
-      ).toBeUndefined();
-      expect(getAgentRunContext(runId)).toMatchObject({
-        lifecycleGeneration: replacementGeneration,
-        sessionId: "replacement-session",
-        sessionKey: "agent:main:replacement",
+      const workspaceResolutionStarted = createDeferred();
+      const resumeWorkspaceResolution = createDeferred();
+      const environments = unusedEnvironments();
+      const claimTurn = placements.claimTurn.bind(placements);
+      if (phase === "placement admission") {
+        vi.spyOn(placements, "claimTurn").mockImplementation(async (...args) => {
+          workspaceResolutionStarted.resolve();
+          await resumeWorkspaceResolution.promise;
+          return await claimTurn(...args);
+        });
+      }
+      const provider = createWorkerSessionTurnPlacementProvider({
+        environments,
+        placements,
+        resolveWorkspace: async () => {
+          workspaceResolutionStarted.resolve();
+          await resumeWorkspaceResolution.promise;
+          return { kind: "local", path: root };
+        },
       });
-      expect(getAgentRunContext(runId)).toBe(replacementContext);
-      expect(onLaneWait).not.toHaveBeenCalledWith(expect.objectContaining({ waiting: false }));
-      expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
-      expect(environments.get).not.toHaveBeenCalled();
-      expect(environments.startTunnel).not.toHaveBeenCalled();
-      expect(runLocal).not.toHaveBeenCalled();
-    } finally {
-      resumeWorkspaceResolution.resolve();
-      uninstallPlacement();
-      await pending.catch(() => {});
-      clearAgentRunContext(runId);
-      clock.mockRestore();
-    }
-  });
+      const uninstallPlacement = installSessionPlacementAdmissionProvider(provider);
+      const controller = createEmbeddedRunLaneController({
+        getLifecycleGeneration: () => lifecycleGeneration,
+        getParams: () => params,
+        globalLane: `global:${runId}`,
+        initialQueuedLifecycleGeneration: lifecycleGeneration,
+        sessionLane: `session:${runId}`,
+        setLifecycleGeneration: (generation) => {
+          lifecycleGeneration = generation;
+        },
+        setParams: (next) => {
+          params = next;
+        },
+      });
+      const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
+      const pending = controller.enqueueSession(() => controller.enqueueGlobal(runLocal));
+
+      try {
+        await workspaceResolutionStarted.promise;
+        expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(
+          phase === "worker preparation" ? runId : undefined,
+        );
+        expect(onLaneWait.mock.calls).toEqual(
+          phase === "worker preparation" ? [[{ waitMs: 0, queuedAhead: 0, waiting: false }]] : [],
+        );
+        clock.mockReturnValue(registeredAt + 30 * 60 * 1000 + 1);
+        const replacementGeneration = rotateAgentEventLifecycleGeneration();
+        expect(sweepStaleRunContexts()).toBe(1);
+        registerAgentRunContext(runId, {
+          lifecycleGeneration: replacementGeneration,
+          registeredAt: Date.now(),
+          sessionId: "replacement-session",
+          sessionKey: "agent:main:replacement",
+        });
+        const replacementContext = getAgentRunContext(runId);
+
+        if (phase === "placement admission") {
+          resumeWorkspaceResolution.resolve();
+        }
+        const rejection = await pending.catch((error: unknown) => error);
+        // Claim acquisition is admission. A registered owner instead records restart cancellation.
+        if (phase === "placement admission") {
+          expect(isAgentRunStaleLifecycleError(rejection)).toBe(true);
+        } else {
+          expect(isAgentRunRestartAbortReason(rejection)).toBe(true);
+          expect(resolveAgentRunErrorLifecycleFields(rejection, params.abortSignal)).toEqual({
+            aborted: true,
+            stopReason: "restart",
+          });
+          const attempts: Parameters<typeof runFallbackAttempt>[0]["attempts"] = [];
+          await expect(
+            runFallbackAttempt({
+              run: async () => {
+                throw rejection;
+              },
+              provider: "fixture-primary",
+              model: "fixture-model",
+              attempts,
+              attempt: 1,
+              total: 2,
+            }),
+          ).rejects.toBe(rejection);
+          expect(attempts).toEqual([]);
+        }
+        // The preparation read remains blocked until after exact claim settlement.
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+        resumeWorkspaceResolution.resolve();
+        expect(
+          getDiagnosticSessionActivitySnapshot({ sessionId: SESSION_ID }).activeWorkKind,
+        ).toBeUndefined();
+        expect(getAgentRunContext(runId)).toMatchObject({
+          lifecycleGeneration: replacementGeneration,
+          sessionId: "replacement-session",
+          sessionKey: "agent:main:replacement",
+        });
+        expect(getAgentRunContext(runId)).toBe(replacementContext);
+        if (phase === "placement admission") {
+          expect(onLaneWait).not.toHaveBeenCalledWith(expect.objectContaining({ waiting: false }));
+        } else {
+          expect(onLaneWait.mock.calls).toEqual([[{ waitMs: 0, queuedAhead: 0, waiting: false }]]);
+        }
+        expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
+        expect(environments.get).not.toHaveBeenCalled();
+        expect(environments.startTunnel).not.toHaveBeenCalled();
+        expect(runLocal).not.toHaveBeenCalled();
+      } finally {
+        resumeWorkspaceResolution.resolve();
+        uninstallPlacement();
+        await pending.catch(() => {});
+        clearAgentRunContext(runId);
+        clock.mockRestore();
+      }
+    },
+  );
 
   it("does not fall back locally when reclaimed redispatch fails", async () => {
     await seedReclaimedPlacement();

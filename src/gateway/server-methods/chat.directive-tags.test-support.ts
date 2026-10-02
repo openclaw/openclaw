@@ -3,13 +3,16 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
   replaceSessionEntry,
   type SessionAccessScope,
 } from "../../config/sessions/session-accessor.js";
-import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-accessor.types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -24,6 +27,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 
@@ -51,16 +55,22 @@ export function readChatDirectiveConfig(
 }
 
 export function createChatDirectiveSuiteResources() {
+  const fixtureLifetime = createFixtureLifetime();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const previousEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
   let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
     databasePath,
     env,
+    runFixture: fixtureLifetime.run,
+    verifyFixtureCleanup: fixtureLifetime.verifyCleanup,
+    settleFixtures: () => fixtureLifetime.cleanup(),
     // The caller retains cleanup ownership before opening can fail.
     open() {
+      setTestEnvValue("OPENCLAW_STATE_DIR", root);
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       // Session cases share the installed inventory through per-case runtime resets.
       metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
@@ -95,14 +105,8 @@ export function createChatDirectiveSuiteResources() {
         env,
         sessionKeys: [canonicalKey],
         readOnly: true,
-        onReadSource: (source, physical) => {
-          if (physical) {
-            captured = {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            };
-          }
+        onReadSource: (source) => {
+          captured = source;
         },
       });
       const capturedReadSource = expectDefined(captured, "chat directive fixture database source");
@@ -121,13 +125,15 @@ export function createChatDirectiveSuiteResources() {
     },
     async close() {
       try {
+        const metadataCleanup = await metadataOwner?.close();
+        expect(metadataCleanup?.failures ?? []).toEqual([]);
         await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
           disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
         );
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
         fs.rmSync(root, { recursive: true, force: true });
       } finally {
-        await metadataOwner?.close();
+        previousEnv.restore();
       }
     },
   };
@@ -176,4 +182,86 @@ export function expectClaimOnlyTranscriptMedia(
   for (const value of forbiddenValues) {
     expect(serialized).not.toContain(value);
   }
+}
+
+export function createChatDirectiveReplyBackend(params: {
+  cancel?: ReplyBackendHandle["cancel"];
+  isStopped?: ReplyBackendHandle["isStopped"];
+  isStreaming?: ReplyBackendHandle["isStreaming"];
+  legacy?: boolean;
+  queueMessage: NonNullable<ReplyBackendHandle["queueMessage"]>;
+  runId?: string;
+  supportsQueueMessageImages?: boolean;
+  taskSuggestionDeliveryMode?: "gateway";
+}): ReplyBackendHandle {
+  return {
+    kind: "embedded",
+    cancel: params.cancel ?? (() => {}),
+    runId: params.runId,
+    supportsQueueMessageImages: params.supportsQueueMessageImages,
+    taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
+    ...(params.legacy
+      ? {
+          queueMessage: params.queueMessage,
+          isStopped: params.isStopped,
+          isStreaming: params.isStreaming,
+        }
+      : {
+          // Production steering adapters use V2. The mock queue is this fixture
+          // backend's final handoff, so retain the source guard at that boundary.
+          messageInjectionV2: {
+            version: 2 as const,
+            isAvailable: () => true,
+            queueMessage: (text, options, assertCurrent) => {
+              assertCurrent();
+              return params.queueMessage(text, options);
+            },
+          },
+        }),
+  };
+}
+
+export function createUnconfirmedTranscriptDelivery() {
+  const queueLifetime = createFixtureLifetime();
+  const delivery = createDeferred<{
+    transcriptCommit: "unconfirmed";
+    errorMessage: string;
+  }>();
+  const persisted = createDeferred();
+  void persisted.promise.catch(() => {});
+  const queueMessage = vi.fn<NonNullable<ReplyBackendHandle["queueMessage"]>>((_text, options) =>
+    queueLifetime.track(
+      (async () => {
+        options?.onQueueAccepted?.(true);
+        try {
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+          persisted.resolve();
+        } catch (error) {
+          persisted.reject(error);
+          throw error;
+        }
+        return await delivery.promise;
+      })(),
+    ),
+  );
+  return {
+    ...delivery,
+    persisted: persisted.promise,
+    queueMessage,
+    settle: () => queueLifetime.cleanup(),
+  };
+}
+
+export function createChatDirectiveUserMessageReader(
+  readEntries: () => Array<Record<string, unknown>>,
+) {
+  return () =>
+    readEntries()
+      .map((entry) => entry.message)
+      .filter(
+        (candidate): candidate is Record<string, unknown> =>
+          typeof candidate === "object" &&
+          candidate !== null &&
+          (candidate as { role?: unknown }).role === "user",
+      );
 }

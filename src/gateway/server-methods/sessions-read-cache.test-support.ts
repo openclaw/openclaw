@@ -24,6 +24,10 @@ import {
 } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
+import type { WorkerPlacementMoveIntent } from "../worker-environments/placement-move-intent.js";
+import type { WorkerSessionPlacementReader } from "../worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
 import { readPreparedServerMethodModelCatalogs } from "./optional-model-catalog.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
@@ -46,35 +50,9 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
         readPreparedServerMethodModelCatalogs(context, listAgentIds(context.getRuntimeConfig())),
       context,
       placementFactsReader: placements
-        ? {
-            async readProjection(sessionIds) {
-              const records = placements.getMany(sessionIds);
-              const environments = new Map();
-              for (const placement of records.values()) {
-                const environmentId = placement.environmentId;
-                const environment = environmentId
-                  ? context.workerEnvironmentService?.get(environmentId)
-                  : undefined;
-                if (environmentId && environment) {
-                  environments.set(environmentId, {
-                    ...environment,
-                    environmentId,
-                    profileSnapshot: { settings: {} },
-                    nodeDeviceId: environment.nodeDeviceId ?? null,
-                    attachedSessionIds: [...(environment.attachedSessionIds ?? [])],
-                  });
-                }
-              }
-              return {
-                placements: records,
-                moves: placements.getPlacementMoves?.(sessionIds) ?? new Map(),
-                workspaceResultReconcilingSessionIds:
-                  placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
-                workspaceRecoveryPendingSessionIds: new Set(),
-                environments,
-              };
-            },
-          }
+        ? createSessionPlacementFactsReader(placements, (id) =>
+            context.workerEnvironmentService?.get(id),
+          )
         : undefined,
     }).then((projection) => {
       trackSessionReadProjection(projection);
@@ -83,6 +61,42 @@ export function initializeSessionReadContext(context: GatewayRequestContext) {
     initializing.set(context, pending);
   }
   return pending;
+}
+
+export function createSessionPlacementFactsReader(
+  placements: WorkerSessionPlacementReader,
+  getEnvironment?: WorkerEnvironmentServiceContract["get"],
+  moves: ReadonlyMap<string, WorkerPlacementMoveIntent> = new Map(),
+): Pick<WorkerSessionPlacementStore, "readProjection"> {
+  return {
+    async readProjection(sessionIds) {
+      const records = placements.getMany(sessionIds);
+      const environments = new Map();
+      for (const placement of records.values()) {
+        const environmentId = placement.environmentId;
+        const environment = environmentId ? getEnvironment?.(environmentId) : undefined;
+        if (environmentId && environment) {
+          environments.set(environmentId, {
+            ...environment,
+            environmentId,
+            profileSnapshot: { settings: {} },
+            nodeDeviceId: environment.nodeDeviceId ?? null,
+            attachedSessionIds: [...(environment.attachedSessionIds ?? [])],
+          });
+        }
+      }
+      return {
+        placements: records,
+        moves: new Map([...moves].filter(([id]) => sessionIds.includes(id))),
+        pendingResults: new Map(),
+        workspaceJournalOwnerSessionIds: new Set(),
+        workspaceResultReconcilingSessionIds:
+          placements.getWorkspaceResultReconcilingSessionIds?.(sessionIds) ?? new Set(),
+        workspaceRecoveryPendingSessionIds: new Set(),
+        environments,
+      };
+    },
+  };
 }
 
 export function identifiedClient(profileId: string): GatewayClient {

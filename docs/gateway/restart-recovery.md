@@ -139,6 +139,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+Read-only RPC waits (`agent.wait`, approval decision waits, `question.waitAnswer`,
+and `device.scopes.waitUpgrade`) stop observing when their client disconnects.
+When shutdown drain begins, connected waiters receive retryable `UNAVAILABLE`
+errors with reason `gateway-restarting`, so clients can reconnect and wait again.
+These waits do not consume the stop drain budget. The underlying runs, decisions,
+and admitted writes keep their normal drain and recovery behavior. This also
+applies to update restarts once the running Gateway contains this fix; installing
+new files cannot change a wait already held by an older Gateway process.
+
 Cron shutdown gives execution cleanup and durable result writes the same cleanup
 window. Finishing the job's execution does not by itself complete the drain:
 result persistence must also settle, or the Gateway reports the remaining work
@@ -150,9 +159,14 @@ Node version and the service manager tracks a launcher parent. The launcher
 forwards the stop signal and waits for the serving Gateway to drain within the
 shared service budget. Managed restart intent targets the live serving owner,
 so unfinished work still follows restart recovery when its drain budget expires.
-The launchd stop budget remains 20 seconds; Linux units use the deadlines below.
+When launchd drives the stop, macOS uses the running job's own `ExitTimeOut`, capped
+by the launcher's own stop timer when a launcher is in the path, and Linux units use
+their own stop timeout; both are described in the deadline sections below.
 This requires a Gateway started with the updated launcher: replacing files cannot
-change a launcher that is already running.
+change a launcher that is already running. The stop deadlines below are the
+exception: the serving Gateway derives the launcher's reap timer rather than being
+told it, precisely so a Gateway started by an already-running older launcher still
+bounds itself correctly.
 
 For these managed restarts, if the CLI cannot verify the service command, serving
 owner, or restart-intent recording, it refuses the restart before signaling with
@@ -205,16 +219,35 @@ unit's effective `TimeoutStopUSec`, including drop-ins. It logs the source and
 reconciled stop budget at both points, so a repaired unit takes effect without
 restarting first. Inspection and any wait for startup to finish consume the same
 shutdown deadline. Active-work drain uses at most
-315 seconds, with 10 seconds reserved for final chat writes and server cleanup
-and another 5 seconds before systemd's deadline. A unit with the default
+315 seconds, with up to 10 seconds reserved for final chat writes and server cleanup
+and up to another 5 seconds before systemd's deadline. A unit with the default
 90-second stop timeout therefore gets a 75-second drain and an 85-second Gateway
 shutdown deadline. A shorter supervisor timeout also caps requested restart waits.
-The drained work, ordering, and interruption behavior stay the same.
+
+Both allowances are bounded when the deadline cannot fund them, by the same rule the
+launchd budget uses and for the same reason: subtracting two values sized for a
+315-second drain from a short stop timeout consumed it entirely and left active work
+nothing. A unit whose `TimeoutStopSec` is 20 seconds or longer keeps the allocation it
+already had, less whatever the stop inspection itself cost, rather than to the exact
+millisecond: 20 seconds is only the least that funds the full 10-second reserve
+alongside a 5-second drain before that cost comes off. Below that the deadline cannot fund
+both, and the reserve yields to keep a drain: a unit at or below 15 seconds now drains
+at all where it previously drained for zero milliseconds, and the four values between
+trade part of a reserve for a drain that was under 5 seconds. The reserve never falls
+below half the shutdown budget. The exit margin holds its full 5 seconds down to a
+20-second deadline and shrinks below that, to 3.75 seconds at 15 seconds and a quarter
+of anything shorter. The drained work, ordering, and interruption behavior stay the
+same, and systemd's own 90-second default is unaffected.
 
 Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
 for final exit bookkeeping. A forced restart drains admitted work within the same
 budget. When the restart scheduler has already exhausted its deferral budget,
 cleanup retains the 10-second reserve without starting a second drain.
+For a supervisor's SIGTERM restart, a shorter requested drain limits when active
+runs are interrupted, not when database cleanup must finish: cleanup can use the
+remaining native stop budget. The Gateway still exits before the supervisor's
+deadline. Clean database restart proof is published only after writer leases,
+checkpointing, and native connection closure settle.
 A restart without a supervisor handoff uses the existing shutdown
 deadline for cleanup. This includes foreground Gateways inside another service's
 cgroup, restarts with `OPENCLAW_NO_RESPAWN=1`, and standalone updates that must
@@ -294,6 +327,59 @@ successfully stopping its children records the captured parent's cancellation
 before acknowledging, without overwriting a newer turn in that session.
 If another child cannot be stopped, the response still reports incomplete
 cancellation; the captured parent's cancellation is persisted before that error.
+
+### Launchd stop deadlines
+
+On a launchd-driven stop, the macOS Gateway reads the **loaded** job's effective
+`exit timeout` with `launchctl print`. It checks the system, GUI, and user
+domains, and accepts only a job whose PID is the Gateway or its launcher. Restart
+ownership can still be external: the supervisor that enforces the stop, not the
+owner of the next start, determines the deadline. A direct SIGTERM does not start
+launchd's stop clock, so it keeps the existing Gateway stop policy unless an
+OpenClaw launcher independently enforces its own child reap timer.
+
+The **stop budget** is time available until the supervisor can kill the process.
+The Gateway sets aside an exit margin (up to 5 seconds) and plans its shutdown
+inside the remainder. **Drain** is the first part of that shutdown: stop admitting
+new work and wait for active turns and background tasks to settle. The rest is
+reserved for final writes and service cleanup (up to 10 seconds). The Gateway
+logs the chosen source, drain, shutdown deadline, reserve, and exit margin.
+
+For the installed 20-second LaunchAgent job, the nominal split is 5 seconds of
+drain, 10 seconds for cleanup, and 5 seconds before launchd's deadline. Time
+spent inspecting the job is debited. For a shorter custom deadline the exit
+margin is at most a quarter, and the cleanup reserve gives way to leave active
+work up to 5 seconds of drain (at most half of the remaining shutdown budget
+when it is very short). For example, a 5-second job nominally leaves 1.875
+seconds each for drain and cleanup after its 1.25-second exit margin; a
+15-second job leaves 5 seconds of drain, 6.25 seconds for cleanup, and a
+3.75-second margin. **This reduces cleanup time for custom jobs below 20
+seconds.** The default systemd 90-second deadline is unaffected. The probe can
+consume up to three 2-second calls; a very slow inspection can leave no drain.
+
+If a Node-recovery or compile-cache launcher is the job's PID, its own child
+reap timer may be shorter than launchd's deadline. The Gateway caps its budget
+at that timer only when its respawn markers establish that this launcher started
+it; an unrelated parent does not shorten the budget.
+
+A direct signal to a marked launcher can start its own timer while launchd
+still reports `running`. The Gateway cannot distinguish that forwarded signal
+from a direct signal to its child, where the launcher has no timer, so it does
+not cap this case. Operators stopping a launcher directly should use the loaded
+job stop instead to get an enforceable, reported deadline.
+
+`ExitTimeOut=0` means no launchd stop deadline, not a missing value. Without a
+launcher timer, the Gateway keeps its ordinary policy and does not classify the
+job as a native deadline. An unreadable job leaves
+the existing stop policy in place with a warning, while a confirmed stopping
+job whose timeout is missing uses launchd's 20-second default with a warning.
+
+The value comes from the job launchd has **loaded**, not the plist on disk.
+Editing `ExitTimeOut` or running `launchctl kickstart -k` does not reload it;
+`launchctl bootout` followed by `launchctl bootstrap` does, restarting the
+Gateway. Reading per stop avoids a stale startup snapshot, not a stale loaded
+job. On macOS 27, launchd reports at most 60 seconds even if the plist asks
+for more; inspect the loaded job to confirm the effective value.
 
 ## Host sleep and process freezes
 
@@ -412,9 +498,11 @@ never triggers automatic re-enablement of the rejected installation.
 
 On macOS, a terminated update helper can leave the selected Gateway LaunchAgent
 installed but unloaded and disabled across logins. `openclaw doctor` and
-`openclaw doctor --fix` diagnose this state. `--fix` leaves an already-stopped
-Gateway stopped. If the update was interrupted or installation safety is
-uncertain, rerun `openclaw update` or use Doctor and triage before starting it.
+`openclaw doctor --fix` diagnose this state. After successful standalone repair,
+`--fix` starts and verifies an already-stopped managed Gateway whose service
+targets the current installation. Update-time Doctor leaves activation with the
+updater. If the update was interrupted or installation safety is uncertain,
+rerun `openclaw update` or use Doctor and triage before starting it manually.
 Once verified, run `openclaw gateway start` (or
 `openclaw --profile <profile> gateway start`) to re-enable and start that service.
 Keep the same state/config and custom-label overrides. Doctor prints the selected
@@ -530,8 +618,10 @@ Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
 saved reply and any admitted completion claim remain available for a later
 attempt. Delegated requests and unverified internal inputs cannot resume
-automatically without surviving authority. Child-completion follow-ups still use their
-existing recovery and delivery ownership checks.
+automatically without surviving authority. Missing or invalid provenance does not
+establish a human sender for an internal claim. Legacy channel and Control UI
+turns retain their existing recovery checks. Child-completion follow-ups still use
+their existing recovery and delivery ownership checks.
 
 When a recovered turn starts with an eligible channel delivery route, OpenClaw
 sends a resumption notice to that conversation, retaining its account and topic.

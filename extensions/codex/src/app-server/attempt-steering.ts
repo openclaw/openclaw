@@ -29,6 +29,7 @@ export type CodexSteeringQueueOptions = Pick<
   | "media"
   | "isInboundUserMessage"
   | "onQueueAccepted"
+  | "onQueueSettled"
   | "userTurnTranscriptRecorder"
 >;
 
@@ -118,6 +119,7 @@ export function createCodexSteeringQueue(params: {
     acceptItem(item);
     item.settled = true;
     pendingMessages.delete(item);
+    item.onQueueSettled?.();
     item.resolve();
   };
 
@@ -128,6 +130,7 @@ export function createCodexSteeringQueue(params: {
     item.settled = true;
     pendingMessages.delete(item);
     reportItemAcceptance(item, false);
+    item.onQueueSettled?.();
     item.reject(
       item.acceptance === "accepted"
         ? new CodexSteeringAcceptedUnconfirmedError(
@@ -297,7 +300,13 @@ export function createCodexSteeringQueue(params: {
     }
   };
 
-  const enqueueSend = (items: PendingSteerMessage[]) => {
+  const flushBatch = (): Promise<void> => {
+    clearBatchTimer();
+    const items = batchedMessages;
+    batchedMessages = [];
+    if (items.length === 0) {
+      return sendChain;
+    }
     const send = sendChain.then(() => sendBatch(items));
     // Preserve submission order after rejection: later messages must fall back
     // instead of overtaking the failed message with another turn/steer request.
@@ -309,37 +318,6 @@ export function createCodexSteeringQueue(params: {
       embeddedAgentLog.debug("codex app-server queued steer failed", { error });
     });
     return send;
-  };
-
-  const flushBatch = (): Promise<void> => {
-    clearBatchTimer();
-    const items = batchedMessages;
-    batchedMessages = [];
-    if (items.length === 0) {
-      return sendChain;
-    }
-    const send = enqueueSend(items);
-    void send.catch(() => undefined);
-    return send;
-  };
-
-  const createPendingMessage = (
-    text: string,
-    options?: CodexSteeringQueueOptions,
-    assertCurrent: () => void = () => {},
-  ): { item: PendingSteerMessage; delivery: Promise<void> } => {
-    const { promise: delivery, resolve, reject } = createDeferred<void>();
-    const item = {
-      ...options,
-      assertCurrent,
-      acceptance: "open" as const,
-      text,
-      resolve,
-      reject,
-      settled: false,
-    };
-    pendingMessages.add(item);
-    return { item, delivery };
   };
 
   params.signal.addEventListener("abort", abortQueue, { once: true });
@@ -358,9 +336,20 @@ export function createCodexSteeringQueue(params: {
         assertCurrent();
       } catch (error) {
         options?.onQueueAccepted?.(false);
+        options?.onQueueSettled?.();
         throw error;
       }
-      const { item, delivery } = createPendingMessage(text, options, assertCurrent);
+      const { promise: delivery, resolve, reject } = createDeferred<void>();
+      const item: PendingSteerMessage = {
+        ...options,
+        assertCurrent,
+        acceptance: "open",
+        text,
+        resolve,
+        reject,
+        settled: false,
+      };
+      pendingMessages.add(item);
       batchedMessages.push(item);
       clearBatchTimer();
       const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);

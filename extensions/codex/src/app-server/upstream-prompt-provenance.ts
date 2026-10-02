@@ -1,5 +1,8 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  readNonEmptyStringPreservingWhitespace,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const UPSTREAM_USER_TEXT_META_KEY = "upstreamUserText" as const;
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
@@ -16,12 +19,7 @@ export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, id
 
 export function readMirrorIdentity(message: AgentMessage): string | undefined {
   const meta = CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const record = asOptionalRecord(meta);
-  if (!record) {
-    return undefined;
-  }
-  const id = record[MIRROR_IDENTITY_META_KEY];
-  return typeof id === "string" && id ? id : undefined;
+  return readNonEmptyStringPreservingWhitespace(asOptionalRecord(meta)?.[MIRROR_IDENTITY_META_KEY]);
 }
 
 export function attachUpstreamUserText<T extends AgentMessage>(message: T, text: string): T {
@@ -35,10 +33,7 @@ export function attachUpstreamUserText<T extends AgentMessage>(message: T, text:
 
 export function readUpstreamUserText(message: AgentMessage | undefined): string | undefined {
   const meta = message && CODEX_META_KEY in message ? message[CODEX_META_KEY] : undefined;
-  const record = asOptionalRecord(meta);
-  if (!record) {
-    return undefined;
-  }
-  const text = record[UPSTREAM_USER_TEXT_META_KEY];
-  return typeof text === "string" && text ? text : undefined;
+  return readNonEmptyStringPreservingWhitespace(
+    asOptionalRecord(meta)?.[UPSTREAM_USER_TEXT_META_KEY],
+  );
 }

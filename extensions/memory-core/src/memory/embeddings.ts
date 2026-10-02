@@ -15,7 +15,6 @@ import {
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 
 export type EmbeddingProvider = MemoryEmbeddingProvider;
-export type EmbeddingProviderId = string;
 export type EmbeddingProviderRuntime = MemoryEmbeddingProviderRuntime;
 
 export type EmbeddingProviderResult = {

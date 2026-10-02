@@ -20,13 +20,9 @@ const publications: Record<string, string | symbol> = {
   "src/agents/cli-auth-epoch.ts": Symbol.for("openclaw.cliAuthEpochTestApi"),
   "src/agents/cli-backends.ts": Symbol.for("openclaw.cliBackendsTestApi"),
   "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
-  "src/agents/command/attempt-execution.helpers.ts": Symbol.for(
-    "openclaw.attemptExecutionHelpersTestApi",
-  ),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
-  "src/agents/embedded-agent-runner/runs.ts": Symbol.for("openclaw.embeddedRunsTestApi"),
   "src/agents/mcp-ui-resource.ts": Symbol.for("openclaw.mcpUiResourceTestApi"),
   "src/agents/media-generation-task-status-shared.ts": Symbol.for(
     "openclaw.mediaGenerationDuplicateGuardTestApi",
@@ -44,7 +40,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.subagentRegistryTestApi",
   ),
   "src/agents/subagents/swarm/swarm-scheduler.ts": Symbol.for("openclaw.swarmSchedulerTestApi"),
-  "src/agents/tool-search.ts": Symbol.for("openclaw.toolSearchTestApi"),
   "src/agents/tools/ask-user-tool.ts": Symbol.for("openclaw.askUserToolTestApi"),
   "src/agents/tools/image-tool.ts": Symbol.for("openclaw.imageToolTestApi"),
   "src/agents/workspace-legacy-state.ts": Symbol.for("openclaw.workspaceLegacyStateTestApi"),

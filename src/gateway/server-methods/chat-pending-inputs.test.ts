@@ -13,7 +13,8 @@ import { saveCronJobsStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userProfileList from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, setAvatar } from "../../state/user-profiles.js";
+import { setAvatar } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortQueuedChatTurnById,
@@ -535,9 +536,12 @@ describe("pending input consumption receipts", () => {
               sessionKey: scope.sessionKey,
             }).aborted,
           ).toBe(true);
+          retained[0]?.finish("cancelled");
           const cancelledPage = await call({ inputRunIds: ["retained-0"], limit: 1 });
           expect(cancelledPage.pendingInputs).toMatchObject({ queuedCount: 0 });
-          expect(cancelledPage.inputReceipts).toEqual([{ runId: "retained-0", state: "pending" }]);
+          expect(cancelledPage.inputReceipts).toEqual([
+            { runId: "retained-0", state: "pending", cancelled: true },
+          ]);
           const anchor = await call({
             inputRunIds,
             messageId: aggregate.inputId,

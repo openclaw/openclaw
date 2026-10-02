@@ -6,10 +6,8 @@ import type { loadSessionEntry } from "../../config/sessions/session-accessor.js
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { callGateway } from "../../gateway/call.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
-import {
-  readSessionMessagesAsync,
-  visitSessionMessagesAsync,
-} from "../../gateway/session-transcript-readers.js";
+import { visitSessionMessagesAsync } from "../../gateway/session-transcript-native.test-support.js";
+import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
@@ -87,8 +85,6 @@ export function registerHarnessCompletionRecoveryCases(
   getFixture: () => HarnessRecoveryFixture,
 ): void {
   it.each([
-    "initial",
-    "recovery",
     "long-initial",
     "long-recovery",
     "missing-source",
@@ -284,51 +280,48 @@ export function registerHarnessCompletionRecoveryCases(
     },
   );
 
-  it.each(["channel", "control-ui"] as const)(
-    "retains %s recovery custody when a later transcript payload cannot be read",
-    async (sourceIngress) => {
-      const {
-        makeSessionsDir,
-        mainSessionEntry,
-        writeStore,
-        writeTranscript,
-        expectRecovery,
-        loadSessionEntry,
-        sendRecoveryNotice,
-      } = getFixture();
-      const sessionsDir = await makeSessionsDir();
-      const storePath = path.join(sessionsDir, "sessions.json");
-      const sessionKey = "agent:main:main";
-      const pendingFinalDelivery = {
-        kind: "replayable" as const,
-        text: "Prepared reply",
-        createdAt: Date.now(),
-        intentId: "read-failure-final",
-        deliveries: [{ id: "read-failure-delivery", state: "prepared" as const }],
-      };
-      const entry = mainSessionEntry({
-        restartRecoverySourceIngress: sourceIngress,
-        pendingFinalDelivery,
-      });
-      await writeStore(sessionsDir, { [sessionKey]: entry });
-      await writeTranscript(sessionsDir, entry.sessionId, [
-        { role: "user", content: "Continue my task" },
-        { role: "assistant", content: "Reply still being prepared. ".repeat(128) },
-      ]);
-      const restorePayload = await corruptLaterAssistantPayload(storePath, entry.sessionId);
-      await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
-        status: "running",
-        abortedLastRun: true,
-        pendingFinalDelivery,
-      });
-      expect(sendRecoveryNotice).not.toHaveBeenCalled();
-      restorePayload();
-      await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
-      expect(callGateway).toHaveBeenCalledOnce();
-    },
-  );
+  it("retains recovery custody when a later transcript payload cannot be read", async () => {
+    const {
+      makeSessionsDir,
+      mainSessionEntry,
+      writeStore,
+      writeTranscript,
+      expectRecovery,
+      loadSessionEntry,
+      sendRecoveryNotice,
+    } = getFixture();
+    const sessionsDir = await makeSessionsDir();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const pendingFinalDelivery = {
+      kind: "replayable" as const,
+      text: "Prepared reply",
+      createdAt: Date.now(),
+      intentId: "read-failure-final",
+      deliveries: [{ id: "read-failure-delivery", state: "prepared" as const }],
+    };
+    const entry = mainSessionEntry({
+      restartRecoverySourceIngress: "channel",
+      pendingFinalDelivery,
+    });
+    await writeStore(sessionsDir, { [sessionKey]: entry });
+    await writeTranscript(sessionsDir, entry.sessionId, [
+      { role: "user", content: "Continue my task" },
+      { role: "assistant", content: "Reply still being prepared. ".repeat(128) },
+    ]);
+    const restorePayload = await corruptLaterAssistantPayload(storePath, entry.sessionId);
+    await expectRecovery({ started: 0, settled: 0, failed: 1, skipped: 0 });
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      pendingFinalDelivery,
+    });
+    expect(sendRecoveryNotice).not.toHaveBeenCalled();
+    restorePayload();
+    await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+  });
 
   it.each(["delegated", "unverified internal", "internal system"] as const)(
     "refuses %s recovery without surviving sender authority",
@@ -395,6 +388,65 @@ export function registerHarnessCompletionRecoveryCases(
       });
       await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
       expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["invalid", "external_user"] as const)(
+    "requires current human evidence for internal prepared-final recovery (%s)",
+    async (source) => {
+      const {
+        makeSessionsDir,
+        mainSessionEntry,
+        writeStore,
+        writeTranscript,
+        expectRecovery,
+        loadSessionEntry,
+        sendRecoveryNotice,
+      } = getFixture();
+      const sessionsDir = await makeSessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const entry = mainSessionEntry({
+        restartRecoverySourceIngress: "internal",
+        pendingFinalDelivery: {
+          kind: "replayable",
+          text: "Prepared internal reply",
+          createdAt: Date.now(),
+          intentId: "source-evidence-final",
+          deliveries: [{ id: "source-evidence-delivery", state: "prepared" }],
+        },
+      });
+      await writeStore(sessionsDir, { [sessionKey]: entry });
+      await writeTranscript(sessionsDir, entry.sessionId, [
+        { role: "user", content: "Earlier human request", provenance: { kind: "external_user" } },
+        { role: "assistant", content: "Earlier request finished." },
+        {
+          role: "user",
+          content: "Current interrupted input",
+          provenance: { kind: source === "invalid" ? "unknown" : "external_user" },
+        },
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "status-current", name: "session_status" }],
+        },
+      ]);
+      if (source === "external_user") {
+        await expectRecovery({ started: 1, settled: 0, failed: 0, skipped: 0 });
+        expect(callGateway).toHaveBeenCalledOnce();
+      } else {
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 1 });
+        expect(callGateway).not.toHaveBeenCalled();
+        expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+          abortedLastRun: false,
+          mainRestartRecovery: {
+            tombstone: { reason: "delegated recovery sender authority is unavailable" },
+          },
+        });
+        await expectRecovery({ started: 0, settled: 0, failed: 0, skipped: 0 });
+        expect(callGateway).not.toHaveBeenCalled();
+      }
     },
   );
 

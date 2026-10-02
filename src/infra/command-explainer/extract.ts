@@ -8,8 +8,8 @@ import {
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
-  SOURCE_EXECUTABLES,
 } from "../command-analysis/risks.js";
+import { SOURCE_EXECUTABLES } from "../command-carriers.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,
@@ -308,10 +308,6 @@ function decodeUnquotedShellTextWithOffsets(text: string): DecodedShellText {
   return decoded;
 }
 
-function decodeUnquotedShellText(text: string): string {
-  return decodeUnquotedShellTextWithOffsets(text).value;
-}
-
 function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
   const hasQuotes = text.startsWith('"') && text.endsWith('"');
   const bodyStart = hasQuotes ? 1 : 0;
@@ -340,10 +336,6 @@ function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
     appendDecodedText(decoded, ch, sourceOffset + 1);
   }
   return decoded;
-}
-
-function decodeDoubleQuotedText(text: string): string {
-  return decodeDoubleQuotedTextWithOffsets(text).value;
 }
 
 const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
@@ -440,10 +432,6 @@ function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
   return decoded;
 }
 
-function decodeAnsiCString(text: string): string {
-  return decodeAnsiCStringWithOffsets(text).value;
-}
-
 function hasDynamicWordPart(root: TreeSitterNode): boolean {
   const pending = [root];
   while (pending.length > 0) {
@@ -472,7 +460,8 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
   ) {
     return {
       kind: "dynamic",
-      value: node.type === "string" ? decodeDoubleQuotedText(node.text) : node.text,
+      value:
+        node.type === "string" ? decodeDoubleQuotedTextWithOffsets(node.text).value : node.text,
     };
   }
 
@@ -481,8 +470,8 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
       const parts = node.namedChildren;
       if (parts.length === 0) {
         return hasUnescapedDynamicPattern(node.text)
-          ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
-          : { kind: "literal", value: decodeUnquotedShellText(node.text) };
+          ? { kind: "dynamic", value: decodeUnquotedShellTextWithOffsets(node.text).value }
+          : { kind: "literal", value: decodeUnquotedShellTextWithOffsets(node.text).value };
       }
       let value = "";
       for (const part of parts) {
@@ -496,17 +485,17 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
     }
     case "word":
       return hasUnescapedDynamicPattern(node.text)
-        ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
-        : { kind: "literal", value: decodeUnquotedShellText(node.text) };
+        ? { kind: "dynamic", value: decodeUnquotedShellTextWithOffsets(node.text).value }
+        : { kind: "literal", value: decodeUnquotedShellTextWithOffsets(node.text).value };
     case "raw_string":
       return { kind: "literal", value: node.text.slice(1, -1) };
     case "string":
-      return { kind: "literal", value: decodeDoubleQuotedText(node.text) };
+      return { kind: "literal", value: decodeDoubleQuotedTextWithOffsets(node.text).value };
     case "ansi_c_string":
-      return { kind: "literal", value: decodeAnsiCString(node.text) };
+      return { kind: "literal", value: decodeAnsiCStringWithOffsets(node.text).value };
     case "concatenation": {
       if (hasUnescapedDynamicPattern(node.text)) {
-        return { kind: "dynamic", value: decodeUnquotedShellText(node.text) };
+        return { kind: "dynamic", value: decodeUnquotedShellTextWithOffsets(node.text).value };
       }
       let value = "";
       let dynamic = false;
@@ -521,8 +510,8 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
     }
     default:
       return node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
-        ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
-        : { kind: "literal", value: decodeUnquotedShellText(node.text) };
+        ? { kind: "dynamic", value: decodeUnquotedShellTextWithOffsets(node.text).value }
+        : { kind: "literal", value: decodeUnquotedShellTextWithOffsets(node.text).value };
   }
 }
 

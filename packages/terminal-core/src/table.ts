@@ -237,9 +237,6 @@ function parseOsc8Sequence(value: string): Osc8Link | undefined {
 }
 
 function wrapLine(text: string, width: number): string[] {
-  if (width <= 0) {
-    return [text];
-  }
   // Fitting edge-trimmed ASCII is one column per code unit and needs no ANSI/grapheme scan.
   // Keep edge whitespace on the full path, where wrapping preserves its trimming semantics.
   if (text.length <= width && /^[!-~](?:[ -~]*[!-~])?$/u.test(text)) {
@@ -558,34 +555,10 @@ export function renderTable(opts: RenderTableOptions): string {
 
   const box =
     border === "ascii"
-      ? {
-          tl: "+",
-          tr: "+",
-          bl: "+",
-          br: "+",
-          h: "-",
-          v: "|",
-          t: "+",
-          ml: "+",
-          m: "+",
-          mr: "+",
-          b: "+",
-        }
-      : {
-          tl: "┌",
-          tr: "┐",
-          bl: "└",
-          br: "┘",
-          h: "─",
-          v: "│",
-          t: "┬",
-          ml: "├",
-          m: "┼",
-          mr: "┤",
-          b: "┴",
-        };
+      ? { top: "+++", middle: "+++", bottom: "+++", h: "-", v: "|" }
+      : { top: "┌┬┐", middle: "├┼┤", bottom: "└┴┘", h: "─", v: "│" };
 
-  const hLine = (left: string, mid: string, right: string) =>
+  const hLine = ([left, mid, right]: string) =>
     `${left}${widths.map((w) => repeat(box.h, w)).join(mid)}${right}`;
 
   const contentWidthFor = (i: number) => {
@@ -612,12 +585,12 @@ export function renderTable(opts: RenderTableOptions): string {
     }
   };
 
-  lines.push(hLine(box.tl, box.t, box.tr));
+  lines.push(hLine(box.top));
   renderRow({}, true);
-  lines.push(hLine(box.ml, box.m, box.mr));
+  lines.push(hLine(box.middle));
   for (const row of rows) {
     renderRow(row, false);
   }
-  lines.push(hLine(box.bl, box.b, box.br));
+  lines.push(hLine(box.bottom));
   return `${lines.join("\n")}\n`;
 }

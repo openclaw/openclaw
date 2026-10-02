@@ -3,7 +3,7 @@ import {
   type GatewayClientOptions,
   type RecoveryRequest,
 } from "@openclaw/gateway-client";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { EventHub } from "./event-hub.js";
 import type {
   ConnectableOpenClawTransport,
@@ -48,11 +48,6 @@ export function observeGatewayReconnects(
       reconnectObservers.delete(transport);
     }
   };
-}
-
-/** Internal connection provenance; raw event objects and payloads remain unchanged. */
-export function readGatewayEventConnectionEpoch(event: GatewayEvent): object | undefined {
-  return eventReceipts.get(event)?.epoch;
 }
 
 export function readGatewayEventReceipt(event: GatewayEvent): GatewayEventReceipt | undefined {
@@ -108,8 +103,7 @@ type GatewayClientTransportOptions = Pick<
 };
 
 function toGatewayEvent(event: unknown): GatewayEvent {
-  const record =
-    typeof event === "object" && event !== null ? (event as Record<string, unknown>) : {};
+  const record = asRecord(event);
   const eventName = typeof record.event === "string" ? record.event : "unknown";
   return {
     event: eventName,

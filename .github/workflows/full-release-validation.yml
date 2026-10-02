@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Reviewed stable/full waiver; 2026.8.1/9.1 cover Telegram, 2026.9.5 covers Telegram and Matrix QA-live
+        description: Reviewed stable/full waiver; 2026.8.1/9.1 cover Telegram, 2026.9.5/9.7/9.8 cover Telegram and Matrix QA-live
         required: false
         default: ""
         type: string
@@ -487,6 +487,10 @@ jobs:
           context_ref="${context_ref#refs/heads/}"
           context_ref="${context_ref#refs/tags/}"
           target_version="$(jq -er '.version | select(type == "string")' target/package.json)"
+          if [[ "$target_version" == *-alpha.* || "$TARGET_REF" == *-alpha.* || "$context_ref" == *-alpha.* || "$TARGET_REF" == *tideclaw/alpha/* || "$context_ref" == tideclaw/alpha/* || "${GITHUB_REF:-}" == *tideclaw/alpha/* ]]; then
+            echo "Alpha releases are retired; use a beta prerelease." >&2
+            exit 1
+          fi
           if [[ -n "${TELEGRAM_WAIVER:-}" ]]; then
             waived_channels="$(
             TARGET_VERSION="$target_version" node --input-type=module <<'NODE'
@@ -568,6 +572,7 @@ jobs:
           if (train === 'unsupported-extended-stable-correction') {
             throw new Error('Extended-stable releases do not allow correction suffixes.');
           }
+          if (train === 'alpha') throw new Error('Alpha releases are retired; use a beta prerelease.');
           const distTag = train === 'stable' ? 'beta' : train;
           const branch = train === 'extended-stable' ? `extended-stable/${version.year}.${version.month}.33` : '';
           const beta = env.RELEASE_PROFILE === 'beta' && env.RUN_RELEASE_SOAK === 'false' && env.RERUN_GROUP === 'all';
@@ -1121,34 +1126,6 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  docker_runtime_assets_preflight:
-    name: Verify Docker runtime image assets
-    needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    # Release image preparation checks runtime-assets on both native architectures.
-    # Alpha has no release image producer, so it retains this standalone proof.
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && inputs.rerun_group == 'all' && contains(needs.resolve_target.outputs.target_version, '-alpha.') && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout target SHA
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.resolve_target.outputs.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Verify Docker runtime-assets prune path
-        env:
-          DOCKER_BUILDKIT: "1"
-        run: |
-          set -euo pipefail
-          timeout --kill-after=30s 15m docker build \
-            --target runtime-assets \
-            --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
-            .
-
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
@@ -1280,6 +1257,11 @@ jobs:
             if [[ "${CHILD_EVIDENCE_REUSE:-false}" == true && "$CHILD_WORKFLOW_KIND" != artifact-* ]]; then
               if node workflow/scripts/find-reusable-release-child.mjs "$workflow" "$@"; then
                 return 0
+              else
+                dispatch_status=$?
+                if [[ "$dispatch_status" != 3 ]]; then
+                  echo "::warning::Child reuse lookup exited ${dispatch_status}; dispatching fresh work." >&2
+                fi
               fi
             fi
 
@@ -1856,7 +1838,7 @@ jobs:
   prepare_docker_release:
     name: Prepare release Docker artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && !contains(needs.resolve_target.outputs.target_version, '-alpha.') }}
+    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
     timeout-minutes: 360
     outputs:
@@ -1944,7 +1926,6 @@ jobs:
       [
         resolve_target,
         evidence_reuse,
-        docker_runtime_assets_preflight,
         candidate_acquisition,
         normal_ci,
         plugin_prerelease_independent,
@@ -2064,7 +2045,6 @@ jobs:
           PERFORMANCE_URL: ${{ needs.performance.outputs.url }}
           PERFORMANCE_REUSE: ${{ needs.performance.outputs.child_reuse || 'null' }}
           RESOLVE_TARGET_RESULT: ${{ needs.resolve_target.result }}
-          DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
           CANDIDATE_REQUIRED: ${{ needs.resolve_target.outputs.candidate_required }}
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
@@ -2101,7 +2081,6 @@ jobs:
               --arg targetVersion "$TARGET_VERSION" \
               --arg liveSuiteFilter "$LIVE_SUITE_FILTER" \
               --arg resolveTargetResult "$RESOLVE_TARGET_RESULT" \
-              --arg dockerPreflightResult "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" \
               --arg candidateRequired "$CANDIDATE_REQUIRED" \
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
@@ -2165,7 +2144,6 @@ jobs:
                 npmTelegramPackageSpec: $npmTelegramPackageSpec,
                 liveSuiteFilter: $liveSuiteFilter,
                 resolveTargetResult: $resolveTargetResult,
-                dockerPreflightResult: $dockerPreflightResult,
                 candidateRequired: $candidateRequired,
                 candidateAcquisitionResult: $candidateAcquisitionResult,
                 candidateEvidence: $candidateEvidence,
@@ -2382,7 +2360,6 @@ jobs:
       [
         resolve_target,
         evidence_reuse,
-        docker_runtime_assets_preflight,
         prepare_npm_package,
         qualify_npm_package,
         prepare_docker_release,
@@ -2418,12 +2395,10 @@ jobs:
               echo "Release package qualification and Docker preparation must both succeed." >&2
               exit 1
             }
-          if [[ "$TARGET_VERSION" != *-alpha.* ]]; then
-            [[ "$DOCKER_PREPARE_RESULT" == "success" && "$PREPARED_DOCKER_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
-              echo "Release Docker preparation must succeed." >&2
-              exit 1
-            }
-          fi
+          [[ "$DOCKER_PREPARE_RESULT" == "success" && "$PREPARED_DOCKER_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "Release Docker preparation must succeed." >&2
+            exit 1
+          }
 
       - name: Checkout release state verifier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

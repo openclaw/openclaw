@@ -29,7 +29,7 @@ vi.mock("./run-attempt-state.js", () => ({
   shouldUseFreshCodexThreadAfterContextEngineOverflow: () => recovery.kind === "overflow",
 }));
 vi.mock("./session-binding.js", () => ({ assertCodexBindingMayBeReplaced: vi.fn() }));
-vi.mock("./transcript-mirror.js", () => ({
+vi.mock("./user-prompt-message.js", () => ({
   buildCodexUserPromptMessage: () => ({ role: "user", content: "reviewed continuation" }),
 }));
 vi.mock("./usage-limit-error.js", () => ({

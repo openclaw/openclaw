@@ -307,14 +307,19 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #","senderName":[]"#,
         #","senderUsername":false"#,
         #","senderProfileAvatarUrl":{}"#,
+        #","media":42"#,
+        #","media":[false]"#,
+        #","media":[{"url":"media://inbound/report.pdf","sizeBytes":"old"}]"#,
+        #","mediaImageLayout":42"#,
+        #","mediaImageLayout":{"slots":[{"kind":"inline","factIndex":"old"}]}"#,
     ])
-    func `legacy transcript rows survive reopening and retain their partition`(senderFields: String) async throws {
+    func `legacy transcript rows survive reopening and retain their partition`(optionalFields: String) async throws {
         await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "assistant", text: "cached reply", timestamp: 1000)])
-        // Older readers ignored sender fields. Invalid optional attribution must not invalidate the row.
+        // Older readers ignored this optional metadata; it must not invalidate the cached row.
         let legacyPayload = """
-        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(senderFields)}}
+        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(optionalFields)}}
         """
         try await databases.cacheQueue.write { db in
             try db.execute(

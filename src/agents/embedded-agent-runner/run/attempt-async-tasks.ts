@@ -1,6 +1,3 @@
-/**
- * Waits for completion-required async tasks before finalizing an attempt.
- */
 import { createAbortError as createNamedAbortError } from "../../../infra/abort-signal.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { toErrorObject } from "../../../infra/errors.js";
@@ -20,7 +17,6 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
-/** Summary of completion-required async task waits performed before a cron run can finish. */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -34,13 +30,9 @@ const COMPLETION_REQUIRED_TASK_KINDS = new Set([
   "video_generation",
 ]);
 
-function resolveAsyncTaskPollIntervalMs(): number {
-  return isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS;
-}
-
 function createAbortError(signal: AbortSignal): Error {
   return createNamedAbortError("aborted", {
-    cause: "reason" in signal ? (signal as { reason?: unknown }).reason : undefined,
+    cause: signal.reason,
   });
 }
 
@@ -79,60 +71,44 @@ async function sleepWithAbort(
   });
 }
 
+function isPendingCompletionTask(task: MediaGenerationOperation): boolean {
+  return (
+    COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind) &&
+    !isTerminalMediaGenerationStatus(task.status)
+  );
+}
+
 function collectAsyncTaskRunIds(
   toolMetas: readonly AsyncStartedToolMeta[],
   sessionKey: string | undefined,
   alreadyWaited: ReadonlySet<string>,
 ): string[] {
-  const runIds: string[] = [];
-  const seen = new Set<string>();
+  const runIds = new Set<string>();
   const addRunId = (runIdRaw: string | undefined) => {
     const runId = runIdRaw?.trim();
-    if (!runId || alreadyWaited.has(runId) || seen.has(runId)) {
+    if (!runId || alreadyWaited.has(runId)) {
       return;
     }
-    seen.add(runId);
-    runIds.push(runId);
+    runIds.add(runId);
   };
   for (const meta of toolMetas) {
     addRunId(meta.asyncStarted === true ? meta.asyncTaskRunId : undefined);
   }
   const normalizedSessionKey = sessionKey?.trim();
   if (!normalizedSessionKey) {
-    return runIds;
+    return [...runIds];
   }
   // Registry lookup catches completion-required tasks started before their
   // tool metadata reached the current attempt result.
   for (const task of listMediaGenerationOperations(normalizedSessionKey)) {
-    if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
-      continue;
-    }
-    if (isTerminalMediaGenerationStatus(task.status)) {
+    if (!isPendingCompletionTask(task)) {
       continue;
     }
     addRunId(task.runId);
   }
-  return runIds;
+  return [...runIds];
 }
 
-function findTerminalTasks(runIds: readonly string[]): {
-  pendingRunIds: string[];
-  terminalTasks: MediaGenerationOperation[];
-} {
-  const pendingRunIds: string[] = [];
-  const terminalTasks: MediaGenerationOperation[] = [];
-  for (const runId of runIds) {
-    const task = findMediaGenerationOperation(runId);
-    if (task && isTerminalMediaGenerationStatus(task.status)) {
-      terminalTasks.push(task);
-      continue;
-    }
-    pendingRunIds.push(runId);
-  }
-  return { pendingRunIds, terminalTasks };
-}
-
-/** Returns whether a cron run has non-terminal generated-media tasks that must settle first. */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -151,14 +127,10 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
     return true;
   }
   return listMediaGenerationOperations(sessionKey).some(
-    (task) =>
-      COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "") &&
-      !isTerminalMediaGenerationStatus(task.status) &&
-      Boolean(task.runId?.trim()),
+    (task) => isPendingCompletionTask(task) && Boolean(task.runId?.trim()),
   );
 }
 
-/** Returns whether the current attempt should synchronously wait for media tasks. */
 export function shouldWaitForCompletionRequiredAsyncTasks(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -170,19 +142,9 @@ export function shouldWaitForCompletionRequiredAsyncTasks(params: {
     // waiting here would reuse the internal abort signal and turn the pause into AbortError.
     return false;
   }
-  return requiresCompletionRequiredAsyncTaskWait({
-    sessionKey: params.sessionKey,
-    toolMetas: params.toolMetas,
-    abortSignal: params.abortSignal,
-  });
+  return requiresCompletionRequiredAsyncTaskWait(params);
 }
 
-/**
- * Polls completion-required async tasks until they reach terminal state, time
- * out at the run deadline, or abort. Newly discovered task run ids are folded
- * into later poll rounds so task metadata and registry state can arrive in any
- * order.
- */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
@@ -194,22 +156,19 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 }): Promise<CompletionRequiredAsyncTaskWaitResult> {
   const now = params.now ?? Date.now;
   const sleepFn = params.sleep ?? sleep;
-  const pollIntervalMs = params.pollIntervalMs ?? resolveAsyncTaskPollIntervalMs();
+  const pollIntervalMs =
+    params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
   const waitedRunIds = new Set<string>();
   const timedOutRunIds = new Set<string>();
   const terminalTasksByRunId = new Map<string, MediaGenerationOperation>();
 
-  while (true) {
+  waitForTasks: while (true) {
     throwIfAborted(params.abortSignal);
     // Re-read metadata every outer loop; tool calls may record async run ids
     // after an earlier task wait finished.
     const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
     if (runIds.length === 0) {
-      return {
-        waitedRunIds: [...waitedRunIds],
-        timedOutRunIds: [...timedOutRunIds],
-        terminalTasks: [...terminalTasksByRunId.values()],
-      };
+      break;
     }
 
     for (const runId of runIds) {
@@ -219,14 +178,17 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
     let pendingRunIds = runIds;
     while (pendingRunIds.length > 0) {
       throwIfAborted(params.abortSignal);
-      const terminalState = findTerminalTasks(pendingRunIds);
-      for (const task of terminalState.terminalTasks) {
-        const runId = task.runId?.trim();
-        if (runId) {
-          terminalTasksByRunId.set(runId, task);
+      pendingRunIds = pendingRunIds.filter((runId) => {
+        const task = findMediaGenerationOperation(runId);
+        if (!task || !isTerminalMediaGenerationStatus(task.status)) {
+          return true;
         }
-      }
-      pendingRunIds = terminalState.pendingRunIds;
+        const taskRunId = task.runId?.trim();
+        if (taskRunId) {
+          terminalTasksByRunId.set(taskRunId, task);
+        }
+        return false;
+      });
       if (pendingRunIds.length === 0) {
         break;
       }
@@ -238,13 +200,14 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
         for (const runId of pendingRunIds) {
           timedOutRunIds.add(runId);
         }
-        return {
-          waitedRunIds: [...waitedRunIds],
-          timedOutRunIds: [...timedOutRunIds],
-          terminalTasks: [...terminalTasksByRunId.values()],
-        };
+        break waitForTasks;
       }
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
     }
   }
+  return {
+    waitedRunIds: [...waitedRunIds],
+    timedOutRunIds: [...timedOutRunIds],
+    terminalTasks: [...terminalTasksByRunId.values()],
+  };
 }

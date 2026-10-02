@@ -44,7 +44,6 @@ import {
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 import { createWebSearchTool } from "./tools/web-search.js";
@@ -472,7 +471,7 @@ describe("Tool Search terminal results", () => {
     { secondTerminal: true, expectedTerminal: true },
     { secondTerminal: false, expectedTerminal: undefined },
   ])(
-    "uses all-terminal semantics for code controls: $secondTerminal",
+    "uses all-terminal semantics for a runtime batch: $secondTerminal",
     async ({ secondTerminal, expectedTerminal }) => {
       const first = fakeTool("first_action");
       first.execute = vi.fn(async () => ({ ...jsonResult({ first: true }), terminate: true }));
@@ -481,17 +480,11 @@ describe("Tool Search terminal results", () => {
         ...jsonResult({ second: true }),
         ...(secondTerminal ? { terminate: true } : {}),
       }));
-      const { catalogRef, config } = createRuntime([first, second]);
-      const codeTool = createToolSearchTools({ catalogRef, config }).find(
-        (tool) => tool.name === TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      );
-
-      const result = await codeTool!.execute("code-parent", {
-        code: `
-          await openclaw.tools.call("first_action", {});
-          return await openclaw.tools.call("second_action", {});
-        `,
-      });
+      const { runtime } = createRuntime([first, second]);
+      const parentToolCallId = "batch-parent";
+      await runtime.call("first_action", {}, { parentToolCallId });
+      const last = await runtime.call("second_action", {}, { parentToolCallId });
+      const result = formatToolSearchControlResult(last, runtime, { parentToolCallId });
 
       expect(result.terminate).toBe(expectedTerminal);
       expect(first.execute).toHaveBeenCalledOnce();
@@ -669,32 +662,23 @@ describe("Tool Search input schemas", () => {
     expect(target.execute).toHaveBeenCalledTimes(2);
   });
 
-  it("returns invalid arguments to isolated Tool Search code without executing them", async () => {
+  it("rejects invalid structured tool_call arguments without executing the target", async () => {
     const target = fakeTool(
       "strict_instruction",
       Type.Object({ instruction: Type.String() }, { additionalProperties: false }),
     );
     const { catalogRef, config } = createRuntime([target]);
-    const codeTool = createToolSearchTools({ catalogRef, config }).find(
-      (tool) => tool.name === TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+    const callTool = createToolSearchTools({ catalogRef, config }).find(
+      (tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME,
     );
 
-    expect(codeTool).toBeDefined();
-    const result = await codeTool!.execute("invalid-code-call", {
-      code: `
-        try {
-          await openclaw.tools.call("strict_instruction", { instructions: "run" });
-          return { executed: true };
-        } catch (error) {
-          return { error: error.message };
-        }
-      `,
-    });
-
-    expect(result.details).toMatchObject({
-      ok: true,
-      value: { error: expect.stringContaining("Did you mean: instruction?") },
-    });
+    expect(callTool).toBeDefined();
+    await expect(
+      callTool!.execute("invalid-structured-call", {
+        id: "strict_instruction",
+        args: { instructions: "run" },
+      }),
+    ).rejects.toThrow("Did you mean: instruction?");
     expect(target.execute).not.toHaveBeenCalled();
   });
 

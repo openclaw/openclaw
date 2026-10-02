@@ -35,47 +35,7 @@ export function isMatrixSdkAvailable(): boolean {
   return resolveMissingMatrixPackages().length === 0;
 }
 
-type CommandResult = {
-  code: number;
-  stdout: string;
-  stderr: string;
-};
-
 let defaultMatrixCryptoRuntimeEnsurePromise: Promise<void> | null = null;
-
-async function runFixedCommandWithTimeout(params: {
-  argv: string[];
-  cwd: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<CommandResult> {
-  if (!params.argv[0]) {
-    return { code: 1, stdout: "", stderr: "command is required" };
-  }
-  try {
-    const result = await runCommandWithTimeout(params.argv, {
-      cwd: params.cwd,
-      env: params.env,
-      killProcessTree: true,
-      maxOutputBytes: MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
-      outputCapture: "tail",
-      timeoutMs: params.timeoutMs,
-    });
-    return {
-      code: result.termination === "timeout" ? 124 : (result.code ?? 1),
-      stdout: result.stdout,
-      stderr:
-        result.stderr ||
-        (result.termination === "timeout" ? `command timed out after ${params.timeoutMs}ms` : ""),
-    };
-  } catch (error) {
-    return {
-      code: 1,
-      stdout: "",
-      stderr: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
 
 const defaultRequireFn = createRequire(import.meta.url);
 const defaultResolveFn = defaultRequireFn.resolve;
@@ -212,20 +172,28 @@ async function ensureMatrixCryptoRuntimeOnce(params: MatrixCryptoRuntimeDeps): P
 
   const scriptPath = resolveFn("@matrix-org/matrix-sdk-crypto-nodejs/download-lib.js");
   params.log?.("matrix: bootstrapping native crypto runtime");
-  const result = await runFixedCommandWithTimeout({
-    argv: [process.execPath, scriptPath],
-    cwd: path.dirname(scriptPath),
-    timeoutMs: 300_000,
-    env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
-  });
-  if (result.code !== 0) {
-    removeIncompleteMatrixCryptoNativeBinding({ bindingPath: nativeBindingPath, log: params.log });
-    throw new Error(
-      result.stderr.trim() || result.stdout.trim() || "Matrix crypto runtime bootstrap failed.",
-    );
+  let failure: string | undefined;
+  try {
+    const result = await runCommandWithTimeout([process.execPath, scriptPath], {
+      cwd: path.dirname(scriptPath),
+      env: { COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" },
+      killProcessTree: true,
+      maxOutputBytes: MATRIX_COMMAND_OUTPUT_TAIL_BYTES,
+      outputCapture: "tail",
+      timeoutMs: 300_000,
+    });
+    const timedOut = result.termination === "timeout";
+    if (timedOut || (result.code ?? 1) !== 0) {
+      const stderr = result.stderr || (timedOut ? "command timed out after 300000ms" : "");
+      failure = stderr.trim() || result.stdout.trim();
+    }
+  } catch (error) {
+    failure = (error instanceof Error ? error.message : String(error)).trim();
   }
-
   removeIncompleteMatrixCryptoNativeBinding({ bindingPath: nativeBindingPath, log: params.log });
+  if (failure !== undefined) {
+    throw new Error(failure || "Matrix crypto runtime bootstrap failed.");
+  }
   requireFn("@matrix-org/matrix-sdk-crypto-nodejs");
 }
 

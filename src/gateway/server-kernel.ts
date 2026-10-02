@@ -149,7 +149,7 @@ async function createGatewayKernelWithSdkHost(
     throw new Error("Gateway boot ID must contain 1 to 96 characters");
   }
   const bootId = suppliedBootId ?? randomUUID();
-  // Capture before bootstrap yields or creates workers; concurrent downloads need a restart.
+  // Capture before bootstrap yields or creates workers; later downloads publish through adoption.
   captureRemoteModelCatalogStartupSnapshot();
   // Retain cancellation before bootstrap owns resources or an update replaces its chunk.
   const { cancelPreparedModelRuntimeRefresh } = await import("../agents/prepared-model-runtime.js");
@@ -269,7 +269,7 @@ async function createGatewayKernelWithSdkHost(
       await lifecycleRuntime.closeOnStartupFailure();
     } else {
       closeStartupTrace?.();
-      kernelState?.mentionInbox.dispose();
+      await kernelState?.mentionInbox.dispose();
       await scheduler.stop();
       await sdkResourceHost.drainWork();
       const cleanupErrors: unknown[] = [];

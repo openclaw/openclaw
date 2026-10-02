@@ -272,41 +272,38 @@ function createGatewayPlugin(params: {
         this.emitter.emit(DISCORD_GATEWAY_TRANSPORT_ACTIVITY_EVENT, { at: Date.now() });
       };
       // Finalization retains capture failures; observe Promises returned by the SDK view.
-      void captureSdk
-        .captureWsEventAsync?.({
-          url,
-          direction: "local",
-          kind: "ws-open",
-          flowId: wsFlowId,
-          meta: { subsystem: "discord-gateway" },
-        })
-        .catch(() => {});
-      socket.on?.("message", (data: unknown) => {
-        emitTransportActivity();
+      const captureEvent = (
+        event: () => Omit<
+          Parameters<typeof proxyCaptureSdk.captureWsEventAsync>[0],
+          "url" | "flowId" | "meta"
+        >,
+      ) => {
         void captureSdk
           .captureWsEventAsync?.({
             url,
-            direction: "inbound",
-            kind: "ws-frame",
+            ...event(),
             flowId: wsFlowId,
-            payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
             meta: { subsystem: "discord-gateway" },
           })
           .catch(() => {});
+      };
+      captureEvent(() => ({ direction: "local", kind: "ws-open" }));
+      socket.on?.("message", (data: unknown) => {
+        emitTransportActivity();
+        captureEvent(() => ({
+          direction: "inbound",
+          kind: "ws-frame",
+          payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
+        }));
       });
       socket.on?.("close", (code: number, reason: Buffer) => {
         const closeReason = Buffer.isBuffer(reason) ? reason : Buffer.from(String(reason ?? ""));
-        void captureSdk
-          .captureWsEventAsync?.({
-            url,
-            direction: "local",
-            kind: "ws-close",
-            flowId: wsFlowId,
-            closeCode: code,
-            payload: closeReason,
-            meta: { subsystem: "discord-gateway" },
-          })
-          .catch(() => {});
+        captureEvent(() => ({
+          direction: "local",
+          kind: "ws-close",
+          closeCode: code,
+          payload: closeReason,
+        }));
         if (
           shouldLogDiscordGatewayTransportClose({
             code,
@@ -328,16 +325,11 @@ function createGatewayPlugin(params: {
       });
       socket.on?.("error", (error: Error) => {
         lastTransportError = describeDiscordGatewayTransportError(error);
-        void captureSdk
-          .captureWsEventAsync?.({
-            url,
-            direction: "local",
-            kind: "error",
-            flowId: wsFlowId,
-            errorText: error.message,
-            meta: { subsystem: "discord-gateway" },
-          })
-          .catch(() => {});
+        captureEvent(() => ({
+          direction: "local",
+          kind: "error",
+          errorText: error.message,
+        }));
         params.runtime?.log?.(
           warn(
             formatDiscordGatewayTransportErrorLog({ flowId: wsFlowId, error: lastTransportError }),

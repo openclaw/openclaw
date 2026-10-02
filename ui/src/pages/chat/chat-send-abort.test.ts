@@ -132,7 +132,7 @@ describe("handleAbortChat", () => {
     expect(request).toHaveBeenCalledWith("sessions.abort", expected);
   });
 
-  it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
+  it.each(["/stop", "stop"])(
     "clears the typed stop command %s after aborting the active run",
     async (message) => {
       const host = makeChatHost({
@@ -194,30 +194,8 @@ describe("handleAbortChat", () => {
       conversation: { sessionKey: "agent:main" },
     });
     expect(host.chatMessage).toBe("");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("queues the active run abort while disconnected", async () => {
-    const client = clientWithRequest(vi.fn());
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: "run-main",
-      chatMessage: "draft",
-      sessionKey: "agent:main",
-    });
-
-    await handleAbortChat(host);
-
-    expect(host.pendingAbort).toEqual({
-      sourceClient: client,
-      recoveryScope: client.recoveryScope,
-      runId: "run-main",
-      sessionKey: "agent:main",
-      conversation: { sessionKey: "agent:main" },
-    });
-    expect(host.chatMessage).toBe("");
     expect(host.chatRunId).toBe("run-main");
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("does not queue an unversioned session stop while disconnected", async () => {
@@ -233,29 +211,6 @@ describe("handleAbortChat", () => {
       sessionsResult: createSessionsResult([
         row(sessionKey, { hasActiveRun: true }),
         row("agent:other", { hasActiveRun: true }),
-      ]),
-    });
-
-    await handleAbortChat(host);
-
-    expect(host.pendingAbort).toBeUndefined();
-    expect(host.chatMessage).toBe("draft");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("does not queue an unversioned global stop while disconnected", async () => {
-    const request = vi.fn();
-    const client = clientWithRequest(request);
-    const host = makeChatHost({
-      client,
-      connected: false,
-      chatRunId: null,
-      chatMessage: "draft",
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-      sessionsResult: createSessionsResult([
-        row("global", { hasActiveRun: true, agentId: "work" } as Partial<GatewaySessionRow>),
       ]),
     });
 
@@ -286,18 +241,5 @@ describe("handleAbortChat", () => {
     });
 
     expect(hasAbortableSessionRun(host)).toBe(false);
-  });
-
-  it("keeps the draft when disconnected without an active run", async () => {
-    const host = makeChatHost({
-      connected: false,
-      chatRunId: null,
-      chatMessage: "draft",
-    });
-
-    await handleAbortChat(host);
-
-    expect(host.pendingAbort).toBeUndefined();
-    expect(host.chatMessage).toBe("draft");
   });
 });

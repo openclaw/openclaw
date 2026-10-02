@@ -1,4 +1,3 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
@@ -42,19 +41,15 @@ export const WizardNextParamsSchema = closedObject({
   answer: Type.Optional(WizardAnswerSchema),
 });
 
-/** Session-id-only params for status requests. */
-const WizardSessionIdParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-});
-
 /** Cancels a wizard or closes input when its client view is discarded. */
 export const WizardCancelParamsSchema = closedObject({
   sessionId: NonEmptyString,
   closeInput: Type.Optional(Type.Boolean()),
 });
 
-/** Reads status for an active or recently completed wizard session. */
-export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
+export const WizardStatusParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+});
 
 /** Selectable value shown in a choice-based wizard step. */
 const WizardStepOptionSchema = closedObject({

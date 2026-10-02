@@ -112,7 +112,7 @@ actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private static let cuaOwnedCommands = Set([
-        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
     ])
     private let cameraCapture = CameraCaptureService()
@@ -221,7 +221,7 @@ actor MacNodeRuntime {
                 return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await handleLocationInvoke(req)
-            case MacNodeScreenCommand.record.rawValue:
+            case OpenClawScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
@@ -356,7 +356,7 @@ actor MacNodeRuntime {
                         throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
                     }
                     try Task.checkCancellation()
-                    response = req.command == MacNodeScreenCommand.snapshot.rawValue
+                    response = req.command == OpenClawScreenCommand.snapshot.rawValue
                         ? try await self.handleScreenSnapshotInvoke(req, desktopPermit: permit)
                         : try await self.handleComputerActInvoke(req, desktopPermit: permit)
                 }
@@ -484,15 +484,21 @@ actor MacNodeRuntime {
 extension MacNodeRuntime {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
-            let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let effectiveURL = try await resolveCanvasTarget(url)
-            let placement = params.placement.map {
-                CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+        case OpenClawCanvasCommand.present.rawValue, OpenClawCanvasCommand.navigate.rawValue:
+            let target: String?
+            let placement: CanvasPlacement?
+            if req.command == OpenClawCanvasCommand.present.rawValue {
+                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
+                    OpenClawCanvasPresentParams()
+                target = params.url
+                placement = params.placement.map {
+                    CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                }
+            } else {
+                target = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON).url
+                placement = nil
             }
+            let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.show(
@@ -505,16 +511,6 @@ extension MacNodeRuntime {
             let sessionKey = self.mainSessionKey
             await MainActor.run {
                 CanvasManager.shared.hide(sessionKey: sessionKey)
-            }
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let effectiveURL = try await resolveCanvasTarget(params.url)
-            let sessionKey = self.mainSessionKey
-            try await MainActor.run {
-                _ = try CanvasManager.shared.show(
-                    sessionKey: sessionKey,
-                    path: effectiveURL)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         default:
@@ -754,8 +750,8 @@ extension MacNodeRuntime {
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenRecordParams()
+        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
+            OpenClawScreenRecordParams()
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -947,7 +943,7 @@ extension MacNodeRuntime {
 
 extension MacNodeRuntime {
     private static func invalidDesktopParamsResponse(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
-        if req.command == MacNodeScreenCommand.snapshot.rawValue {
+        if req.command == OpenClawScreenCommand.snapshot.rawValue {
             return self.errorResponse(
                 req, code: .invalidRequest, message: "INVALID_REQUEST: invalid screen snapshot params")
         }

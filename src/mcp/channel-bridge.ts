@@ -1,4 +1,3 @@
-// Channel MCP bridge translates MCP tool calls into channel runtime operations.
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
@@ -130,6 +129,8 @@ export class OpenClawChannelBridge {
 
     this.gateway = new GatewayClientCtor({
       url: bootstrap.url,
+      deviceAuthScope: bootstrap.deviceAuthScope,
+      ...(bootstrap.sshTunnel ? { sshTunnel: bootstrap.sshTunnel } : {}),
       token: bootstrap.auth.token,
       password: bootstrap.auth.password,
       preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,

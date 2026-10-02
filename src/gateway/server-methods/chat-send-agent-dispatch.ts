@@ -12,8 +12,10 @@ import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.
 import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import { isInternalSourceReplyChannel } from "../../auto-reply/reply/source-reply-delivery-mode.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import { onAgentEventForRun } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { updateChatRunProvider } from "../chat-abort.js";
@@ -119,6 +121,16 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     injection;
   let { messageInjectionAttempt } = injection;
   const { chatSendAckedAtMs, chatSendTiming } = timing;
+
+  const titleReady = createDeferredCore();
+  let titleWaiting = true;
+  let stopTitleWait: (() => void) | undefined;
+  const releaseTitle = () => {
+    stopTitleWait?.();
+    stopTitleWait = undefined;
+    titleWaiting = false;
+    titleReady.resolve();
+  };
 
   const jobSessionBinding = admission.sessionBinding;
   let agentRunStarted = false;
@@ -379,6 +391,20 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 ...(restartSafeAdmission ? { suppressNextUserMessagePersistence: true } : {}),
                 fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
                 onAgentRunStart: (runId, _identity, options) => {
+                  if (titleWaiting) {
+                    stopTitleWait?.();
+                    stopTitleWait = onAgentEventForRun(runId, (event) => {
+                      if (
+                        event.stream === "assistant" ||
+                        event.stream === "item" ||
+                        event.stream === "tool" ||
+                        event.stream === "thinking" ||
+                        event.stream === "approval"
+                      ) {
+                        releaseTitle();
+                      }
+                    });
+                  }
                   replyDispatchRun = options;
                   if (activeRunAbort.markExecutionStarted()) {
                     admission.armOperatorRunCancellation();
@@ -666,6 +692,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     try {
       await dispatch;
     } finally {
+      // Empty, rejected, and interrupted turns still receive an independent title.
+      releaseTitle();
       await dispatchErrorLifecycle.finalize();
       // Terminal lifecycle can precede owner release; publish exact liveness after cleanup.
       emitSessionsChanged(
@@ -682,16 +710,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
       }
     }
   })();
-  // Title work starts at turn admission, concurrently with the launched run. It must never run
-  // serially before dispatch (a cold utility runtime can starve the turn) or wait for completion
-  // (long or interrupted first turns would silently remain untitled, and restart loses the chain).
-  scheduleChatDashboardSessionTitle({
-    admittedSessionId,
-    agentId,
-    cfg,
-    context,
-    request,
-    sessionKey,
-    storePath: session.storePath,
-  });
+  scheduleChatDashboardSessionTitle(
+    { admittedSessionId, agentId, cfg, context, request, sessionKey, storePath },
+    titleReady.promise,
+  );
 }

@@ -1,4 +1,3 @@
-import type { Locator } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -7,19 +6,9 @@ import {
   openSidebarSortMenu,
   routeAvatarFixtures,
 } from "./session-ownership-visuals.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI person header owner filter" });
-
-async function selectMenuValue(menu: Locator, value: string) {
-  await menu.evaluate((element, selectedValue) => {
-    element.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        detail: { item: { value: selectedValue } },
-      }),
-    );
-  }, value);
-}
 
 function sessionsList() {
   const ada = {
@@ -92,7 +81,8 @@ suite.define(() => {
       ]);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       const menu = await openSidebarSortMenu(page);
-      await selectMenuValue(menu, "grouping:person");
+      await chooseSidebarMenuOption(menu.page(), "Group by", "Person");
+      await closeSidebarMenu(page);
       const adaSection = page.locator('[data-session-section="person:profile:profile-ada"]');
       const bobSection = page.locator('[data-session-section="person:profile:profile-bob"]');
       await expectBrowser(adaSection).toBeVisible();
@@ -119,7 +109,7 @@ suite.define(() => {
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
       const summary = page.locator(".sidebar-session-filter-summary");
-      const funnel = page.locator(".sidebar-session-sort");
+      const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
       await expectBrowser(summary).toBeVisible();
       await expectBrowser(summary).toContainText("Ada");
       await expectBrowser(summary).toHaveAccessibleName("Ada · Show all sessions");

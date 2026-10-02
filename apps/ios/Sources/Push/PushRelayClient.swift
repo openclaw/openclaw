@@ -35,20 +35,6 @@ private struct PushRelayChallengeResponse: Decodable {
     var expiresAtMs: Int64
 }
 
-private struct PushRelayRegisterSignedPayload: Encodable {
-    var challengeId: String
-    var installationId: String
-    var bundleId: String
-    var environment: String
-    var relayProfile: String
-    var apnsEnvironment: String
-    var proofPolicy: String
-    var distribution: String
-    var gateway: PushRelayGatewayIdentity
-    var appVersion: String
-    var apnsToken: String
-}
-
 private struct PushRelayAppAttestPayload: Encodable {
     var keyId: String
     var attestationObject: String?
@@ -275,7 +261,7 @@ final class PushRelayClient: @unchecked Sendable {
             GatewayDiagnostics.pushRelay.failed("challenge request", error: error)
             throw error
         }
-        let signedPayload = PushRelayRegisterSignedPayload(
+        var requestBody = PushRelayRegisterRequest(
             challengeId: challenge.challengeId,
             installationId: input.installationId,
             bundleId: input.bundleId,
@@ -287,7 +273,7 @@ final class PushRelayClient: @unchecked Sendable {
             gateway: input.gatewayIdentity,
             appVersion: input.appVersion,
             apnsToken: input.apnsTokenHex)
-        let signedPayloadData = try self.jsonEncoder.encode(signedPayload)
+        let signedPayloadData = try self.jsonEncoder.encode(requestBody)
         let appAttestScope = PushRelayRegistrationStore.AppAttestScope(
             relayOrigin: self.normalizedBaseURLString,
             apnsEnvironment: input.environment.rawValue,
@@ -325,21 +311,9 @@ final class PushRelayClient: @unchecked Sendable {
             GatewayDiagnostics.pushRelay.failed("simulator proof", error: error)
             throw error
         }
-        let requestBody = PushRelayRegisterRequest(
-            challengeId: signedPayload.challengeId,
-            installationId: signedPayload.installationId,
-            bundleId: signedPayload.bundleId,
-            environment: signedPayload.environment,
-            relayProfile: signedPayload.relayProfile,
-            apnsEnvironment: signedPayload.apnsEnvironment,
-            proofPolicy: signedPayload.proofPolicy,
-            distribution: signedPayload.distribution,
-            gateway: signedPayload.gateway,
-            appVersion: signedPayload.appVersion,
-            apnsToken: signedPayload.apnsToken,
-            appAttest: appAttest,
-            receipt: receipt,
-            simulatorProof: simulatorProof)
+        requestBody.appAttest = appAttest
+        requestBody.receipt = receipt
+        requestBody.simulatorProof = simulatorProof
 
         let endpoint = self.baseURL.appending(path: "v1/push/register")
         var request = URLRequest(url: endpoint)

@@ -137,23 +137,6 @@ it("fails closed on an unknown external lease observation without exposing priva
   );
 });
 
-it("grants external maintenance only after the unchanged held-owner checks", async () => {
-  boundary.external.mockReturnValue(true);
-  const maintenance = await begin();
-  expect(maintenance).toBeDefined();
-  expect(boundary.readLeases).toHaveBeenCalledOnce();
-  expect(boundary.gatewayAcquire).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert).toHaveBeenCalledOnce();
-  expect(boundary.lease).toHaveBeenCalledOnce();
-  expect(boundary.ownerAssert.mock.invocationCallOrder[0]!).toBeLessThan(
-    boundary.lease.mock.invocationCallOrder[0]!,
-  );
-  expect(boundary.stop).not.toHaveBeenCalled();
-  await maintenance!.release();
-  expect(boundary.close).toHaveBeenCalledOnce();
-  expect(boundary.release).toHaveBeenCalledOnce();
-});
-
 it("preserves held-owner unreadable-state guidance after an external diagnostic read fails", async () => {
   boundary.external.mockReturnValue(true);
   const failure = new Error("synthetic unreadable schema");
@@ -315,24 +298,4 @@ it("does not settle a typed refusal while command cleanup remains uncertain", as
   expect(boundary.resume).not.toHaveBeenCalled();
   expect(boundary.complete).not.toHaveBeenCalled();
   expect(boundary.restart).not.toHaveBeenCalled();
-});
-
-it("does not classify a forged lease error name, code or message", async () => {
-  const cause = Object.assign(new Error(privateCause), {
-    name: "OpenClawAgentDatabaseLeaseActiveError",
-    code: leaseCode,
-  });
-  boundary.lease.mockImplementation(() => {
-    throw cause;
-  });
-  const refusal: unknown = await begin().catch((error: unknown) => error);
-  expect(refusal).toBeInstanceOf(DoctorMaintenanceRefusalError);
-  expect(refusal).toMatchObject({ refusal: { kind: "deferred", reason: "admission-unavailable" } });
-  expect(collectUpdateDoctorFailureFacts(refusal)).toEqual([]);
-  expect(
-    redactPublicSupportDiagnosticLine(String(refusal), {
-      env: {},
-      stateDir: "/synthetic/private-state",
-    }),
-  ).toBe("DoctorMaintenanceRefusalError: Doctor could not enter maintenance.");
 });

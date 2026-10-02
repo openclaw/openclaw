@@ -6,7 +6,6 @@ import { listConfiguredBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
-import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
 import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
 import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
 import { getLoadedChannelPluginEntryById } from "./registry-loaded.js";
@@ -29,7 +28,7 @@ function resolveConfiguredBindingAdapter(channel: string): {
     normalized,
     getPluginRegistryForContext() ?? undefined,
   )?.plugin;
-  const provider = resolveChannelConfiguredBindingProvider(plugin);
+  const provider = plugin?.bindings;
   if (
     !plugin ||
     !provider ||

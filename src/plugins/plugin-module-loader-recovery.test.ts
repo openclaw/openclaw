@@ -251,8 +251,46 @@ it("captures quiesced code without admitting calls and refuses capture after dis
   expect((restored.loadModule(entry) as FixtureModule).late()).toBe("original late import");
 });
 
+it("shares bundled TypeScript code without captures and warns when edited code needs a restart", () => {
+  const root = temp.make("bundled-source-identity-");
+  const captures = temp.make("bundled-source-captures-");
+  const entry = path.join(root, "index.ts");
+  const writeEntry = (value: number) =>
+    fs.writeFileSync(
+      entry,
+      `import { emptyPluginConfigSchema } from "openclaw/plugin-sdk/plugin-entry";
+       export const value: number = ${value};
+       export const schema = emptyPluginConfigSchema().jsonSchema;`,
+    );
+  const load = () => {
+    const instance = new PluginInstance("bundled-source");
+    instances.push(instance);
+    const value = withPluginSourceCaptureDirectory(captures, () => {
+      bindPluginInstanceModuleLoader({
+        instance,
+        origin: "bundled",
+        source: entry,
+        rootDir: root,
+      });
+      return instance.loadModule(entry);
+    });
+    expect(instance.sourceDigest).toBeUndefined();
+    expect(fs.readdirSync(captures)).toEqual([]);
+    expect(value).toMatchObject({ value: 1, schema: { type: "object" } });
+    return instance;
+  };
+
+  writeEntry(1);
+  expect(getSharedPluginCodeReloadWarning(load())).toBeUndefined();
+  resetPluginCache();
+  writeEntry(2);
+  expect(getSharedPluginCodeReloadWarning(load())).toBe(
+    "Bundled plugin code remains loaded. Restart the Gateway to load edited code.",
+  );
+});
+
 it.each(["cjs", "mjs"])(
-  "reuses compiled bundled %s code while giving recovery fresh callback authority",
+  "reuses bundled %s code while giving recovery fresh callback authority",
   async (extension) => {
     const root = temp.make("bundled-recovery-identity-");
     const entry = path.join(root, `index.${extension}`);

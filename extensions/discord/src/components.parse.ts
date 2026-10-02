@@ -1,5 +1,6 @@
 import { ButtonStyle, TextInputStyle } from "discord-api-types/v10";
 import {
+  asOptionalRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   readNonBlankString,
@@ -21,18 +22,17 @@ import type {
 
 export const DISCORD_COMPONENT_ATTACHMENT_PREFIX = "attachment://";
 
-type DiscordComponentSeparatorSpacing = "small" | "large" | 1 | 2;
-
 const BLOCK_ALIASES = new Map<string, DiscordComponentBlock["type"]>([
   ["row", "actions"],
   ["action-row", "actions"],
 ]);
 
 function requireObject(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(value);
+  if (!record) {
     throw new Error(`${label} must be an object`);
   }
-  return value as Record<string, unknown>;
+  return record;
 }
 
 // Body whitespace carries Markdown; control labels still use trimmed values.
@@ -82,7 +82,7 @@ function readOptionalInteger(
   if (value == null) {
     return undefined;
   }
-  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value)) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
     throw new Error(`${label} must be an integer`);
   }
   if (bounds?.min !== undefined && value < bounds.min) {
@@ -95,10 +95,10 @@ function readOptionalInteger(
 }
 
 function readOptionalEmoji(value: unknown, label: string) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const obj = asOptionalRecord(value);
+  if (!obj) {
     return undefined;
   }
-  const obj = value as { name?: unknown; id?: unknown; animated?: unknown };
   return {
     name: readRequiredString(obj.name, `${label}.name`),
     id: normalizeOptionalString(obj.id),
@@ -107,11 +107,7 @@ function readOptionalEmoji(value: unknown, label: string) {
 }
 
 export function normalizeModalFieldName(value: string | undefined, index: number) {
-  const trimmed = value?.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  return `field_${index + 1}`;
+  return value?.trim() || `field_${index + 1}`;
 }
 
 function readAttachmentName(value: string, label: string, filenameLabel = "a filename"): string {
@@ -175,7 +171,7 @@ function parseButtonSpec(raw: unknown, label: string): DiscordComponentButtonSpe
   const obj = requireObject(raw, label);
   const style = normalizeOptionalString(obj.style) as DiscordComponentButtonStyle | undefined;
   const url = normalizeOptionalString(obj.url);
-  if ((style === "link" || url) && !url) {
+  if (style === "link" && !url) {
     throw new Error(`${label}.url is required for link buttons`);
   }
   return {
@@ -317,18 +313,19 @@ function parseComponentBlock(raw: unknown, label: string): DiscordComponentBlock
     }
     case "separator": {
       const spacingRaw = obj.spacing;
-      let spacing: DiscordComponentSeparatorSpacing | undefined;
-      if (spacingRaw === "small" || spacingRaw === "large") {
-        spacing = spacingRaw;
-      } else if (spacingRaw === 1 || spacingRaw === 2) {
-        spacing = spacingRaw;
-      } else if (spacingRaw !== undefined) {
+      if (
+        spacingRaw !== undefined &&
+        spacingRaw !== "small" &&
+        spacingRaw !== "large" &&
+        spacingRaw !== 1 &&
+        spacingRaw !== 2
+      ) {
         throw new Error(`${label}.spacing must be "small", "large", 1, or 2`);
       }
       const divider = typeof obj.divider === "boolean" ? obj.divider : undefined;
       return {
         type: "separator",
-        spacing,
+        spacing: spacingRaw,
         divider,
       };
     }
@@ -424,22 +421,16 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
       fields,
     };
   }
+  const container = asOptionalRecord(obj.container);
   return {
     text: readNonBlankString(obj.text),
     reusable: typeof obj.reusable === "boolean" ? obj.reusable : undefined,
-    container:
-      typeof obj.container === "object" && obj.container && !Array.isArray(obj.container)
-        ? {
-            accentColor: (obj.container as { accentColor?: unknown }).accentColor as
-              | string
-              | number
-              | undefined,
-            spoiler:
-              typeof (obj.container as { spoiler?: unknown }).spoiler === "boolean"
-                ? ((obj.container as { spoiler?: boolean }).spoiler as boolean)
-                : undefined,
-          }
-        : undefined,
+    container: container
+      ? {
+          accentColor: container.accentColor as string | number | undefined,
+          spoiler: typeof container.spoiler === "boolean" ? container.spoiler : undefined,
+        }
+      : undefined,
     blocks,
     modal,
   };

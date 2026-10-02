@@ -9,7 +9,7 @@ enum SessionActions {
         thinking: String?? = nil,
         verbose: String?? = nil) async throws
     {
-        let request = OpenClawChatGatewayRequests.patchSessionPreferences(
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: key,
             agentID: nil,
             thinkingLevel: thinking,
@@ -37,14 +37,14 @@ enum SessionActions {
     }
 
     @MainActor
-    static func confirmDestructiveAction(title: String, message: String, action: String) -> Bool {
+    static func confirmDestructiveAction(title: String, message: String, action: String) async -> Bool {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = message
         alert.addButton(withTitle: action)
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
-        return alert.runModal() == .alertFirstButtonReturn
+        return await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn
     }
 
     @MainActor
@@ -54,7 +54,7 @@ enum SessionActions {
         alert.informativeText = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         alert.addButton(withTitle: "OK")
         alert.alertStyle = .warning
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     @MainActor
@@ -74,10 +74,11 @@ enum SessionActions {
             let alert = NSAlert()
             alert.messageText = "Session log not found"
             alert.informativeText = sessionId
-            alert.runModal()
+            AppActivation.shared.presentAlert(alert)
             return
         }
 
+        guard AppActivation.shared.requestExternalNavigation() else { return }
         let proc = Process()
         proc.launchPath = "/usr/bin/env"
         proc.arguments = ["code", url.path]
@@ -85,6 +86,6 @@ enum SessionActions {
             return
         }
 
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        AppActivation.shared.revealFiles([url])
     }
 }

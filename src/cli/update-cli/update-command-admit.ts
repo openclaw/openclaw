@@ -6,10 +6,16 @@ import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
 import { createConfigIO } from "../../config/io.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { listRetiredCronStateFiles } from "../../infra/state-migrations.retired-cron-files.js";
+import {
+  assertNoRetiredStateFiles,
+  RetiredStateFormatError,
+} from "../../infra/state-migrations.retired-files.js";
 import {
   isUpdateAdmissionAuthorityEnvKey,
   parseUpdateAdmissionContext,
@@ -70,11 +76,19 @@ async function inspectUpdateAdmission(
     delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     return await withOwnedManagedUpdateEnv(env, async () => {
       const timeoutMs = context.request.timeoutMs ?? 120_000;
-      const checks: UpdateAdmissionVerdict["facts"]["checks"] = [];
+      const checks = new Map<
+        string,
+        Omit<UpdateAdmissionVerdict["facts"]["checks"][number], "name">
+      >();
       const reasons: UpdateAdmissionVerdict["reasons"] = [];
       const warnings: UpdateAdmissionVerdict["warnings"] = [];
+      const legacyConfigWarning = {
+        code: "config-warning",
+        message:
+          "Configuration contains legacy fields that candidate Doctor can repair after installation.",
+      };
       const refuse = (name: string, code: string, message: string, nextAction?: string) => {
-        checks.push({ name, status: "refuse", detail: message });
+        checks.set(name, { status: "refuse", detail: message });
         reasons.push({ code, message, ...(nextAction ? { nextAction } : {}) });
       };
       let databaseContext:
@@ -95,13 +109,9 @@ async function inspectUpdateAdmission(
             : undefined;
         databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
         if (legacyConfigPlan) {
-          warnings.push({
-            code: "config-warning",
-            message:
-              "Configuration contains legacy fields that candidate Doctor can repair after installation.",
-          });
+          warnings.push(legacyConfigWarning);
         }
-        checks.push({ name: "config", status: warnings.length ? "warn" : "ok" });
+        checks.set("config", { status: warnings.length ? "warn" : "ok" });
       } catch (error) {
         if (!(error instanceof UpdatePreMutationError)) {
           throw error;
@@ -117,10 +127,12 @@ async function inspectUpdateAdmission(
       }
       let schemasAccepted = false;
       let pluginInstallRecords: Record<string, PluginInstallRecord> | undefined;
-      if (databaseContext) {
+      const checkDatabaseSchemas = async (
+        schemaContext: NonNullable<typeof databaseContext>,
+      ): Promise<boolean> => {
         try {
           const schemas = await checkTargetDatabaseSchemasForContexts(schemaVersions, [
-            databaseContext,
+            schemaContext,
           ]);
           if (hasSchemaRefusal(schemas)) {
             refuse(
@@ -129,8 +141,8 @@ async function inspectUpdateAdmission(
               formatSchemaRefusalLines(schemas).join("\n"),
             );
           } else {
-            checks.push({ name: "database-schema", status: "ok" });
-            schemasAccepted = true;
+            checks.set("database-schema", { status: "ok" });
+            return true;
           }
         } catch (error) {
           if (!(error instanceof UpdatePreMutationError)) {
@@ -138,35 +150,70 @@ async function inspectUpdateAdmission(
           }
           refuse("database-schema", error.reason, error.message);
         }
+        return false;
+      };
+      if (databaseContext) {
+        schemasAccepted = await checkDatabaseSchemas(databaseContext);
+        if (schemasAccepted) {
+          const snapshot = databaseContext.configSnapshot;
+          try {
+            // The saved partition reads SQLite; admit its schema before inspecting live files
+            // that published updaters omit from their later rehearsal snapshots.
+            assertNoRetiredStateFiles(
+              "Cron state",
+              await listRetiredCronStateFiles(
+                resolveCronJobsStorePathFromConfig(
+                  snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+                  databaseContext.env,
+                ),
+              ),
+            );
+          } catch (error) {
+            if (!(error instanceof RetiredStateFormatError)) {
+              throw error;
+            }
+            refuse("state-format", "retired-state-format", error.message);
+            schemasAccepted = false;
+          }
+        }
       }
       // Plugin metadata reads require compatible stores; never let them mask a schema refusal.
       if (databaseContext && schemasAccepted && !databaseContext.legacyConfigPlan) {
-        const { snapshot, pluginMetadataSnapshot } = await createConfigIO({
+        const { snapshot, writeOptions } = await createConfigIO({
           env: cloneEnvWithPlatformSemantics(env),
           observe: false,
           suppressFutureVersionWarning: true,
           shellEnvFallback: "defer",
-        }).readConfigFileSnapshotWithPluginMetadata();
-        if (!snapshot.valid || snapshot.readError) {
-          const failure = createUpdateConfigFailure(snapshot);
-          checks[0] = { name: "config", status: "refuse", detail: failure.message };
-          reasons.push({
-            code: failure.reason,
-            message: failure.message,
-            nextAction: failure.nextAction,
-          });
-          databaseContext = undefined;
-        } else {
-          pluginInstallRecords = pluginMetadataSnapshot?.index.installRecords;
+        }).readConfigFileSnapshotForWrite();
+        try {
+          if (!snapshot.valid || snapshot.readError) {
+            const legacyConfigPlan = !snapshot.readError
+              ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
+              : undefined;
+            if (!legacyConfigPlan) {
+              throw createUpdateConfigFailure(snapshot);
+            }
+            databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+            // Plugin repairs can change configured stores; validate the source-bound projection too.
+            schemasAccepted = await checkDatabaseSchemas(databaseContext);
+            warnings.push(legacyConfigWarning);
+          }
+          pluginInstallRecords = writeOptions.basePluginMetadataSnapshot?.index.installRecords;
           warnings.push(
             ...snapshot.warnings.map((warning) => ({
               code: warning.code ?? "config-warning",
               message: `${warning.path}: ${warning.message}`,
             })),
           );
-          if (snapshot.warnings.length) {
-            checks[0] = { name: "config", status: "warn" };
+          if (snapshot.warnings.length || databaseContext.legacyConfigPlan) {
+            checks.set("config", { status: "warn" });
           }
+        } catch (error) {
+          if (!(error instanceof UpdatePreMutationError)) {
+            throw error;
+          }
+          refuse("config", error.reason, error.message, error.nextAction);
+          databaseContext = undefined;
         }
       }
       const nodeEngines =
@@ -176,8 +223,7 @@ async function inspectUpdateAdmission(
       const runtimeCompatible =
         !nodeEngines || nodeVersionSatisfiesEngine(process.versions.node, nodeEngines) === true;
       // Selection and provisioning require the installed supervisor's execution authority.
-      checks.push({
-        name: "node-runtime",
+      checks.set("node-runtime", {
         status: runtimeCompatible ? "ok" : "warn",
         ...(!runtimeCompatible
           ? {
@@ -205,14 +251,19 @@ async function inspectUpdateAdmission(
             message: warning.message,
           })),
         );
-        checks.push({ name: "plugin-availability", status: pluginWarnings.length ? "warn" : "ok" });
+        checks.set("plugin-availability", { status: pluginWarnings.length ? "warn" : "ok" });
       }
       return {
         protocol: UPDATE_ADMISSION_PROTOCOL,
         verdict: reasons.length ? "refuse" : "admit",
         reasons,
         warnings,
-        facts: { candidateVersion, installedVersion, nodeEngines, checks },
+        facts: {
+          candidateVersion,
+          installedVersion,
+          nodeEngines,
+          checks: Array.from(checks, ([name, check]) => ({ name, ...check })),
+        },
       };
     });
   });

@@ -174,6 +174,22 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   };
   await withEnvAsync(env, async () => {
     const siblingDir = writePackage("sibling");
+    const writeSiblingControlUi = (build: string) => {
+      const assetDir = `dist/control-ui/${build}`;
+      fs.mkdirSync(path.join(siblingDir, assetDir), { recursive: true });
+      fs.writeFileSync(path.join(siblingDir, assetDir, "index.js"), "export {};\n");
+      fs.writeFileSync(path.join(siblingDir, assetDir, "index.css"), ":root { color: blue; }\n");
+      const manifestPath = path.join(siblingDir, "openclaw.plugin.json");
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          ...manifest,
+          controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] },
+        }),
+      );
+    };
+    writeSiblingControlUi("build-a");
     const bundledDir =
       settings === "empty" && !cleanupRetry
         ? writePackage(
@@ -374,7 +390,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           port: 0,
           log,
           loadGatewayPluginBootstrapModule: async () => bootstrap,
-          prepareAttachedPluginRuntime: async (candidate) => {
+          prepareAttachedPluginRuntime: async (candidate, trackActivationCleanup) => {
             loaded.push(candidate);
             beforeAttachment?.(candidate);
             return {
@@ -385,6 +401,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
                   "gateway-bindable",
                   workspaceDir,
                   runtime.pluginRuntime.registry,
+                  trackActivationCleanup,
                 );
                 registryOwner.publish(candidate.pluginRegistry);
               },
@@ -396,7 +413,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           nextConfig,
           sourceConfig,
           changedPaths: [],
-          prepareConfigEffects: () => async () => {},
+          prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
           assertInvokerOwned,
           pluginLifecycle: {
             reason,
@@ -427,6 +444,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
     const releaseSiblingWork = siblingInstance.retainWork();
     let firstReceipt: Awaited<ReturnType<typeof reload>>;
     try {
+      writeSiblingControlUi("build-b");
       firstReceipt = await reload(
         validated.config,
         ["installed-probe"],
@@ -438,6 +456,12 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       releaseSiblingWork();
     }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
+    expect(firstReceipt.runtime.warnings ?? []).not.toEqual(
+      expect.arrayContaining([expect.stringContaining("retained work")]),
+    );
+    expect(runtime.pluginRuntime.registry.plugins.find((record) => record.id === "sibling")).toBe(
+      siblingRecord,
+    );
     expect(await probe("sibling")).toEqual(sibling);
     if (workspacePlugin) {
       expect(await probe("workspace-probe")).toEqual(workspacePlugin);
@@ -945,7 +969,7 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       expect(bundledReload.runtime).toMatchObject({
         restartRequired: true,
         pluginIds: ["bundled-probe"],
-        warnings: [expect.stringMatching(/compiled bundled.*restart/i)],
+        warnings: ["Bundled plugin code remains loaded. Restart the Gateway to load edited code."],
       });
       expect(bundledReload.runtime.generation).toBeGreaterThan(configReceipt.runtime.generation);
       const repeatedBundled = await reload(changedSettings, ["bundled-probe"]);

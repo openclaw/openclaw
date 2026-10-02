@@ -1,13 +1,8 @@
-// Doctor core checks collect environment, config, and runtime readiness diagnostics.
-import path from "node:path";
 import { listAgentIds, tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import {
-  detectLegacyClawdBrowserProfileResidue,
-  maybeArchiveLegacyClawdBrowserProfileResidue,
   maybeRepairOwnedChromeExtensionNativeHosts,
   noteChromeMcpBrowserReadiness,
-  type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
 import {
@@ -59,7 +54,6 @@ import type {
   HealthRepairContext,
 } from "./health-checks.js";
 
-const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
 const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
@@ -490,18 +484,6 @@ const bootstrapSizeCheck: HealthCheck = {
   },
 };
 
-function createProviderCatalogProjectionCheck(deps: CoreHealthCheckDeps): HealthCheck {
-  return {
-    id: "core/doctor/provider-catalog-projection",
-    kind: "core",
-    description: "Provider catalog hooks project into unified text model catalog rows.",
-    source: "doctor",
-    async detect(ctx) {
-      return deps.collectProviderCatalogProjectionFindings(ctx);
-    },
-  };
-}
-
 function noteTextToFinding(params: {
   checkId: string;
   severity: HealthFinding["severity"];
@@ -601,20 +583,6 @@ const claudeCliCheck: HealthCheck = {
     return collector.findings;
   },
 };
-
-function createSecurityCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: "core/doctor/security",
-    updateReadiness: "post-plugin",
-    kind: "core",
-    description: "Security posture checks produce structured findings.",
-    source: "doctor",
-    async detect(ctx) {
-      const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
-      return findings.map(securityAuditFindingToHealthFinding);
-    },
-  };
-}
 
 const openAIOAuthTlsCheck: HealthCheck = {
   id: "core/doctor/oauth-tls",
@@ -801,32 +769,6 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
-function createGatewayHealthCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: GATEWAY_HEALTH_CHECK_ID,
-    kind: "core",
-    description: "Authenticated Gateway health and degraded secret owners are structured findings.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx) {
-      return deps.collectGatewayHealthFindings(ctx);
-    },
-  };
-}
-
-function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): DoctorHealthCheck {
-  return {
-    id: GATEWAY_DAEMON_CHECK_ID,
-    kind: "core",
-    description: "Local Gateway daemon service state is represented as structured findings.",
-    source: "doctor",
-    defaultEnabled: false,
-    async detect(ctx) {
-      return deps.collectGatewayDaemonFindings(ctx);
-    },
-  };
-}
-
 const nodeRuntimeCheck: HealthCheck = {
   id: "core/doctor/node-runtime",
   kind: "core",
@@ -958,92 +900,6 @@ function skillReadinessPath(skill: SkillStatusEntry): string {
   return `skills.entries.${skill.skillKey}.enabled`;
 }
 
-function browserResidueDeps(ctx: { configPath?: string }) {
-  return ctx.configPath ? { configDir: path.dirname(ctx.configPath) } : {};
-}
-
-function browserResidueFinding(residue: LegacyClawdBrowserProfileResidue): HealthFinding {
-  return {
-    checkId: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
-    severity: "warning",
-    message: `Legacy managed browser profile residue was found at ${residue.legacyProfileDir}.`,
-    path: residue.legacyProfileDir,
-    ocPath: "oc://state/browser/clawd",
-    fixHint:
-      "Run `openclaw doctor --fix` to archive the stale clawd profile safely instead of deleting it in place.",
-  };
-}
-
-function formatWouldArchiveBrowserResidue(residue: LegacyClawdBrowserProfileResidue): string {
-  return [
-    "Would archive legacy clawd managed browser profile residue.",
-    `- legacy profile: ${residue.legacyProfileDir}`,
-    `- canonical profile: ${residue.canonicalUserDataDir}`,
-  ].join("\n");
-}
-
-const browserClawdProfileResidueCheck: HealthCheck = {
-  id: BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID,
-  kind: "core",
-  description:
-    "Legacy clawd managed browser profile residue has been archived after the OpenClaw rename.",
-  source: "doctor",
-  async detect(ctx, scope) {
-    const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
-    if (!residue) {
-      return [];
-    }
-    const scopedPaths = new Set(scope?.paths ?? []);
-    if (scopedPaths.size > 0 && !scopedPaths.has(residue.legacyProfileDir)) {
-      return [];
-    }
-    return [browserResidueFinding(residue)];
-  },
-  async repair(ctx) {
-    const residue = await detectLegacyClawdBrowserProfileResidue(ctx.cfg, browserResidueDeps(ctx));
-    if (!residue) {
-      return {
-        status: "skipped",
-        reason: "legacy clawd browser profile residue no longer exists",
-        changes: [],
-      };
-    }
-    const effect = {
-      kind: "state" as const,
-      action:
-        ctx.dryRun === true
-          ? "would-archive-legacy-browser-profile-residue"
-          : "archive-legacy-browser-profile-residue",
-      target: residue.legacyProfileDir,
-      dryRunSafe: false,
-    };
-    if (ctx.dryRun === true) {
-      return {
-        changes: [formatWouldArchiveBrowserResidue(residue)],
-        effects: [effect],
-      };
-    }
-    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
-      ctx.cfg,
-      browserResidueDeps(ctx),
-    );
-    if (result.changes.length === 0 && result.warnings.length > 0) {
-      return {
-        status: "failed",
-        reason: result.warnings.join("; "),
-        changes: [],
-        warnings: result.warnings,
-        effects: [],
-      };
-    }
-    return {
-      changes: result.changes,
-      warnings: result.warnings,
-      effects: result.changes.length > 0 ? [effect] : [],
-    };
-  },
-};
-
 const shellCompletionCheck: HealthCheck = {
   id: "core/doctor/shell-completion",
   kind: "core",
@@ -1140,17 +996,54 @@ export function createCoreHealthChecks(
     uiProtocolFreshnessCheck,
     gatewayServicesExtraCheck,
     gatewayPlatformNotesCheck,
-    createGatewayHealthCheck(deps),
-    createGatewayDaemonCheck(deps),
+    {
+      id: GATEWAY_HEALTH_CHECK_ID,
+      kind: "core",
+      description:
+        "Authenticated Gateway health and degraded secret owners are structured findings.",
+      source: "doctor",
+      defaultEnabled: false,
+      async detect(ctx) {
+        return deps.collectGatewayHealthFindings(ctx);
+      },
+    },
+    {
+      id: GATEWAY_DAEMON_CHECK_ID,
+      kind: "core",
+      description: "Local Gateway daemon service state is represented as structured findings.",
+      source: "doctor",
+      defaultEnabled: false,
+      async detect(ctx) {
+        return deps.collectGatewayDaemonFindings(ctx);
+      },
+    },
     nodeRuntimeCheck,
-    createSecurityCheck(deps),
+    {
+      id: "core/doctor/security",
+      updateReadiness: "post-plugin",
+      kind: "core",
+      description: "Security posture checks produce structured findings.",
+      source: "doctor",
+      async detect(ctx) {
+        const findings = await deps.collectSecurityWarnings(ctx.cfg, ctx.env);
+        return findings.map(securityAuditFindingToHealthFinding);
+      },
+    },
     browserCheck,
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
     createModelReferenceCheck(),
     createAcpAgentModelCheck(),
-    createProviderCatalogProjectionCheck(deps),
+    {
+      id: "core/doctor/provider-catalog-projection",
+      kind: "core",
+      description: "Provider catalog hooks project into unified text model catalog rows.",
+      source: "doctor",
+      async detect(ctx) {
+        return deps.collectProviderCatalogProjectionFindings(ctx);
+      },
+    },
     {
       id: "core/doctor/local-audio-acceleration",
       kind: "core",
@@ -1192,7 +1085,6 @@ export function createCoreHealthChecks(
       : []),
     commandOwnerCheck,
     createSkillsReadinessCheck(deps),
-    browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
   return copyHealthChecks(checks);

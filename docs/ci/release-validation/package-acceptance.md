@@ -17,10 +17,39 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 1. `resolve_package` checks out `workflow_ref`, resolves one package candidate, writes `.artifacts/docker-e2e-package/openclaw-current.tgz`, writes `.artifacts/docker-e2e-package/package-candidate.json`, uploads both as the `package-under-test` artifact, and prints the source, workflow ref, package ref, version, SHA-256, and profile in the GitHub step summary.
 2. `package_integrity` downloads the `package-under-test` artifact and enforces the public package tarball contract with `scripts/check-openclaw-package-tarball.mjs`.
-3. `npm_12_install_sh` installs that exact artifact through the public Linux installer under npm 12 in an isolated home/prefix, then verifies the CLI version and lifecycle-completion guard.
+3. `npm_12_install_sh` installs that exact artifact through the public Linux installer under npm 12 in an isolated home/prefix, then verifies the CLI version and lifecycle-completion guard and enforces the installed-package tree budget.
 4. `docker_acceptance` calls `openclaw-live-and-e2e-checks-reusable.yml` with the resolved package source SHA (falling back to `workflow_ref`) and `package_artifact_name=package-under-test`. The reusable workflow downloads that artifact, validates the tarball inventory, prepares package-digest Docker images when needed, and runs the selected Docker lanes against that package instead of packing the workflow checkout. When a profile selects multiple targeted `docker_lanes`, the reusable workflow prepares the package and shared images once, then fans those lanes out as parallel targeted Docker jobs with unique artifacts.
 5. `package_telegram` optionally calls `NPM Telegram Beta E2E`. It runs when `telegram_mode` is not `none` and installs the same `package-under-test` artifact when Package Acceptance resolved one; standalone Telegram dispatch can still install a published npm spec.
 6. `summary` fails the workflow if package resolution, integrity, npm 12 installer acceptance, Docker acceptance, or the optional Telegram lane failed. Selected lanes keep their first failure; callers cannot downgrade a failing test to a warning.
+
+### Installed package tree budget
+
+`scripts/check-openclaw-installed-package-budget.mts` measures the npm-installed
+package tree, including dependencies that the tarball check cannot see. It counts
+the root and every directory entry without following symlinks, and sums every
+regular file's size, including npm's hidden `node_modules/.package-lock.json`
+files, because published updaters charge those bytes too. Hardlinked paths count
+separately. The report lists the largest contributors by entry count and adds the
+totals to the GitHub step summary.
+
+Published updaters freeze caps of **50,000 entries / 1 GiB**. The release budgets
+are **47,500 entries / 900 MiB**: the 2,500-entry reserve (5%) covers npm-version,
+hoisting, and per-platform optional-dependency variance and is larger than routine
+dependency bumps, so the check fails while every shipped updater can still install
+the candidate. Bytes are far from the cap but vary more with platform native
+prebuilds, so the byte budget keeps roughly 12% in reserve.
+
+To reproduce locally with a candidate tarball:
+
+```bash
+tmp="$(mktemp -d)"
+npm install -g --prefix "$tmp" ./openclaw.tgz
+node scripts/check-openclaw-installed-package-budget.mts "$tmp/lib/node_modules/openclaw"
+```
+
+On failure, reduce installed entries by trimming the largest dependencies or
+dist chunk and precompressed asset counts; reduce large files for a byte-budget
+failure. Do not raise the budgets: caps cannot change in already-shipped updaters.
 
 ### Candidate sources
 
@@ -121,7 +150,7 @@ on the candidate-relative predecessor. The lane does not run an extra Doctor or
 omit those fixtures to turn a failed schema upgrade into a pass.
 
 Current cross-OS tooling runs packaged fresh-install and upgrade checks on both
-Node 24.19.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
+Node 24.21.0 and the Node 26.1.0 support floor across Linux, Windows, and macOS.
 Windows packaged fresh-install retains Node 24.16.0 for its Node 24 cell because
 of the later libuv file-watcher regression. Both runtime variants consume the
 same prepared candidate tarball. A focused `suite_filter` selects both Node

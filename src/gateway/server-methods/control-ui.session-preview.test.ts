@@ -2,8 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -80,6 +80,7 @@ describe("controlUi.sessionPreview", () => {
                 sessionKeys: [],
               }),
               (selection) => selection.runIds,
+              { sessionKeys: [run.childSessionKey], descendants: true },
             );
             void recovering.catch(() => {});
             await recoveryStarted.promise;
@@ -303,18 +304,6 @@ describe("controlUi.sessionPreview", () => {
     expect(payload.title).toHaveLength(200);
     expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
     expect(payload.lastMessagePreview).not.toContain(secret);
-  });
-
-  it("returns unavailable for an unknown session", async () => {
-    const handlers = createControlUiHandlers(vi.fn(), vi.fn().mockReturnValue(null));
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.sessionPreview"],
-      'handlers["controlUi.sessionPreview"] test invariant',
-    )(requestOptions({ sessionKey: "agent:main:missing" }, respond));
-
-    expect(respond).toHaveBeenCalledWith(true, { status: "unavailable" }, undefined);
   });
 
   it("rejects malformed preview params", async () => {

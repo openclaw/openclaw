@@ -7,7 +7,7 @@ import {
 import {
   hasMeaningfulChannelConfigShallow,
   resolveChannelConfigRecord,
-} from "./channel-configured-shared.js";
+} from "./channel-config-activation.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Resolves whether a channel has enough config, env, or plugin state to be considered setup. */

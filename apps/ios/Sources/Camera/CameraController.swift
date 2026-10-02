@@ -35,11 +35,7 @@ actor CameraController {
 
     func snap(
         params: OpenClawCameraSnapParams,
-        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
-        format: String,
-        base64: String,
-        width: Int,
-        height: Int)
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraSnapResult
     {
         let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let format = params.format ?? .jpg
@@ -101,11 +97,7 @@ actor CameraController {
 
     func clip(
         params: OpenClawCameraClipParams,
-        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
-        format: String,
-        base64: String,
-        durationMs: Int,
-        hasAudio: Bool)
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> OpenClawCameraClipResult
     {
         let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let durationMs = CaptureRateLimits.clampDurationMs(params.durationMs, defaultMs: 3000)

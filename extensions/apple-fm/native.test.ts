@@ -23,6 +23,18 @@ const success = (stdout = "") => ({
   termination: "exit" as const,
 });
 
+function cancelAfterCompile() {
+  const abort = new AbortController();
+  vi.mocked(runCommandBuffered).mockImplementation(async (argv) => {
+    if (argv[0] === "/usr/bin/xcrun") {
+      await fs.writeFile(argv.at(-1)!, "synthetic executable");
+      abort.abort();
+    }
+    return success();
+  });
+  return abort.signal;
+}
+
 beforeEach(async () => {
   native = createAppleFmNative(fileURLToPath(new URL(".", import.meta.url)));
   directory = await fs.mkdtemp(path.join(os.tmpdir(), "apple-fm-native-test-"));
@@ -60,21 +72,13 @@ describe("Apple Foundation Models helper lifecycle", () => {
   });
 
   it("cleans up cold discovery on cancellation without publishing an executable", async () => {
-    const abort = new AbortController();
-    vi.mocked(runCommandBuffered).mockImplementation(async (argv) => {
-      if (argv[0] === "/usr/bin/xcrun") {
-        await fs.writeFile(argv.at(-1)!, "synthetic executable");
-        abort.abort();
-      }
-      return success();
-    });
-    await expect(native.probe({ signal: abort.signal })).rejects.toThrow();
+    await expect(native.probe({ signal: cancelAfterCompile() })).rejects.toThrow();
     expect(await fs.readdir(directory)).toEqual([]);
     await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
   });
 
-  it.each(["linux", "win32"])("does not probe or compile on %s", async (platform) => {
-    Object.defineProperty(process, "platform", { ...originalPlatform, value: platform });
+  it("does not probe or compile on non-Mac hosts", async () => {
+    Object.defineProperty(process, "platform", { ...originalPlatform, value: "linux" });
     expect(await native.probe()).toBeNull();
     expect(runCommandBuffered).not.toHaveBeenCalled();
     expect(await fs.readdir(directory)).toEqual([]);
@@ -100,15 +104,7 @@ describe("Apple Foundation Models helper lifecycle", () => {
   });
 
   it("does not publish a compiled helper when setup is canceled", async () => {
-    const abort = new AbortController();
-    vi.mocked(runCommandBuffered).mockImplementation(async (argv) => {
-      if (argv[0] === "/usr/bin/xcrun") {
-        await fs.writeFile(argv.at(-1)!, "synthetic executable");
-        abort.abort();
-      }
-      return success();
-    });
-    await expect(native.prepare({ signal: abort.signal })).rejects.toThrow();
+    await expect(native.prepare({ signal: cancelAfterCompile() })).rejects.toThrow();
     await expect(native.run({ messages: [] })).rejects.toThrow("setup again");
     const [buildRoot] = await fs.readdir(path.join(directory, "tools", "apple-fm"));
     expect(await fs.readdir(path.join(directory, "tools", "apple-fm", buildRoot!))).toEqual([]);

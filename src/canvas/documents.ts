@@ -4,13 +4,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { resolveStateDir } from "../config/paths.js";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { escapeHtml } from "../shared/html-escape.js";
 import { resolveUserPath } from "../utils.js";
 import { CANVAS_DOCUMENTS_PATH } from "./constants.js";
 
-const CANVAS_DOCUMENT_READ_MAX_BYTES = 2 * 1024 * 1024;
+const CANVAS_DOCUMENT_MANIFEST_MAX_BYTES = 2 * 1024 * 1024;
 
 type CanvasDocumentKind = "html_bundle" | "url_embed" | "document" | "image" | "video_asset";
 
@@ -110,7 +111,7 @@ export async function readCanvasDocumentHtmlSource(
   const id = normalizeCanvasDocumentId(documentId);
   // Keep the document directory inside the guarded root so aliases cannot select another document.
   const root = await fsRoot(resolveCanvasDocumentsDir(options?.stateDir), {
-    maxBytes: CANVAS_DOCUMENT_READ_MAX_BYTES,
+    maxBytes: CANVAS_DOCUMENT_MANIFEST_MAX_BYTES,
   });
   const manifest = await root.readJson<Partial<CanvasDocumentManifest>>(`${id}/manifest.json`);
   if (manifest.id !== id || typeof manifest.localEntrypoint !== "string") {
@@ -122,7 +123,7 @@ export async function readCanvasDocumentHtmlSource(
   }
   return {
     html: await root.readText(`${id}/${entrypoint}`, {
-      maxBytes: options?.maxBytes ?? CANVAS_DOCUMENT_READ_MAX_BYTES,
+      maxBytes: options?.maxBytes ?? WIDGET_HTML_MAX_UTF8_BYTES,
     }),
     ...(manifest.cspSandbox === "scripts" ? { cspSandbox: "scripts" as const } : {}),
   };

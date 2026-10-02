@@ -1,36 +1,44 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  patchSessionEntryCore,
   readActiveTranscriptEntryAnchor,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
   SQLITE_SESSION_WRITER_QUEUES,
 } from "../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
   drainPendingContextEngineTurnsBeforeRun,
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-attempt.js";
-import { enqueueContextEngineTurnIntent } from "./context-engine-turn-outbox.js";
+import {
+  enqueueContextEngineTurnCommit,
+  enqueueContextEngineTurnIntent,
+} from "./context-engine-turn-outbox.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-turn-range-");
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+async function seedTurnSession(
+  target: Parameters<typeof patchSessionEntryCore>[0] & { sessionId: string },
+) {
+  const entry = { sessionId: target.sessionId, updatedAt: 1 };
+  // Queue assertions measure outbox settlement, independent of automatic session housekeeping.
+  await patchSessionEntryCore(target, () => entry, {
+    fallbackEntry: entry,
+    skipMaintenance: true,
+    workerGuard: {},
+  });
+}
 
 // Keep durable-engine setup identical across range and recovery cases so each
 // test varies only the transcript state that owns the behavior under test.
@@ -77,14 +85,14 @@ async function createAcceptedTurnFixture(params: {
   prefix: string[];
   sessionId: string;
 }) {
-  const tempDir = tempDirs.make("openclaw-context-turn-range-");
+  const tempDir = sessionDirs.make();
   const target = {
     agentId: "main",
     sessionId: params.sessionId,
     sessionKey: `agent:main:${params.sessionId}`,
     storePath: path.join(tempDir, "sessions.json"),
   };
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await seedTurnSession(target);
   let parentId: string | undefined;
   for (const [index, content] of params.prefix.entries()) {
     const entry = await appendTranscriptMessage(target, {
@@ -151,6 +159,68 @@ async function createAcceptedTurnFixture(params: {
 }
 
 describe("accepted context-engine turn finalization", () => {
+  it("commits the accepted session first and preserves bounded retries for other sessions", async () => {
+    const { database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "accepted-after-orphans",
+      prefix: [],
+      sessionId: "accepted-after-orphans",
+    });
+    database.db
+      .prepare("DELETE FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .run(facts.boundary.admission.logicalTurnId);
+    const retrySessionId = "retry-ready";
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: {
+        boundary: {
+          admission: {
+            ...facts.boundary.admission,
+            logicalTurnId: retrySessionId,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+          terminal: {
+            ...facts.boundary.terminal,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+        },
+        isHeartbeat: false,
+        messages: [],
+      },
+    });
+    for (let index = 0; index < 15; index += 1) {
+      const sessionId = `orphaned-admission-${index}`;
+      enqueueContextEngineTurnIntent({
+        admission: {
+          ...facts.boundary.admission,
+          logicalTurnId: sessionId,
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+        },
+        database,
+        engineId: "test",
+        isHeartbeat: false,
+      });
+    }
+    enqueueContextEngineTurnIntent({
+      admission: facts.boundary.admission,
+      database,
+      engineId: "test",
+      isHeartbeat: false,
+    });
+    const { commitTurn, lease } = createDurableLease();
+
+    await finalizeAcceptedContextEngineTurn({ facts, lease });
+
+    expect(commitTurn.mock.calls.map(([turn]) => turn.sessionId)).toEqual([
+      facts.sessionIdUsed,
+      retrySessionId,
+    ]);
+  });
+
   it.each([null, "missing", "metadata-0", "metadata-1", "terminal"])(
     "preserves the depth boundary for a broken ancestry ending at %s",
     async (parent) => {
@@ -316,14 +386,14 @@ describe("accepted context-engine turn finalization", () => {
   });
 
   it("advances only the admitted durable range and rejects stale admission facts", async () => {
-    const tempDir = tempDirs.make("openclaw-context-turn-attempt-");
+    const tempDir = sessionDirs.make();
     const target = {
       agentId: "main",
       sessionId: "accepted-turn",
       sessionKey: "agent:main:accepted-turn",
       storePath: path.join(tempDir, "sessions.json"),
     };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    await seedTurnSession(target);
     const prior = await appendTranscriptMessage(target, {
       message: { role: "assistant", content: "prior" },
       now: 1_000,

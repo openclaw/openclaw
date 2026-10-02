@@ -228,12 +228,8 @@ final class ComputerScreenActionExecutor {
     }
 
     private func peekabooClick(at point: CGPoint, action: OpenClawComputerAction) async throws {
-        let clickType: ClickType = switch action {
-        case .rightClick: .right
-        case .doubleClick: .double
-        default: .single
-        }
-        try await self.automation.click(target: .coordinates(point), clickType: clickType, snapshotId: nil)
+        try await self.automation.click(
+            target: .coordinates(point), clickType: action.peekabooClickType, snapshotId: nil)
     }
 
     func typeText(
@@ -274,7 +270,7 @@ final class ComputerScreenActionExecutor {
         try checkExecutionAllowed()
         if modifiers.isEmpty {
             try await self.automation.scroll(ScrollRequest(
-                direction: Self.scrollDirection(direction),
+                direction: direction.peekabooDirection,
                 amount: amount,
                 foreground: true))
         } else {
@@ -482,6 +478,12 @@ final class ComputerScreenActionExecutor {
     #endif
 
     private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw ComputerActionError.refused(
+                "Screen Recording permission required; relaunch without --no-activate and retry")
+        }
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
         let content = try await SCShareableContent.current
@@ -557,17 +559,6 @@ final class ComputerScreenActionExecutor {
             throw ComputerActionError.missingKeys
         }
         return keys
-    }
-
-    private static func scrollDirection(
-        _ direction: OpenClawComputerScrollDirection) -> PeekabooFoundation.ScrollDirection
-    {
-        switch direction {
-        case .up: .up
-        case .down: .down
-        case .left: .left
-        case .right: .right
-        }
     }
 
     // MARK: - Raw CoreGraphics primitives
@@ -737,6 +728,17 @@ final class ComputerScreenActionExecutor {
             event.flags = flags
         }
         event.post(tap: .cghidEventTap)
+    }
+}
+
+extension OpenClawComputerScrollDirection {
+    var peekabooDirection: PeekabooFoundation.ScrollDirection {
+        switch self {
+        case .up: .up
+        case .down: .down
+        case .left: .left
+        case .right: .right
+        }
     }
 }
 

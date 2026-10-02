@@ -80,15 +80,9 @@ describe("sender-local scroll intent", () => {
     state.requestUpdate?.();
     expect(state.chatFollowLocked).toBe(false);
   });
-  it("pauses following before a newly accepted remote input renders", () => {
-    const state = setup();
-    pending(state, "remote");
-    expect(state.chatFollowLocked).toBe(true);
-    expect(state.chatUserNearBottom).toBe(false);
-  });
   it("keeps following when this browser's spoken input is persisted", () => {
     const state = setup();
-    state.realtimeTalkConversation = [
+    state.realtimeTalkConversationState.entries = [
       {
         id: "rt-1",
         role: "user",
@@ -102,12 +96,6 @@ describe("sender-local scroll intent", () => {
     expect(state.chatFollowLocked).toBe(false);
     expect(state.chatUserNearBottom).toBe(true);
     state.chatMessages = [...state.chatMessages, userMessage("voice-remote", "voice:other-call:1")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(true);
-  });
-  it("does not infer local intent from the same authenticated sender profile", () => {
-    const state = setup();
-    state.chatMessages = [userMessage("another-browser")];
     state.requestUpdate?.();
     expect(state.chatFollowLocked).toBe(true);
   });
@@ -127,6 +115,7 @@ describe("sender-local scroll intent", () => {
     const state = setup();
     pending(state, "remote");
     expect(state.chatFollowLocked).toBe(true);
+    expect(state.chatUserNearBottom).toBe(false);
     // Policy after an explicit local return; custody retirement is not a new input.
     state.chatFollowLocked = false;
     state.chatUserNearBottom = true;

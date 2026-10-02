@@ -95,8 +95,8 @@ Run deferred confidence against the exact published beta with
 `package`, or the relevant QA/live group explicitly. Selected children must
 still finish and pass their existing policy; a deferred check is **not run**,
 never passed. Stable, full, soak-enabled, and focused validation retain their
-existing confidence coverage. `main`, alpha, and non-beta targets do not qualify
-for `npm-beta-v1`.
+existing confidence coverage. `main` and non-beta targets do not qualify for
+`npm-beta-v1`.
 
 For a regular final package on its matching release branch or tag, `all` with
 `release_profile=stable` records `coveragePolicy=npm-stable-v1` and uses CI's
@@ -155,7 +155,7 @@ an exhausted pool, and failed attempts do not count as successful proof. Exact
 candidate identity, credential isolation, and lease cleanup remain required.
 
 Package Acceptance Telegram E2E is automatically deferred for every beta-profile
-`all` run without soak, including beta-profile checks of `main` or alpha targets.
+`all` run without soak, including beta-profile checks of `main`.
 The effective `skip_package_telegram_e2e=true` is captured in the inputs and
 summary as **not run**. Soak-enabled runs and explicit `rerun_group=package`
 keep Telegram selected by default. The existing
@@ -163,11 +163,14 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Selected-test requirements are separate from explicit omissions. The reviewed exceptions are
-`-f telegram_waiver=2026.8.1-owner-approved` and
-`-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
-reviewed code change; a matching `<target-version>-owner-approved` string alone
-is not authorization. The value must name the validated target's actual
+Selected-test requirements are separate from explicit omissions. The reviewed
+Telegram-only exceptions are `2026.8.1-owner-approved` and
+`2026.9.1-owner-approved`. The reviewed Telegram and Matrix QA-live exceptions
+are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`, and
+`2026.9.8-owner-approved`. Pass the selected value with `-f telegram_waiver=<value>`.
+Any future exception requires a reviewed code change; a matching
+`<target-version>-owner-approved` string alone is not authorization. The value
+must name the validated target's actual
 `package.json` version, the sealed candidate version must match, and the profile
 must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
 Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs

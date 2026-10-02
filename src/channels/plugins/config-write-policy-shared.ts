@@ -94,26 +94,17 @@ export function authorizeConfigWriteShared<TChannelId extends string>(params: {
   if (params.target?.kind === "ambiguous") {
     return { allowed: false, reason: "ambiguous-target" };
   }
-  // Both the message origin and the target section can disable channel-initiated config writes.
-  if (
-    params.origin?.channelId &&
-    !resolveChannelConfigWritesShared({
-      cfg: params.cfg,
-      channelId: params.origin.channelId,
-      accountId: params.origin.accountId,
-    })
-  ) {
-    return {
-      allowed: false,
-      reason: "origin-disabled",
-      blockedScope: { kind: "origin", scope: params.origin },
-    };
-  }
   const target = params.target;
-  if (target && target.kind !== "global") {
-    const scope: ConfigWriteScopeLike<TChannelId> = target.scope;
+  // Check the origin first so denial reporting preserves the initiating boundary.
+  const scopes: Array<
+    readonly ["origin" | "target", ConfigWriteScopeLike<TChannelId> | undefined]
+  > = [
+    ["origin", params.origin],
+    ["target", target && target.kind !== "global" ? target.scope : undefined],
+  ];
+  for (const [kind, scope] of scopes) {
     if (
-      scope.channelId &&
+      scope?.channelId &&
       !resolveChannelConfigWritesShared({
         cfg: params.cfg,
         channelId: scope.channelId,
@@ -122,8 +113,8 @@ export function authorizeConfigWriteShared<TChannelId extends string>(params: {
     ) {
       return {
         allowed: false,
-        reason: "target-disabled",
-        blockedScope: { kind: "target", scope },
+        reason: kind === "origin" ? "origin-disabled" : "target-disabled",
+        blockedScope: { kind, scope },
       };
     }
   }
@@ -174,7 +165,7 @@ export function resolveConfigWriteTargetFromPathShared<TChannelId extends string
   }
   return resolveExplicitConfigWriteTargetShared({
     channelId,
-    accountId: normalizeAccountId(params.path[3]),
+    accountId: params.path[3],
   });
 }
 

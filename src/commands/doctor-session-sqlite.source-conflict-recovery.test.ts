@@ -7,7 +7,6 @@ import {
   loadExactSessionEntry,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.sqlite-lifecycle.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
 import {
   appendTranscriptEvent,
@@ -21,7 +20,10 @@ import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migr
 import { createPluginDoctorStateMigrationContext } from "../infra/state-migrations.plugin-doctor-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { countBlockingSessionSqliteIssues } from "./doctor-session-sqlite-types.js";
-import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
+import {
+  editAndDeleteImportedSessions,
+  seedDeferredPluginSessionSource,
+} from "./doctor-session-sqlite.deferred-plugin.test-support.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -495,7 +497,9 @@ describe("retained plugin session source recovery", () => {
           fs.writeFileSync(storePath, JSON.stringify(entries));
         }
         await runDoctorSessionSqlite({ ...options, mode: "import" });
-        if (!metadataConflict) {
+        if (kind === "conflicting-transcript") {
+          await editAndDeleteImportedSessions(scope, "current");
+        } else if (!metadataConflict) {
           await upsertSessionEntryCore(
             { ...scope, sessionKey: "agent:main:kept" },
             { label: "current" },
@@ -505,14 +509,6 @@ describe("retained plugin session source recovery", () => {
           kind === "conflicting-transcript" || kind === "truncated-transcript"
             ? path.join(path.dirname(storePath), "legacy-kept.jsonl")
             : storePath;
-        if (kind === "conflicting-transcript") {
-          await deleteSessionEntryLifecycle({
-            ...scope,
-            target: { canonicalKey: "agent:main:deleted", storeKeys: ["agent:main:deleted"] },
-            archiveTranscript: false,
-            deleteTranscriptWithoutArchive: true,
-          });
-        }
         const sqliteEntries = kind === "conflicting-transcript" ? 1 : 2;
         const changedMetadata = JSON.parse(fs.readFileSync(storePath, "utf8"));
         if (kind === "conflicting-metadata") {

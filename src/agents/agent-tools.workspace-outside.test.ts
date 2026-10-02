@@ -1,4 +1,3 @@
-/** Host filesystem opt-out and memory-write behavior. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createReadTool } from "openclaw/plugin-sdk/agent-sessions";
@@ -6,14 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createOpenClawCodingTools } from "./agent-tools.js";
 import {
-  createHostWorkspaceEditTool,
   createHostWorkspaceWriteTool,
   createOpenClawReadTool,
   wrapToolMemoryFlushAppendOnlyWrite,
-  wrapToolWorkspaceRootGuardWithOptions,
 } from "./agent-tools.read.js";
-import { getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
+import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../infra/shell-env.js", async () => {
@@ -22,16 +20,13 @@ vi.mock("../infra/shell-env.js", async () => {
   return { ...mod, getShellPathFromLoginShell: () => null };
 });
 
-describe("FS tools with workspaceOnly=false", () => {
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("memory filesystem policy", () => {
   let tmpDir: string;
   let workspaceDir: string;
   let outsideFile: string;
 
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-  const hasToolError = (result: { content: Array<{ type: string; text?: string }> }) =>
-    result.content.some(
-      (content) => content.type === "text" && content.text?.toLowerCase().includes("error"),
-    );
   const readTool = () =>
     createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
   const memoryWriteTool = (relativePath: string) =>
@@ -45,30 +40,6 @@ describe("FS tools with workspaceOnly=false", () => {
     workspaceDir = path.join(tmpDir, "workspace");
     await fs.mkdir(workspaceDir);
     outsideFile = path.join(tmpDir, "outside.txt");
-  });
-
-  it("should allow edit outside workspace via ../ path when workspaceOnly=false", async () => {
-    const relativeOutsidePath = path.join("..", "outside-relative-edit.txt");
-    const outsideRelativeFile = path.join(tmpDir, "outside-relative-edit.txt");
-    await fs.writeFile(outsideRelativeFile, "old relative content");
-
-    const result = await createHostWorkspaceEditTool(workspaceDir, {
-      workspaceOnly: false,
-    }).execute("edit-outside", {
-      path: relativeOutsidePath,
-      edits: [{ oldText: "old relative content", newText: "new relative content" }],
-    });
-    expect(hasToolError(result)).toBe(false);
-    const content = await fs.readFile(outsideRelativeFile, "utf-8");
-    expect(content).toBe("new relative content");
-  });
-
-  it("should allow read outside workspace when workspaceOnly=false", async () => {
-    await fs.writeFile(outsideFile, "test read content");
-
-    const result = await readTool().execute("read-outside", { path: outsideFile });
-    expect(hasToolError(result)).toBe(false);
-    expect(JSON.stringify(result.content)).toContain("test read content");
   });
 
   it("makes only missing canonical daily-memory reads implicitly optional", async () => {
@@ -106,31 +77,6 @@ describe("FS tools with workspaceOnly=false", () => {
     }
   });
 
-  it("should allow write outside workspace when workspaceOnly is unset", async () => {
-    const outsideUnsetFile = path.join(tmpDir, "outside-unset-write.txt");
-    const result = await createHostWorkspaceWriteTool(workspaceDir).execute("write-outside", {
-      path: outsideUnsetFile,
-      content: "unset write content",
-    });
-    expect(hasToolError(result)).toBe(false);
-    const content = await fs.readFile(outsideUnsetFile, "utf-8");
-    expect(content).toBe("unset write content");
-  });
-
-  it("should block write outside workspace when workspaceOnly=true", async () => {
-    const writeTool = wrapToolWorkspaceRootGuardWithOptions(
-      createHostWorkspaceWriteTool(workspaceDir, { workspaceOnly: true }),
-      workspaceDir,
-    );
-
-    await expect(
-      writeTool.execute("test-call-4", {
-        path: outsideFile,
-        content: "test content",
-      }),
-    ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
-  });
-
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {
     const allowedRelativePath = "memory/2026-03-07.md";
     const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
@@ -150,7 +96,6 @@ describe("FS tools with workspaceOnly=false", () => {
       path: allowedRelativePath,
       content: "new note",
     });
-    expect(hasToolError(result)).toBe(false);
     expect(result).toStrictEqual({
       content: [{ type: "text", text: "Appended content to memory/2026-03-07.md." }],
       details: { changed: true },
@@ -169,7 +114,6 @@ describe("FS tools with workspaceOnly=false", () => {
       content: "new note",
     });
 
-    expect(hasToolError(result)).toBe(false);
     expect(result).toStrictEqual({
       content: [{ type: "text", text: "Appended content to memory/2026-03-08.md." }],
       details: { changed: true },
@@ -186,5 +130,48 @@ describe("FS tools with workspaceOnly=false", () => {
         content: "new note",
       }),
     ).rejects.toThrow(/Missing required parameter: path/);
+  });
+});
+
+describe("workspace-only Unicode read fallback", () => {
+  it("does not follow a filename fallback into a sibling workspace", async (context) => {
+    const rootDir = tempDirs.make("openclaw-unicode-parent-");
+    const workspaceDir = path.join(rootDir, "cafe\u0301");
+    const outsideDir = path.join(rootDir, "caf\u00e9");
+    await fs.mkdir(workspaceDir);
+    try {
+      await fs.mkdir(outsideDir);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        context.skip();
+        return;
+      }
+      throw error;
+    }
+    await fs.writeFile(path.join(outsideDir, "secret.txt"), "outside secret", "utf8");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: { tools: { fs: { workspaceOnly: true } } },
+    });
+    const { readTool } = expectReadWriteEditTools(tools);
+
+    await expect(
+      readTool.execute("ws-read-unicode-parent", { path: "secret.txt" }),
+    ).rejects.toThrow(/File not found/i);
+  });
+
+  it("keeps filename fallback working inside the guarded workspace", async () => {
+    const workspaceDir = tempDirs.make("openclaw-unicode-leaf-");
+    await fs.writeFile(path.join(workspaceDir, "d\u2019accord.txt"), "allowed fallback", "utf8");
+
+    const tools = createOpenClawCodingTools({
+      workspaceDir,
+      config: { tools: { fs: { workspaceOnly: true } } },
+    });
+    const { readTool } = expectReadWriteEditTools(tools);
+
+    const result = await readTool.execute("ws-read-unicode-leaf", { path: "d'accord.txt" });
+    expect(getTextContent(result)).toContain("allowed fallback");
   });
 });

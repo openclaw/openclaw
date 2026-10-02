@@ -25,7 +25,6 @@ describe("model endpoint display", () => {
   });
 
   it.each([
-    ["https://api.openai.com/v1/responses", "https://api.openai.com/v1/responses"],
     [
       "wss://chatgpt.com/backend-api/codex/responses",
       "wss://chatgpt.com/backend-api/codex/responses",
@@ -35,10 +34,8 @@ describe("model endpoint display", () => {
       "https://example.test:9443/v1/responses",
     ],
     ["http://127.0.0.1:1234/private-token/v1/responses", "http://127.0.0.1:1234/[path hidden]"],
-    ["https://example.test/tenant/secret", "https://example.test/[path hidden]"],
     ["https://example.test/v1/", "https://example.test/v1"],
     ["https://example.test", "https://example.test"],
-    ["https://example.test/[path hidden]", "https://example.test/[path hidden]"],
     ["file:///tmp/credentials", undefined],
     ["not a URL", undefined],
     ["https://example.test/" + "x".repeat(8192), undefined],

@@ -20,7 +20,7 @@ const fixture = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
   resolveStorePath: () => `${process.env.OPENCLAW_STATE_DIR}/agents/main/sessions/sessions.json`,
-  upsertSessionEntry: async (scope: {
+  patchSessionEntry: async (scope: {
     env?: NodeJS.ProcessEnv;
     storePath: string;
     sessionKey: string;

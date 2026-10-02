@@ -1,13 +1,37 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createConfigResolutionFacts,
+  setConfigResolutionFacts,
+} from "../config/resolution-facts.js";
+import type { McpServerConfig } from "../config/types.mcp.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as bundleMcp from "./bundle-mcp.js";
 import { computeDeclaredSurfaceHash } from "./capability-summary.js";
 import {
   emptyMetadataSnapshot,
   hostedFeedDiffsEntry,
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
+import { bindPluginMetadataSnapshotCache, createPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 
-const mocks = vi.hoisted(() => ({ metadata: vi.fn(), officialCatalog: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  metadata: vi.fn(),
+  officialCatalog: vi.fn(),
+  mcpAuth: vi.fn(),
+  remoteDetail: vi.fn(),
+}));
+
+vi.mock("../infra/clawhub-plugin-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clawhub-plugin-catalog.js")>()),
+  fetchClawHubPluginDetail: (...args: unknown[]) => mocks.remoteDetail(...args),
+}));
+
+vi.mock("../agents/mcp-oauth.js", () => ({
+  readMcpOAuthCredentialsStatuses: (...args: unknown[]) => mocks.mcpAuth(...args),
+}));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
@@ -24,45 +48,343 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { inspectManagedPlugin } = await import("./management-service.js");
 
 describe("managed plugin inspection", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
     clearManagedPluginCatalogCache();
     mocks.metadata.mockReset();
     mocks.officialCatalog.mockReset();
     mocks.officialCatalog.mockResolvedValue({ source: "hosted", entries: [] });
+    mocks.mcpAuth.mockReset();
+    mocks.remoteDetail.mockReset();
   });
 
-  it("inspects bundled plugin metadata with its effective default hook grants", async () => {
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
+  it.each([true, false])(
+    "inspects an arbitrary selected ClawHub release with manifest available: %s",
+    async (manifestAvailable) => {
+      // A runtime ID collision is not a canonical ClawHub package match.
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true, id: "community-plugin" }));
+      mocks.remoteDetail.mockResolvedValue({
+        packageName: "community/plugin",
+        displayName: "Community Plugin",
+        family: "code-plugin",
+        runtimeId: "community-plugin",
+        isOfficial: false,
+        categories: [],
+        topics: [],
+        configFields: [],
+        mcpServers: manifestAvailable ? ["docs"] : [],
+        skills: manifestAvailable ? [{ name: "research" }] : [],
+        ...(manifestAvailable
+          ? { contracts: { tools: ["research_lookup"] }, providers: ["search"] }
+          : {}),
+        versions: [],
+        selectedRelease: { version: "1.2.3" },
+        tags: { latest: "2.0.0" },
+        downloadability: { status: "downloadable" },
+        metadata: {
+          manifest: manifestAvailable ? "available" : "missing",
+          readme: "available",
+          security: "missing",
+        },
+        readme: "# Community Plugin",
+        trust: { disposition: "review-required", reasons: ["Unverified publisher"] },
+      });
+      const inspection = await inspectManagedPlugin({
+        config: {
+          plugins: {
+            entries: { "community-plugin": { hooks: { allowConversationAccess: true } } },
+          },
+        },
+        env: {},
+        clawhub: { packageName: "community/plugin", version: "1.2.3" },
+      });
+
+      expect(inspection).toMatchObject({
+        plugin: { name: "Community Plugin", version: "1.2.3", installed: false, enabled: false },
+        source: { kind: "clawhub", packageName: "community/plugin" },
+        declaredSurfaceStatus: manifestAvailable ? "partial" : "unavailable",
+        declared: {
+          tools: manifestAvailable ? ["research_lookup"] : [],
+          mcpServers: manifestAvailable ? ["docs"] : [],
+          skills: manifestAvailable ? ["research"] : [],
+        },
+        grants: { hooks: { allowConversationAccess: { effective: false } } },
+        trust: { disposition: "review-required" },
+        catalog: {
+          detail: {
+            packageName: "community/plugin",
+            readme: "# Community Plugin",
+            selectedRelease: { version: "1.2.3" },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBeUndefined();
+      expect(inspection.overview?.capabilities === undefined).toBe(!manifestAvailable);
+    },
+  );
+
+  it.each(["community-plugin", undefined, "another-plugin"])(
+    "joins installed grants only for the selected runtime identity: %s",
+    async (runtimeId) => {
+      mocks.metadata.mockReturnValue(
+        metadataSnapshot({
+          enabled: false,
+          id: "community-plugin",
+          origin: "global",
+          installRecord: {
+            source: "clawhub",
+            clawhubPackage: "community/plugin",
+            clawhubUrl: "https://clawhub.ai",
+            installPath: "/tmp/community-plugin",
+          },
+        }),
+      );
+      mocks.remoteDetail.mockResolvedValue({
+        packageName: "community/plugin",
+        runtimeId,
+        displayName: "Community Plugin",
+        family: "code-plugin",
+        isOfficial: false,
+        categories: [],
+        topics: [],
+        configFields: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+        selectedRelease: { version: "2.0.0" },
+        tags: {},
+        downloadability: { status: "downloadable" },
+        metadata: { manifest: "available", readme: "missing", security: "missing" },
+        contracts: { tools: ["new_tool"] },
+      });
+      const inspection = await inspectManagedPlugin({
+        config: {
+          plugins: {
+            entries: { "community-plugin": { hooks: { allowConversationAccess: true } } },
+          },
+        },
+        env: {},
+        clawhub: { packageName: "community/plugin", version: "2.0.0" },
+      });
+
+      expect(inspection).toMatchObject({
+        plugin: { id: "community-plugin", installed: true, version: "2.0.0" },
+        declared: { tools: ["new_tool"] },
+        grants: {
+          hooks: {
+            allowConversationAccess:
+              runtimeId === "community-plugin"
+                ? { effective: true, configured: true }
+                : { effective: false },
+          },
+        },
+      });
+      expect(inspection.reviewToken).toBeUndefined();
+    },
+  );
+
+  it("projects only eligible operator MCP connections without credential details", async () => {
+    const snapshot = metadataSnapshot({ enabled: true });
+    const states = [
+      "unauthenticated",
+      "pending-authorization",
+      "requires-authorization",
+      "authorized",
+    ] as const;
+    const servers = Object.fromEntries(
+      states.map((state, i) => [
+        `connection-${i}`,
+        {
+          transport: "streamable-http" as const,
+          url: `https://example.test/${state}`,
+          auth: "oauth" as const,
+        },
+      ]),
+    );
+    const base: McpServerConfig = {
+      transport: "streamable-http",
+      url: "https://example.test/mcp",
+      auth: "oauth",
+    };
+    const excluded: Record<string, McpServerConfig> = {
+      disabled: { ...base, enabled: false },
+      command: { ...base, command: "node" },
+      unauthenticated: { ...base, auth: undefined },
+      requester: { ...base, oauth: { identity: "per-requester" } },
+      profile: { ...base, oauth: { authProfileId: "existing-account" } },
+      unrelated: { ...base, url: "https://other.example.test/mcp" },
+    };
+    snapshot.plugins[0]!.mcpServers = {
+      ...servers,
+      ...Object.fromEntries(Object.keys(excluded).map((name) => [name, base])),
+    };
+    mocks.metadata.mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    });
+    mocks.mcpAuth.mockResolvedValue(states.map((state) => ({ state, expiresAt: 100 })));
 
     const inspection = await inspectManagedPlugin({
-      config: { plugins: { entries: { workboard: { enabled: true } } } },
-      env: {},
+      config: {
+        plugins: { entries: { workboard: { enabled: true } } },
+        mcp: { servers: { ...servers, ...excluded } },
+      },
       pluginId: "workboard",
+      env: {},
     });
 
-    expect(inspection).toMatchObject({
-      ok: true,
-      plugin: {
-        id: "workboard",
-        name: "Workboard",
-        description: "Coordinate agent work in a shared board.",
-        origin: "bundled",
-        installed: true,
-        enabled: true,
-      },
-      source: { kind: "bundled" },
-      reviewToken: expect.stringMatching(/^[a-f\d]{64}$/),
-      grants: {
-        hooks: {
-          allowPromptInjection: { effective: true },
-          allowConversationAccess: { effective: true },
-        },
-      },
-    });
-    expect(inspection.reviewToken).toBe(computeDeclaredSurfaceHash(inspection.declared));
-    expect(inspection).not.toHaveProperty("trust");
+    expect(inspection.mcpAuth).toEqual(
+      states.map((state, i) => ({ serverName: `connection-${i}`, state })),
+    );
+    expect(mocks.mcpAuth).toHaveBeenCalledWith(
+      states.map((state, i) =>
+        expect.objectContaining({
+          serverName: `connection-${i}`,
+          serverUrl: `https://example.test/${state}`,
+          principal: "operator",
+        }),
+      ),
+    );
   });
+
+  it("reuses MCP ownership until config or metadata changes while reading OAuth state live", async () => {
+    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    const other = { ...snapshot.plugins[0]!, id: "other" };
+    const metadata = {
+      ...snapshot,
+      manifestRegistry: { plugins: [...snapshot.plugins, other], diagnostics: [] },
+    };
+    bindPluginMetadataSnapshotCache(metadata, createPluginCache());
+    mocks.metadata.mockReturnValue(metadata);
+    const config: OpenClawConfig = {
+      plugins: { entries: { workboard: { enabled: true }, other: { enabled: false } } },
+      mcp: { servers: { docs: server } },
+    };
+    const inspect = (currentConfig = config) =>
+      inspectManagedPlugin({ config: currentConfig, pluginId: "workboard", env: {} });
+    const load = vi.spyOn(bundleMcp, "loadEnabledBundleMcpConfig");
+    mocks.mcpAuth.mockResolvedValue([{ state: "unauthenticated" }]);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "unauthenticated" }]);
+    mocks.mcpAuth.mockResolvedValue([{ state: "authorized" }]);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledOnce();
+    expect(mocks.mcpAuth).toHaveBeenCalledTimes(2);
+
+    const shadowedConfig = {
+      ...config,
+      plugins: { entries: { workboard: { enabled: true }, other: { enabled: true } } },
+    };
+    expect((await inspect(shadowedConfig)).mcpAuth).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledTimes(2);
+
+    const replacement = {
+      ...metadata,
+      manifestRegistry: { plugins: [other], diagnostics: [] },
+    };
+    bindPluginMetadataSnapshotCache(replacement, createPluginCache());
+    mocks.metadata.mockReturnValue(replacement);
+    expect((await inspect(shadowedConfig)).mcpAuth).toBeUndefined();
+    expect(load).toHaveBeenCalledTimes(3);
+    mocks.metadata.mockReturnValue(metadata);
+    expect((await inspect()).mcpAuth).toEqual([{ serverName: "docs", state: "authorized" }]);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it("omits resolver-owned requester credentials from operator plugin inspection", async () => {
+    const server = { url: "https://example.test/mcp", auth: "oauth" as const };
+    const snapshot = metadataSnapshot({ enabled: true });
+    snapshot.plugins[0]!.mcpServers = { docs: server };
+    mocks.metadata.mockReturnValue({
+      ...snapshot,
+      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.mcpServerConnectionResolvers.push({
+      pluginId: "workboard",
+      source: "/plugins/workboard/index.ts",
+      resolver: { serverName: "docs", resolve: async () => null },
+    });
+
+    const inspection = await withPluginRuntimeRegistryScope(registry, () =>
+      inspectManagedPlugin({
+        config: {
+          plugins: { entries: { workboard: { enabled: true } } },
+          mcp: { servers: { docs: server } },
+        },
+        pluginId: "workboard",
+        env: {},
+      }),
+    );
+
+    expect(inspection.mcpAuth).toBeUndefined();
+    expect(mocks.mcpAuth).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { value: undefined, env: {}, status: "missing" },
+    { value: "private-literal", env: {}, status: "configured" },
+    { value: undefined, env: { ALTERNATIVE_KEY: "private-env" }, status: "configured" },
+    {
+      value: { source: "file", provider: "vault", id: "/private/key" },
+      env: {},
+      status: "configured",
+    },
+    { value: { invalid: true }, env: {}, status: "invalid" },
+    { value: "${WORKBOARD_KEY}", env: {}, status: "unresolved", unresolved: true },
+  ])(
+    "projects only public credential status $status",
+    async ({ value, env, status, unresolved }) => {
+      mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: true }));
+      const registry = createEmptyPluginRegistry();
+      registry.webSearchProviders.push({
+        pluginId: "workboard",
+        source: "/plugins/workboard/index.ts",
+        provider: {
+          id: "workboard",
+          label: "Workboard",
+          hint: "Search",
+          placeholder: "",
+          signupUrl: "",
+          credentialPath: "plugins.entries.workboard.config.apiKey",
+          credentialLabel: "Workboard key",
+          envVars: ["WORKBOARD_KEY", "ALTERNATIVE_KEY"],
+          getCredentialValue: () => undefined,
+          setCredentialValue: () => {},
+          createTool: () => null,
+        },
+      });
+      const config: OpenClawConfig = {
+        plugins: { entries: { workboard: { enabled: true, config: { apiKey: value } } } },
+      };
+      if (unresolved) {
+        const path = "plugins.entries.workboard.config.apiKey";
+        setConfigResolutionFacts(
+          config,
+          createConfigResolutionFacts(
+            [{ configPath: path, varName: "WORKBOARD_KEY" }],
+            new Map([[path, "WORKBOARD_KEY"]]),
+          ),
+        );
+      }
+      const inspection = await withPluginRuntimeRegistryScope(registry, () =>
+        inspectManagedPlugin({ config, pluginId: "workboard", env }),
+      );
+      expect(inspection.credentials).toEqual([
+        {
+          path: ["plugins", "entries", "workboard", "config", "apiKey"],
+          label: "Workboard key",
+          envVars: ["WORKBOARD_KEY", "ALTERNATIVE_KEY"],
+          status,
+        },
+      ]);
+    },
+  );
 
   it("inspects tracked external provenance, pinned integrity, operator grants, and trust", async () => {
     mocks.metadata.mockReturnValue(
@@ -162,35 +484,33 @@ describe("managed plugin inspection", () => {
     });
   });
 
-  it.each(["spec", "resolvedSpec"] as const)(
-    "redacts credentials from the persisted %s without changing the install record",
-    async (field) => {
-      const url = new URL("https://example.invalid/plugins/demo.git");
-      url.username = "fixture-user";
-      url.password = "fixture-password";
-      url.searchParams.set("token", "fixture-token");
-      url.searchParams.set("ref", "stable");
-      const spec = `git:${url.href}`;
-      const metadata = metadataSnapshot({
-        id: "community-plugin",
-        origin: "global",
-        enabled: false,
-        installRecord: { source: "git", installPath: "/tmp/community-plugin", [field]: spec },
-      });
-      mocks.metadata.mockReturnValue(metadata);
+  it("redacts credentials from the persisted resolved spec without changing the install record", async () => {
+    const field = "resolvedSpec";
+    const url = new URL("https://example.invalid/plugins/demo.git");
+    url.username = "fixture-user";
+    url.password = "fixture-password";
+    url.searchParams.set("token", "fixture-token");
+    url.searchParams.set("ref", "stable");
+    const spec = `git:${url.href}`;
+    const metadata = metadataSnapshot({
+      id: "community-plugin",
+      origin: "global",
+      enabled: false,
+      installRecord: { source: "git", installPath: "/tmp/community-plugin", [field]: spec },
+    });
+    mocks.metadata.mockReturnValue(metadata);
 
-      const inspection = await inspectManagedPlugin({
-        config: {},
-        env: {},
-        pluginId: "community-plugin",
-      });
+    const inspection = await inspectManagedPlugin({
+      config: {},
+      env: {},
+      pluginId: "community-plugin",
+    });
 
-      expect(inspection.source?.spec).toBe(
-        "git:https://***:***@example.invalid/plugins/demo.git?token=***&ref=stable",
-      );
-      expect(metadata.index.installRecords["community-plugin"]?.[field]).toBe(spec);
-    },
-  );
+    expect(inspection.source?.spec).toBe(
+      "git:https://***:***@example.invalid/plugins/demo.git?token=***&ref=stable",
+    );
+    expect(metadata.index.installRecords["community-plugin"]?.[field]).toBe(spec);
+  });
 
   it.each([false, true])(
     "inspects the pinned catalog candidate with npm available: %s",

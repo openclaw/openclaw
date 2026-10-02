@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
+import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   type PanelHostedTab,
@@ -24,6 +25,7 @@ function nextFilesPanelId(): string {
 /** Projection of the workspace controller; tab order and selection have no second store here. */
 class ChatFilesPanel extends OpenClawLightDomElement {
   private readonly contentId = nextFilesPanelId();
+  private readonly appUnmount = new McpAppUnmountGate(this);
   private hostedTabsChangeKey = "";
   @property({ attribute: false }) previews: SessionWorkspacePreview[] = [];
   @property({ attribute: false }) activeId: string | null = null;
@@ -40,7 +42,10 @@ class ChatFilesPanel extends OpenClawLightDomElement {
       id,
       label,
       title: content.kind === "file" ? content.path : label,
-      icon: renderAttachmentFileIcon({ filename: label, mode: "preview-with-favicon" }),
+      icon:
+        content.kind === "mcp-app"
+          ? icons.puzzle
+          : renderAttachmentFileIcon({ filename: label, mode: "preview-with-favicon" }),
       className: content.kind === "loading" ? "is-connecting" : undefined,
     }));
     return this.activeId === null && tabs.length
@@ -89,50 +94,68 @@ class ChatFilesPanel extends OpenClawLightDomElement {
   }
 
   override render() {
-    return html`
-      ${
-        this.tabsInHeader
-          ? nothing
-          : html`<header class="rail-header side-panel__header">
-              <div class="side-panel__header-tabs">
-                ${renderPanelTabStrip({
-                  tabs: this.hostedTabs.map((tab) => ({
-                    ...tab,
-                    domId: `${this.contentId}-tab-${tab.id}`,
-                    closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
-                  })),
-                  activeId: this.activeHostedTabId,
-                  ariaControls: this.contentId,
-                  onSelect: (id) => this.selectHostedTab(id),
-                  onClose: (id) => this.closeHostedTab(id),
-                  onNew: () => this.onSelect(null),
-                  newLabel: t("chat.sidePanel.files"),
-                  newControl: this.hostedActions,
-                })}
+    const appKeys = new Set(
+      this.previews
+        .filter((preview) => preview.content.kind === "mcp-app")
+        .map((preview) => preview.id),
+    );
+    return this.appUnmount.render(
+      JSON.stringify([...appKeys]),
+      () => html`
+        ${
+          this.tabsInHeader
+            ? nothing
+            : html`<header class="rail-header side-panel__header">
+                <div class="side-panel__header-tabs">
+                  ${renderPanelTabStrip({
+                    tabs: this.hostedTabs.map((tab) => ({
+                      ...tab,
+                      domId: `${this.contentId}-tab-${tab.id}`,
+                      closeLabel: `${t("browser.closeTab")}: ${tab.label}`,
+                    })),
+                    activeId: this.activeHostedTabId,
+                    ariaControls: this.contentId,
+                    onSelect: (id) => this.selectHostedTab(id),
+                    onClose: (id) => this.closeHostedTab(id),
+                    onNew: () => this.onSelect(null),
+                    newLabel: t("chat.sidePanel.files"),
+                    newControl: this.hostedActions,
+                  })}
+                </div>
+              </header>`
+        }
+        <div id=${this.contentId} class="chat-files-panel__content">
+          <div class="chat-files-panel__page" ?hidden=${this.activeId !== null}>
+            ${this.browser}
+          </div>
+          ${repeat(
+            this.previews,
+            (preview) => preview.id,
+            (preview) => html`
+              <div
+                class="chat-files-panel__page"
+                data-app-tab-id=${preview.content.kind === "mcp-app" ? preview.id : nothing}
+                ?hidden=${this.activeId !== preview.id}
+              >
+                ${
+                  preview.content.kind === "loading"
+                    ? renderPanelLoadingSkeleton("files", t("common.loading"))
+                    : preview.content.kind === "unavailable"
+                      ? html`<div class="callout danger" role="alert">
+                          ${preview.content.message}
+                        </div>`
+                      : this.renderDetail?.(preview.content)
+                }
               </div>
-            </header>`
-      }
-      <div id=${this.contentId} class="chat-files-panel__content">
-        <div class="chat-files-panel__page" ?hidden=${this.activeId !== null}>${this.browser}</div>
-        ${repeat(
-          this.previews,
-          (preview) => preview.id,
-          (preview) => html`
-            <div class="chat-files-panel__page" ?hidden=${this.activeId !== preview.id}>
-              ${
-                preview.content.kind === "loading"
-                  ? renderPanelLoadingSkeleton("files", t("common.loading"))
-                  : preview.content.kind === "unavailable"
-                    ? html`<div class="callout danger" role="alert">
-                        ${preview.content.message}
-                      </div>`
-                    : this.renderDetail?.(preview.content)
-              }
-            </div>
-          `,
-        )}
-      </div>
-    `;
+            `,
+          )}
+        </div>
+      `,
+      () =>
+        [...this.querySelectorAll<HTMLElement>("[data-app-tab-id]")].filter(
+          (element) => !appKeys.has(element.dataset.appTabId ?? ""),
+        ),
+    );
   }
 }
 

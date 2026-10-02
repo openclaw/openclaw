@@ -22,11 +22,6 @@ enum QuickChatPasteLogic {
               })
         else { return nil }
 
-        let lastConversationalIndex = messages.indices.reversed().first(where: {
-            let role = messages[$0].role.lowercased()
-            return role == "user" || role == "assistant"
-        })
-        guard lastConversationalIndex == assistantIndex else { return nil }
         let text = ChatMessageVisibleText.visibleText(in: messages[assistantIndex])
         return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : text
     }

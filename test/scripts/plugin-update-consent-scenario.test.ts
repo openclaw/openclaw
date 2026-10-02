@@ -61,6 +61,7 @@ let enabled: boolean;
 let available: number;
 let installed: number;
 let record: Record<string, unknown>;
+let timeoutExit: number | undefined;
 let mutateDenial: ((result: Denial, repair: boolean, child: FixtureChild) => void) | undefined;
 const packages = new Map<number, { code: string; integrity: string }>();
 const coreVersions = new Map<string, string>();
@@ -190,6 +191,8 @@ beforeEach(() => {
   packages.clear();
   coreVersions.clear();
   mutateDenial = undefined;
+  timeoutExit = undefined;
+  vi.stubEnv("OPENCLAW_E2E_COMMAND_TIMEOUT", "");
   available = 1;
   installed = 0;
   enabled = true;
@@ -243,7 +246,7 @@ beforeEach(() => {
     return filename;
   });
   adapters.spawn.mockImplementation(
-    (command: string, args: string[], options: { stdio: unknown[] }) => {
+    (command: string, args: string[], options: { stdio: unknown[]; env: NodeJS.ProcessEnv }) => {
       const child = new FixtureChild();
       if (
         command === process.execPath &&
@@ -262,7 +265,17 @@ beforeEach(() => {
       expect(command).toBe("bash");
       const entryIndex = args.indexOf(entry);
       expect(entryIndex).toBeGreaterThan(0);
-      const output = cliReply(args.slice(entryIndex + 1), child);
+      const cliArgs = args.slice(entryIndex + 1);
+      if (timeoutExit && cliArgs[0] === "update" && cliArgs.includes("--tag")) {
+        child.observation.code = timeoutExit;
+        const stderr = options.stdio[2];
+        if (typeof stderr !== "number") {
+          throw new Error("expected scenario-owned stderr descriptor");
+        }
+        fs.writeSync(stderr, "package replacement still running");
+        return child;
+      }
+      const output = cliReply(cliArgs, child);
       const descriptor = options.stdio[1];
       if (typeof descriptor !== "number") {
         throw new Error("expected scenario-owned stdout descriptor");
@@ -287,6 +300,26 @@ describe("installed-CLI consent scenario report contract", () => {
     expect(installed).toBe(3);
     expect(fs.existsSync(path.join(installPath, "index.js"))).toBe(true);
   });
+
+  it.each([124, 137])(
+    "reports a core update timeout (exit %s) with retained diagnostics",
+    async (code) => {
+      timeoutExit = code;
+      await expect(runConsentScenario(entry, coreTarball)).rejects.toThrow(
+        /update-denied timed out after 900s .*ledger: .*runs\.json\n\npackage replacement still running/,
+      );
+      const scenarioRoot = roots.find((root) =>
+        path.basename(root).startsWith("openclaw-update-consent-"),
+      );
+      if (!scenarioRoot) {
+        throw new Error("missing scenario evidence root");
+      }
+      const runs = JSON.parse(fs.readFileSync(path.join(scenarioRoot, "runs.json"), "utf8"));
+      expect(runs.at(-1)).toMatchObject({ label: "update-denied", code });
+      const updateSpawn = adapters.spawn.mock.calls.find(([, args]) => args.includes("--tag"));
+      expect(updateSpawn?.[2].env.OPENCLAW_E2E_COMMAND_TIMEOUT).toBe("900s");
+    },
+  );
 
   it("retains plugin consent proof when a frozen target predates core update consent", async () => {
     await expect(

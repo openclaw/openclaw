@@ -19,6 +19,7 @@
     "**/*.test-compat.d.ts",
     "src/plugin-sdk/control-ui.ts",
     "src/plugin-sdk/control-ui-components.ts",
+    "src/plugin-sdk/control-ui-session-link.ts",
     "test/**"
   ]
 }

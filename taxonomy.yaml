@@ -11600,19 +11600,19 @@ surfaces:
             description: "Covers typed providerOptions across video generation request normalization before provider execution: `generate`, `imageToVideo`, and `videoToVideo` modes, reference media typing and roles, and related video generation modes behavior."
           - name: queue-backed jobs
             coverageIds: [media-generation.queue-backed-jobs]
-            description: "Covers queue-backed jobs across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
+            description: "Covers queue-backed jobs across provider integration and async polling for video generation after request normalization: OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: polling/timeout handling
             coverageIds: [media-generation.polling-timeout-handling]
-            description: "Covers polling/timeout handling across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
+            description: "Covers polling/timeout handling across provider integration and async polling for video generation after request normalization: OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: Hosted URL download
             coverageIds: [media-generation.hosted-url-download]
-            description: "Covers hosted URL download across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
+            description: "Covers hosted URL download across provider integration and async polling for video generation after request normalization: OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: provider skip explanations
             coverageIds: [media-generation.provider-skip-explanations]
-            description: "Covers provider skip explanations across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
+            description: "Covers provider skip explanations across provider integration and async polling for video generation after request normalization: OpenRouter, fal, Runway, and related video providers and polling behavior."
           - name: returned asset metadata
             coverageIds: [media-generation.returned-asset-metadata]
-            description: "Covers returned asset metadata across provider integration and async polling for video generation after request normalization: OpenAI Sora, OpenRouter, fal, Runway, and related video providers and polling behavior."
+            description: "Covers returned asset metadata across provider integration and async polling for video generation after request normalization: OpenRouter, fal, Runway, and related video providers and polling behavior."
         docs:
           - docs/tools/video-generation.md
           - docs/providers/runway.md

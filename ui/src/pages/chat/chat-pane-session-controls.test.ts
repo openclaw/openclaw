@@ -341,14 +341,16 @@ describe("chat pane composer controls", () => {
         permissionContainer.querySelector('[data-chat-permission-select="true"]'),
       ).not.toBeNull();
       expect(
-        permissionContainer.querySelector('[data-chat-permission-select="true"]')?.textContent,
+        permissionContainer
+          .querySelector('[data-chat-permission-select="true"]')
+          ?.getAttribute("aria-label"),
       ).toContain("Default (Guarded)");
       container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
       expect(onModelSetup).toHaveBeenCalledTimes(error ? 0 : 1);
     },
   );
 
-  it("renders a distinct active icon for every permission mode", () => {
+  it("renders only a distinct active icon for every permission mode", () => {
     const activeIcons = new Set<string>();
     for (const mode of [undefined, "read-only", "guarded", "workspace", "full"] as const) {
       const container = document.createElement("div");
@@ -363,6 +365,9 @@ describe("chat pane composer controls", () => {
       const icon = container.querySelector(".chat-controls__permission-icon svg");
       expect(icon).not.toBeNull();
       activeIcons.add(icon?.outerHTML ?? "");
+      const trigger = container.querySelector('[data-chat-permission-select="true"]');
+      expect(trigger?.textContent?.trim()).toBe("");
+      expect(trigger?.getAttribute("aria-label")).toMatch(/^Execution permissions: .+/);
     }
     expect(activeIcons.size).toBe(5);
   });
@@ -385,17 +390,12 @@ describe("chat pane composer controls", () => {
       const trigger = container.querySelector('[data-chat-permission-select="true"]');
       const option = container.querySelector('[data-chat-permission-option="default"]');
       const fullAccess = defaultMode === "full";
-      expect(trigger?.textContent?.trim()).toBe(label);
+      expect(trigger?.textContent?.trim()).toBe("");
       expect(trigger?.getAttribute("aria-label")).toBe(`Execution permissions: ${label}`);
       expect(trigger?.getAttribute("data-chat-select-value")).toBe("");
       expect(trigger?.classList.contains("chat-controls__permission-trigger--full")).toBe(
         fullAccess,
       );
-      expect(
-        trigger
-          ?.querySelector(".chat-controls__inline-select-label")
-          ?.classList.contains("chat-controls__permission-label--full"),
-      ).toBe(fullAccess);
       expect(
         option?.querySelector(".chat-controls__permission-option-title")?.textContent?.trim(),
       ).toBe(label);
@@ -500,8 +500,8 @@ describe("chat pane composer controls", () => {
     );
     expect(defaultOption?.textContent).toContain("Default (Guarded)");
     expect(
-      container.querySelector('[data-chat-permission-select="true"]')?.textContent?.trim(),
-    ).toBe("Full Access");
+      container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
+    ).toBe("Execution permissions: Full Access");
     expect(full?.hasAttribute("disabled")).toBe(true);
     expect(full?.getAttribute("aria-checked")).toBe("true");
     expect(full?.querySelector(".chat-controls__permission-shortcut")).toBeNull();

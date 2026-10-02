@@ -153,14 +153,26 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   );
 }
 
-/** Resolve navigation owners from canonical existence and current run liveness. */
+const emptyChildOwners: readonly string[] = Object.freeze([]);
+const sessionChildOwners = new WeakMap<
+  SessionEntry,
+  {
+    revision: object;
+    key: string;
+    controller?: string;
+    parent?: string;
+    owners: readonly string[];
+  }
+>();
+
+/** Reuse owner identities, but recheck time and live authority on every read. */
 export function resolveSessionChildOwners(params: {
   key: string;
   entry: SessionEntry;
   now: number;
   subagentRuns: SessionListRowContext["subagentRuns"];
   hasActiveRun?: boolean;
-}): string[] {
+}): readonly string[] {
   const { key, entry, now, subagentRuns } = params;
   const latest = subagentRuns.getDisplaySubagentRun(key);
   const keep =
@@ -183,9 +195,31 @@ export function resolveSessionChildOwners(params: {
     keep || parseAgentSessionKey(key)?.rest.startsWith("dashboard:")
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
-  return [...new Set([controller, parent])].filter(
-    (owner): owner is string => owner !== undefined && owner !== key,
-  );
+  const cached = sessionChildOwners.get(entry);
+  if (
+    cached?.revision === subagentRuns.revision &&
+    cached.key === key &&
+    cached.controller === controller &&
+    cached.parent === parent
+  ) {
+    return cached.owners;
+  }
+  const owners: string[] = [];
+  if (controller && controller !== key) {
+    owners.push(controller);
+  }
+  if (parent && parent !== key && parent !== controller) {
+    owners.push(parent);
+  }
+  const result = owners.length ? Object.freeze(owners) : emptyChildOwners;
+  sessionChildOwners.set(entry, {
+    revision: subagentRuns.revision,
+    key,
+    controller,
+    parent,
+    owners: result,
+  });
+  return result;
 }
 
 export type SessionChildLink = { key: string; entry: SessionEntry };

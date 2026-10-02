@@ -26,6 +26,57 @@ import * as nodeSqlite from "./node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
 describe("Gateway state ownership", () => {
+  it.skipIf(process.platform === "win32").each(["state", "explicit"] as const)(
+    "resolves the %s database and linked lock directory without recanonicalizing their ancestor",
+    async (layout) => {
+      await withTempDir("openclaw-owner-canonical-path-", async (root) => {
+        const stateDir = path.join(fs.realpathSync(root), "CanonicalState");
+        const alias = path.join(root, "alias");
+        const redirectedTmp = path.join(fs.realpathSync(root), "redirected-tmp");
+        fs.mkdirSync(stateDir);
+        fs.mkdirSync(redirectedTmp);
+        fs.symlinkSync(stateDir, alias, "dir");
+        fs.symlinkSync(redirectedTmp, path.join(stateDir, "tmp"), "dir");
+        const lockDir = resolveGatewayLockDir(stateDir);
+        fs.mkdirSync(lockDir);
+        const physicalLockDir = fs.realpathSync(lockDir);
+        const relativeDatabase =
+          layout === "state" ? path.join("state", "openclaw.sqlite") : "custom.sqlite";
+        const databasePath = path.join(stateDir, relativeDatabase);
+        if (layout === "state") {
+          fs.mkdirSync(path.dirname(databasePath));
+        }
+        fs.writeFileSync(databasePath, "");
+        const expectedOwner = resolveGatewayStateOwnerPath(databasePath);
+        expect(path.dirname(expectedOwner)).toBe(physicalLockDir);
+        const caseVariant = path.join(path.dirname(stateDir), "canonicalstate");
+        const aliasedDatabasePath = path.join(alias, relativeDatabase);
+        const paths = [aliasedDatabasePath];
+        if (fs.existsSync(caseVariant)) {
+          paths.push(path.join(caseVariant, relativeDatabase));
+        }
+        const realpath = vi.spyOn(fs.realpathSync, "native");
+        try {
+          for (const pathname of paths) {
+            realpath.mockClear();
+            expect(resolveGatewayStateOwnerPath(pathname)).toBe(expectedOwner);
+            expect(realpath).toHaveBeenCalledTimes(2);
+          }
+
+          fs.unlinkSync(databasePath);
+          if (layout === "state") {
+            fs.rmdirSync(path.dirname(databasePath));
+          }
+          realpath.mockClear();
+          expect(resolveGatewayStateOwnerPath(aliasedDatabasePath)).toBe(expectedOwner);
+          expect(realpath).toHaveBeenCalledTimes(layout === "state" ? 4 : 3);
+        } finally {
+          realpath.mockRestore();
+        }
+      });
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
     async () => {
@@ -640,6 +691,48 @@ describe("Gateway state ownership", () => {
         fs.rmSync(pathname, { force: true });
       }
       expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
+    });
+  });
+
+  it("checks the current alias target while the original owner remains held", async () => {
+    await withTempDir("openclaw-state-owner-retarget-", async (root) => {
+      const original = path.join(root, "original");
+      const replacement = path.join(root, "replacement");
+      const alias = path.join(root, "alias");
+      fs.mkdirSync(original);
+      fs.mkdirSync(replacement);
+      fs.symlinkSync(original, alias, "junction");
+      const databasePath = path.join(alias, "state", "openclaw.sqlite");
+      const owner = acquireGatewayStateOwner({
+        databasePath,
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(original, "openclaw.json"),
+          role: "gateway",
+        },
+      });
+      let maintenance: ReturnType<typeof acquireGatewayStateOwner> | undefined;
+      try {
+        expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
+        expect(() => owner.assertDatabaseAccess(databasePath)).not.toThrow();
+        maintenance = acquireGatewayStateOwner({
+          databasePath: path.join(replacement, "state", "openclaw.sqlite"),
+        });
+        fs.unlinkSync(alias);
+        fs.symlinkSync(replacement, alias, "junction");
+
+        expect(() => owner.assertCurrent()).not.toThrow();
+        expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+          "undergoing offline maintenance",
+        );
+        expect(() => owner.assertDatabaseAccess(databasePath)).toThrow(
+          "does not own this database",
+        );
+      } finally {
+        maintenance?.release();
+        owner.release();
+      }
     });
   });
 

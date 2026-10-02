@@ -79,20 +79,15 @@ const buildAccountNotes = (params: {
   if (snapshot.dmPolicy) {
     notes.push(`dm:${snapshot.dmPolicy}`);
   }
-  if (snapshot.tokenSource && snapshot.tokenSource !== "none") {
-    notes.push(`token:${snapshot.tokenSource}`);
-  }
-  if (snapshot.botTokenSource && snapshot.botTokenSource !== "none") {
-    notes.push(`bot:${snapshot.botTokenSource}`);
-  }
-  if (snapshot.appTokenSource && snapshot.appTokenSource !== "none") {
-    notes.push(`app:${snapshot.appTokenSource}`);
-  }
-  if (
-    snapshot.signingSecretSource &&
-    snapshot.signingSecretSource !== "none" /* pragma: allowlist secret */
-  ) {
-    notes.push(`signing:${snapshot.signingSecretSource}`);
+  for (const [label, source] of [
+    ["token", snapshot.tokenSource],
+    ["bot", snapshot.botTokenSource],
+    ["app", snapshot.appTokenSource],
+    ["signing", snapshot.signingSecretSource],
+  ]) {
+    if (source && source !== "none") {
+      notes.push(`${label}:${source}`);
+    }
   }
   if (entry.kind === "unavailable") {
     notes.push("secret unavailable in this command path");
@@ -297,19 +292,13 @@ export async function buildChannelsTable(
       if (!anyEnabled) {
         return "off";
       }
-      if (missingPaths.length > 0) {
-        return "warn";
-      }
-      if (issues.length > 0) {
-        return "warn";
-      }
-      if (unavailableConfiguredAccounts.length > 0) {
-        return "warn";
-      }
-      if (configurationUnknown) {
-        return "warn";
-      }
-      if (link.statusState === "unstable") {
+      if (
+        missingPaths.length > 0 ||
+        issues.length > 0 ||
+        unavailableConfiguredAccounts.length > 0 ||
+        configurationUnknown ||
+        link.statusState === "unstable"
+      ) {
         return "warn";
       }
       if (link.linked === false) {
@@ -318,13 +307,7 @@ export async function buildChannelsTable(
       if (tokenSummary.state) {
         return tokenSummary.state;
       }
-      if (link.linked === true) {
-        return "ok";
-      }
-      if (configuredAccounts.length > 0) {
-        return "ok";
-      }
-      return "setup";
+      return link.linked === true || configuredAccounts.length > 0 ? "ok" : "setup";
     })();
 
     const detail = (() => {

@@ -9,6 +9,7 @@ import type {
 } from "../config/types.secrets.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
@@ -50,14 +51,6 @@ function resolveArg(arg: string, pluginRoot: string): string | undefined {
     return arg;
   }
   return resolvePluginRelativePath(arg, pluginRoot);
-}
-
-function withNodeCommandTrustedDir(command: string, pluginRoot: string): string[] {
-  // The ${node} placeholder executes the current Node binary with a plugin-owned entrypoint.
-  // Trust both the Node binary dir and plugin root so resolver path checks accept that shape.
-  return command === NODE_COMMAND_PLACEHOLDER
-    ? [...new Set([path.dirname(process.execPath), pluginRoot])]
-    : [pluginRoot];
 }
 
 function isSecurePosixPathStat(stat: fs.Stats): boolean {
@@ -146,18 +139,15 @@ function materializeExecProviderConfig(
     return undefined;
   }
   const args = integration.args
-    ?.map((arg, index) =>
-      nodeEntrypoint && index === 0 ? nodeEntrypoint : resolveArg(arg, pluginRoot),
-    )
+    ?.map((arg, index) => (index === 0 ? nodeEntrypoint : resolveArg(arg, pluginRoot)))
     .filter((arg): arg is string => arg !== undefined);
   if (integration.args && args?.length !== integration.args.length) {
     return undefined;
   }
-  const trustedDirs = withNodeCommandTrustedDir(integration.command, pluginRoot);
   return {
     source: "exec",
     command: process.execPath,
-    ...(args ? { args } : {}),
+    ...(args ? { args: [...resolveRuntimeArgs(), ...args] } : {}),
     ...(integration.timeoutMs !== undefined ? { timeoutMs: integration.timeoutMs } : {}),
     ...(integration.noOutputTimeoutMs !== undefined
       ? { noOutputTimeoutMs: integration.noOutputTimeoutMs }
@@ -168,7 +158,8 @@ function materializeExecProviderConfig(
     ...(integration.jsonOnly === false ? { jsonOnly: false } : {}),
     ...(integration.env ? { env: integration.env } : {}),
     ...(integration.passEnv ? { passEnv: integration.passEnv } : {}),
-    trustedDirs,
+    // The Node placeholder needs both the executable and plugin entrypoint roots.
+    trustedDirs: [...new Set([path.dirname(process.execPath), pluginRoot])],
   };
 }
 
@@ -199,19 +190,6 @@ function integrationDisplayName(
   );
 }
 
-function createPluginIntegrationProviderConfig(params: {
-  pluginId: string;
-  integrationId: string;
-}): PluginIntegrationSecretProviderConfig {
-  return {
-    source: "exec",
-    pluginIntegration: {
-      pluginId: params.pluginId,
-      integrationId: params.integrationId,
-    },
-  };
-}
-
 function isValidPluginIntegrationProviderId(value: string): boolean {
   return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
 }
@@ -238,7 +216,6 @@ export function isPluginIntegrationSecretProviderConfig(
 }
 
 /** Materializes an active trusted plugin secret-provider integration into an exec provider. */
-/** Resolves a trusted plugin secret-provider integration into executable provider config. */
 export function resolveSecretProviderIntegrationConfig(params: {
   manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
   providerAlias: string;
@@ -324,10 +301,10 @@ export function listSecretProviderIntegrationPresets(params: {
         providerAlias,
         displayName: integrationDisplayName(record, integrationId, integration),
         ...(integration.description ? { description: integration.description } : {}),
-        providerConfig: createPluginIntegrationProviderConfig({
-          pluginId: record.id,
-          integrationId,
-        }),
+        providerConfig: {
+          source: "exec",
+          pluginIntegration: { pluginId: record.id, integrationId },
+        },
       });
     }
   }
