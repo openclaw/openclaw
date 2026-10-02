@@ -2404,7 +2404,6 @@ src/infra/state-migrations.runtime-state.ts	1
 src/infra/state-migrations.session-store.ts	6
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
-src/infra/state-migrations.storage.ts	2
 src/infra/state-migrations.tui-last-session.ts	2
 src/infra/state-migrations.update-check.ts	2
 src/infra/state-migrations.workspace-setup-store.ts	2

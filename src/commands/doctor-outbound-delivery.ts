@@ -167,11 +167,10 @@ export async function migrateDoctorDeliveryQueues(params: {
         );
       }
       return {
-        changes: [
-          ...(result.moved > 0
+        changes:
+          result.moved > 0
             ? [`Prepared ${result.moved} legacy outbound deliveries for current queue recovery`]
-            : []),
-        ],
+            : [],
         warnings,
         warningDisposition: "recoverable",
       };
