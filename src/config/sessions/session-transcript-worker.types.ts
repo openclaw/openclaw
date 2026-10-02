@@ -30,7 +30,6 @@ import type { SessionGoalOperationLookupResult } from "./goals-operations.types.
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-events.js";
-import type { TranscriptArchivePresenceRead } from "./session-accessor.sqlite-archive-types.js";
 import type {
   SessionBranchSummaryReadRequest,
   SessionBranchSummaryReadResult,
@@ -93,6 +92,11 @@ import type {
   SessionTranscriptRecentActiveEventsWorkerInput,
   SessionTranscriptLatestActiveMessageWorkerInput,
 } from "./session-transcript-hydration.types.js";
+import type {
+  SessionTranscriptInventoryWorkerInput,
+  SessionTranscriptInventoryWorkerValues,
+  SessionTranscriptInventoryReaders,
+} from "./session-transcript-inventory.types.js";
 import type {
   SessionTranscriptSearchParams,
   SessionTranscriptSearchResult,
@@ -452,10 +456,6 @@ type SessionPendingArchivesWorkerInput = {
   env: NodeJS.ProcessEnv;
 };
 
-type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
-  kind: "session-archive-presence";
-};
-
 type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
   kind: "session-archive-pruning";
 };
@@ -479,7 +479,7 @@ export type SessionHistoryWorkerInput =
   | SessionArchivedEvictionCandidatesWorkerInput
   | SessionArchivePruningWorkerInput
   | SessionPendingArchivesWorkerInput
-  | SessionArchivePresenceWorkerInput
+  | SessionTranscriptInventoryWorkerInput
   | SessionColdMetadataWorkerInput
   | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
@@ -528,11 +528,10 @@ type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
-export type SessionTranscriptWorkerValues = {
+export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues & {
   "conversation-delivery": { kind: "conversation-delivery"; record?: ConversationDeliveryRecord };
   prewarm: { kind: "prewarm" };
   "session-pending-archives": { kind: "session-pending-archives"; pending: boolean };
-  "session-archive-presence": { kind: "session-archive-presence"; registered: boolean };
   "historical-eviction-candidates": { kind: "historical-eviction-candidates" } & (
     | { sessionIds: string[] }
     | { batch: ArchivedSessionEvictionBatch }
@@ -646,9 +645,8 @@ type CancellableSessionHistoryReader<
   Value = SessionTranscriptWorkerValues[Input["kind"]],
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
-export type SessionHistoryWorkerDatabase = {
+export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   prewarm: (input: { env: NodeJS.ProcessEnv }) => Promise<void>;
-  readArchivePresence: SessionHistoryReader<SessionArchivePresenceWorkerInput, boolean>;
   readPendingArchives: CancellableSessionHistoryReader<SessionPendingArchivesWorkerInput, boolean>;
   findTranscriptEvent: (
     request: SessionTranscriptMatchWorkerInput["request"],

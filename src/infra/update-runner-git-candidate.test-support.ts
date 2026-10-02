@@ -522,7 +522,8 @@ export async function assertCandidateCommandEnvironment(params: {
   update: (options: Partial<UpdateRunnerOptions>) => Promise<UpdateRunResult>;
 }) {
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", params.root);
-  const inheritedPath = `${path.join(params.directory, "other-tools")}${path.delimiter}${process.env.PATH ?? ""}`;
+  const otherTools = path.join(params.directory, "other-tools");
+  const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
   vi.stubEnv("PATH", inheritedPath);
   const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
   await params.advanceRemote();
@@ -532,7 +533,14 @@ export async function assertCandidateCommandEnvironment(params: {
     if (argv[0] === "pnpm" && argv[1] === "build") {
       built = true;
       expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
-      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(nodeRuntime.path));
+      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
+      const observed = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
+        cwd: options.cwd,
+        env: options.env,
+        timeoutMs: 5000,
+      });
+      expect(observed.code, observed.stderr).toBe(0);
+      expect(observed.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
     }
     return params.runCommand(argv, options);
   });
