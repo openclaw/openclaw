@@ -17,7 +17,7 @@ export async function ensureAgentsApiEnvironment(params: {
   sessionKey: string;
   agentId: string;
   workspaceDirectory: string;
-  environmentId?: string;
+  environmentId: string;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<void> {
@@ -25,13 +25,22 @@ export async function ensureAgentsApiEnvironment(params: {
   params.signal.throwIfAborted();
   const session = await params.client.session(params.binding.sessionId, params.signal);
   params.assertCurrent();
+  if (
+    session.status !== "requires_action" ||
+    !session.required_actions.some(
+      (action) =>
+        action.type === "environment_connection" && action.environment_id === params.environmentId,
+    )
+  ) {
+    return;
+  }
   const environment = session.environment;
   if (environment.type !== "self_hosted") {
     throw new Error("Agents API environment changed; reset the OpenClaw session before continuing");
   }
   if (
     environment.workspace_directory !== params.workspaceDirectory ||
-    (params.environmentId && params.environmentId !== environment.id)
+    params.environmentId !== environment.id
   ) {
     throw new Error(
       "Agents API self-hosted environment does not match its session workspace or connection action",

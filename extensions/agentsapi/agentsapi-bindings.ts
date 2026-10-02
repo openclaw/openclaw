@@ -192,7 +192,7 @@ export function createAgentsApiBindings(
             }
             await cleanup.settle(params.sessionId, binding, assertDeletionCurrent);
             assertDeletionCurrent();
-            // Retain the binding until retirement succeeds; rollback can reconnect it.
+            // Give the controller a chance to stop its executor before deleting the binding.
             await cleanup.retire(params.sessionId, binding, assertDeletionCurrent);
             assertDeletionCurrent();
           }

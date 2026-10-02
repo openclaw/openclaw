@@ -61,7 +61,10 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
   const events: string[] = [];
   const controller = {
     workspaceDirectory: "/executor/project",
-    ensure: vi.fn<AgentExecutorController["ensure"]>(async () => {}),
+    ensure: vi.fn<AgentExecutorController["ensure"]>(async () => {
+      nativeSession.status = "idle";
+      nativeSession.required_actions = [];
+    }),
     retire: vi.fn<AgentExecutorController["retire"]>(async () => {
       events.push("retire");
     }),
@@ -93,7 +96,7 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
     last_active_at: 2,
     metadata: {},
     object: "agent.session",
-    status: "idle",
+    status: "requires_action",
     error: null,
     usage: null,
     vault_ids: [],
@@ -104,7 +107,7 @@ export async function executorFixture(state: { stateDir: string; env: NodeJS.Pro
       workspace_directory: "/executor/project",
       remote_url: "wss://executor.example.test/session",
     },
-    required_actions: [],
+    required_actions: [{ type: "environment_connection", environment_id: "executor-environment" }],
   };
   const create = vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue(nativeSession.id);
   const session = vi.spyOn(AgentsApiClient.prototype, "session").mockResolvedValue(nativeSession);

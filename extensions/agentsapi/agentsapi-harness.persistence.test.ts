@@ -63,6 +63,7 @@ beforeEach(() => {
       run: async (prompt, persistInput, onSubmitted) => {
         await persistInput();
         await options.client.message(options.sessionId, prompt, options.signal);
+        await options.connectEnvironment?.("executor-environment");
         onSubmitted();
         options.onSettled?.();
         return { turn, cancelled: false, terminatedByTool: false };
@@ -514,7 +515,7 @@ it("retains the executor binding after uncertain startup and waits for readiness
         type: "self_hosted",
         workspace_directory: "/executor/project",
       });
-      expect(fixture.message).not.toHaveBeenCalled();
+      expect(fixture.message).toHaveBeenCalledTimes(1);
       await harness.dispose();
       await reopenState();
       expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(
@@ -537,7 +538,7 @@ it("retains the executor binding after uncertain startup and waits for readiness
             throw new Error("The attempt finished without waiting for executor readiness");
           }),
         ]);
-        expect(fixture.message).not.toHaveBeenCalled();
+        expect(fixture.message).toHaveBeenCalledTimes(2);
       } finally {
         readiness.resolve(connectedEnvironment());
       }
@@ -547,7 +548,7 @@ it("retains the executor binding after uncertain startup and waits for readiness
         savedBeforeStartup?.executor,
         savedBeforeStartup?.executor,
       ]);
-      expect(fixture.message).toHaveBeenCalledExactlyOnceWith(
+      expect(fixture.message).toHaveBeenLastCalledWith(
         "native-executor-session",
         expect.stringContaining(fixture.params.prompt),
         expect.any(AbortSignal),
@@ -558,7 +559,7 @@ it("retains the executor binding after uncertain startup and waits for readiness
   });
 });
 
-it("settles native work before reset and retains the binding when executor retirement fails", async () => {
+it("settles native work and completes reset when executor retirement is unavailable", async () => {
   await withOpenClawTestState({ label: "agentsapi-executor-reset" }, async (state) => {
     const fixture = await executorFixture(state);
     const harness = fixture.createHarness();
@@ -572,20 +573,8 @@ it("settles native work before reset and retains the binding when executor retir
         expect(await fixture.openStore().lookup(fixture.params.sessionId)).toMatchObject(saved!);
         throw new Error("Executor retirement was not acknowledged");
       });
-
-      await expect(
-        harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" }),
-      ).rejects.toThrow("Executor retirement was not acknowledged");
-      expect(fixture.events).toEqual(["cancel", "retire"]);
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
-
       await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
-      expect(fixture.events).toEqual(["cancel", "retire", "cancel", "retire"]);
-      expect(fixture.controller.retire.mock.calls.map(([binding]) => binding)).toEqual([
-        saved?.executor,
-        saved?.executor,
-      ]);
-      // The released lease leaves either an empty tombstone or an expired row.
+      expect(fixture.events).toEqual(["cancel", "retire"]);
       expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
     } finally {
       await harness.dispose();
@@ -776,13 +765,12 @@ it("retains earlier controlled bindings and explains the required upgrade cutove
   });
 });
 
-it("preserves an owned executor binding when its deployment controller is unavailable", async () => {
+it("can reset an owned executor after Gateway restart when its controller is unavailable", async () => {
   await withOpenClawTestState({ label: "agentsapi-executor-missing-controller" }, async (state) => {
     const fixture = await executorFixture(state);
     let harness = fixture.createHarness();
     try {
       expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
-      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
       await harness.dispose();
       await reopenState();
       fixture.resolveController.mockImplementation(() => {
@@ -791,36 +779,9 @@ it("preserves an owned executor binding when its deployment controller is unavai
         );
       });
       harness = requireExecutorHarness(fixture.runtime);
-      const rejected = await harness.runAttempt({
-        ...fixture.params,
-        runId: "missing-controller-run",
-      });
-      expect(rejected).toMatchObject({
-        terminal: {
-          kind: "failed",
-          error: expect.objectContaining({
-            message:
-              'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
-          }),
-        },
-      });
-      await expect(
-        harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" }),
-      ).rejects.toThrow(
-        'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
-      );
-      const deleteSession = vi.fn(async () => {});
-      await expect(
-        harness.withSessionDeletion(
-          { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-          deleteSession,
-        ),
-      ).rejects.toThrow(
-        'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
-      );
-      expect(deleteSession).not.toHaveBeenCalled();
+      await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
+      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
       expect(fixture.message).toHaveBeenCalledTimes(1);
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
     } finally {
       await harness.dispose();
     }
@@ -878,7 +839,7 @@ it.each([false, true])(
   },
 );
 
-it("preserves the executor binding and skips session deletion when retirement fails", async () => {
+it("completes session deletion when unused executor retirement fails", async () => {
   await withOpenClawTestState({ label: "agentsapi-executor-delete-failure" }, async (state) => {
     const fixture = await executorFixture(state);
     const harness = fixture.createHarness();
@@ -888,21 +849,31 @@ it("preserves the executor binding and skips session deletion when retirement fa
       fixture.controller.retire.mockRejectedValueOnce(
         new Error("Executor retirement was not acknowledged"),
       );
-      const deleteSession = vi.fn(async () => {});
       const target = { ...fixture.params.sessionTarget, assertCurrent: () => {} };
-
-      await expect(harness.withSessionDeletion(target, deleteSession)).rejects.toThrow(
-        "Executor retirement was not acknowledged",
-      );
-      expect(deleteSession).not.toHaveBeenCalled();
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
-
       await harness.withSessionDeletion(target, async (mutation) => mutation.commit());
-      expect(fixture.controller.retire.mock.calls.map(([binding]) => binding)).toEqual([
+      expect(fixture.controller.retire).toHaveBeenCalledExactlyOnceWith(
         saved?.executor,
-        saved?.executor,
-      ]);
+        expect.any(Object),
+      );
       expect(await fixture.openStore().lookup(fixture.params.sessionId)).toBeUndefined();
+    } finally {
+      await harness.dispose();
+    }
+  });
+});
+
+it("ignores a stale connection action on a healthy retained session", async () => {
+  await withOpenClawTestState({ label: "agentsapi-executor-healthy-turn" }, async (state) => {
+    const fixture = await executorFixture(state);
+    const harness = fixture.createHarness();
+    try {
+      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
+      expect(
+        await harness.runAttempt({ ...fixture.params, runId: "healthy-following-turn" }),
+      ).toMatchObject({ terminal: { kind: "ok" } });
+      expect(fixture.controller.ensure).toHaveBeenCalledTimes(1);
+      expect(fixture.message).toHaveBeenCalledTimes(2);
+      expect(fixture.create).toHaveBeenCalledTimes(1);
     } finally {
       await harness.dispose();
     }

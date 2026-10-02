@@ -91,8 +91,11 @@ Gateway's workspace. `AgentExecutorBinding` contains `sessionKey`, `agentId`,
 `ensure` idempotently connects or reconnects that exact environment; `retire`
 idempotently releases that environment's connection. Neither operation creates
 or deletes the native agent session. The controller owns its transport,
-credentials, and process management. Multiple native environment registrations
-can refer to one physical executor.
+credentials, and process management. For Agents API, each native session owns
+its direct executor process; multiple sessions can share the same host and
+persistent workspace. Readiness and connection requests are separate: the
+harness invokes `ensure` for a current `environment_connection` action, including
+while its input submission waits, rather than probing before every turn.
 
 Harness implementations import `resolveAgentExecutorController(pluginId)` from
 `openclaw/plugin-sdk/agent-harness-runtime` and resolve the explicitly configured

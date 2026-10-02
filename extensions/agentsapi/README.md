@@ -235,11 +235,16 @@ and `AgentExecutorContext` types from `openclaw/plugin-sdk/agent-harness-runtime
 - `ensure(binding, context)` idempotently starts or reconnects the executor using
   the exact environment ID, remote URL and workspace in the canonical binding.
   The harness persists that binding and its controller owner before invocation,
-  then waits for the API to report the environment connected before input.
+  then waits for the API to report the environment connected. Startup is triggered
+  only by an outstanding `environment_connection` action. The original input
+  request can remain pending while its executor starts; the harness reads
+  connection actions during that wait without resubmitting the input. Healthy
+  turns do not call the executor controller.
 - `retire(binding, context)` idempotently releases only that binding's executor
   after native work settles, before reset or session deletion discards the binding.
-  Failed retirement retains the binding for retry; rolled-back deletion can
-  reconnect that executor on the next input.
+  Executor cleanup is best effort: a failed stop does not prevent reset or deletion.
+  Terminal native session failure also attempts to retire the executor after
+  current API state confirms the failure.
 
 Callbacks receive `signal` and `assertCurrent`. Honor cancellation and recheck
 `assertCurrent()` immediately before side effects and after asynchronous work.
@@ -248,12 +253,18 @@ belong to the active plugin registry, including reload and disposal; imported
 copies of the Agents API package do not maintain independent controller lists.
 The executor plugin owns process launch, authentication and filesystem provisioning.
 The harness owns native session identity, readiness and cleanup ordering.
+Connection-state notifications alone do not start an executor. A living direct
+executor reconnects through the native protocol; stopping or replacing it does
+not replay interrupted commands. Keep one executor per native session, and stop
+only that session's executor during retirement. Different sessions may share
+an existing persistent workspace.
 
 Changing controllers requires a session reset. Cleanup uses the original stored
-controller owner, even after configuration changes; a missing or disabled owner
-fails explicitly and retains the binding. Gateway disposal retains the executor
-and its binding. After a Gateway restart, resume a controlled session once before
-reset or deletion to prepare the authenticated cleanup handle.
+controller owner, even after configuration changes. A missing or disabled owner
+is reported as a cleanup warning. Gateway disposal retains the executor and its
+binding. Cleanup uses the session's prepared authenticated handle when available;
+credentials are never stored in the binding. An unavailable cleanup handle or
+executor host does not block reset or deletion.
 Bindings from the earlier factory-injected controller have no plugin owner.
 Retire those sessions using the previous version before adopting plugin selection;
 ownerless controlled bindings are rejected and retained rather than reassigned.

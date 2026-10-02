@@ -59,6 +59,7 @@ export async function runAgentsApiAttempt(
   readPluginConfig: () => unknown,
   promptHistories: AgentsApiPromptHistories,
   prepareNativeCleanup?: (binding: AgentsApiBinding, apiKey: string) => void,
+  onTerminalSessionFailure?: (binding: AgentsApiBinding) => Promise<void>,
 ): Promise<EmbeddedRunAttemptResult> {
   const startedAtMs = Date.now();
   const cancellationState = {
@@ -377,7 +378,7 @@ export async function runAgentsApiAttempt(
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
     }
     assertCurrent();
-    let connectEnvironment: ((environmentId?: string) => Promise<void>) | undefined;
+    let connectEnvironment: ((environmentId: string) => Promise<void>) | undefined;
     if (environment.type === "self_hosted" && executorController) {
       const workspaceDirectory = environment.workspace_directory;
       const selfHostedBinding = activeBinding;
@@ -403,8 +404,6 @@ export async function runAgentsApiAttempt(
           assertCurrent,
         });
       };
-      await connectEnvironment();
-      assertCurrent();
     }
     if (recorder && preparedHistory) {
       // A retry keeps this run's already-validated, detached hook context. The
@@ -473,6 +472,11 @@ export async function runAgentsApiAttempt(
         }
       },
       connectEnvironment,
+      onSessionFailed: async () => {
+        if (activeBinding) {
+          await onTerminalSessionFailure?.(activeBinding);
+        }
+      },
       executeFunction: async (call) => {
         startedToolCount++;
         await emitEvent({
