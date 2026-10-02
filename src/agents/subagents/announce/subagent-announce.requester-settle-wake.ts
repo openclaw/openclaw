@@ -30,7 +30,6 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
-  isRequesterCompletionCohortCurrent,
   resolveCurrentRequesterSettleWakeBatch,
 } from "../registry/subagent-requester-settle-identity.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
@@ -48,12 +47,9 @@ import {
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
-import {
-  dedupeLatestChildCompletionRows,
-  filterCurrentDirectChildCompletionRows,
-  readChildCompletionFindings,
-} from "./subagent-announce-output.js";
+import { readChildCompletionFindings } from "./subagent-announce-output.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
+import { selectCurrentRequesterCompletionRows } from "./subagent-announce.requester-settle-cohort.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
@@ -204,17 +200,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
   const currentCompletionRows = (rows: SubagentRunRecord[]) =>
-    frozenBatchRunIds?.length
-      ? rows.filter((entry) =>
-          isRequesterCompletionCohortCurrent(entry, getLatestLiveSubagentRunByChildSessionKey),
-        )
-      : dedupeLatestChildCompletionRows(
-          filterCurrentDirectChildCompletionRows(rows, {
-            requesterSessionKey,
-            requesterAgentId,
-            getLatestSubagentRunByChildSessionKey: getLatestLiveSubagentRunByChildSessionKey,
-          }),
-        );
+    selectCurrentRequesterCompletionRows({
+      rows,
+      requesterSessionKey,
+      requesterAgentId,
+      frozenBatch: Boolean(frozenBatchRunIds?.length),
+      latestForSession: getLatestLiveSubagentRunByChildSessionKey,
+    });
   const readCurrentBatch = (requireUnchangedProgress = false) =>
     resolveCurrentRequesterSettleWakeBatch({
       observed: settledBatch,
@@ -307,7 +299,13 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
         : (getLatestLiveSubagentRunByChildSessionKey(
             requesterSessionKey,
             (entry) => entry.pauseReason === "sessions_yield",
-          ) ?? getLatestLiveSubagentRunByChildSessionKey(requesterSessionKey));
+            requesterAgentId,
+          ) ??
+          getLatestLiveSubagentRunByChildSessionKey(
+            requesterSessionKey,
+            undefined,
+            requesterAgentId,
+          ));
     const requesterRun = getRequesterRun();
     const isRequesterRunCurrent = captureRequesterRunOwner(requesterRun);
     const isBatchDeliveryClosed = () => {

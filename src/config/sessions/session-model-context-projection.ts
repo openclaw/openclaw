@@ -1,6 +1,6 @@
 import { sql, type Expression, type RawBuilder } from "kysely";
 import {
-  DEFAULT_MISSING_TOOL_RESULT_TEXT,
+  LEGACY_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
@@ -169,7 +169,7 @@ export function projectModelContextNavigationSql(
     AND ${contentPropertySql(event, "type")} IN ('toolCall', 'toolUse', 'functionCall'))`;
   const synthetic = /* kysely-allow-raw: pairing prefers real results over synthetic missing-result placeholders. */ sql<number>`COALESCE(json_extract(${event}, ${`$.message.details.${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}`}), 0) = 1 OR EXISTS (
     SELECT 1 FROM json_each(${event}, '$.message.content') WHERE type = 'object'
-    AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${DEFAULT_MISSING_TOOL_RESULT_TEXT})`;
+    AND ${contentPropertySql(event, "type")} = 'text' AND ${contentPropertySql(event, "text")} = ${LEGACY_MISSING_TOOL_RESULT_TEXT})`;
   return /* kysely-allow-raw: retain readable empty bodies only for navigation outside the model window. */ sql<string>`CASE json_extract(${event}, '$.type')
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',

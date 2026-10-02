@@ -249,8 +249,8 @@ export function commitRequesterInitialTransfer(
         (entry) =>
           context.pendingRequesterSettleWakeCommits.get(getSubagentRunRuntimeKey(entry)) !==
             pending ||
-          !isRequesterCompletionCohortCurrent(entry, (key, matches) =>
-            context.options.getLatestRunForChildSession(key, matches),
+          !isRequesterCompletionCohortCurrent(entry, (key, matches, childAgentId) =>
+            context.options.getLatestRunForChildSession(key, matches, childAgentId),
           ),
       )
     ) {
@@ -594,8 +594,8 @@ export function commitRequesterWake(
         !isDeepStrictEqual(captureRequesterSettleRunIdentity(live), owner.identity) ||
         !isDeepStrictEqual(live.killIntent, owner.killIntent) ||
         !isDeepStrictEqual(live.killReconciliation, owner.killReconciliation) ||
-        !isRequesterCompletionCohortCurrent(live, (key, matches) =>
-          context.options.getLatestRunForChildSession(key, matches),
+        !isRequesterCompletionCohortCurrent(live, (key, matches, childAgentId) =>
+          context.options.getLatestRunForChildSession(key, matches, childAgentId),
         )
       ) {
         return false;

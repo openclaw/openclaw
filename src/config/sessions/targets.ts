@@ -203,6 +203,8 @@ export function resolveAllAgentSessionStoreTargetsSync(
   params: {
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+    readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   } = {},
 ): SessionStoreTarget[] {
@@ -232,6 +234,8 @@ function resolveAllAgentSessionStoreTargets(
   params: {
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+    readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
   recoveryCandidates: boolean,
@@ -241,6 +245,8 @@ function resolveAllAgentSessionStoreTargets(
     cfg,
     env,
     params.registeredDatabases,
+    params.readCandidates,
+    params.readPaths,
   );
   const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
@@ -305,6 +311,7 @@ function resolveAllAgentSessionStoreTargets(
       env,
       onResolvedTarget: params.onResolvedTarget,
       registeredDatabases: params.registeredDatabases,
+      readCandidates: params.readCandidates,
     },
   );
 }

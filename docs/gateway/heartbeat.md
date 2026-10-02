@@ -166,7 +166,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
 - `agents.entries.*.heartbeat` merges on top. If any agent has a `heartbeat` block, **only those agents** run heartbeats.
-- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, the legacy default owner, then the sole agent. When no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
+- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, then the sole agent. When no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
 - `channels.defaults.heartbeatVisibility` sets visibility defaults for all channels.
 - `channels.<channel>.heartbeatVisibility` overrides channel defaults.
 - `channels.<channel>.accounts.<id>.heartbeatVisibility` (multi-account channels) overrides per-channel settings.
@@ -180,14 +180,16 @@ Example: two agents, only the second agent runs heartbeats.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
+      systemAgent: { agentId: "main" },
       heartbeat: {
         every: "30m",
         target: "owner", // default: operator DM
       },
     },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       ops: {
         heartbeat: {
           every: "1h",
@@ -199,6 +201,7 @@ Example: two agents, only the second agent runs heartbeats.
       },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
@@ -246,7 +249,6 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   agents: {
     entries: {
       ops: {
-        default: true,
         heartbeat: {
           every: "1h",
           target: "telegram",

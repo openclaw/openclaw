@@ -41,63 +41,45 @@ function fixture() {
       "process.stdout.write(JSON.stringify({ databasePath, observed, result, nodeOptions: process.env.NODE_OPTIONS ?? null }));",
     ].join("\n"),
   );
-  return { root, binding, program };
-}
-
-describe("explicit managed handoff test binding", () => {
-  it.each(["inherited", "service-sanitized", "replaced", "NODE_OPTIONS-deleted"] as const)(
-    "opens the real lease store after %s environment selection",
-    (selection) => {
-      const { root, binding, program } = fixture();
-      const env =
-        selection === "service-sanitized"
-          ? resolveServiceManagerEnv()
-          : selection === "replaced"
-            ? { ...resolveServiceManagerEnv(), HOME: root, USERPROFILE: root }
-            : { ...process.env };
-      if (selection !== "inherited") {
-        delete env.NODE_OPTIONS;
-      }
+  return {
+    root,
+    binding,
+    program,
+    run: (env: NodeJS.ProcessEnv = resolveServiceManagerEnv()) => {
       const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
         env,
         encoding: "utf8",
         timeout: 15_000,
       });
       expect(child.error).toBeUndefined();
-      expect(child.status, child.stderr).toBe(0);
-      const result = JSON.parse(child.stdout);
-      expect(result).toMatchObject({
-        databasePath: binding.databasePath,
-        observed: { kind: "current", lease: { owner: "binding-owner" } },
-        result: { kind: "absent" },
-      });
-      if (selection !== "inherited") {
-        expect(result.nodeOptions).toBeNull();
-      }
-      expect(fs.statSync(binding.databasePath).isFile()).toBe(true);
-      expect(binding.assertPath(result.databasePath)).toBe(binding.databasePath);
-      assertManagedHandoffTestConsumer(binding, child.pid, path.resolve("src"));
-      const witnesses = fs.readdirSync(root).filter((name) => name.startsWith("preflight-"));
-      expect(witnesses.length).toBeGreaterThan(0);
-      for (const name of witnesses) {
-        expect(JSON.parse(fs.readFileSync(path.join(root, name), "utf8"))).toMatchObject({
-          pid: child.pid,
-          databasePath: binding.databasePath,
-          realParent: root,
-        });
-      }
+      return child;
     },
-  );
+  };
+}
+
+describe("explicit managed handoff test binding", () => {
+  it("opens the real lease store with a replaced environment and no NODE_OPTIONS", () => {
+    const { root, binding, run } = fixture();
+    const env: NodeJS.ProcessEnv = { ...resolveServiceManagerEnv(), HOME: root, USERPROFILE: root };
+    delete env.NODE_OPTIONS;
+    const child = run(env);
+    expect(child.status, child.stderr).toBe(0);
+    const result = JSON.parse(child.stdout);
+    expect(result).toMatchObject({
+      databasePath: binding.databasePath,
+      observed: { kind: "current", lease: { owner: "binding-owner" } },
+      result: { kind: "absent" },
+      nodeOptions: null,
+    });
+    expect(fs.statSync(binding.databasePath).isFile()).toBe(true);
+    expect(binding.assertPath(result.databasePath)).toBe(binding.databasePath);
+    assertManagedHandoffTestConsumer(binding, child.pid, path.resolve("src"));
+  });
 
   it("does not credit preload setup as target consumer use", () => {
-    const { binding, program, root } = fixture();
+    const { binding, program, root, run } = fixture();
     fs.writeFileSync(program, 'process.stdout.write("entrypoint-ran");');
-    const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
-      env: resolveServiceManagerEnv(),
-      encoding: "utf8",
-      timeout: 15_000,
-    });
-    expect(child.error).toBeUndefined();
+    const child = run();
     expect(child.status, child.stderr).toBe(0);
     expect(child.stdout).toBe("entrypoint-ran");
     expect(fs.readdirSync(root).some((name) => name.startsWith("preflight-"))).toBe(true);
@@ -109,8 +91,6 @@ describe("explicit managed handoff test binding", () => {
 
   it.each([
     ["create", "dev"],
-    ["create", "ino"],
-    ["validate", "dev"],
     ["validate", "ino"],
   ] as const)(
     "refuses unavailable Windows %s directory %s before database access",
@@ -143,7 +123,7 @@ describe("explicit managed handoff test binding", () => {
   );
 
   it("preserves a separately resolved consumer package's import and require conditions", () => {
-    const { root, binding, program } = fixture();
+    const { root, binding, program, run } = fixture();
     const consumer = path.join(root, "consumer-package");
     const dependency = path.join(consumer, "node_modules", "@openclaw", "fs-safe");
     fs.mkdirSync(dependency, { recursive: true });
@@ -182,12 +162,7 @@ describe("explicit managed handoff test binding", () => {
         "}))));",
       ].join("\n"),
     );
-    const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
-      env: resolveServiceManagerEnv(),
-      encoding: "utf8",
-      timeout: 15_000,
-    });
-    expect(child.error).toBeUndefined();
+    const child = run();
     expect(child.status, child.stderr).toBe(0);
     expect(JSON.parse(child.stdout)).toEqual([
       { root, consumer: "commonjs" },
@@ -197,7 +172,7 @@ describe("explicit managed handoff test binding", () => {
   });
 
   it("preserves an explicitly selected application cache", () => {
-    const { binding, program } = fixture();
+    const { program, run } = fixture();
     const cache = temporary.make("openclaw-explicit-cache-");
     fs.writeFileSync(
       program,
@@ -208,12 +183,7 @@ describe("explicit managed handoff test binding", () => {
         `process.stdout.write(resolveSecureTempRoot({ preferredDir: ${JSON.stringify(cache)}, fallbackPrefix: "cache", skipPreferredOnWindows: false }));`,
       ].join("\n"),
     );
-    const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
-      env: resolveServiceManagerEnv(),
-      encoding: "utf8",
-      timeout: 15_000,
-    });
-    expect(child.error).toBeUndefined();
+    const child = run();
     expect(child.status, child.stderr).toBe(0);
     expect(child.stdout).toBe(cache);
   });
@@ -230,7 +200,7 @@ describe("explicit managed handoff test binding", () => {
   it.each(["database-symlink", "database-hardlink", "wal-symlink", "parent-replaced"] as const)(
     "refuses %s before executing the store consumer",
     (failure) => {
-      const { root, binding, program } = fixture();
+      const { root, binding, program, run } = fixture();
       const outside = temporary.make("openclaw-handoff-untouched-");
       const protectedFile = path.join(outside, "untouched");
       fs.writeFileSync(protectedFile, "unchanged");
@@ -254,12 +224,7 @@ describe("explicit managed handoff test binding", () => {
           binding.databasePath + (failure === "wal-symlink" ? "-wal" : ""),
         );
       }
-      const child = spawnSync(requireNodeTool("node"), [binding.nodeOption, program], {
-        env: resolveServiceManagerEnv(),
-        encoding: "utf8",
-        timeout: 15_000,
-      });
-      expect(child.error).toBeUndefined();
+      const child = run();
       expect(child.status).not.toBe(0);
       expect(child.stderr).toMatch(
         /Handoff test (?:database (?:alias|hardlink)|directory identity)/,

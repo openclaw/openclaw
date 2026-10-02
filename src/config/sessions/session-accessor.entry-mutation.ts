@@ -5,10 +5,10 @@ import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycl
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";

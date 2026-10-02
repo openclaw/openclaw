@@ -11,6 +11,7 @@ import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -22,7 +23,10 @@ import {
   resolveAuthProfileDatabasePath,
 } from "./auth-profiles/sqlite.js";
 import type { PluginModelCatalogAuthSnapshot } from "./plugin-model-catalog-auth.js";
-import { withPluginModelCatalogWorker } from "./plugin-model-catalog-execution.js";
+import {
+  withPluginModelCatalogPublicationLocks,
+  withPluginModelCatalogWorker,
+} from "./plugin-model-catalog-execution.js";
 import {
   isGeneratedPluginModelCatalog,
   repairPluginModelCatalogTransportMetadata,
@@ -126,32 +130,6 @@ export function repairPersistedPluginModelCatalogs(params: {
     { operationLabel: "plugin-model-catalog.repair" },
   );
   return applied.map(({ pluginId, removedModelCount }) => ({ pluginId, removedModelCount }));
-}
-
-/** Scrubs exact credential copies on the canonical agent database worker. */
-export async function removePersistedPluginModelCatalogCredentials(params: {
-  agentId: string;
-  databasePath: string;
-  credentials: ReadonlySet<string>;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const credentials = [...params.credentials];
-  const options = {
-    agentId: params.agentId,
-    path: params.databasePath,
-    env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
-  };
-  try {
-    await stat(params.databasePath);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
-  }
-  await withPluginModelCatalogWorker(options, false, async (scope) => {
-    await scope.execute({ type: "catalog.removeCredentials", input: { credentials } });
-  });
 }
 
 function readPersistedPluginModelCatalogMigrationPayloads(
@@ -583,6 +561,7 @@ export async function replacePersistedPluginModelCatalogs(params: {
     ...pluginModelCatalogDatabaseOptions(params.agentDir),
     env: cloneEnvWithPlatformSemantics(params.env ?? process.env),
   };
+  options.path = resolvePathViaExistingAncestorSync(options.path);
   const authSnapshot = params.authSnapshot && structuredClone(params.authSnapshot);
   const planned = new Map<string, string>();
   for (const [relativePath, contents] of Object.entries(params.pluginCatalogWrites)) {
@@ -602,11 +581,13 @@ export async function replacePersistedPluginModelCatalogs(params: {
       throw error;
     }
   }
-  return await withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
-    scope.execute({
-      type: "catalog.replace",
-      input: { planned: [...planned], authSnapshot, env: options.env },
-    }),
+  return await withPluginModelCatalogPublicationLocks([options.path], () =>
+    withPluginModelCatalogWorker(options, planned.size > 0, (scope) =>
+      scope.execute({
+        type: "catalog.replace",
+        input: { planned: [...planned], authSnapshot, env: options.env },
+      }),
+    ),
   );
 }
 

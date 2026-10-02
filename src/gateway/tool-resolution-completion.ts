@@ -3,10 +3,8 @@ import {
   MAX_DELEGATION_LINEAGE_DEPTH,
 } from "../agents/requester-tool-policy.js";
 import type { SessionCapabilityLookup } from "../agents/subagents/spawn/subagent-session-store.js";
-import {
-  evaluateGatewayToolCallerReceiptAdmission,
-  type GatewayToolCallerReceiptAdmission,
-} from "../agents/tools/gateway-caller-context.js";
+import { evaluateGatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-context.js";
+import type { GatewayToolCallerReceiptAdmission } from "../agents/tools/gateway-caller-receipt.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import type {

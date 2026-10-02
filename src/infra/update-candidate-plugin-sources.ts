@@ -10,9 +10,10 @@ import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run
 export function inspectUpdateCandidatePluginSource(
   entry: { pluginId: string; rootDir: string; entryFile: string },
   warnings: string[],
+  dependencyLookupBoundary?: Parameters<typeof inspectPluginSourceDependencies>[1],
 ) {
   try {
-    return inspectPluginSourceDependencies([entry]);
+    return inspectPluginSourceDependencies([entry], dependencyLookupBoundary);
   } catch (error) {
     if (!(error instanceof SyntaxError)) {
       throw error;

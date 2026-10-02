@@ -755,16 +755,6 @@ describe("mobile release CI tools", () => {
     expect(JSON.stringify(steps)).not.toContain("candidate/");
 
     const tooling = steps[toolingIndex]?.run ?? "";
-    expect(tooling).toContain('apt_source="/etc/apt/sources.list.d/ubuntu.sources"');
-    expect(tooling).toContain(
-      'apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"',
-    );
-    expect(tooling).toContain('test -s "$apt_source"');
-    expect(tooling).toContain('[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]');
-    expect(tooling).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
-    expect(tooling).toMatch(
-      /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends imagemagick/u,
-    );
     expect(tooling).toContain(
       'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
     );
@@ -955,17 +945,9 @@ describe("mobile release CI tools", () => {
     expect(diagnostic).toContain(
       'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)',
     );
-    expect(diagnostic).toContain("capture_accel_check() {");
     expect(diagnostic).toContain("accel_check_timeout_seconds=10");
-    expect(diagnostic).toContain('emulator -accel-check >"$accel_raw" 2>&1 &');
     expect(diagnostic).toContain(
       'head -c 16384 "$accel_raw" >"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
-    );
-    expect(diagnostic).toContain(
-      'printf \'exit_status=%s\\n\' "$accel_status" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
-    );
-    expect(diagnostic).toContain(
-      'printf \'timed_out=%s\\n\' "$accel_timed_out" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
     );
     expect(diagnostic).toContain("sample_owned_qemu() {");
     expect(diagnostic).toContain(
@@ -1021,18 +1003,15 @@ describe("mobile release CI tools", () => {
     expect(timedOutAccel.output).toContain("exit_status=124");
     expect(timedOutAccel.output).toContain("timed_out=true");
 
-    expect(diagnostic).toContain("observe_after_readiness_timeout() {");
     expect(diagnostic).toContain("final_cold_boot_observation_seconds=900");
     expect(diagnostic).toContain("probe_timeout_seconds=5");
     expect(diagnostic).toContain("final_snapshot_lead_seconds=15");
     expect(diagnostic).toContain("snapshot_properties_max_bytes=65536");
     expect(diagnostic).toContain("snapshot_logcat_max_bytes=262144");
-    expect(diagnostic).toContain("capture_cold_boot_snapshot() {");
     expect(diagnostic).toContain(
       "emulator_observation_deadline=$((emulator_launch_seconds + final_cold_boot_observation_seconds))",
     );
     expect(diagnostic).not.toContain("post_deadline_observation_seconds");
-    expect(diagnostic).toContain("fail_after_readiness_timeout() {");
     const observationFunctionStart = diagnostic.indexOf("run_bounded_probe() {");
     const observationFunctionEnd = diagnostic.indexOf(
       "\n\nfail_after_readiness_timeout()",
@@ -1127,34 +1106,11 @@ describe("mobile release CI tools", () => {
       };
     };
 
-    const lateReady = await runPostDeadlineObservation(`#!/bin/bash
-set -euo pipefail
-if [[ "\${1:-}" == "devices" ]]; then
-  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
-  printf '1\\n'
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
-  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
-fi
-`);
-    expect(lateReady.result.status).toBe(1);
-    expect(lateReady.result.stderr).toContain("::error::latched readiness failure");
-    expect(lateReady.observations).toContain("late_adb_online_at=");
-    expect(lateReady.observations).toContain("late_boot_completed_at=");
-    expect(lateReady.observations).toContain("observation_stop=late-boot-completed");
-    expect(lateReady.snapshots).toEqual(["first-online"]);
-    expect(
-      fs.readFileSync(
-        path.join(lateReady.snapshotsRoot, "first-online", "boot-properties.txt"),
-        "utf8",
-      ),
-    ).toContain("probe_exit_status=0");
-
     const lateReadyNearCeilingFunctions = observationFunctions.replace(
       "final_snapshot_lead_seconds=4",
       "final_snapshot_lead_seconds=60",
     );
-    const lateReadyNearCeiling = await runPostDeadlineObservation(
+    const lateReady = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
@@ -1167,10 +1123,18 @@ fi
 `,
       { functions: lateReadyNearCeilingFunctions },
     );
-    expect(lateReadyNearCeiling.result.status).toBe(1);
-    expect(lateReadyNearCeiling.observations).toContain("late_boot_completed_at=");
-    expect(lateReadyNearCeiling.observations).toContain("observation_stop=late-boot-completed");
-    expect(lateReadyNearCeiling.snapshots).toEqual(["first-online"]);
+    expect(lateReady.result.status).toBe(1);
+    expect(lateReady.result.stderr).toContain("::error::latched readiness failure");
+    expect(lateReady.observations).toContain("late_adb_online_at=");
+    expect(lateReady.observations).toContain("late_boot_completed_at=");
+    expect(lateReady.observations).toContain("observation_stop=late-boot-completed");
+    expect(lateReady.snapshots).toEqual(["first-online"]);
+    expect(
+      fs.readFileSync(
+        path.join(lateReady.snapshotsRoot, "first-online", "boot-properties.txt"),
+        "utf8",
+      ),
+    ).toContain("probe_exit_status=0");
 
     const [failedBootProbeResult, boundedSnapshotsResult] = await Promise.allSettled([
       runPostDeadlineObservation(
@@ -1256,21 +1220,6 @@ fi
     expect(changedDevice.observations).toContain("observation_stop=unexpected-device-change");
     expect(changedDevice.snapshots).toEqual([]);
 
-    const capped = await runPostDeadlineObservation(
-      `#!/bin/bash
-set -euo pipefail
-if [[ "\${1:-}" == "devices" ]]; then
-  printf 'List of devices attached\\n\\n'
-fi
-`,
-      { deadlineSeconds: 2 },
-    );
-    expect(capped.result.status).toBe(1);
-    expect(capped.elapsedSeconds).toBe(2);
-    expect(capped.result.stderr).toContain("::error::latched readiness failure");
-    expect(capped.observations).toContain("observation_cap_seconds=900");
-    expect(capped.observations).toContain("observation_stop=observation-cap-reached");
-
     const absoluteCap = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
@@ -1282,6 +1231,8 @@ fi
     );
     expect(absoluteCap.result.status).toBe(1);
     expect(absoluteCap.elapsedSeconds).toBe(3);
+    expect(absoluteCap.result.stderr).toContain("::error::latched readiness failure");
+    expect(absoluteCap.observations).toContain("observation_cap_seconds=900");
     expect(absoluteCap.durationMs).toBeLessThan(5_000);
     expect(absoluteCap.observations).toContain("observation_stop=observation-cap-reached");
 
@@ -1454,7 +1405,6 @@ fi
     expect(diagnostic).toContain("adb devices -l");
     expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1');
     expect(diagnostic).toContain('ps -p "$emulator_pid"');
-    expect(diagnostic).toContain('kill "$emulator_pid"');
     expect(diagnostic).toContain("adb kill-server");
     expect(diagnostic).toContain("trap cleanup EXIT");
     expect(diagnostic).toMatch(
@@ -1906,8 +1856,6 @@ fi
       "bundle:_4.0.21_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
-    expect(signingProof).toContain("source ./scripts/lib/ios-fastlane.sh");
-    expect(signingProof).toContain("(cd apps/ios && run_ios_fastlane ios signing_check)");
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);

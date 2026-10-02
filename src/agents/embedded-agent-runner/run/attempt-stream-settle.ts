@@ -327,7 +327,7 @@ export async function settleEmbeddedAttemptStream(input: {
         });
 
         if (timedOutDuringCompaction) {
-          const removedEntries = normalizeCompactionRecoveryTranscriptTail({
+          const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
             activeSession,
             sessionManager,
           });

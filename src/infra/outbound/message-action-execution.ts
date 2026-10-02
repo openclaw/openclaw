@@ -596,7 +596,7 @@ export async function executeMessagePlugin(
   }
 
   if (!channelPlugin?.actions?.handleAction) {
-    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
 
   // Plugin actions bypass buildSendPayloadParts, so model-authored text here

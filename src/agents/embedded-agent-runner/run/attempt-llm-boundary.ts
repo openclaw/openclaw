@@ -52,6 +52,7 @@ type LlmBoundaryOptions = {
   projectPersistedSenderContext?: boolean;
   userTranscriptContexts?: readonly UserTranscriptContext[];
   currentUserTimestampOverride?: CurrentUserTimestampMatch;
+  onRuntimeContextCarrierRemoved?: (removed: AgentMessage[]) => void;
 };
 
 /** A session keeps its model projection across replay and process restarts. */
@@ -126,6 +127,12 @@ export function normalizeMessagesForLlmBoundary(
   const retained = options?.appendOnlyRuntimeContext
     ? withPersistedSenderContext
     : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+  if (retained.length < withPersistedSenderContext.length) {
+    const retainedMessages = new Set(retained);
+    options?.onRuntimeContextCarrierRemoved?.(
+      withPersistedSenderContext.filter((message) => !retainedMessages.has(message)),
+    );
+  }
   return usesEscapedRuntimeContext(options?.sessionVersion)
     ? projectRuntimeContextMessages(retained)
     : retained;

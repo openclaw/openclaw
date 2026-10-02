@@ -2255,7 +2255,7 @@
     "@modelcontextprotocol/sdk": "1.30.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.22.0",
+    "@openclaw/fs-safe": "0.23.0",
     "@openclaw/proxyline": "0.3.12",
     "@silvia-odwyer/photon-node": "0.3.4",
     "@trycua/cua-driver": "0.28.2",

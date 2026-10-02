@@ -7,6 +7,7 @@ import {
   quoteStructuredInputValue as quote,
   readStructuredInputText,
   snapshotStructuredInput,
+  STRUCTURED_INPUT_MAX_TEXT_CHARS,
   structuredInputEntries,
   structuredInputRecord as ownRecord,
   structuredInputString as ownString,
@@ -94,7 +95,12 @@ export function compileStructuredInputForm(params: {
   if (typeof required === "string") {
     return unsupported(required);
   }
-  const intro = readStructuredInputText(params.message ?? params.fallbackMessage, MAX_MESSAGE_TEXT);
+  const richDisplay = options.allowRichForms === true;
+  const intro = readStructuredInputText(
+    params.message ?? params.fallbackMessage,
+    richDisplay ? STRUCTURED_INPUT_MAX_TEXT_CHARS : MAX_MESSAGE_TEXT,
+    richDisplay,
+  );
   if (!intro) {
     return unsupported(
       `OpenClaw declined ${protocol} form display text that is invalid or over-limit.`,

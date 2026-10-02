@@ -93,7 +93,11 @@ export async function dispatchSessionsSendFollowup(
   const assertCallerCurrent = captureGatewayToolCallerAssertion();
   const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
   const completionChild = options.watch
-    ? getLatestLiveSubagentRunByChildSessionKey(params.sessionStoreTarget.canonicalKey)
+    ? getLatestLiveSubagentRunByChildSessionKey(
+        params.sessionStoreTarget.canonicalKey,
+        undefined,
+        params.sessionStoreTarget.agentId,
+      )
     : undefined;
   const sameRequester = replyContext.requesterSessionKey === options.requesterSessionKey;
   const requesterTurn =
@@ -171,6 +175,7 @@ export async function dispatchSessionsSendFollowup(
             ? getLatestLiveSubagentRunByChildSessionKey(
                 childSessionKey,
                 (entry) => entry.runId === start.steeredRunId,
+                params.sessionStoreTarget.agentId,
               )
             : undefined;
           if (expected) {

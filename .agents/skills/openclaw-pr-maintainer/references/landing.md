@@ -457,6 +457,23 @@ outcome OID and independently qualify its response; there is no automatic retry.
 If the PR has merged meanwhile, reconcile the retained outcome without sending
 another merge request.
 
+When an unaccepted prior-CI REST admin request is uncertain, a different current
+head fences its exact `sha`. After fresh review and exact-head `github_pending`
+preparation, retire it into an ordinary current-head auto request:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
+  --replacement-head <HEAD_SHA> --auto-merge
+```
+
+Do not pass `--admin-evidence`. The replacement must differ, and the PR must stay
+OPEN and `MERGEABLE/BLOCKED` or `MERGEABLE/BEHIND`. Normal required-check,
+ClawSweeper, review, security, and owner gates still apply. The successor CAS
+records route `auto` plus `recovery.staleHeadRetirement`, preserving ancestry
+and exact regular capture bytes without interpreting them; an empty capture is
+valid. Missing, symlink, extra, or admission-mutated captures, same-head or
+stale evidence, lifecycle/head drift, queue state, and failed gates stay blocked.
+
 After two identical pre-dispatch failures without new evidence, stop invoking
 the same blocked route. Inspect the failure and select an already-authorized
 supported route with the exact reviewed head pinned, or report the concrete

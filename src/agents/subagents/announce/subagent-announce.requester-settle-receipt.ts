@@ -4,10 +4,8 @@ import type {
 } from "../../../config/sessions/session-entry-current.types.js";
 import { captureSystemEventStoreCurrentCheck } from "../../../infra/system-event-ownership.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
-import {
-  evaluateGatewayToolCallerReceiptAdmission,
-  type GatewayToolCallerReceiptAdmission,
-} from "../../tools/gateway-caller-context.js";
+import { evaluateGatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-context.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 
 /** Watch effects retain their original stores; the durable wake keeps its ordinary handoff rules. */
 export function createRequesterSettleReceiptAdmission(params: {

@@ -326,6 +326,44 @@ describe("cron service ops regressions", () => {
     clearCommandLane(CommandLane.Cron);
   });
 
+  it("manual due runs honor retry backoff while force can run the preserved occurrence", async () => {
+    const store = opsRegressionFixtures.makeStorePath();
+    const nowMs = Date.parse("2026-09-30T09:00:00.000Z");
+    const dueAt = nowMs - 2_000;
+    const job = createDueIsolatedJob({
+      id: "manual-backoff",
+      nowMs,
+      nextRunAtMs: dueAt,
+    });
+    job.schedule = { kind: "every", everyMs: 60_000, anchorMs: dueAt };
+    job.state = {
+      nextRunAtMs: dueAt,
+      forcePreservedNextRunAtMs: dueAt,
+      lastRunAtMs: nowMs - 3_000,
+      lastDurationMs: 2_500,
+      lastRunStatus: "error",
+      consecutiveErrors: 1,
+    };
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    const runIsolatedAgentJob = vi.fn().mockResolvedValue({ status: "ok", summary: "done" });
+    const state = createCronRegressionState({
+      cronEnabled: false,
+      storePath: store.storePath,
+      nowMs: () => nowMs,
+      runIsolatedAgentJob,
+    });
+
+    await expect(run(state, job.id, "due")).resolves.toEqual({
+      ok: true,
+      ran: false,
+      reason: "not-due",
+    });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
+    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state.nextRunAtMs).toBe(dueAt);
+  });
+
   it("manual cron.run preserves unrelated due jobs but advances already-executed stale slots", async () => {
     const store = opsRegressionFixtures.makeStorePath();
     const nowMs = Date.now();

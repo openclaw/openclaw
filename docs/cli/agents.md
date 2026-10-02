@@ -289,7 +289,6 @@ Config sample:
   agents: {
     entries: {
       main: {
-        default: true,
         identity: {
           name: "OpenClaw",
           theme: "space lobster",

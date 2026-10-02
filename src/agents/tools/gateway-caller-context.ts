@@ -38,6 +38,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "../runtime/internal-hooks.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
+import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type GatewayToolCallerIdentity = {
   personalToolParticipants?: ReplyTurnParticipants;
@@ -107,14 +108,6 @@ type GatewayToolCallerSource = {
 };
 
 const gatewayToolCallerStorage = new AsyncLocalStorage<GatewayToolCallerIdentity>();
-
-/** A storage predicate supplies worker facts without replacing its caller's lifetime fences. */
-export type GatewayToolCallerReceiptAdmission = {
-  prepare(): Promise<{
-    current: SessionEntriesCurrentCheck;
-    isCurrent(): boolean;
-  }>;
-};
 
 const receiptAdmissionStorage = new AsyncLocalStorage<
   ReadonlyMap<GatewayToolCallerReceiptAdmission, () => boolean>

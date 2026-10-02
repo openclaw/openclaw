@@ -18,11 +18,11 @@ import type {
   AgentDatabaseOperations,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
 } from "../state/openclaw-agent-execution-contract.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
 } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import type { SessionCostUsageCacheRead } from "./session-cost-usage-cache-read.js";

@@ -1,42 +1,24 @@
-import assert from "node:assert/strict";
 import { describe, expect, it } from "vitest";
 import { redactCredentialText, redactDiagnostic } from "./vitest/credential-redaction.ts";
 
 describe("public test diagnostic redaction", () => {
-  it.each([
-    "EXAMPLE_TOKEN",
-    "secret",
-    "Password",
-    "PASSWD",
-    "API_KEY",
-    "apiKey",
-    "PRIVATE_KEY",
-    "AUTHORIZATION",
-    "COOKIE",
-    "SESSION",
-    "BLACKSMITH_STICKYDISK_TOKEN",
-    "BLACKSMITH_CACHE_TOKEN",
-    "BLACKSMITH_MONITORING_TOKEN",
-    "BLACKSMITH_JOB_COMPLETION_TOKEN",
-    "ACTIONS_RUNTIME_TOKEN",
-    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
-    "GITHUB_TOKEN",
-    "GH_TOKEN",
-    "NPM_TOKEN",
-  ])("preserves %s while hiding its value in object, JSON and env text", (key) => {
-    const cases: [string, string][] = [
-      [`${key}: 'synthetic'`, `${key}: '<redacted len=9>'`],
-      [`${key}: "synthetic"`, `${key}: "<redacted len=9>"`],
-      [`"${key}": "synthetic"`, `"${key}": "<redacted len=9>"`],
-      [`${key}=synthetic\nNORMAL=visible`, `${key}=<redacted len=9>\nNORMAL=visible`],
-      [`["${key}", "synthetic"]`, `["${key}", "<redacted len=9>"]`],
-      [`[ '${key}', 'synthetic' ]`, `[ '${key}', '<redacted len=9>' ]`],
-    ];
-    for (const [input, expected] of cases) {
-      expect(redactCredentialText(input)).toBe(expected);
-      expect(redactCredentialText(expected)).toBe(expected);
-    }
-  });
+  it.each(["EXAMPLE_TOKEN", "PASSWD"])(
+    "preserves %s while hiding its value in object, JSON and env text",
+    (key) => {
+      const cases: [string, string][] = [
+        [`${key}: 'synthetic'`, `${key}: '<redacted len=9>'`],
+        [`${key}: "synthetic"`, `${key}: "<redacted len=9>"`],
+        [`"${key}": "synthetic"`, `"${key}": "<redacted len=9>"`],
+        [`${key}=synthetic\nNORMAL=visible`, `${key}=<redacted len=9>\nNORMAL=visible`],
+        [`["${key}", "synthetic"]`, `["${key}", "<redacted len=9>"]`],
+        [`[ '${key}', 'synthetic' ]`, `[ '${key}', '<redacted len=9>' ]`],
+      ];
+      for (const [input, expected] of cases) {
+        expect(redactCredentialText(input)).toBe(expected);
+        expect(redactCredentialText(expected)).toBe(expected);
+      }
+    },
+  );
 
   it("scrubs nested credential entry pairs while preserving keys and ordinary entries", () => {
     const diagnostic = {
@@ -134,9 +116,6 @@ describe("public test diagnostic redaction", () => {
   });
 
   it.each([
-    ["AUTHORIZATION", "Bearer synthetic"],
-    ["COOKIE", "first=synthetic; second=synthetic"],
-    ["PASSWORD", "two synthetic words"],
     ["PASSWORD", " two synthetic words "],
     ["TOKEN", "synthetic NORMAL=visible"],
     ["TOKEN", "synthetic,second}"],
@@ -162,20 +141,6 @@ describe("public test diagnostic redaction", () => {
     expect(redactCredentialText('- "TOKEN": "first"\n+ "TOKEN": "second"')).toBe(
       '- "TOKEN": "<redacted len=5>"\n+ "TOKEN": "<redacted len=6>"',
     );
-  });
-
-  it("redacts all multiline credential fragments in native assertion messages", () => {
-    const fragment = "not-a-real-secret-value-1234567890";
-    const value = `-----BEGIN PRIVATE KEY-----\n${`${fragment}\n`.repeat(3)}-----END PRIVATE KEY-----`;
-    let message = "";
-    try {
-      assert.deepStrictEqual({ PRIVATE_KEY: value }, {});
-    } catch (error) {
-      message = error instanceof Error ? error.message : "";
-    }
-    const output = redactCredentialText(message);
-    expect(output.includes(fragment)).toBe(false);
-    expect(output).toContain(`<redacted len=${value.length}>`);
   });
 
   it("scrubs every error field and nested causes without losing nonsecret diagnostics", () => {

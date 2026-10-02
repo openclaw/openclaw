@@ -111,7 +111,7 @@ src/process/spawn-broker/startup.test.ts	1
 src/process/supervisor/service-child-relay-host.awaited-output.test.ts	1
 src/skills/workshop/experience-review.apply.test.ts	1
 src/state/openclaw-database-preflight.lifecycle.test.ts	4
-src/state/openclaw-state-lease-existing.test.ts	2
+src/state/openclaw-state-lease-existing.test.ts	1
 src/system-agent/setup-lifetime.test.ts	1
 src/tui/tui-pty-local-test-support.ts	1
 src/utils/run-with-concurrency.test.ts	7

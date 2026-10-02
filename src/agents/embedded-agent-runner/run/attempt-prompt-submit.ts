@@ -11,7 +11,10 @@ import {
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { ackPendingAgentSteeringItems } from "../../subagents/registry/subagent-registry.js";
-import { recordAggregateTruncation } from "../prompt-cache-observability.js";
+import {
+  declarePromptHistoryRewrite,
+  recordAggregateTruncation,
+} from "../prompt-cache-observability.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
   type getEmbeddedSessionPromptState,
@@ -165,6 +168,9 @@ export async function submitEmbeddedAttemptPrompt(input: {
           input.toolResultPromptProjectionState,
         );
         const providerMessages = providerPromptHistoryTruncation.messages;
+        if (providerPromptHistoryTruncation.truncatedCount > 0) {
+          declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
+        }
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
         }

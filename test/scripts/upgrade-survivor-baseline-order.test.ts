@@ -1,10 +1,12 @@
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import path, { delimiter, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
+import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
@@ -187,6 +189,24 @@ it.each([
   const paths = readUpgradeSurvivorPaths(root, {
     OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
   });
+  if (scenario === "sqlite-volume") {
+    mkdirSync(paths.packageRoot, { recursive: true });
+    writeFileSync(
+      path.join(paths.packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.8.1",
+        type: "module",
+        exports: { "./plugin-sdk/cron-store-runtime": "./cron-store-runtime.js" },
+      }),
+    );
+    // Keep real SQLite persistence behind the fixture's installed SDK boundary.
+    symlinkSync(
+      fileURLToPath(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.store)),
+      path.join(paths.packageRoot, "cron-store-runtime.js"),
+      "file",
+    );
+  }
   const authoredPath = path.join(root, "authored.json");
   const resultPath = path.join(root, "result.json");
   const probePath = path.join(root, "probe.mjs");
@@ -223,12 +243,16 @@ it.each([
     }),
   );
   const startupModule = pathToFileURL(path.resolve("src/config/sessions/startup-migration.ts"));
+  const legacyStoreModule = pathToFileURL(
+    path.resolve("src/config/sessions/legacy-store-inspection.ts"),
+  );
   writeFileSync(
     probePath,
     `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path, { delimiter, join, resolve } from "node:path";
 import { assertSessionStoreMigrationComplete } from ${JSON.stringify(startupModule.href)};
+import { readLegacySessionStoreEntries } from ${JSON.stringify(legacyStoreModule.href)};
 const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
 const stores = volume
@@ -251,9 +275,18 @@ if (process.argv[2] === "startup") {
     assert.equal(fs.existsSync(process.env.PROBE_LIVE), false, "baseline must be offline before specimens and initial update");
   }
   assert.throws(checkStartup, /Legacy session store requires migration/);
-  const rows = stores.flatMap(file => Object.values(JSON.parse(fs.readFileSync(path.join(state, file), "utf8"))));
+  const rows = stores.flatMap(file => {
+    const issues = [];
+    const { entries } = readLegacySessionStoreEntries({ storePath: path.join(state, file) }, issues);
+    assert.deepEqual(issues, []);
+    return entries.map(({ entry }) => entry);
+  });
   assert.equal(rows.length, volume ? 15 : 3);
   assert.equal(new Set(rows.map(row => row.sessionId)).size, rows.length);
+  for (const row of rows) {
+    assert.equal(row.modelProvider, "openai");
+    assert.equal(row.model, "gpt-5.5");
+  }
   for (const id of ["upgrade-main-session", "upgrade-direct-session", "upgrade-group-session"]) {
     const row = rows.find(row => row.sessionId === id);
     assert.ok(row, "missing original session " + id);

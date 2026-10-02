@@ -23,6 +23,7 @@ import {
   updateSwarmCollectorCompletion,
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation } from "../swarm/swarm-scheduler.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -52,18 +53,32 @@ import {
 } from "./subagent-run-generation.js";
 
 function resolveSwarmWaitOwnerSessionKeys(
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>,
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>,
   requesterSessionKey: string,
+  requesterAgentId?: string,
 ): string[] {
   const ownerSessionKeys: string[] = [];
-  const visited = new Set<string>();
+  const visited: Array<{ childSessionKey: string; childAgentId?: string }> = [];
   let currentSessionKey = requesterSessionKey.trim();
-  while (currentSessionKey && !visited.has(currentSessionKey)) {
-    visited.add(currentSessionKey);
+  let currentAgentId = requesterAgentId;
+  while (
+    currentSessionKey &&
+    !visited.some((entry) =>
+      matchesSubagentChildSessionOwner(entry, currentSessionKey, currentAgentId),
+    )
+  ) {
+    visited.push({ childSessionKey: currentSessionKey, childAgentId: currentAgentId });
     ownerSessionKeys.push(currentSessionKey);
-    const latestOwner = latestSubagentRun(getRunsForChildSession(currentSessionKey));
+    const latestOwner = latestSubagentRun(
+      getRunsForChildSession(currentSessionKey, currentAgentId),
+    );
     currentSessionKey =
       latestOwner?.controllerSessionKey?.trim() || latestOwner?.requesterSessionKey.trim() || "";
+    currentAgentId =
+      parseAgentSessionKey(currentSessionKey)?.agentId ?? latestOwner?.requesterAgentId;
   }
   return ownerSessionKeys;
 }
@@ -103,7 +118,16 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
     }
     const context = captureOpenClawStateWorkerContext();
     const selected = this.options.runs.get(runId);
-    const registrationOwnership = subagentRuns.captureRegistrationOwnership(childSessionKey);
+    const childAgentId = selected
+      ? selected.childAgentId
+      : keyAgentId
+        ? undefined
+        : explicitChildAgentId?.value;
+    const registrationOwnership = subagentRuns.captureRegistrationOwnership(
+      childSessionKey,
+      undefined,
+      childAgentId,
+    );
     let authority: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>;
     let registered: SubagentRunRecord | undefined;
     let custodyTransferred = false;
@@ -114,7 +138,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       if (
         initialOutcome !== "refused" ||
         this.options.runs.has(runId) ||
-        [...this.options.getRunsForChildSession(childSessionKey)].length > 0 ||
+        [...this.options.getRunsForChildSession(childSessionKey, childAgentId)].length > 0 ||
         !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)
       ) {
         return false;
@@ -158,7 +182,10 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         : await captureOperatorToolGatewayContinuationContext();
       const runIds = new Set([
         runId,
-        ...Array.from(this.options.getRunsForChildSession(childSessionKey), (row) => row.runId),
+        ...Array.from(
+          this.options.getRunsForChildSession(childSessionKey, childAgentId),
+          (row) => row.runId,
+        ),
       ]);
       const assertCurrent = () => {
         options.assertCurrent?.();
@@ -198,13 +225,13 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               "Subagent registration owner changed during preparation",
             );
           }
-          const siblings = [...this.options.getRunsForChildSession(childSessionKey)];
+          const siblings = [...this.options.getRunsForChildSession(childSessionKey, childAgentId)];
           if (siblings.some((row) => !runIds.has(row.runId))) {
             throw new SubagentRegistryMutationRejectedError("Subagent registration cohort changed");
           }
           const entry = createSubagentRegistrationRecord(registerParams, {
             now: Date.now(),
-            generation: nextSubagentRunGeneration(siblings, childSessionKey),
+            generation: nextSubagentRunGeneration(siblings, childSessionKey, childAgentId),
             lifecycleGeneration,
             requesterAgentId,
             requesterOrigin: normalizeDeliveryContext(registerParams.requesterOrigin),
@@ -213,6 +240,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 ? resolveSwarmWaitOwnerSessionKeys(
                     this.options.getRunsForChildSession,
                     registerParams.swarmRequesterSessionKey,
+                    requesterAgentId,
                   )
                 : undefined,
           });

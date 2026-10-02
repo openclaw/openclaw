@@ -32,7 +32,7 @@ import {
   hasVisibleCompletionResult,
 } from "../../internal-event-contract.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
-import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-context.js";
+import type { GatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-receipt.types.js";
 import {
   SOURCE_OWNER_CHANGED,
   resolveActiveWakeWithRetries,
