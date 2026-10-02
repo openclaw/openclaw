@@ -149,6 +149,37 @@ describe("config schema regressions", () => {
     ).toBe(true);
   });
 
+  it("accepts plugin channel ids as queue byChannel providers", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            buzz: "collect",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.messages?.queue?.byChannel).toEqual({ buzz: "collect" });
+    }
+  });
+
+  it("still rejects invalid queue modes for plugin channel ids", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            buzz: "nope",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts string values for agent default model inputs", () => {
     expect(
       validateAgentDefaults({
