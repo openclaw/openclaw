@@ -11,7 +11,10 @@ import {
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import {
+  captureSystemEventStoreCurrentCheck,
+  resolveSystemEventQueueKey,
+} from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -96,6 +99,7 @@ export async function drainFormattedSystemEvents(params: {
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
+  const isStoreCurrent = captureSystemEventStoreCurrentCheck(params.sessionKey, params.agentId);
   // Exec completions have a dedicated heartbeat prompt; leave those entries queued
   // so the heartbeat path can consume and deliver them.
   const queued = consumeSelectedSystemEventEntries(
@@ -104,15 +108,21 @@ export async function drainFormattedSystemEvents(params: {
       (event) => !isExecCompletionEvent(event.text),
     ),
   );
-  const sessionStateTargets = queued
-    .map((event) =>
-      event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
-    )
-    .filter((target): target is string => target !== undefined);
-  if (sessionStateTargets.length > 0) {
-    acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
+  const sessionStateNotices = queued.flatMap((event) => {
+    const targetSessionKey = event.contextKey
+      ? decodeSessionStateNoticeContextKey(event.contextKey)
+      : undefined;
+    return targetSessionKey === undefined
+      ? []
+      : [{ targetSessionKey, watcherStorePath: event.sessionStorePath ?? null }];
+  });
+  if (sessionStateNotices.length > 0) {
+    await acknowledgeSessionStateNotices(params.sessionKey, sessionStateNotices);
   }
   for (const event of queued) {
+    if (!isStoreCurrent(event.sessionStorePath)) {
+      continue;
+    }
     const compacted = compactSystemEvent(event);
     if (!compacted) {
       continue;

@@ -278,11 +278,14 @@ export async function dispatchSessionsSendFollowup(
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey
-      ? registerSessionStateWatch({
-          watcherSessionKey: replyContext.requesterSessionKey,
-          targetSessionKey,
-          targetAgentId: params.sendParams.agentId,
-        })
+      ? await registerSessionStateWatch(
+          {
+            watcherSessionKey: replyContext.requesterSessionKey,
+            targetSessionKey,
+            targetAgentId: params.sendParams.agentId,
+          },
+          { assertCurrent: assertCallerCurrent },
+        )
       : false;
   return {
     start,

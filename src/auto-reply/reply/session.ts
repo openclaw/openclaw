@@ -1135,17 +1135,16 @@ async function initSessionStateAttemptLocked(
   if (createdNewEntry) {
     recordSessionCreated(cfg, { sessionKey, agentId, entry: sessionEntry });
   }
-  if (
-    !isSystemEvent &&
-    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType === "human"
-  ) {
-    registerMainSessionGroupWatch({
-      sessionKey,
-      agentId,
-      entry: sessionEntry,
-      mainKey,
-    });
-  }
+  await registerMainSessionGroupWatch({
+    sessionKey,
+    agentId,
+    entry: sessionEntry,
+    mainKey,
+    isSystemEvent,
+    inputProvenance: ctx.InputProvenance,
+    signal: params.signal,
+  });
+  params.signal?.throwIfAborted();
   const sessionStore = committed.sessionStoreView;
   const sessionEntryHandle = createReplySessionEntryHandle({
     sessionEntry,

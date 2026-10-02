@@ -573,6 +573,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution-cleanup.test.ts",
   "src/sessions/session-diff-baseline.test.ts",
   "src/sessions/session-state-events.test.ts",
+  "src/sessions/session-state-events.worker-boundary.test.ts",
+  "src/agents/watched-sessions-prompt.test.ts",
   "src/state/openclaw-state-ownership.test.ts",
   "src/sessions/session-created.test.ts",
   "src/sessions/session-upstream-links.test.ts",
