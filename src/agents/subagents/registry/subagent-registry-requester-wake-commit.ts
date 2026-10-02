@@ -593,24 +593,6 @@ export function retryPendingWakeCommit(
   return runPendingWakeCommit(context, pending, true, "retry");
 }
 
-export function rearmRequesterWakeAfterCommit(
-  context: SubagentLifecycleWakeContext,
-  pending: PendingRequesterSettleWakeCommit,
-  entry: SubagentRunRecord,
-  isSourceCurrent: () => boolean,
-): void {
-  if (
-    pending.needsWakeContinuation &&
-    isSourceCurrent() &&
-    pending.isCurrent(entry) &&
-    entry.requesterSettleWake &&
-    getPendingWakeCommit(context, entry) === undefined
-  ) {
-    pending.needsWakeContinuation = false;
-    context.pendingRequesterSettleWakeRearms.add(entry);
-  }
-}
-
 function runPendingWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,

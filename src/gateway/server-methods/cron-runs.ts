@@ -1,4 +1,5 @@
 import { validateCronRunsParams } from "../../../packages/gateway-protocol/src/index.js";
+import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   isInvalidCronRunJobIdError,
   projectCronRunHistoryPage,
@@ -84,6 +85,7 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
           }),
           p.agentId,
           context.cron.getDefaultAgentId(),
+          tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
         );
       for (;;) {
         assertCurrent(storeKey);
@@ -92,7 +94,13 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
         }
         const jobs = currentJobs();
         const pendingJobs = visibilityRead.prepare(
-          jobs.map((job) => cronJobVisibilityTarget(job, context.cron.getDefaultAgentId())),
+          jobs.map((job) =>
+            cronJobVisibilityTarget(
+              job,
+              context.cron.getDefaultAgentId(),
+              tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
+            ),
+          ),
         );
         if (pendingJobs) {
           await pendingJobs;
@@ -100,7 +108,12 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
         }
         const visibility = visibilityRead.resolve();
         const visibleJobs = jobs.filter((job) =>
-          cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId()),
+          cronJobIsVisible(
+            job,
+            visibility,
+            context.cron.getDefaultAgentId(),
+            tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
+          ),
         );
         const visibleIds = new Set(visibleJobs.map((job) => job.id));
         const pageOptions: ReadCronRunHistoryPageOptions = {
@@ -145,14 +158,17 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
         const job = context.cron.getJob(jobId);
         const visibility = visibilityRead.resolve();
         const defaultAgentId = context.cron.getDefaultAgentId();
+        const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(context.getRuntimeConfig());
         const matchedJob =
           job &&
-          filterCronRunLogJobsByAgent([job], p.agentId, defaultAgentId).length > 0 &&
-          cronJobIsVisible(job, visibility, defaultAgentId) &&
+          filterCronRunLogJobsByAgent([job], p.agentId, defaultAgentId, legacyDefaultAgentId)
+            .length > 0 &&
+          cronJobIsVisible(job, visibility, defaultAgentId, legacyDefaultAgentId) &&
           cronJobMatchesCallerScope({
             job,
             callerScope,
             defaultAgentId,
+            legacyDefaultAgentId,
             allowCurrentJob: true,
           })
             ? job
@@ -168,10 +184,14 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
         assertCurrent(storeKey);
         const job = context.cron.getJob(jobId);
         const defaultAgentId = context.cron.getDefaultAgentId();
+        const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(context.getRuntimeConfig());
         const pendingJob = visibilityRead.prepare(
-          filterCronRunLogJobsByAgent(job ? [job] : [], p.agentId, defaultAgentId).map((target) =>
-            cronJobVisibilityTarget(target, defaultAgentId),
-          ),
+          filterCronRunLogJobsByAgent(
+            job ? [job] : [],
+            p.agentId,
+            defaultAgentId,
+            legacyDefaultAgentId,
+          ).map((target) => cronJobVisibilityTarget(target, defaultAgentId, legacyDefaultAgentId)),
         );
         if (pendingJob) {
           await pendingJob;

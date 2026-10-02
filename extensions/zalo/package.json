@@ -84,10 +84,10 @@
       "clawhubSpec": "clawhub:@openclaw/zalo",
       "npmSpec": "@openclaw/zalo",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10"
+      "minHostVersion": ">=2026.9.8"
     },
     "compat": {
-      "pluginApi": ">=2026.9.7"
+      "pluginApi": ">=2026.9.8"
     },
     "build": {
       "openclawVersion": "2026.9.7"

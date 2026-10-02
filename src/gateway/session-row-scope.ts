@@ -1,10 +1,12 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { listAgentIds } from "../agents/agent-scope-config.js";
+import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveGatewaySessionStoreTargets } from "../config/sessions/combined-store-gateway.js";
 import type { GatewaySessionStoreDiscovery } from "../config/sessions/combined-store-paths.js";
+import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import * as records from "./session-row-projection-record.js";
 
 type SessionRowScopeTarget = {
@@ -162,21 +164,44 @@ export function prepareSessionRowScopes(
   };
 }
 
+type SessionRowEntrySelection = {
+  cfg: OpenClawConfig;
+  scope: SessionRowScope;
+  byAgent: ReadonlyMap<string, ReadonlySet<string>>;
+  byParent: ReadonlyMap<string, ReadonlySet<string>>;
+  rows: ReadonlyMap<string, records.Row>;
+  dirty: ReadonlySet<string>;
+  matching: (query: records.Query, kind?: string) => records.Row[];
+  acquire: (row: records.Row) => records.Row | undefined;
+  referenced: (reference: string) => records.Row | undefined;
+};
+
+/** Selection consumes prepared metadata in the projection's synchronous owner frame. */
+export function createSessionRowEntrySelector(owner: {
+  isActive: () => boolean;
+  runAsOwner: <T>(read: () => T) => T;
+  prepare: () => boolean;
+  state: () => SessionRowEntrySelection;
+}) {
+  const noDirtyRows = new Set<string>();
+  return (query: records.Query = {}, metadataPrepared = false) => {
+    if (!owner.isActive()) {
+      return [];
+    }
+    return owner.runAsOwner(() => {
+      if (!owner.prepare()) {
+        throw new Error("Session row topology changed; prepare current facts before reading");
+      }
+      const state = owner.state();
+      return withAgentRosterFactsBatch(state.cfg, () =>
+        selectSessionRowEntries(metadataPrepared ? { ...state, dirty: noDirtyRows } : state, query),
+      );
+    });
+  };
+}
+
 /** Select metadata before federation, visibility, and reader-only materialization. */
-export function selectSessionRowEntries(
-  params: {
-    cfg: OpenClawConfig;
-    scope: SessionRowScope;
-    byAgent: ReadonlyMap<string, ReadonlySet<string>>;
-    byParent: ReadonlyMap<string, ReadonlySet<string>>;
-    rows: ReadonlyMap<string, records.Row>;
-    dirty: ReadonlySet<string>;
-    matching: (query: records.Query, kind?: string) => records.Row[];
-    acquire: (row: records.Row) => records.Row | undefined;
-    referenced: (reference: string) => records.Row | undefined;
-  },
-  query: records.Query,
-) {
+function selectSessionRowEntries(params: SessionRowEntrySelection, query: records.Query) {
   const { cfg, scope, byAgent, byParent, rows, dirty, matching, acquire } = params;
   const matches = createSessionRowScopeMatcher(query, scope, true);
   const parent = query.parentSessionKey;
@@ -214,7 +239,9 @@ export function selectSessionRowEntries(
     // Broad publications can change IDs before the resident index has caught up.
     for (const id of dirty) {
       const row = rows.get(id);
-      if (row && matches(row)) {
+      // Category cannot change an ID; unrelated uncertain categories do not
+      // participate in the structural refresh needed to resolve this lookup.
+      if (row && row.unresolvedDatabaseFacts !== "category" && matches(row)) {
         acquire(row);
       }
     }
@@ -225,6 +252,20 @@ export function selectSessionRowEntries(
   const candidates = keys
     ? [...keys].flatMap((key) => matching({ ...query, key }))
     : matching(query);
+  const pending: records.Lookup[] = [];
+  for (const row of candidates) {
+    if (row?.unresolvedDatabaseFacts === "category" && matches(row)) {
+      pending.push({ agentId: row.agentId, key: row.key, storePath: row.storeTarget.storePath });
+      if (pending.length === MAX_SESSION_ROW_FACTS_KEYS) {
+        break;
+      }
+    }
+  }
+  // Synchronous selection cannot consume unresolved categories, even when a
+  // metadata-only caller omits dirty rows. Exact preparation remains bounded.
+  if (pending.length > 0) {
+    throw new SessionRowFactsPending(pending);
+  }
   const acquired =
     sessionIdOrKey || dirty.size === 0
       ? candidates

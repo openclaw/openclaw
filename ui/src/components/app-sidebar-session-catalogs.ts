@@ -9,7 +9,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
-import { repoName } from "../lib/session-display.ts";
+import { pathDisplayName } from "../lib/path-display.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
@@ -79,11 +79,11 @@ export function findCatalogSessionHovercardRow(params: {
             ? branch || session.pullRequest
               ? {
                   kind: "project",
-                  name: repoName(cwd),
+                  name: pathDisplayName(cwd),
                   path: cwd,
                   ...(branch ? { branch } : {}),
                 }
-              : { kind: "workspace", name: repoName(cwd), path: cwd }
+              : { kind: "workspace", name: pathDisplayName(cwd), path: cwd }
             : params.liveRow?.workContext,
         };
       }
@@ -193,6 +193,7 @@ export type CatalogSessionMenuRequest = {
   canOpenTerminal: boolean;
   canDelete: boolean;
   name: string;
+  displayName?: string;
   meta: string;
 };
 

@@ -10,6 +10,7 @@ import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProofEnabled,
@@ -22,12 +23,16 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const buildId = "startup-recovery-proof";
+let buildRoot: string;
 const suite = createControlUiE2eSuite({
   name: "Control UI startup recovery production E2E",
   startServer: async () => {
     const outDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-startup-recovery-"));
+    buildRoot = outDir;
     try {
-      const server = await startProductionControlUiE2eServer(outDir, buildId);
+      const server = await startProductionControlUiE2eServer(outDir, buildId, undefined, {
+        includeBootGroups: false,
+      });
       return {
         ...server,
         close: async () => {
@@ -138,7 +143,10 @@ suite.define(() => {
           }
         });
         await page.route(
-          /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/,
+          controlUiE2eBuiltModuleRequest(
+            "ui/src/app/session-placement-startup.runtime.ts",
+            buildRoot,
+          ),
           async (route) => {
             moduleRequests += 1;
             if (moduleRequests === 1) {
@@ -301,7 +309,10 @@ suite.define(() => {
             }
             await page.locator(".new-session-page__message").fill(separateDraft);
           }
-          const configRuntime = /\/assets\/config-page-[^/?]+\.js(?:\?.*)?$/;
+          const configRuntime = controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/config/config-page.ts",
+            buildRoot,
+          );
           await page.route(configRuntime, (route) => route.abort("failed"));
           await navigateInApp(page, "appearance");
           const reload = page

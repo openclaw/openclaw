@@ -45,6 +45,7 @@ import {
 } from "../../scripts/lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { FULL_RELEASE_CHILD_EVIDENCE_JOB } from "../../scripts/lib/full-release-evidence.mjs";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import {
   artifactDownloadTimeoutMs,
   createReleaseEvidenceClient,
@@ -73,12 +74,44 @@ import {
 } from "../../scripts/release-ci-summary.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
+import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function runInterruptedPlanFixture(
+  args: string[],
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+) {
+  let stdout = "";
+  let stderr = "";
+  const command = runManagedCommand({
+    bin: process.execPath,
+    args,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+    timeoutMs: 12_000,
+    requireProcessTreeExit: process.platform !== "win32",
+    signal,
+    onReady(child) {
+      child.stdout!.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+    },
+  });
+  try {
+    return { status: await withinTest(command, signal), stdout, stderr };
+  } finally {
+    await command.catch(() => {});
+  }
+}
 
 function publicationSourceFixture(
   fixture: ReturnType<typeof trustedMainNpmFixture>,
@@ -454,7 +487,7 @@ describe("original publication admission reader", () => {
     }
   });
 
-  it.each([
+  it.for([
     "workflow-restore",
     "workflow-restore-failed-resolution",
     "workflow-plan-restore",
@@ -489,7 +522,7 @@ describe("original publication admission reader", () => {
     "extra-entry",
     "symlink-entry",
     "changed-selection",
-  ])("authenticates retained attempt one before any new observations: %s", (fault) => {
+  ])("authenticates retained attempt one before any new observations: %s", async (fault, t) => {
     const fixture = publicationRestoreFixture();
     const cachedRestore = fault.includes("cached");
     const witnessContract =
@@ -504,7 +537,18 @@ describe("original publication admission reader", () => {
       fixture.admission.binding.observationsDigest = `sha256:${createHash("sha256").update(publicationObservationJson(fixture.admission.observations)).digest("hex")}`;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
     }
-    const root = tempDirs.make("publication-original-reader-");
+    let interruptedWork: ReturnType<typeof runInterruptedPlanFixture> | undefined;
+    const caseTempDirs =
+      fault === "interrupted-sealer"
+        ? useAutoCleanupTempDirTracker((cleanup) =>
+            t.onTestFinished(async () => {
+              // The interrupted fixture owns its root until its managed process tree has joined.
+              await interruptedWork?.catch(() => {});
+              cleanup();
+            }),
+          )
+        : tempDirs;
+    const root = caseTempDirs.make("publication-original-reader-");
     const request = join(root, "request.json");
     const fixturesPath = join(root, "fixtures.json");
     const archivePath = join(root, "plan.zip");
@@ -533,6 +577,7 @@ describe("original publication admission reader", () => {
       const pendingGh = gh;
       const ready = join(root, "pending-gh-ready");
       const settled = join(root, "pending-gh-settled");
+      const receipts = join(root, "pending-gh-receipts");
       const written = join(root, "interrupted-plan.json");
       const outputsPath = join(root, "interrupted-outputs");
       const admissionPath = join(root, "source-admission.json");
@@ -548,11 +593,18 @@ describe("original publication admission reader", () => {
       writeFileSync(
         pendingGh,
         `#!${process.execPath}
+const fs = require("node:fs");
+const receipts = fs.openSync(${JSON.stringify(receipts)}, "w");
 const parent = process.ppid;
-process.once("exit", () => require("node:fs").writeFileSync(${JSON.stringify(settled)}, "settled"));
+process.once("exit", () => {
+  fs.writeFileSync(${JSON.stringify(settled)}, "settled");
+  // Synchronous FIFO writes cannot be lost when this orphan exits immediately afterward.
+  fs.writeSync(receipts, "settled\\n");
+});
 setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 10);
 setTimeout(() => {}, 30000);
-require("node:fs").writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+fs.writeSync(receipts, "ready\\n");
 `,
         { mode: 0o755 },
       );
@@ -579,58 +631,75 @@ require("node:fs").writeFileSync(${JSON.stringify(ready)}, String(process.pid));
         evidenceRunUrl: "https://example.invalid/runs/99",
         evidenceChangedPaths: [],
       };
-      const interrupted = spawnSync(
-        process.execPath,
+      interruptedWork = runInterruptedPlanFixture(
         [
           "--input-type=module",
           "--eval",
           `
-import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { setTimeout as delay } from "node:timers/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { closeSync, createReadStream, existsSync, openSync, readFileSync } from "node:fs";
+import { once } from "node:events";
+execFileSync("mkfifo", [${JSON.stringify(receipts)}]);
+// Keep the FIFO open until gh owns its writer; then EOF joins that fixture's exit.
+let heldWriter = openSync(${JSON.stringify(receipts)}, "r+");
+const receiptStream = createReadStream(${JSON.stringify(receipts)}, { encoding: "utf8" });
+const receiptClosed = new Promise(resolve => receiptStream.once("close", resolve));
+const ended = once(receiptStream, "end");
+let markReady;
+const reached = new Promise(resolve => { markReady = resolve; });
+let receiptText = "";
+receiptStream.on("data", chunk => {
+  receiptText += chunk;
+  if (receiptText.includes("ready\\n")) markReady();
+});
+await once(receiptStream, "open");
 const child = spawn(process.execPath, [${JSON.stringify(resolve("scripts/full-release-validation-state.mjs"))}, "plan"], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
 const closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
 const timeout = setTimeout(() => child.kill("SIGKILL"), 8000);
 try {
-  while (!existsSync(${JSON.stringify(ready)}) && child.exitCode === null) await delay(10);
-  if (!existsSync(${JSON.stringify(ready)})) {
-    await closed;
-    throw new Error("reuse did not reach controlled gh: " + (existsSync(${JSON.stringify(written)}) ? readFileSync(${JSON.stringify(written)}, "utf8") : "no checkpoint"));
-  }
+  await Promise.race([reached, closed.then(() => {
+    // The durable marker is written before the pipe receipt; close can win their delivery race.
+    if (!existsSync(${JSON.stringify(ready)})) throw new Error("reuse did not reach controlled gh: " + (existsSync(${JSON.stringify(written)}) ? readFileSync(${JSON.stringify(written)}, "utf8") : "no checkpoint"));
+  })]);
+  closeSync(heldWriter); heldWriter = undefined;
   child.kill("SIGTERM");
   const result = await closed;
   if (result.code !== 1 || result.signal !== null) throw new Error("interruption did not write and exit 1");
-  const settlementDeadline = Date.now() + 2000;
-  while (!existsSync(${JSON.stringify(settled)}) && Date.now() < settlementDeadline) await delay(10);
+  await ended;
   if (!existsSync(${JSON.stringify(settled)})) throw new Error("controlled gh did not settle after owner interruption");
-} finally { clearTimeout(timeout); }
+} finally {
+  clearTimeout(timeout);
+  if (heldWriter !== undefined) closeSync(heldWriter);
+  receiptStream.destroy();
+  child.kill("SIGKILL");
+  await closed;
+  await receiptClosed;
+}
 `,
         ],
         {
-          encoding: "utf8",
-          timeout: 12_000,
-          env: {
-            PATH: `${root}:${process.env.PATH ?? ""}`,
-            OPENCLAW_GH_BIN: pendingGh,
-            GH_TOKEN: "synthetic-evidence-token",
-            FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1",
-            FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1",
-            FULL_RELEASE_EXECUTION_PLAN_PATH: written,
-            PUBLICATION_ADMISSION_PATH: admissionPath,
-            FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(inputs),
-            GITHUB_OUTPUT: outputsPath,
-            GITHUB_REPOSITORY: "openclaw/openclaw",
-            GITHUB_RUN_ID: fixture.runId,
-            GITHUB_RUN_ATTEMPT: "1",
-            GITHUB_REF_NAME: "main",
-            GITHUB_SHA: fixture.workflowSha,
-            TARGET_SHA: fixture.targetSha,
-            RELEASE_PROFILE: "beta",
-            RERUN_GROUP: "all",
-          },
+          PATH: `${root}:${process.env.PATH ?? ""}`,
+          OPENCLAW_GH_BIN: pendingGh,
+          GH_TOKEN: "synthetic-evidence-token",
+          FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1",
+          FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1",
+          FULL_RELEASE_EXECUTION_PLAN_PATH: written,
+          PUBLICATION_ADMISSION_PATH: admissionPath,
+          FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(inputs),
+          GITHUB_OUTPUT: outputsPath,
+          GITHUB_REPOSITORY: "openclaw/openclaw",
+          GITHUB_RUN_ID: fixture.runId,
+          GITHUB_RUN_ATTEMPT: "1",
+          GITHUB_REF_NAME: "main",
+          GITHUB_SHA: fixture.workflowSha,
+          TARGET_SHA: fixture.targetSha,
+          RELEASE_PROFILE: "beta",
+          RERUN_GROUP: "all",
         },
+        t.signal,
       );
+      const interrupted = await interruptedWork;
       expect(interrupted.status, interrupted.stderr).toBe(0);
       Object.assign(fixture.plan, JSON.parse(readFileSync(written, "utf8")));
       expect(fixture.plan.errors).toContainEqual(

@@ -3,6 +3,7 @@
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";

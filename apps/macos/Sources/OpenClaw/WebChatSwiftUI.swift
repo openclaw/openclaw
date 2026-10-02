@@ -784,7 +784,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                 }
 
                 let stream = await self.connection.subscribe()
-                var hasSeenSnapshot = false
+                var previousLease: GatewayConnection.ServerLease?
                 for await delivery in stream {
                     if Task.isCancelled {
                         return
@@ -793,10 +793,12 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                     if case .snapshot = push {
                         try? await self.connection.updateNativeChatSubscription(owner: nil, target: nil)
                         guard delivery.isCurrent else { continue }
-                        if hasSeenSnapshot {
-                            continuation.yield(.routeChanged)
+                        if let previousLease {
+                            let event = await self.snapshotTransportEvent(previousLease: previousLease)
+                            guard delivery.isCurrent else { continue }
+                            continuation.yield(event)
                         }
-                        hasSeenSnapshot = true
+                        previousLease = delivery.serverLease
                     }
                     if let evt = Self.mapPushToTransportEvent(push) {
                         continuation.yield(evt)
@@ -831,15 +833,12 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
 
 private enum MacChatMessageSpeechError: LocalizedError {
     case invalidRequest
-    case emptyAudio
     case unsupportedTransport
 
     var errorDescription: String? {
         switch self {
         case .invalidRequest:
             "Failed to encode tts.speak request"
-        case .emptyAudio:
-            "Gateway tts.speak returned empty audio"
         case .unsupportedTransport:
             "Gateway TTS is unavailable for this chat transport"
         }
@@ -863,15 +862,7 @@ private enum MacChatMessageSpeechClient {
             params: params.mapValues(AnyCodable.init),
             timeoutMs: self.requestTimeoutMs,
             ifCurrentServerLease: serverLease)
-        let response = try JSONDecoder().decode(TtsSpeakResult.self, from: responseData)
-        guard let audioData = Data(base64Encoded: response.audiobase64), !audioData.isEmpty else {
-            throw MacChatMessageSpeechError.emptyAudio
-        }
-        return OpenClawChatSpeechClip(
-            data: audioData,
-            outputFormat: response.outputformat,
-            mimeType: response.mimetype,
-            fileExtension: response.fileextension)
+        return try OpenClawChatGatewayPayloadCodec.decodeSpeechClip(responseData)
     }
 }
 
@@ -1216,10 +1207,12 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         // Custom transports have no Gateway owner; never attach them to the primary connection.
         if let gatewayTransport {
             let chatConnection = gatewayTransport.connection
-            self.routingIdentityTask = Task { @MainActor [weak vm] in
+            self.routingIdentityTask = Task { @MainActor [weak vm, windowCommands = self.windowCommands] in
                 let pushes = await chatConnection.subscribe()
                 for await delivery in pushes {
                     guard !Task.isCancelled, let vm else { return }
+                    Self.configureSessionMenus(
+                        windowCommands, connection: chatConnection, target: gatewayTarget, delivery: delivery)
                     guard delivery.isCurrent, case .snapshot = delivery.push else { continue }
                     let routingIdentity = try? await chatConnection.sessionRoutingIdentity(
                         ifCurrentRoute: delivery.serverLease.route)
@@ -1248,8 +1241,6 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
                 }
             }
         }
-        // Full window: native split-view shell with sessions sidebar and
-        // toolbar pickers bridged into the NSToolbar.
         let hosting = NSHostingController(rootView: MacChatSurface(
             viewModel: vm,
             windowCommands: self.windowCommands,
@@ -1277,6 +1268,43 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
             self?.onSessionTargetChanged?(vm.currentSessionTarget)
         }
         self.sidebarPresence?.start()
+    }
+
+    static func configureSessionMenus(
+        _ commands: OpenClawChatWindowCommands,
+        connection: GatewayConnection,
+        target: DashboardGatewayTarget?,
+        delivery: GatewayConnection.PushDelivery)
+    {
+        if case .disconnected = delivery.event {
+            commands.setSessionMenuConnection(nil)
+            return
+        }
+        guard let target, !Task.isCancelled, delivery.isCurrent,
+              case let .snapshot(hello) = delivery.push else { return }
+        let lease = delivery.serverLease
+        let base = hello.controluiurl.flatMap(URL.init(string:)) ?? lease.route.url
+        commands.setSessionMenuConnection(OpenClawSessionMenuConnection(
+            hello: hello,
+            local: target == .local || (target == .primary && AppStateStore.shared.connectionMode == .local),
+            selfProfileID: hello.snapshot.presence.first {
+                $0.instanceid == InstanceIdentity.instanceId && $0.reason != "disconnect"
+            }?.user?["id"]?.value as? String,
+            isCurrent: { connection.serverLeaseMatchesCurrentState(lease) },
+            request: { try await connection.request($0, ifCurrentServerLease: lease) },
+            link: { session, preview in
+                guard connection.serverLeaseMatchesCurrentState(lease) else { return nil }
+                return WebChatManager.sessionLink(
+                    base: base, sessionKey: session.key, agentID: session.agentId, preview: preview)
+            },
+            openWindow: { session in
+                guard connection.serverLeaseMatchesCurrentState(lease) else { return }
+                WebChatManager.shared.openGatewayWindow(
+                    for: target,
+                    newWindow: true,
+                    route: WebChatRoute(sessionKey: session.key, agentID: session.agentId),
+                    sourceIsCurrent: { connection.serverLeaseMatchesCurrentState(lease) })
+            }))
     }
 
     var acceptsNativeDraft: Bool {
@@ -1316,6 +1344,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         guard let window, notification.object as? NSWindow === window, !window.isHiddenForExperience else { return }
+        self.windowCommands.refreshSessionMenus()
         self.onBecameKey?()
         self.conversationController?.present(visible: true, active: true)
     }
@@ -1354,6 +1383,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         self.sidebarPresence?.stop()
         self.routingIdentityTask?.cancel()
         self.routingIdentityTask = nil
+        self.windowCommands.setSessionMenuConnection(nil)
         self.conversationController?.close()
         self.viewModel.detachTransport()
         self.window = nil

@@ -117,7 +117,7 @@ describe("action-bound plugin state", () => {
             expect(method).toBe("users.list");
             return { profiles: [] };
           });
-          const registry = loadAndActivateRootPluginRegistry({
+          const registry = await loadAndActivateRootPluginRegistry({
             config,
             env: state.env,
             workspaceDir: state.workspaceDir,

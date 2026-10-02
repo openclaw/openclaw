@@ -1,11 +1,20 @@
 import {
   isSessionTranscriptProjectionUnavailableError,
+  readSessionTranscriptBoundedMessageTailPageFromProjection,
+  type SessionTranscriptBoundedMessageTailOptions,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import {
+  prepareSqliteTranscriptReadScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { readSessionTranscriptWatermark } from "../config/sessions/session-accessor.sqlite-transcript-watermark.js";
 import { bindSessionTranscriptStoreScope } from "../config/sessions/session-accessor.transcript-target.js";
 import { readRestoredSessionTranscript } from "../config/sessions/session-cold-storage-read.js";
+import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
+import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
@@ -95,6 +104,25 @@ export const readSessionMessagesWithSourceAsync = createHistoryPageReader(
   (read, target, options) => read({ kind: "source-messages", params: { target, options } }),
 );
 
+export const readSessionTranscriptAccountingAsync = createHistoryPageReader(
+  async (target, options: SessionTranscriptAccountingOptions) =>
+    withCurrentProjectionSnapshot(target, (projection) =>
+      readSessionTranscriptAccountingFromProjection(projection, options),
+    ),
+  (read, target, options) => read({ kind: "active-accounting", params: { target, options } }),
+);
+
+export const readSessionTranscriptBoundedMessageTailPageAsync = createHistoryPageReader(
+  async (target, options: SessionTranscriptBoundedMessageTailOptions) =>
+    withCurrentProjectionSnapshot(
+      target,
+      (projection) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      options,
+    ),
+  (read, target, options) => read({ kind: "bounded-tail", params: { target, options } }),
+);
+
 export const readRecentSessionMessagesWithStatsAsync = createHistoryPageReader(
   sessionTranscriptReader.readRecentSessionMessagesWithStatsAsync,
   (read, target, options) => read({ kind: "recent-page", params: { target, options } }),
@@ -145,6 +173,24 @@ export async function readSessionMessageByIdAsync(
     kind: "message-by-id",
     params: { target, messageId, options: capturedOptions },
   });
+}
+
+export async function readSessionTranscriptWatermarkAsync(
+  scope: SessionTranscriptReadScope & { agentId: string; storePath: string },
+) {
+  const target = {
+    ...scope,
+    env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
+  };
+  if (usesProcessHeldTranscript(target)) {
+    return readSessionTranscriptWatermark(target);
+  }
+  const { withSessionHistoryWorkerDatabase } =
+    await import("../config/sessions/session-transcript-worker-runtime.js");
+  return withSessionHistoryWorkerDatabase(
+    toDatabaseOptions(await prepareSqliteTranscriptReadScope(target)),
+    (owner) => owner.readWatermark({ scope: target }),
+  );
 }
 
 /** Keep exact membership and its full-history validation in the admitted history worker. */

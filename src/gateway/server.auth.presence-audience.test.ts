@@ -16,11 +16,8 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
 import { listSystemPresence, type SystemPresence } from "../infra/system-presence.js";
-import {
-  ensureProfileForEmail,
-  setDisplayName,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   connectReq,
   CONTROL_UI_CLIENT,

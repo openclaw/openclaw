@@ -9,13 +9,12 @@ read_when:
 
 ## Announce
 
-Sub-agents report back via an announce step:
+Sub-agents report back through completion delivery:
 
-- The announce step runs inside the sub-agent session (not the requester session).
-- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
-- An exact `ANNOUNCE_SKIP` response suppresses announce output.
-- For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
-- Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.
+- The completed child's result is handed to the requester; delivery does not ask the child to generate a separate announcement.
+- Runs spawned with `expectsCompletionMessage: false` skip completion delivery entirely; the run registry records their delivery as not required.
+- Subagents must return a meaningful result or a concrete blocker. An exact child `NO_REPLY` response or no output cannot satisfy a missing child result and triggers normal missing-answer recovery. A retained completion without a visible result is handed to the requester as `(no output)`, including when several child results are collected together.
+- Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
 
 By default, delivery depends on requester depth:
 
@@ -53,10 +52,22 @@ child's result remains available for recovery.
 ### Private parent completion
 
 Set `completionTarget: "parent"` on `sessions_spawn` to return the result in a
-private turn of the original requester session. The parent can inspect the result,
-start another child, or reply `NO_REPLY`. OpenClaw does not automatically send the
-child result, parent final, or generated media to a channel. The parent can still
-choose to send a message through its permitted tools.
+private turn of the original requester session. The parent reviews the result,
+continues unfinished work, and records the reviewed outcome in its internal final
+reply. OpenClaw does not automatically send the child result, parent final, or
+generated media to a channel. The parent can still choose to send a message
+through its permitted tools.
+
+If the parent called `sessions_yield` while waiting for private children, the
+yield hands the conversation back to it. When those children settle, the parent
+resumes and answers the original conversation under its normal reply rules: with
+automatic replies its final text is delivered; with `visibleReplies:
+"message_tool"` it must send the answer with the `message` tool, and plain final
+text stays internal. Child results stay internal input, and nothing is sent
+automatically on the child's behalf. The resumed turn stays bound to the parent
+session that spawned the children: if that session is reset (for example with
+`/new`) or replaced before the parent resumes, the results are dropped and
+nothing is sent.
 
 This option supports hidden, native, one-shot runs only. It cannot be combined
 with ACP, `collect: true`, `visible: true`, `thread: true`, `mode: "session"`, or
@@ -66,8 +77,9 @@ Finished private results remain in the registry until the spawning parent turn
 settles. A normal parent finish releases each ready result for private review;
 `sessions_yield` hands the results to its existing child batch instead. A reset or
 removed parent does not transfer the result to another session. When a settled
-batch contains a private result, its combined review stays private; ordinary
-siblings retain their individual completion delivery.
+batch contains a private result, the child findings stay private input to the
+parent's review or yielded continuation; ordinary siblings retain their individual
+completion delivery.
 
 Inspecting a completed child's status before yielding does not consume or invalidate
 its private result.
@@ -92,7 +104,7 @@ Announce context is normalized to a stable internal event block:
 | Type           | Announce type + task label                                                                               |
 | Status         | Derived from runtime outcome (`ok`, `error`, `timeout`, or `unknown`) — **not** inferred from model text |
 | Result content | Latest visible assistant text from the child                                                             |
-| Follow-up      | Instruction describing when to reply vs stay silent                                                      |
+| Follow-up      | Instruction to review the result, continue unfinished work, and report the outcome                       |
 
 The result is the child's complete visible final answer for the completed run.
 OpenClaw preserves prompt-data escaping and stable order when it delivers several
@@ -100,10 +112,14 @@ results together. It does not shorten an answer to fit the former announce
 projection limits. The bounded lifecycle snapshot remains separate from the
 complete answer sent to the parent.
 
+A successful child with an empty final reply remains in the batch with its task
+identity, `ok` status, and `(no output)` result. Its successful execution status
+does not satisfy the required result.
+
 For nested work, descendant findings help the child form its answer. The child's
-own final answer is what travels onward to its parent. If the child sends its
-final answer through the message tool and then returns `NO_REPLY`, that final
-answer remains authoritative.
+own final answer is what travels onward to its parent. A final answer delivered
+through the message tool remains authoritative through its recorded source
+delivery, even if a later terminal response is empty or silent.
 
 Completion delivery can read an existing registered archive when child cleanup
 finishes before the parent resumes. The Control UI's **Tasks** inspector also

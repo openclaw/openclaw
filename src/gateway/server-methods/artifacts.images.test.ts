@@ -3,17 +3,23 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { ArtifactsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { materializeRuntimeConfig } from "../../config/materialize.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
+import { prepareAgentSession } from "./agent-session-prepare.js";
 import { artifactsHandlers } from "./artifacts.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const scope = {
   agentId: "main",
@@ -25,6 +31,7 @@ async function invoke(
   method: "artifacts.list" | "artifacts.download",
   params: Record<string, unknown>,
   client: GatewayClient | null = null,
+  context: GatewayRequestContext = createDirectChatContext(),
 ) {
   let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
   await expectDefined(
@@ -32,7 +39,7 @@ async function invoke(
     "artifact handler",
   )({
     params: { sessionKey: scope.sessionKey, ...params },
-    context: createDirectChatContext(),
+    context,
     req: { type: "req", id: "images", method },
     client,
     isWebchatConnect: () => false,
@@ -340,5 +347,113 @@ describe("bounded Activity image discovery", () => {
         error: { details: { type: "artifact_cursor_invalid" } },
       });
     });
+  });
+});
+
+it("keeps an admitted run on its stored main row when the public alias becomes global", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const source: OpenClawConfig = { agents: { ownership: "explicit", entries: { research: {} } } };
+    const materialize = (config: OpenClawConfig) =>
+      materializeRuntimeConfig(config, {
+        env: state.env,
+        manifestRegistry: { plugins: [] },
+      });
+    await state.writeConfig(source);
+    const initial = materialize(source);
+    setRuntimeConfigSnapshot(initial, source);
+    const runId = "qualified-main-run";
+    const stored = {
+      agentId: "research",
+      sessionKey: "agent:research:main",
+      sessionId: "qualified-main-window",
+    };
+    await upsertSessionEntryCore(stored, { sessionId: stored.sessionId, updatedAt: Date.now() });
+    await appendTranscriptMessage(stored, {
+      message: {
+        role: "assistant",
+        content: [
+          { type: "file", data: "aGVsbG8=", mimeType: "text/plain", title: "stored-main.txt" },
+        ],
+        __openclaw: { runId },
+      },
+    });
+    const admitted = expectDefined(
+      prepareAgentSession({
+        cfg: initial,
+        requestedSessionKey: stored.sessionKey,
+        requestedSessionId: stored.sessionId,
+        expectedExistingSessionId: stored.sessionId,
+        request: { message: "stored address proof", idempotencyKey: runId },
+        canUseCronRunContinuation: false,
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        respond: () => {
+          throw new Error("Expected session admission");
+        },
+      }),
+      "admitted session",
+    );
+    expect(admitted.canonicalKey).toBe(stored.sessionKey);
+    expect(admitted.canonicalSessionAgentId).toBe(stored.agentId);
+    registerAgentRunContext(runId, {
+      agentId: admitted.canonicalSessionAgentId,
+      sessionKey: admitted.canonicalKey,
+      sessionId: admitted.sessionId,
+    });
+    try {
+      const globalSource: OpenClawConfig = { ...source, session: { scope: "global" } };
+      await state.writeConfig(globalSource);
+      const current = materialize(globalSource);
+      setRuntimeConfigSnapshot(current, globalSource);
+      const global = { agentId: "research", sessionKey: "global", sessionId: "global-window" };
+      await upsertSessionEntryCore(global, { sessionId: global.sessionId, updatedAt: Date.now() });
+      await appendTranscriptMessage(global, {
+        message: {
+          role: "assistant",
+          content: [
+            { type: "file", data: "Z2xvYmFs", mimeType: "text/plain", title: "global.txt" },
+          ],
+        },
+      });
+      const context = createDirectChatContext({ getRuntimeConfig: () => current });
+      const client = sharingPolicyClient({ user: "artifact-viewer", scopes: ["operator.read"] });
+      const aliased = await invoke(
+        "artifacts.list",
+        { sessionKey: stored.sessionKey },
+        client,
+        context,
+      );
+      expect(aliased, JSON.stringify(aliased)).toMatchObject({
+        ok: true,
+        payload: { artifacts: [{ title: "global.txt", sessionKey: "global" }] },
+      });
+      for (const agentId of [undefined, "research"]) {
+        expect(
+          await invoke(
+            "artifacts.list",
+            { sessionKey: undefined, runId, agentId },
+            client,
+            context,
+          ),
+        ).toMatchObject({
+          ok: true,
+          payload: {
+            artifacts: [{ title: "stored-main.txt", sessionKey: stored.sessionKey, runId }],
+          },
+        });
+      }
+      await upsertSessionEntryCore(stored, {
+        sessionId: stored.sessionId,
+        updatedAt: Date.now(),
+        visibility: "draft",
+      });
+      expect(
+        await invoke("artifacts.list", { sessionKey: undefined, runId }, client, context),
+      ).toMatchObject({ ok: false, error: { details: { type: "artifact_scope_not_found" } } });
+      expect(
+        await invoke("artifacts.list", { sessionKey: stored.sessionKey }, client, context),
+      ).toMatchObject({ ok: true, payload: { artifacts: [{ title: "global.txt" }] } });
+    } finally {
+      clearAgentRunContext(runId);
+    }
   });
 });

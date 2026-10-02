@@ -1,9 +1,11 @@
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { retainGatewayDeviceRevocation } from "../../gateway/device-revocation.js";
 import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import {
@@ -93,7 +95,7 @@ async function finishPreparedManualRun(
       if (err instanceof CronRunReceiptRevisionError && err.reason === "owner-unavailable") {
         receiptSettlementDisposition = "owner-unavailable";
       }
-      coreResult = authorCronRunCompletion(state, executionJob, {
+      coreResult = authorCronRunCompletion(executionJob, {
         status: "error",
         error:
           err instanceof CronRunReceiptRevisionError ? err.message : normalizeCronRunErrorText(err),
@@ -504,90 +506,93 @@ export async function enqueueRun(
   };
   let queuedRun: Promise<unknown>;
   try {
-    queuedRun = runWithGatewayIndependentRootWorkContinuation(async () => {
-      opts?.commitGuard?.();
-      const prepared = await prepareManualRun(state, id, mode, {
-        runId,
-        scheduleOwnershipAtMs,
-        terminalTracker,
-        commitGuard: opts?.commitGuard,
-      });
-      if (!prepared.ok || !prepared.ran) {
-        acceptance.resolve(prepared);
-        return prepared;
-      }
-      let dispatched = false;
-      try {
+    // The run outlives the calling agent turn, so it must not write through that turn's transcript lifecycle.
+    queuedRun = runWithoutOwnedSessionTranscriptWrites(() =>
+      runWithGatewayIndependentRootWorkContinuation(async () => {
         opts?.commitGuard?.();
-        return await enqueueCommandInLane(
-          CommandLane.Cron,
-          async (owningCronLaneTaskMarker) => {
-            acceptQueue();
-            dispatched = true;
-            const result = await executePreparedManualRun(
-              state,
-              { ...prepared, owningCronLaneTaskMarker },
-              mode,
-              activationSettled.resolve,
-            );
-            if (result.ok && "ran" in result && !result.ran) {
-              if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
-                const finishedAt = state.deps.nowMs();
-                const job = state.store?.jobs.find((entry) => entry.id === id);
-                await emitCronRunFinished(
-                  state,
-                  {
-                    jobId: id,
-                    action: "finished",
-                    job,
-                    status: "skipped",
-                    error: `queued manual run skipped before execution: ${result.reason}`,
-                    runId,
-                    runAtMs: finishedAt,
-                    durationMs: 0,
-                    nextRunAtMs: job?.state.nextRunAtMs,
-                  },
-                  terminalTracker,
+        const prepared = await prepareManualRun(state, id, mode, {
+          runId,
+          scheduleOwnershipAtMs,
+          terminalTracker,
+          commitGuard: opts?.commitGuard,
+        });
+        if (!prepared.ok || !prepared.ran) {
+          acceptance.resolve(prepared);
+          return prepared;
+        }
+        let dispatched = false;
+        try {
+          opts?.commitGuard?.();
+          return await enqueueCommandInLane(
+            CommandLane.Cron,
+            async (owningCronLaneTaskMarker) => {
+              acceptQueue();
+              dispatched = true;
+              const result = await executePreparedManualRun(
+                state,
+                { ...prepared, owningCronLaneTaskMarker },
+                mode,
+                activationSettled.resolve,
+              );
+              if (result.ok && "ran" in result && !result.ran) {
+                if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
+                  const finishedAt = state.deps.nowMs();
+                  const job = state.store?.jobs.find((entry) => entry.id === id);
+                  await emitCronRunFinished(
+                    state,
+                    {
+                      jobId: id,
+                      action: "finished",
+                      job,
+                      status: "skipped",
+                      error: `queued manual run skipped before execution: ${result.reason}`,
+                      runId,
+                      runAtMs: finishedAt,
+                      durationMs: 0,
+                      nextRunAtMs: job?.state.nextRunAtMs,
+                    },
+                    terminalTracker,
+                  );
+                }
+                state.deps.log.info(
+                  { jobId: id, runId, reason: result.reason },
+                  "cron: queued manual run skipped before execution",
                 );
               }
-              state.deps.log.info(
-                { jobId: id, runId, reason: result.reason },
-                "cron: queued manual run skipped before execution",
+              return result;
+            },
+            {
+              onQueued: acceptQueue,
+              taskIdentity: { taskKind: "cron", runId },
+              warnAfterMs: 5_000,
+              onWait: (waitMs, queuedAhead) => {
+                state.deps.log.warn(
+                  { jobId: id, runId, waitMs, queuedAhead },
+                  "cron: queued manual run waiting for an execution slot",
+                );
+              },
+            },
+          );
+        } finally {
+          if (!dispatched) {
+            try {
+              await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
+            } catch (cleanupError) {
+              state.deps.log.warn(
+                { jobId: id, err: String(cleanupError) },
+                "cron: failed to release manual reservation after queue rejection",
               );
             }
-            return result;
-          },
-          {
-            onQueued: acceptQueue,
-            taskIdentity: { taskKind: "cron", runId },
-            warnAfterMs: 5_000,
-            onWait: (waitMs, queuedAhead) => {
-              state.deps.log.warn(
-                { jobId: id, runId, waitMs, queuedAhead },
-                "cron: queued manual run waiting for an execution slot",
-              );
-            },
-          },
-        );
-      } finally {
-        if (!dispatched) {
-          try {
-            await releasePreparedManualReservationAfterReloadWithRetry(state, prepared);
-          } catch (cleanupError) {
-            state.deps.log.warn(
-              { jobId: id, err: String(cleanupError) },
-              "cron: failed to release manual reservation after queue rejection",
-            );
           }
         }
-      }
-    }, "cron:manual-run");
+      }, "cron:manual-run"),
+    );
   } catch (error) {
     activationSettled.resolve();
     releaseCallerAuthority?.();
     throw error;
   }
-  void queuedRun
+  const settled = queuedRun
     .catch(async (err: unknown) => {
       if (!accepted) {
         acceptance.reject(err);
@@ -627,8 +632,44 @@ export async function enqueueRun(
       // path that never entered the activation callback.
       activationSettled.resolve();
       releaseCallerAuthority?.();
+      state.queuedManualRuns.delete(runId);
     });
+  state.queuedManualRuns.set(runId, settled);
   return await acceptance.promise;
+}
+
+/**
+ * Resolves true once an accepted manual run has written its terminal history row,
+ * or false when the timeout or caller signal ends the wait first.
+ */
+export async function waitForManualRun(
+  state: CronServiceState,
+  runId: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const settled = state.queuedManualRuns.get(runId);
+  if (!settled) {
+    return true;
+  }
+  if (signal?.aborted) {
+    return false;
+  }
+  const { promise, resolve } = createDeferredCore<boolean>();
+  const timer = setSafeTimeout(() => resolve(false), timeoutMs);
+  const onAbort = () => resolve(false);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  // Background failures are logged by the run owner; the waiter only needs settlement.
+  settled.then(
+    () => resolve(true),
+    () => resolve(true),
+  );
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 /** Enqueues manual wake text through the cron wake API. */

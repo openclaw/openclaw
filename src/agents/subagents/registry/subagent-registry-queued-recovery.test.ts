@@ -105,10 +105,10 @@ function createRegistrationFixture() {
     clearPendingLifecycleTimeout: () => {},
     resolveSubagentWaitTimeoutMs: () => 100,
     scheduleSweep: () => {},
-    resolveSubagentSessionCompletion: () => null,
-    resolveSubagentSessionStartedAt: () => undefined,
+    resolveSubagentSessionCompletion: async () => null,
+    resolveSubagentSessionStartedAt: async () => undefined,
     notifyContextEngineSubagentEnded: async () => {},
-    completeCleanupBookkeeping: () => {},
+    completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
   };
   const manager = createSubagentRunManager(options);

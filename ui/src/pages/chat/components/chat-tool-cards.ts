@@ -24,6 +24,7 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
 import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
 import type { WorkGroupRenderItem } from "../chat-thread-grouping.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -192,7 +193,7 @@ function compactToolTarget(target: string, kind: ToolCallView["kind"]): string {
   if (kind !== "edit" && kind !== "write") {
     return target;
   }
-  return target.split(/[\\/]/u).findLast(Boolean) ?? target;
+  return pathDisplayName(target);
 }
 
 export function syncToolDisclosureOverflow(event: Event): void {

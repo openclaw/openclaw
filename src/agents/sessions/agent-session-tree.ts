@@ -98,7 +98,6 @@ export abstract class AgentSessionTree extends AgentSessionExecution {
           fromExtension = true;
         }
 
-        // Allow extensions to override instructions and label
         if (result?.customInstructions !== undefined) {
           customInstructions = result.customInstructions;
         }

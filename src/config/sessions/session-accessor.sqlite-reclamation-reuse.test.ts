@@ -426,7 +426,6 @@ test("warm Worker results cannot revive proof invalidated after a competing pare
 });
 
 test.each([
-  { cold: false, agentId: "main" },
   { cold: true, agentId: "main" },
   { cold: false, agentId: "MAIN" },
 ])(

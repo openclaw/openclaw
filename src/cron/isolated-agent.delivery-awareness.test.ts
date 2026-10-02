@@ -82,13 +82,13 @@ describe("isolated cron delivery awareness", () => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBe(true);
         expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
-        expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        expect(deps.telegram).toHaveBeenNthCalledWith(
           1,
           "123",
           "first cron update",
           expect.any(Object),
         );
-        expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        expect(deps.telegram).toHaveBeenNthCalledWith(
           2,
           "123",
           `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
@@ -104,7 +104,7 @@ describe("isolated cron delivery awareness", () => {
       (result, deps) => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBeFalsy();
-        expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+        expect(deps.telegram).not.toHaveBeenCalled();
       },
     );
   });

@@ -187,7 +187,7 @@ describe("ordinary HTML preview transport", () => {
       expect(request).toHaveBeenCalledExactlyOnceWith(
         "canvas.document.preview",
         { html },
-        { timeoutMs: 10_000 },
+        { timeoutMs: 30_000 },
       );
     },
   );
@@ -220,7 +220,7 @@ describe("ordinary HTML preview transport", () => {
     expect(request).toHaveBeenCalledWith(
       "canvas.document.preview",
       { html: source },
-      { timeoutMs: 10_000 },
+      { timeoutMs: 30_000 },
     );
     expect(frame.src).toBe("http://gateway.example:8444/mcp-app-sandbox?frames=none");
     expect(frame.hasAttribute("srcdoc")).toBe(false);

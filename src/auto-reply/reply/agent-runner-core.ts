@@ -322,10 +322,7 @@ export function resolveAdmittedRunSessionFile(params: {
   sessionFile?: string;
   sessionKey?: string;
 }): string | undefined {
-  if (params.sessionKey?.trim()) {
-    return params.sessionKey.trim();
-  }
-  return params.sessionFile;
+  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(

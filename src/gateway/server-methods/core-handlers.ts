@@ -94,6 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),
+  backup: () => import("./backup.js").then((module) => module.backupHandlers),
+  storage: () => import("./storage.js").then((module) => module.storageHandlers),
   push: () => import("./push.js").then((module) => module.pushHandlers),
   restart: () => import("./restart.js").then((module) => module.restartHandlers),
   suspend: () => import("./suspend.js").then((module) => module.suspendHandlers),
@@ -171,6 +173,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   voicewake: () => import("./voicewake.js").then((module) => module.voicewakeHandlers),
   web: () => import("./web.js").then((module) => module.webHandlers),
   "system-agent": () => import("./system-agent.js").then((module) => module.systemAgentHandlers),
+  "system-agent-approvals": () =>
+    import("./system-agent-approvals.js").then((module) => module.systemAgentApprovalHandlers),
   "system-changes": () =>
     import("./system-changes.js").then((module) => module.systemChangesHandlers),
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),

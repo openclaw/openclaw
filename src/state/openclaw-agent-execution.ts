@@ -1,7 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
+import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
 import {
@@ -41,6 +44,10 @@ import {
 import { registerOpenClawStateDatabaseAsyncResource } from "./openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import {
+  LEASE_CONTENTION_RETRY_MS,
+  LEASE_CONTENTION_RETRY_TIMEOUT_MS,
+} from "./openclaw-state-lease-heartbeat-shared.js";
+import {
   captureOpenClawStateReadContext,
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
@@ -74,6 +81,7 @@ type ExecutionOwner = {
     pathname: string,
     expectedIdentity?: AgentDatabaseExecutionFileIdentity,
     expectedCreationIdentity?: DatabasePathIdentity,
+    requestedPath?: string,
   ): OpenClawAgentDatabaseExecution;
   closeIdle(): Promise<void>;
   close(): Promise<void>;
@@ -113,6 +121,8 @@ export function captureOpenClawAgentDatabaseExecution(
   constraints: {
     expectedIdentity?: AgentDatabaseExecutionFileIdentity;
     expectedCreationIdentity?: DatabasePathIdentity;
+    /** The caller's locator before it pinned options.path to the physical file. */
+    requestedPath?: string;
   } = {},
 ): OpenClawAgentDatabaseExecution {
   const agentId = normalizeAgentId(options.agentId);
@@ -152,6 +162,7 @@ export function captureOpenClawAgentDatabaseExecution(
         identity,
         initialIdentity: constraints.expectedIdentity,
         expectedCreationIdentity,
+        requestedPath: constraints.requestedPath,
       });
     }
   }
@@ -170,7 +181,12 @@ export function captureOpenClawAgentDatabaseExecution(
       "Agent database execution belongs to another shared-state database; drain its existing resources before changing the state directory.",
     );
   }
-  return existing.borrow(pathname, constraints.expectedIdentity, expectedCreationIdentity);
+  return existing.borrow(
+    pathname,
+    constraints.expectedIdentity,
+    expectedCreationIdentity,
+    constraints.requestedPath,
+  );
 }
 
 function createAgentDatabaseExecution(
@@ -181,6 +197,7 @@ function createAgentDatabaseExecution(
     identity: DatabasePathIdentity;
     initialIdentity?: AgentDatabaseExecutionFileIdentity;
     expectedCreationIdentity?: DatabasePathIdentity;
+    requestedPath?: string;
   },
 ): OpenClawAgentDatabaseExecution {
   const { agentId, pathname, identity, initialIdentity, expectedCreationIdentity } = prepared;
@@ -281,6 +298,7 @@ function createAgentDatabaseExecution(
     createIfMissing = false,
     creatingTarget?: DatabasePathIdentity,
     signal?: AbortSignal,
+    contentionDeadline?: number,
   ): Promise<T | undefined> {
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
@@ -341,10 +359,14 @@ function createAgentDatabaseExecution(
       }
     }
     const current = generation;
+    let entered = false;
     try {
       const result = await current.run(
         source,
-        operation,
+        (scope) => {
+          entered = true;
+          return operation(scope);
+        },
         assertCallerCurrent,
         createIfMissing,
         signal,
@@ -359,9 +381,10 @@ function createAgentDatabaseExecution(
       return result;
     } catch (error) {
       const nativeFailed = current.failed();
+      const contended = !entered && isSqliteLockError(error);
       if (generation === current && (nativeFailed || retireNativeOnFailure)) {
         try {
-          if (nativeFailed) {
+          if (nativeFailed && !contended) {
             await owner.close();
           } else {
             // The rejected broker scope has settled; only its captured native owner is retired.
@@ -376,6 +399,36 @@ function createAgentDatabaseExecution(
           );
         }
       }
+      if (contended) {
+        const deadline =
+          contentionDeadline ?? performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
+        if (contentionDeadline === undefined) {
+          log.warn(
+            "Agent database execution admission delayed by SQLite lock contention; retrying before execution.",
+          );
+        }
+        const remaining = deadline - performance.now();
+        if (remaining > 0) {
+          await sleepWithAbort(Math.min(LEASE_CONTENTION_RETRY_MS, remaining), signal);
+          assertCurrent();
+          source.assertCurrent();
+          assertCallerCurrent();
+          if (performance.now() >= deadline) {
+            throw error;
+          }
+          return run(
+            source,
+            operation,
+            assertCallerCurrent,
+            expectedIdentity,
+            retireNativeOnFailure,
+            createIfMissing,
+            creatingTarget,
+            signal,
+            deadline,
+          );
+        }
+      }
       throw error;
     }
   }
@@ -384,7 +437,7 @@ function createAgentDatabaseExecution(
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
-    borrow(borrowedPath, expected, creating) {
+    borrow(borrowedPath, expected, creating, requestedPath) {
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
       const assertReferenceCurrent = (nativeIdentity?: AgentDatabaseExecutionFileIdentity) => {
@@ -435,6 +488,9 @@ function createAgentDatabaseExecution(
         throw new Error("Agent creation cannot capture another pending native opener");
       }
       retainAlias(borrowedPath);
+      if (requestedPath !== undefined) {
+        retainAlias(path.resolve(requestedPath));
+      }
       observeOpenClawDatabaseMaintenanceResource(aliases.get(pathname));
       borrowers += 1;
       clearIdleTimer();
@@ -656,7 +712,12 @@ function createAgentDatabaseExecution(
         }
       },
     });
-    return owner.borrow(pathname, initialIdentity, expectedCreationIdentity);
+    return owner.borrow(
+      pathname,
+      initialIdentity,
+      expectedCreationIdentity,
+      prepared.requestedPath,
+    );
   } catch (error) {
     unregisterAgent();
     unregisterShared?.();

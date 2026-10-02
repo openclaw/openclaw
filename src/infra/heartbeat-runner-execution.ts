@@ -586,6 +586,14 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     outboundPolicySessionKey,
     internalProjection,
     ...heartbeatRunPrompt,
+    // Selected work outranks a coalesced wake; periodic tasks own their prompt even on an exec wake.
+    useHeartbeatFailureCopy:
+      scheduledTasks.length > 0 ||
+      (!heartbeatRunPrompt.hasTaskContinuation &&
+        !heartbeatRunPrompt.hasCronEvents &&
+        (wake.wakeSource === undefined ||
+          wake.wakeSource === "interval" ||
+          wake.wakeSource === "manual")),
   } as const;
 }
 

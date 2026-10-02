@@ -125,10 +125,10 @@ frozen release target or replace an exact-head PR release gate.
 CodeQL retains all seven main-push security categories. CI retains
 `security-fast` (committed private keys, changed-workflow security auditing,
 and production dependency auditing) on its existing non-docs push scope.
-Default main pushes also run the baseline-growth, assertion-safety, and new
-protocol-method metadata guards there against the exact push `before` SHA,
-so scheduled CI's main-against-itself comparison cannot lose these checks;
-Workflow Sanity checks tracked conflict markers on every admitted push.
+Default main pushes also run the baseline-growth, assertion-safety, test timeout
+race, and new protocol-method metadata guards there against the exact push
+`before` SHA, so scheduled CI's main-against-itself comparison cannot lose these
+checks; Workflow Sanity checks tracked conflict markers on every admitted push.
 Its workflow lint and security tools run only when workflow, action, or lint
 policy inputs change. The full CI aggregate job is
 skipped on default main pushes, **not** on runnable PRs or full manual runs.
@@ -432,7 +432,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 ### Platform-specific security shards
 
 - `CodeQL Android Critical Security` — scheduled Android security shard. Builds the Android app manually for CodeQL on the smallest Blacksmith Linux runner accepted by workflow sanity. Uploads under `/codeql-critical-security/android`.
-- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Prepares the generated Mermaid resources on GitHub-hosted Linux, then builds the ARM64 macOS app manually for CodeQL on a GitHub-hosted Intel runner without unused index-store or debug-info artifacts; filters dependency build results out of uploaded SARIF; and uploads under `/codeql-critical-security/macos`. Its macOS job has a 90-minute ceiling because the complete traced build and analysis exceed the previous 45-minute budget. Kept outside daily defaults because macOS build dominates runtime even when clean.
+- `CodeQL macOS Critical Security` — weekly/manual macOS security shard. Prepares the generated Mermaid resources on GitHub-hosted Linux, then builds the ARM64 macOS app manually for CodeQL on a GitHub-hosted Intel runner without unused index-store or debug-info artifacts; filters dependency build results out of uploaded SARIF while retaining first-party generated protocol models; and uploads under `/codeql-critical-security/macos`. Its macOS job has a 90-minute ceiling because the complete traced build and analysis exceed the previous 45-minute budget. Kept outside daily defaults because macOS build dominates runtime even when clean.
 
 ### Critical Quality categories
 

@@ -64,6 +64,10 @@ runtime uses the official `https://api.openai.com/v1` endpoint with the
 `openai-responses` adapter. See
 [OpenAI setup](/providers/openai/setup#getting-started) for authentication help.
 
+Requests identify OpenClaw with `User-Agent: openclaw/<version>`,
+`originator: openclaw`, and `version: <version>`, using the same attribution
+headers as other native OpenAI requests.
+
 ### 2. Enable the plugin and choose your model
 
 Merge this into your existing `openclaw.json`, keeping your channel settings and

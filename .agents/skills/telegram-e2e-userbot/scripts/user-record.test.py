@@ -3,8 +3,9 @@ import json
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from pathlib import Path
+from types import SimpleNamespace
 
 
 RECORD_PATH = Path(__file__).with_name("user-record.py")
@@ -21,6 +22,146 @@ class FakeClient:
     def request(self, payload, timeout=20):
         self.requests.append((payload, timeout))
         return {"@type": "callbackQueryAnswer", "text": ""}
+
+
+class ForwardBurstScenarioTest(unittest.TestCase):
+    def message(self, message_id, text="", photo=False, **fields):
+        return {"@type": "updateNewMessage", "message": {
+            "id": message_id, "chat_id": 4242, "sender_id": {"user_id": 42},
+            "content": {"@type": "messagePhoto" if photo else "messageText", "text": {"text": text}},
+            **fields,
+        }}
+
+    def fixture(self):
+        clock = [0]
+        updates = []
+        def next_update(timeout):
+            clock[0] += 1
+            return updates.pop(0) if updates else None
+        client = SimpleNamespace(next_update=next_update)
+        recorder = record.EventRecorder(client, 4242, "", 42)
+        recorder.started_at = 0
+        driver_obj = SimpleNamespace(
+            client=client,
+            post_forward_sources=Mock(return_value=None),
+            forward_messages=Mock(return_value=[{"id": 30}, {"id": 40}]),
+            send_text=Mock(return_value={"id": 50}),
+        )
+        return clock, updates, recorder, driver_obj
+
+    def test_correlates_new_bot_sources_by_content_and_order_amid_unrelated_messages(self):
+        clock, updates, recorder, driver_obj = self.fixture()
+        text = "@sut_bot burst"
+        updates.extend([
+            self.message(3, photo=True),
+            self.message(4, text, chat_id=4343),
+            self.message(5, text, sender_id={"user_id": 99}),
+            self.message(6, text, is_outgoing=True),
+            self.message(7, "unrelated text"),
+            {"@type": "updateMessageContent", "chat_id": 4242, "message_id": 1,
+             "new_content": {"@type": "messageText", "text": {"text": text}}},
+            self.message(10, text),
+            self.message(11, "another unrelated text"),
+            self.message(12, photo=True, chat_id=4343),
+            self.message(13, photo=True, sender_id={"user_id": 99}),
+            self.message(14, photo=True, is_outgoing=True),
+            self.message(20, photo=True),
+            self.message(30, text, is_outgoing=True),
+            self.message(40, photo=True, is_outgoing=True),
+        ])
+        actions = [
+            {"type": "forwardBurst", "atMs": 0, "text": "@{sut} burst", "photo": "/fixture.png"},
+            {"type": "send", "atMs": 0, "text": "followup", "replyToPrevious": True},
+        ]
+        with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+            recorder.ingest(self.message(1, text))
+            recorder.ingest(self.message(2, photo=True))
+            sent = record.run_scenario(recorder, driver_obj, {"username": "sut_bot"}, actions, 20)
+        driver_obj.post_forward_sources.assert_called_once_with(text, "/fixture.png")
+        driver_obj.forward_messages.assert_called_once_with(4242, 4242, [10, 20])
+        driver_obj.send_text.assert_called_once_with(4242, "followup", reply_to=40, forum_topic_id=None)
+        self.assertEqual(sent, [30, 40, 50])
+        completed = recorder.summary()["actions"][0]
+        self.assertEqual({key: value for key, value in completed.items() if key != "elapsedMs"}, {
+            "kind": "action", "messageId": 30, "botApiMessageId": 0,
+            "actionType": "forwardBurst", "actionIndex": 0, "status": "completed",
+            "text": text, "photo": "/fixture.png", "messageIds": [30, 40], "sourceMessageIds": [10, 20],
+        })
+        self.assertEqual(len(recorder.summary()["actions"]), 2)
+        source_rows = [event for event in recorder.events if event["kind"] == "message"
+                       and event["messageId"] in (10, 20)]
+        self.assertEqual([event["messageId"] for event in source_rows], [10, 20])
+        for event in source_rows:
+            self.assertTrue(event["isSut"])
+            self.assertLess(recorder.events.index(event), recorder.events.index(completed))
+
+    def test_summary_preserves_completed_forward_ids_when_a_later_send_fails(self):
+        clock, updates, _recorder, driver_obj = self.fixture()
+        updates.extend([self.message(10, "burst"), self.message(20, photo=True)])
+        driver_obj.resolve_chat = Mock(return_value=4242)
+        driver_obj.send_text.side_effect = record.driver.DriverError("synthetic later failure")
+        with tempfile.TemporaryDirectory() as directory:
+            scenario_path = Path(directory) / "scenario.json"
+            scenario_path.write_text(json.dumps({"actions": [
+                {"type": "forwardBurst", "atMs": 0, "text": "burst", "photo": "/fixture.png"},
+                {"type": "send", "atMs": 0, "text": "later"},
+            ]}))
+            argv = ["user-record.py", "--scenario", str(scenario_path), "--record",
+                    str(Path(directory) / "events.ndjson"), "--seconds", "5"]
+            with patch.object(sys, "argv", argv), \
+                 patch.object(record, "build_driver", return_value=({}, {}, driver_obj)), \
+                 patch.object(record.driver, "resolve_sut", return_value={"id": 42}), \
+                 patch.object(record.time, "time", side_effect=lambda: clock[0]), \
+                 patch("builtins.print") as output:
+                self.assertEqual(record.main(), 1)
+            summary = json.loads(output.call_args.args[0])
+        self.assertEqual(summary["sentMessageIds"], [30, 40])
+        self.assertEqual(summary["sentMessageId"], 30)
+        self.assertEqual(summary["sentAction"], {"type": "scenario", "count": 2, "messageIds": [30, 40]})
+        self.assertEqual(summary["actionError"], "synthetic later failure")
+
+    def test_failure_records_phase_outcome_and_observes_rest_of_window_without_retry(self):
+        for phase, outcome in [("post_forward_sources", "not-sent"), ("forward_messages", "unknown")]:
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                clock, updates, recorder, driver_obj = self.fixture()
+                error = record.driver.DriverError("synthetic confirmation failure")
+                getattr(driver_obj, phase).side_effect = error
+                if phase == "forward_messages":
+                    updates.extend([self.message(10, "burst"), self.message(20, photo=True)])
+                updates.append(self.message(60, "late evidence"))
+                actions = [{"type": "forwardBurst", "atMs": 0, "text": "burst", "photo": "/fixture.png"}]
+                with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+                    with self.assertRaises(record.driver.DriverError) as raised:
+                        record.run_scenario(recorder, driver_obj, {}, actions, 5, directory)
+                self.assertIs(raised.exception, error)
+                self.assertEqual(clock[0], 5)
+                failure = json.loads((Path(directory) / "action-failure.json").read_text())
+                self.assertEqual(failure, {
+                    "elapsedMs": 0 if outcome == "not-sent" else 2000,
+                    "kind": "action", "messageId": None, "botApiMessageId": None,
+                    "actionType": "forwardBurst", "actionIndex": 0, "status": "failed",
+                    "sendOutcome": outcome, "error": str(error),
+                })
+                self.assertEqual(recorder.summary()["actions"], [failure])
+                self.assertEqual(recorder.events[-1]["messageId"], 60)
+                self.assertEqual(driver_obj.post_forward_sources.call_count, 1)
+                self.assertEqual(driver_obj.forward_messages.call_count, 0 if outcome == "not-sent" else 1)
+
+    def test_source_timeout_is_bounded_by_remaining_window_and_never_forwards(self):
+        for seconds, text_arrives in [(5, False), (5, True), (40, False)]:
+            with self.subTest(seconds=seconds, text_arrives=text_arrives), tempfile.TemporaryDirectory() as directory:
+                clock, updates, recorder, driver_obj = self.fixture()
+                updates.append(self.message(10, "burst") if text_arrives else self.message(20, photo=True))
+                actions = [{"type": "forwardBurst", "atMs": 0, "text": "burst", "photo": "/fixture.png"}]
+                with patch.object(record.time, "time", side_effect=lambda: clock[0]):
+                    with self.assertRaisesRegex(record.driver.DriverError, "Timed out waiting for the bot's forward source"):
+                        record.run_scenario(recorder, driver_obj, {}, actions, seconds, directory)
+                failure = json.loads((Path(directory) / "action-failure.json").read_text())
+                self.assertEqual(failure["sendOutcome"], "not-sent")
+                self.assertEqual(failure["elapsedMs"], min(30, seconds) * 1000)
+                self.assertEqual(clock[0], seconds)
+                driver_obj.post_forward_sources.assert_called_once()
+                driver_obj.forward_messages.assert_not_called()
 
 
 class CallbackScenarioTest(unittest.TestCase):

@@ -1,3 +1,4 @@
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   escapeCustomIdFieldValue,
   needsCustomIdFieldEscaping,
@@ -90,14 +91,13 @@ export function parseDiscordComponentCustomId(
     return null;
   }
   const data = decodeParsedCustomIdData(parsed.data);
-  const componentId = data.cid;
-  if (typeof componentId !== "string" || !componentId.trim()) {
+  const componentId = readNonBlankString(data.cid);
+  if (!componentId) {
     return null;
   }
-  const modalId = data.mid;
   return {
     componentId,
-    modalId: typeof modalId === "string" && modalId.trim() ? modalId : undefined,
+    modalId: readNonBlankString(data.mid),
   };
 }
 
@@ -106,12 +106,7 @@ export function parseDiscordModalCustomId(id: string): string | null {
   if (parsed.key !== DISCORD_MODAL_CUSTOM_ID_KEY) {
     return null;
   }
-  const data = decodeParsedCustomIdData(parsed.data);
-  const modalId = data.mid;
-  if (typeof modalId !== "string" || !modalId.trim()) {
-    return null;
-  }
-  return modalId;
+  return readNonBlankString(decodeParsedCustomIdData(parsed.data).mid) ?? null;
 }
 
 function isDiscordComponentWildcardRegistrationId(id: string): boolean {

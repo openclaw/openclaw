@@ -310,22 +310,26 @@ export async function prepareAgentCommandExecution(
   });
   if (
     sessionEntryRaw &&
-    commandOpts.cliSessionBindingFacts === undefined &&
     isSyntheticSourceReplyTurn({
       inputProvenance: commandOpts.inputProvenance,
       isHeartbeat: commandOpts.bootstrapContextRunKind === "heartbeat",
     })
   ) {
+    const sessionStableReplyMode = resolveSessionStableReplyMode({
+      cfg,
+      ctx: { CommandAuthorized: false },
+      sessionEntry: sessionEntryRaw,
+      sessionAgentId,
+      sessionKey,
+    });
     commandOpts = {
       ...commandOpts,
-      cliSessionBindingFacts: {
-        sourceReplyDeliveryMode: resolveSessionStableReplyMode({
-          cfg,
-          ctx: { CommandAuthorized: false },
-          sessionEntry: sessionEntryRaw,
-          sessionAgentId,
-          sessionKey,
-        }),
+      // A direct Gateway wake has no inbound dispatcher to apply reply policy.
+      // Bind the effective run and its delivery to the same existing policy owner,
+      // without letting explicit turn overrides change reusable CLI bindings.
+      sourceReplyDeliveryMode: commandOpts.sourceReplyDeliveryMode ?? sessionStableReplyMode,
+      cliSessionBindingFacts: commandOpts.cliSessionBindingFacts ?? {
+        sourceReplyDeliveryMode: sessionStableReplyMode,
       },
     };
   }

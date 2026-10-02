@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { readOpenClawStateLease } from "../state/openclaw-state-lease-store.js";
@@ -43,15 +44,10 @@ export function readGatewayOwnerLeaseFromDatabase(
     return undefined;
   }
   const processOwner = parseStateLeaseProcessOwner(row.payloadJson);
-  let payload: unknown;
-  try {
-    payload = row.payloadJson ? JSON.parse(row.payloadJson) : null;
-  } catch {
-    payload = null;
-  }
+  const payload = safeParseJsonRecord(row.payloadJson ?? "");
   if (
     !processOwner ||
-    !isRecord(payload) ||
+    !payload ||
     typeof payload.port !== "number" ||
     !Number.isInteger(payload.port) ||
     payload.port <= 0 ||

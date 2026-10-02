@@ -285,7 +285,7 @@ export function createSubagentRegistryPublicApi(config: {
       };
       assertCurrent();
       await restoreOnce(stateContext);
-      await markSubagentMessageWaitInRuns({
+      return await markSubagentMessageWaitInRuns({
         ...params,
         runs,
         context: stateContext,

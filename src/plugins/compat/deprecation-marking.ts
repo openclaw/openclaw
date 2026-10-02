@@ -2,20 +2,21 @@ import type { PluginCompatRecord } from "./types.js";
 
 const MARKING_DATE = "2026-07-25";
 const DEPRECATION_MARKING = {
-  status: "deprecated",
+  status: "removal-pending",
   introduced: MARKING_DATE,
   deprecated: MARKING_DATE,
   warningStarts: MARKING_DATE,
   removeAfter: "2026-10-01",
 } as const;
 
-/** Dated metadata for shipped deprecated surfaces that previously had annotations only. */
+/** The elapsed window does not replace each family's required reader-migration proof. */
 export const DEPRECATION_MARKING_COMPAT_RECORDS = [
   {
     code: "plugin-sdk-channel-setup-input-fields",
     ...DEPRECATION_MARKING,
     owner: "channel",
-    replacement: "plugin-local setup input intersections that declare each owning channel field",
+    replacement:
+      "plugin-local setup input intersections that declare each owning channel field; retain each field until a new published-plugin artifact sweep finds no reader",
     docsPath: "/plugins/sdk-migration#published-channel-setup-compatibility",
     surfaces: [
       "ChannelSetupInput.privateKey",
@@ -53,7 +54,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "plugin-sdk-broad-runtime-barrels",
     ...DEPRECATION_MARKING,
     owner: "sdk",
-    replacement: "focused plugin SDK subpaths for each runtime capability",
+    replacement:
+      "focused plugin SDK subpaths for each runtime capability; retain until bundled and published plugins no longer import any of the seven broad barrels",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/agent-runtime",
@@ -84,7 +86,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "plugin-sdk-provider-owned-helper-shims",
     ...DEPRECATION_MARKING,
     owner: "provider",
-    replacement: "provider-local auth, model, replay, OAuth, and stream helper APIs",
+    replacement:
+      "provider-local auth, model, replay, OAuth, and stream helper APIs; retain until every helper is migrated in official providers and absent from published plugins",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/provider-stream GOOGLE_THINKING_STREAM_HOOKS",
@@ -134,7 +137,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "message-presentation-legacy-bridges",
     ...DEPRECATION_MARKING,
     owner: "channel",
-    replacement: "MessagePresentation values and channel presentation renderers",
+    replacement:
+      "MessagePresentation values and channel presentation renderers; retain until reply producers and official channel packages no longer emit or read legacy interactive replies",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "InteractiveReplyButton.value",
@@ -175,7 +179,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "plugin-sdk-focused-compat-aliases",
     ...DEPRECATION_MARKING,
     owner: "sdk",
-    replacement: "the focused replacement named by each TypeScript @deprecated annotation",
+    replacement:
+      "the focused replacement named by each TypeScript @deprecated annotation; retain until every enumerated alias has zero bundled and published readers",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "openclaw/plugin-sdk/acp-runtime __testing",
@@ -220,7 +225,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     ...DEPRECATION_MARKING,
     owner: "agent-runtime",
     replacement:
-      "AgentHarnessAttemptResult.terminal and AgentHarnessDeliveryDefaults.visibleReplies",
+      "AgentHarnessAttemptResult.terminal and AgentHarnessDeliveryDefaults.visibleReplies; retain until harness migration verifies that legacy terminal fields and sourceVisibleReplies are unread",
     docsPath: "/plugins/sdk-agent-harness",
     surfaces: [
       "AgentHarnessAttemptResult.aborted",
@@ -250,7 +255,7 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     ...DEPRECATION_MARKING,
     owner: "channel",
     replacement:
-      "the canonical testing export, MessagePresentation renderers, and host-owned timeout/runtime behavior",
+      "the canonical testing export, MessagePresentation renderers, and host-owned timeout/runtime behavior; retain until minimum supported official plugin packages no longer import these aliases",
     docsPath: "/plugins/compatibility#current-compatibility-areas",
     surfaces: [
       "@openclaw/google-meet __testing",
@@ -276,7 +281,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "memory-host-compatibility-aliases",
     ...DEPRECATION_MARKING,
     owner: "sdk",
-    replacement: "canonical memory cache/FTS tables and getRuntimeConfig or caller-provided config",
+    replacement:
+      "canonical memory cache/FTS tables and getRuntimeConfig or caller-provided config; retain until memory integrations are verified to use canonical tables and prepared runtime config without these aliases",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "@openclaw/memory-host-sdk ensureMemoryIndexSchema.embeddingCacheTable",
@@ -299,7 +305,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "plugin-runtime-api-compat-aliases",
     ...DEPRECATION_MARKING,
     owner: "plugin-execution",
-    replacement: "the namespaced plugin API and focused runtime methods named per surface",
+    replacement:
+      "the namespaced plugin API and focused runtime methods named per surface; retain until all enumerated flat API and runtime aliases have no readers",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "OpenClawPluginApi.registerSessionExtension",
@@ -347,7 +354,8 @@ export const DEPRECATION_MARKING_COMPAT_RECORDS = [
     code: "plugin-provider-manifest-compat-aliases",
     ...DEPRECATION_MARKING,
     owner: "provider",
-    replacement: "manifest-owned plugin kind/setup metadata and model catalog registration",
+    replacement:
+      "manifest-owned plugin kind/setup metadata and model catalog registration; retain until providers no longer publish runtime kind or legacy catalog hooks",
     docsPath: "/plugins/sdk-migration#compatibility-policy",
     surfaces: [
       "DefinePluginEntryOptions.kind",

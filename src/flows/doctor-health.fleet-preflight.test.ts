@@ -1,5 +1,6 @@
 import "./doctor-health.test-support.js";
 import { execFile, fork, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -83,6 +84,30 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
     const original = Buffer.from("// original operator formatting\n{ gateway: { port: 19101 } }\n");
     fs.writeFileSync(state.configPath, original);
     fs.renameSync(state.stateDir, legacyRoot);
+    const expiredRunId = `doctor-${randomUUID()}`;
+    const expiredCapture = path.join(resolveUpdateCaptureRoot(legacyRoot), expiredRunId);
+    fs.mkdirSync(expiredCapture, { recursive: true });
+    fs.writeFileSync(
+      path.join(expiredCapture, "manifest.json"),
+      JSON.stringify({
+        schemaVersion: 2,
+        kind: "update-recovery",
+        generation: { kind: "baseline" },
+        databases: [],
+        runId: expiredRunId,
+        installRoot: process.cwd(),
+        stateDir: legacyRoot,
+        configPath: legacyConfig,
+        configPaths: [legacyConfig],
+        creator: { host: "fixture", pid: 1, startIdentity: "1" },
+        drivers: [],
+        createdAt: new Date(Date.now() - 31 * 24 * 60 * 60_000).toISOString(),
+        roots: [legacyConfig],
+        excludedRoots: [],
+        protectedPaths: [legacyConfig],
+        entries: [{ kind: "missing", sourcePath: legacyConfig, sqlite: false, directory: false }],
+      }),
+    );
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
@@ -126,6 +151,10 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
       expect(resolveStateDir(process.env)).toBe(legacyRoot);
       await runDoctorHealthFlow(runtime, { repair: true, nonInteractive: true });
       expect(repair).toHaveBeenCalledOnce();
+      expect(fs.existsSync(expiredCapture)).toBe(false);
+      expect(runtime.log).toHaveBeenCalledWith(
+        `Retired standalone Doctor capture older than 30 days: ${expiredCapture}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
+      );
       expect(fs.realpathSync(legacyRoot)).toBe(state.stateDir);
       expect(fs.readFileSync(state.configPath, "utf8")).toContain("19102");
       if (!captured) {
@@ -227,7 +256,10 @@ it("reuses the same original capture across Doctor continuations without recaptu
           expect(fs.readFileSync(captured.manifestPath)).toEqual(captured.manifestBytes);
           expect(fs.readFileSync(captured.payloadPath, "utf8")).toBe(original);
         }
-        expect(mocks.runContributions).toHaveBeenCalledTimes(2);
+        expect(
+          mocks.runContributions,
+          [...runtime.log.mock.calls, ...runtime.error.mock.calls].flat().join("\n"),
+        ).toHaveBeenCalledTimes(2);
         expect(
           runtime.log.mock.calls.filter(
             ([message]) =>

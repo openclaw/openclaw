@@ -19,7 +19,11 @@ import {
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { runWithoutOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import {
+  runWithoutOwnedSessionTranscriptWrites,
+  SessionTranscriptWriterClaimReboundError,
+  withOwnedSessionTranscriptWrites,
+} from "../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { onAgentEvent, type AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -27,6 +31,7 @@ import {
   clearAgentRunTerminalWriteContext,
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
@@ -56,6 +61,7 @@ async function seed(assistantBranch?: "active" | "inactive" | "other-run") {
     startedAt: 1_000,
     status: "running",
     lifecycleRunId: runId,
+    activeWriterRunId: runId,
     goal: {
       schemaVersion: 1,
       id: "failure-goal",
@@ -219,10 +225,24 @@ describe("durable pre-reply run failure", () => {
     },
   );
 
-  it("records one displayed failure per run and retains it after the next run starts", async () => {
+  it("records one child failure outside its requester's ended turn and retains it after the next run", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed();
-      await persistGatewaySessionLifecycleEvent({ ...target, event });
+      const requester = await resolveSessionTranscriptRuntimeTarget({
+        ...target,
+        sessionKey: "agent:main:requester",
+        sessionId: "requester-session",
+      });
+      await withOwnedSessionTranscriptWrites(
+        {
+          sessionTarget: { ...requester, expectedWriterRunId: "requester-run" },
+          assertCommitAllowed: () => {
+            throw new Error("Requester turn has ended");
+          },
+          withTranscriptWrite: async (write) => await write(),
+        },
+        () => persistGatewaySessionLifecycleEvent({ ...target, event }),
+      );
       const pausedGoal = loadSessionEntry(target)?.goal;
       expect(pausedGoal).toMatchObject({
         id: "failure-goal",
@@ -424,18 +444,57 @@ describe("durable pre-reply run failure", () => {
     });
   });
 
-  it("does not report an error whose lifecycle write was refused", async () => {
+  it.each(["before", "after"])(
+    "rejects authority revoked %s the lifecycle commit",
+    async (when) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        await seed();
+        let current = when === "after";
+        onTestFinished(
+          sessionChanges.subscribe((change) => {
+            if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+              current = false;
+            }
+          }),
+        );
+        await expect(
+          persistGatewaySessionLifecycleEvent({
+            ...target,
+            event,
+            assertCommitAllowed: () => {
+              if (!current) {
+                throw new Error("Run authority expired");
+              }
+            },
+          }),
+        ).rejects.toThrow("Run authority expired");
+        expect(loadSessionEntry(target)?.status).toBe(when === "after" ? "failed" : "running");
+        expect(await reports()).toEqual([]);
+      });
+    },
+  );
+
+  it("refuses a receipt after another writer claims the accepted terminal's session", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await seed();
-      await expect(
-        persistGatewaySessionLifecycleEvent({
-          ...target,
-          event,
-          assertCommitAllowed: () => {
-            throw new Error("Run authority expired");
-          },
-        }),
-      ).rejects.toThrow("Run authority expired");
+      let replacement: Promise<unknown> | undefined;
+      const unsubscribe = sessionChanges.subscribe((change) => {
+        if (!("sessionKey" in change) || change.sessionKey !== target.sessionKey) {
+          return;
+        }
+        unsubscribe();
+        replacement = patchSessionEntryCore(target, () => ({ activeWriterRunId: "successor-run" }));
+      });
+      onTestFinished(unsubscribe);
+      await expect(persistGatewaySessionLifecycleEvent({ ...target, event })).rejects.toThrow(
+        SessionTranscriptWriterClaimReboundError,
+      );
+      await replacement;
+      expect(loadSessionEntry(target)).toMatchObject({
+        status: "failed",
+        lastRunError: error,
+        activeWriterRunId: "successor-run",
+      });
       expect(await reports()).toEqual([]);
     });
   });

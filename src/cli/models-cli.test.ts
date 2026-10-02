@@ -14,6 +14,9 @@ const mocks = vi.hoisted(() => ({
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
+  addFallbackCommand: vi.fn().mockResolvedValue(undefined),
+  removeFallbackCommand: vi.fn().mockResolvedValue(undefined),
+  clearFallbacksCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesRemoveCommand: vi.fn().mockResolvedValue(undefined),
@@ -36,6 +39,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 const {
+  addFallbackCommand,
+  clearFallbacksCommand,
+  removeFallbackCommand,
   modelsAliasesAddCommand,
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
@@ -95,10 +101,10 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
 vi.mock("../commands/models/fallbacks-shared.js", () => ({
-  addFallbackCommand: mocks.noopAsync,
-  clearFallbacksCommand: mocks.noopAsync,
+  addFallbackCommand: mocks.addFallbackCommand,
+  clearFallbacksCommand: mocks.clearFallbacksCommand,
   listFallbacksCommand: mocks.noopAsync,
-  removeFallbackCommand: mocks.noopAsync,
+  removeFallbackCommand: mocks.removeFallbackCommand,
 }));
 vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.modelsScanCommand,
@@ -499,6 +505,19 @@ describe("models cli", () => {
       args: ["aliases", "remove", "zzz"],
       command: modelsAliasesRemoveCommand,
     },
+    ...(["fallbacks", "image-fallbacks"] as const).flatMap((group) => [
+      {
+        label: `${group} add`,
+        args: [group, "add", "openai/gpt-5.5"],
+        command: addFallbackCommand,
+      },
+      {
+        label: `${group} remove`,
+        args: [group, "remove", "openai/gpt-5.5"],
+        command: removeFallbackCommand,
+      },
+      { label: `${group} clear`, args: [group, "clear"], command: clearFallbacksCommand },
+    ]),
     {
       label: "scan",
       args: ["scan", "--no-probe", "--no-input"],

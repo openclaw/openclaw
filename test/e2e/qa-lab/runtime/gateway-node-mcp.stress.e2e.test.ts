@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
@@ -31,6 +32,22 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+// The node owns these descendants; tree signaling does not expose their extinction.
+async function waitForGenerationExit(
+  record: { leaderPid: number; descendantPid: number },
+  signal: AbortSignal,
+): Promise<void> {
+  try {
+    while (processIsAlive(record.leaderPid) || processIsAlive(record.descendantPid)) {
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`timed out waiting for MCP generation ${record.leaderPid} to exit`, {
+      cause: error,
+    });
+  }
+}
+
 function descriptorFor(
   descriptors: readonly NodePluginToolDescriptor[],
   server: string,
@@ -55,7 +72,7 @@ describe("Gateway/node MCP real-process stress", () => {
   it(
     "serializes catalogs, recovers terminal streams, fences expiry, and reaps crash generations",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const repoRoot = process.cwd();
       const root = tempDirs.make("openclaw-gateway-node-mcp-stress-");
       const at = (...parts: string[]) => path.join(root, ...parts);
@@ -85,7 +102,12 @@ describe("Gateway/node MCP real-process stress", () => {
       let sessionRuntime: ReturnType<typeof createSessionMcpRuntime> | undefined;
       try {
         const fixtureEnv = createChildEnv({ home: nodeHome, tempDir: nodeTempDir });
-        fixture = await startHttpFixture({ fixturePath, labelPrefix: "node", env: fixtureEnv });
+        fixture = await startHttpFixture({
+          fixturePath,
+          labelPrefix: "node",
+          env: fixtureEnv,
+          signal,
+        });
         const nodeStdioEnv = createChildEnv({
           home: nodeHome,
           tempDir: nodeTempDir,
@@ -262,13 +284,14 @@ describe("Gateway/node MCP real-process stress", () => {
             descriptor: descriptorFor(descriptors, "stdio"),
             marker: "crash-generation",
           });
-          await vi.waitFor(async () => {
-            const records = await readProcessRecords(nodeEvents);
-            const record = records.find((entry) => entry.leaderPid === result.pid);
-            expect(record).toBeDefined();
-            expect(processIsAlive(record?.leaderPid ?? 0)).toBe(false);
-            expect(processIsAlive(record?.descendantPid ?? 0)).toBe(false);
-          }, WAIT_OPTIONS);
+          // runStressStdio appends this record before installing its request handler.
+          const records = await readProcessRecords(nodeEvents);
+          const record = records.find((entry) => entry.leaderPid === result.pid);
+          expect(record).toBeDefined();
+          if (!record) {
+            throw new Error(`MCP generation ${result.pid} omitted its process record`);
+          }
+          await waitForGenerationExit(record, signal);
           await vi.waitFor(async () => {
             const current = (await waitForNode(gateway!, nodeId, 3)).nodePluginTools ?? [];
             const recovered = await invokeNodeMcp({

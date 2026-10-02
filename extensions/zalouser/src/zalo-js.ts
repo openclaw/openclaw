@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -531,13 +532,7 @@ function trimGroupContextCache(now: number): void {
     }
     groupContextCache.delete(key);
   }
-  while (groupContextCache.size > GROUP_CONTEXT_CACHE_MAX_ENTRIES) {
-    const oldestKey = groupContextCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    groupContextCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(groupContextCache, GROUP_CONTEXT_CACHE_MAX_ENTRIES);
 }
 
 function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {
@@ -681,8 +676,7 @@ export async function checkZaloAuthenticated(
 }
 
 export async function getZaloUserInfo(profileInput?: string | null): Promise<ZcaUserInfo | null> {
-  const profile = normalizeProfile(profileInput);
-  return await withZaloApi(profile, async (api) => {
+  return await withZaloApi(profileInput, async (api) => {
     const info = await api.fetchAccountInfo();
     const user = normalizeAccountInfoUser(info);
     if (!user?.userId) {
@@ -700,9 +694,8 @@ export async function listZaloFriends(
   profileInput?: string | null,
   options?: CredentialPersistenceOptions,
 ): Promise<ZcaFriend[]> {
-  const profile = normalizeProfile(profileInput);
   return await withZaloApi(
-    profile,
+    profileInput,
     async (api) => {
       const friends = await api.getAllFriends();
       return friends.map(mapFriend);
@@ -737,9 +730,8 @@ export async function listZaloGroups(
   profileInput?: string | null,
   options?: CredentialPersistenceOptions,
 ): Promise<ZaloGroup[]> {
-  const profile = normalizeProfile(profileInput);
   return await withZaloApi(
-    profile,
+    profileInput,
     async (api) => {
       const allGroups = await api.getAllGroups();
       const ids = Object.keys(allGroups.gridVerMap ?? {});
@@ -776,8 +768,7 @@ export async function listZaloGroupMembers(
   profileInput: string | null | undefined,
   groupId: string,
 ): Promise<ZaloGroupMember[]> {
-  const profile = normalizeProfile(profileInput);
-  return await withZaloApi(profile, async (api) => {
+  return await withZaloApi(profileInput, async (api) => {
     const infoResponse = await api.getGroupInfo(groupId);
     const groupInfo = infoResponse.gridInfoMap?.[groupId] as
       | (GroupInfo & { memVerList?: unknown })
@@ -871,7 +862,6 @@ export async function sendZaloTextMessage(
   options: ZaloSendOptions = {},
   onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void,
 ): Promise<ZaloSendResult> {
-  const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
     return {
@@ -882,7 +872,7 @@ export async function sendZaloTextMessage(
   }
 
   return await withZaloApi(
-    profile,
+    options.profile,
     (api) => sendZaloTextWithApi(api, trimmedThreadId, text, options, onDeliveryResult),
     { shouldPersist: (result) => result.ok, handoff: options },
   );
@@ -892,12 +882,11 @@ export async function sendZaloTypingEvent(
   threadId: string,
   options: Pick<ZaloSendOptions, "profile" | "isGroup"> = {},
 ): Promise<void> {
-  const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
   if (!trimmedThreadId) {
     throw new Error("No threadId provided");
   }
-  await withZaloApi(profile, async (api) => {
+  await withZaloApi(options.profile, async (api) => {
     const type = options.isGroup ? ThreadType.Group : ThreadType.User;
     await api.sendTypingEvent(trimmedThreadId, type);
   });
@@ -939,7 +928,6 @@ export async function sendZaloReaction(params: {
   emoji: string;
   remove?: boolean;
 }): Promise<{ ok: boolean; error?: string }> {
-  const profile = normalizeProfile(params.profile);
   const threadId = params.threadId.trim();
   const msgId = toStringValue(params.msgId);
   const cliMsgId = toStringValue(params.cliMsgId);
@@ -948,7 +936,7 @@ export async function sendZaloReaction(params: {
   }
   try {
     return await withZaloApi(
-      profile,
+      params.profile,
       async (api) => {
         const type = params.isGroup ? ThreadType.Group : ThreadType.User;
         const icon = params.remove
@@ -974,8 +962,7 @@ export async function sendZaloDeliveredEvent(params: {
   message: ZaloEventMessage;
   isSeen?: boolean;
 }): Promise<void> {
-  const profile = normalizeProfile(params.profile);
-  await withZaloApi(profile, async (api) => {
+  await withZaloApi(params.profile, async (api) => {
     const type = params.isGroup ? ThreadType.Group : ThreadType.User;
     await api.sendDeliveredEvent(params.isSeen === true, params.message, type);
   });
@@ -986,8 +973,7 @@ export async function sendZaloSeenEvent(params: {
   isGroup?: boolean;
   message: ZaloEventMessage;
 }): Promise<void> {
-  const profile = normalizeProfile(params.profile);
-  await withZaloApi(profile, async (api) => {
+  await withZaloApi(params.profile, async (api) => {
     const type = params.isGroup ? ThreadType.Group : ThreadType.User;
     await api.sendSeenEvent(params.message, type);
   });
@@ -998,7 +984,6 @@ export async function sendZaloLink(
   url: string,
   options: ZaloSendOptions = {},
 ): Promise<ZaloSendResult> {
-  const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
   const trimmedUrl = url.trim();
   if (!trimmedThreadId) {
@@ -1018,7 +1003,7 @@ export async function sendZaloLink(
 
   try {
     return await withZaloApi(
-      profile,
+      options.profile,
       async (api) => {
         const type = options.isGroup ? ThreadType.Group : ThreadType.User;
         const response = await api.sendLink(

@@ -21,7 +21,7 @@ import {
   chatSendOwner,
   requireNonEmptyString,
 } from "./server.sessions.create.test-support.js";
-import { listSessionGroups } from "./session-groups.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -53,36 +53,6 @@ function describeSessionStoreForensics(storePath: string): string {
   return JSON.stringify({ storeDir, files, resolvedTargetPath: target.path, rows });
 }
 
-test("sessions.create assigns and registers its requested group", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const broadcastToConnIds = vi.fn();
-
-  const created = await directSessionReq<{ key: string }>(
-    "sessions.create",
-    {
-      agentId: "main",
-      category: "  Client work  ",
-    },
-    {
-      context: {
-        broadcastToConnIds,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-      },
-    },
-  );
-
-  expect(created.ok).toBe(true);
-  const key = requireNonEmptyString(created.payload?.key, "grouped session key");
-  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Client work");
-  expect(listSessionGroups().map((group) => group.name)).toContain("Client work");
-  expect(broadcastToConnIds).toHaveBeenCalledWith(
-    "sessions.changed",
-    expect.objectContaining({ reason: "groups" }),
-    new Set(["conn-1"]),
-    { dropIfSlow: true },
-  );
-});
-
 test("sessions.create registers a category only after the session commit succeeds", async () => {
   await createSessionStoreDir();
   const category = "Deferred category";
@@ -109,12 +79,16 @@ test("sessions.create registers a category only after the session commit succeed
   );
 
   expect(failed.ok).toBe(false);
-  expect(listSessionGroups().map((group) => group.name)).not.toContain(category);
+  expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
 
   const broadcastToConnIds = vi.fn();
   const created = await directSessionReq(
     "sessions.create",
-    { agentId: "main", category, key: "agent:main:dashboard:successful-category-create" },
+    {
+      agentId: "main",
+      category: `  ${category}  `,
+      key: "agent:main:dashboard:successful-category-create",
+    },
     {
       context: {
         broadcastToConnIds,
@@ -124,7 +98,9 @@ test("sessions.create registers a category only after the session commit succeed
   );
 
   expect(created.ok).toBe(true);
-  expect(listSessionGroups().filter((group) => group.name === category)).toHaveLength(1);
+  expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
+    1,
+  );
   expect(
     broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
   ).toHaveLength(1);

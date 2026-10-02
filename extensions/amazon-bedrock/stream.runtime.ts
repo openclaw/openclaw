@@ -68,6 +68,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   buildAssistantMessage,
+  coerceTransportToolCallArguments,
   describeToolResultMediaPlaceholder,
   createEmptyTransportUsage,
   failTransportStream,
@@ -985,7 +986,11 @@ function convertMessages(
               break;
             case "toolCall":
               contentBlocks.push({
-                toolUse: { toolUseId: c.id, name: c.name, input: c.arguments as DocumentType },
+                toolUse: {
+                  toolUseId: c.id,
+                  name: c.name,
+                  input: coerceTransportToolCallArguments(c.arguments) as DocumentType,
+                },
               });
               break;
             case "thinking": {
@@ -1203,19 +1208,10 @@ function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {
 }
 
 function getStandardBedrockEndpointRegion(baseUrl: string | undefined): string | undefined {
-  if (!baseUrl) {
-    return undefined;
-  }
-
-  try {
-    const { hostname } = new URL(baseUrl);
-    const match = hostname
-      .toLowerCase()
-      .match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/);
-    return match?.[1];
-  } catch {
-    return undefined;
-  }
+  const hostname = baseUrl ? URL.parse(baseUrl)?.hostname : undefined;
+  return hostname
+    ?.toLowerCase()
+    .match(/^bedrock-runtime(?:-fips)?\.([a-z0-9-]+)\.amazonaws\.com(?:\.cn)?$/)?.[1];
 }
 
 function isGovCloudBedrockTarget(

@@ -210,6 +210,52 @@ describe("Control UI Vite build", () => {
     expect(scripts).toContain(secondStyle.name);
   });
 
+  it("prepares the sign-in gate offline without preloading it into ordinary chat navigation", async () => {
+    const config = createConfig();
+    const gate = fileURLToPath(new URL("../components/login-gate.ts", import.meta.url));
+    const feedback = fileURLToPath(
+      new URL("../components/login-offline-fixture.ts", import.meta.url),
+    );
+    const modules = new Map([
+      [gate, `import { message } from ${JSON.stringify(feedback)}; export const label = message;`],
+      [feedback, 'export const message = "Connect again when online";'],
+    ]);
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      `globalThis.loadLogin = () => import(${JSON.stringify(gate)});`,
+    );
+    config.plugins = [
+      {
+        name: "offline-login-fixture",
+        enforce: "pre",
+        resolveId: (id) => (modules.has(id) ? id : null),
+        load: (id) => modules.get(id) ?? null,
+      },
+      ...(config.plugins ?? []),
+    ];
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const gateChunk = built.output.find(
+      (entry) => entry.type === "chunk" && entry.facadeModuleId === gate,
+    );
+    if (!gateChunk || gateChunk.type !== "chunk") {
+      throw new Error("Expected the dynamically imported sign-in gate");
+    }
+    const worker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+    const boot = JSON.parse(/const OFFLINE_BOOT = (.+);/u.exec(worker)![1]!) as {
+      assets: Array<{ path: string }>;
+    };
+    const cached = new Set(boot.assets.map((asset) => asset.path));
+    expect(cached.has(gateChunk.fileName)).toBe(true);
+    for (const dependency of gateChunk.imports) {
+      expect(cached.has(dependency)).toBe(true);
+    }
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).not.toContain(gateChunk.fileName);
+  });
+
   it("preserves an unresolved import diagnostic with a fresh output directory", async () => {
     const config = createConfig("info");
     await fs.writeFile(path.join(root, "main.js"), 'import "./missing-module.js";');

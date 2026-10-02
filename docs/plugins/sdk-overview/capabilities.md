@@ -1,15 +1,16 @@
 ---
-summary: "Provider, worker-provider, and embedding registration on OpenClawPluginApi"
+summary: "Provider, storage, worker, and embedding registration on OpenClawPluginApi"
 title: "Plugin SDK capability registration"
 sidebarTitle: "Capability registration"
 read_when:
   - You are registering an inference, media, search, or transcript provider
   - You are implementing the cloud-worker provider lifecycle
   - You are registering an embedding provider
+  - You are implementing a storage location transport
 ---
 
 The capability registrars on `OpenClawPluginApi`, and the runtime contracts a
-worker or embedding provider must satisfy. Part of the
+worker, storage, or embedding provider must satisfy. Part of the
 [Plugin SDK overview](/plugins/sdk-overview).
 
 ## Capability registration
@@ -18,6 +19,7 @@ worker or embedding provider must satisfy. Part of the
 | ------------------------------------------------ | --------------------------------------------------------------------------------- |
 | `api.registerProvider(...)`                      | Text inference (LLM)                                                              |
 | `api.registerWorkerProvider(...)`                | Cloud-worker lifecycle leases                                                     |
+| `api.registerStorageProvider(...)`               | Opaque object storage for named locations                                         |
 | `api.registerModelCatalogProvider(...)`          | Model catalog rows for text and media generation                                  |
 | `api.registerAgentHarness(...)`                  | [Experimental](/plugins/sdk-agent-harness) native agent executor (Codex, Copilot) |
 | `api.registerCliBackend(...)`                    | Local CLI inference backend                                                       |
@@ -47,6 +49,51 @@ account exists. Configured auto-start must supply a nonempty source account or
 resolve one with this descriptor. OpenClaw rejects ambiguous or unresolved ownership before it
 persists the start or invokes the provider. Provider aliases are lookup names
 only and must not be used for this declaration.
+
+### Storage providers
+
+Import `StorageProvider`, `StorageProviderOpenParams`, `StorageBackend`, and
+`StorageObjectInfo` from `openclaw/plugin-sdk/plugin-entry`. Register a transport
+with `api.registerStorageProvider(provider)` and declare its `id` in
+`contracts.storageProviders`. Undeclared IDs, duplicate IDs, and the core-owned
+`filesystem` ID are rejected. A configured `storage.locations.<name>.provider`
+automatically enables its bundled owner, subject to explicit plugin disablement
+and deny rules. External plugins still require explicit enablement.
+
+A provider has an `id`, a `label`, optional synchronous `validateSettings(settings)`
+returning a user-facing error, optional `describeTarget(settings)`, and asynchronous
+`open(params)`. `describeTarget` returns a non-secret display target or `undefined`.
+It must be pure and synchronous: derive the target from settings without I/O or
+secret resolution. Configuration listings call it only for the built-in provider
+or a provider already present in the supplied registry; they never activate a
+plugin or open a backend to describe a target. Otherwise, `displayTarget` is omitted.
+
+Core passes `open` the
+location name, read-only settings, optional abort signal, and `resolveSecret(ref)`.
+Resolve credentials through that callback; secret-bearing settings must contain
+SecretRefs. Return a backend with a non-secret `displayTarget` and these methods:
+
+| Method                                        | Contract                                                                                                  |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `probe({ signal }?)`                          | Return optional `freeBytes` and `totalBytes`.                                                             |
+| `putObject(key, body, { sizeBytes, signal })` | Consume an `AsyncIterable<Uint8Array>` and return the stored byte count. Never overwrite an existing key. |
+| `getObject(key, { signal }?)`                 | Return a byte stream, or `undefined` for an absent object.                                                |
+| `statObject(key, { signal }?)`                | Return `{ key, sizeBytes, modifiedAt? }`, or `undefined`. Timestamps use milliseconds.                    |
+| `listObjects(prefix, { signal }?)`            | Stream object metadata beneath the prefix.                                                                |
+| `deleteObject(key, { signal }?)`              | Delete the object.                                                                                        |
+| `close()`                                     | Optional asynchronous resource cleanup.                                                                   |
+
+`sizeBytes`, when provided, is exact. Use atomic conditional creation when the
+backend supports it; otherwise check for an existing object first and document
+the race. Honor abort signals throughout streaming and keep memory bounded.
+Core validates keys before calling the transport: slash-separated segments of
+ASCII letters, digits, `.`, `_`, and `-`, excluding `.` and `..`, with no empty
+segments, leading slash, or backslash, and a maximum of 512 bytes.
+
+Providers store opaque bytes. Core owns location initialization, marker identity,
+namespacing, encryption, and health classification; consumers own retention.
+Providers must not create or interpret location markers or expose credentials in
+`displayTarget` or errors. See [Storage locations](/concepts/storage-locations).
 
 ### Worker providers
 
@@ -216,6 +263,23 @@ errors and turn them into fallback work.
 The provider receives the selected `model` and optional `agentId` in its evaluation
 context. Concurrent agent/model selections share provider health without retiring
 each other. A changed selection fences the affected request before returning it.
+
+Automatic consumers check the Labs opt-in at provider dispatch. Disabling it
+stops future evaluations, not already-dispatched work or use of its result. The
+host supplies `context.isAdmissible()` for ongoing consumer authority, model
+selection, and provider configuration/credential generation checks; the Labs
+toggle is not part of those ongoing checks. Providers performing external I/O
+must call it synchronously immediately before sending,
+after any lazy loading, DNS, or other awaited preparation. A false result closes
+that evaluation; a thrown authority assertion is terminal. The host remembers
+either observation across provider cleanup, so revocation cannot become a provider
+health failure or a later successful result. Omission preserves explicit
+`decision_evaluate` calls and older-host compatibility; it is not a Labs check for
+explicit calls. TypeSafe uses its guarded transport’s final `beforeRequest` hook.
+The host still checks before provider dispatch and before returning results, but
+cannot prevent I/O in third-party providers that ignore this callback. Local ONNX
+inference retains its existing signal-controlled worker lifecycle; it does not
+transmit evidence to an external service.
 
 Consumers share the selected provider's host-owned concurrency, circuit, and
 credential-refresh lifecycle; each plugin does not create its own provider client.

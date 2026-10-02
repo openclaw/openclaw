@@ -1,20 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
-import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-type ClawPackageLifecycleDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
+import {
+  acquireOpenClawStateLeaseInTransaction,
+  releaseOpenClawStateLeaseInTransaction,
+  renewOpenClawStateLeaseInTransaction,
+} from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 type ClawPackageLifecycleArtifact =
   | { kind: "plugin"; source: "clawhub"; ref: string }
@@ -30,6 +27,33 @@ export type MaintainedClawPackageLifecycleLease = {
   release: () => void;
 };
 
+const writeAuthorities = new WeakMap<
+  object,
+  {
+    identity: OpenClawStateLeaseIdentity;
+    artifact: ClawPackageLifecycleArtifact;
+    path: string;
+    assertCurrent: () => void;
+  }
+>();
+
+export function captureClawPackageLifecycleWriteAuthority(
+  lease: MaintainedClawPackageLifecycleLease,
+  artifact: Pick<ClawPackageLifecycleArtifact, "kind" | "source" | "ref">,
+) {
+  const authority = writeAuthorities.get(lease);
+  if (
+    !authority ||
+    authority.artifact.kind !== artifact.kind ||
+    authority.artifact.source !== artifact.source ||
+    authority.artifact.ref !== artifact.ref
+  ) {
+    throw new Error("Package write requires its original lifecycle owner.");
+  }
+  authority.assertCurrent();
+  return authority;
+}
+
 type ClawPackageLifecycleLeaseOptions = OpenClawStateDatabaseOptions & {
   nowMs?: number;
   owner?: string;
@@ -44,10 +68,6 @@ class ClawPackageLifecycleBusyError extends Error {
     super(message);
     this.name = "ClawPackageLifecycleBusyError";
   }
-}
-
-function kyselyFor(db: DatabaseSync) {
-  return getNodeSqliteKysely<ClawPackageLifecycleDatabase>(db);
 }
 
 function packageLeaseKey(artifact: ClawPackageLifecycleArtifact): string {
@@ -66,47 +86,27 @@ export function acquireClawPackageLifecycleLease(
   const databasePath = options.path ?? resolveOpenClawStateSqlitePath(env);
   const nowMs = options.nowMs ?? Date.now();
   const expiresAt = nowMs + LEASE_TTL_MS;
-  const owner = options.owner ?? randomUUID();
-  const leaseKey = packageLeaseKey(artifact);
+  const identity = {
+    owner: options.owner ?? randomUUID(),
+    scope: LEASE_SCOPE,
+    key: packageLeaseKey(artifact),
+  };
 
   try {
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const state = kyselyFor(db);
-        executeSqliteQuerySync(
+        const acquired = acquireOpenClawStateLeaseInTransaction(
           db,
-          state
-            .deleteFrom("state_leases")
-            .where("scope", "=", LEASE_SCOPE)
-            .where("lease_key", "=", leaseKey)
-            .where("expires_at", "<=", nowMs),
+          identity,
+          LEASE_TTL_MS,
+          JSON.stringify(artifact),
+          nowMs,
         );
-        const existing = executeSqliteQueryTakeFirstSync(
-          db,
-          state
-            .selectFrom("state_leases")
-            .select("expires_at")
-            .where("scope", "=", LEASE_SCOPE)
-            .where("lease_key", "=", leaseKey),
-        );
-        if (existing) {
+        if (acquired.kind === "held") {
           throw new ClawPackageLifecycleBusyError(
-            `Package ${artifact.ref} is being changed by another OpenClaw lifecycle; retry after ${new Date(existing.expires_at ?? expiresAt).toISOString()}.`,
+            `Package ${artifact.ref} is being changed by another OpenClaw lifecycle; retry after ${new Date(acquired.holder.expiresAt ?? expiresAt).toISOString()}.`,
           );
         }
-        executeSqliteQuerySync(
-          db,
-          state.insertInto("state_leases").values({
-            scope: LEASE_SCOPE,
-            lease_key: leaseKey,
-            owner,
-            expires_at: expiresAt,
-            heartbeat_at: nowMs,
-            payload_json: JSON.stringify(artifact),
-            created_at: nowMs,
-            updated_at: nowMs,
-          }),
-        );
       },
       { env, path: databasePath },
     );
@@ -117,26 +117,19 @@ export function acquireClawPackageLifecycleLease(
     return null;
   }
 
-  return {
+  let active = true;
+  const lease: ClawPackageLifecycleLease = {
     heartbeat: (heartbeatNowMs = Date.now()) => {
-      const heartbeatExpiresAt = heartbeatNowMs + LEASE_TTL_MS;
       runOpenClawStateWriteTransaction(
         ({ db }) => {
-          const result = executeSqliteQuerySync(
+          const renewed = renewOpenClawStateLeaseInTransaction(
             db,
-            kyselyFor(db)
-              .updateTable("state_leases")
-              .set({
-                expires_at: heartbeatExpiresAt,
-                heartbeat_at: heartbeatNowMs,
-                updated_at: heartbeatNowMs,
-              })
-              .where("scope", "=", LEASE_SCOPE)
-              .where("lease_key", "=", leaseKey)
-              .where("owner", "=", owner)
-              .where("expires_at", ">", heartbeatNowMs),
+            identity,
+            LEASE_TTL_MS,
+            undefined,
+            heartbeatNowMs,
           );
-          if (result.numAffectedRows !== 1n) {
+          if (renewed === undefined) {
             throw new Error(`Package lifecycle lease was lost for ${artifact.ref}.`);
           }
         },
@@ -144,21 +137,24 @@ export function acquireClawPackageLifecycleLease(
       );
     },
     release: () => {
+      active = false;
       runOpenClawStateWriteTransaction(
-        ({ db }) => {
-          executeSqliteQuerySync(
-            db,
-            kyselyFor(db)
-              .deleteFrom("state_leases")
-              .where("scope", "=", LEASE_SCOPE)
-              .where("lease_key", "=", leaseKey)
-              .where("owner", "=", owner),
-          );
-        },
+        ({ db }) => releaseOpenClawStateLeaseInTransaction(db, identity),
         { env, path: databasePath },
       );
     },
   };
+  writeAuthorities.set(lease, {
+    identity,
+    artifact: { ...artifact },
+    path: databasePath,
+    assertCurrent: () => {
+      if (!active) {
+        throw new Error("Package lifecycle lease has been released.");
+      }
+    },
+  });
+  return lease;
 }
 
 /** Renews an acquired lease while an asynchronous package mutation is in flight. */
@@ -174,13 +170,17 @@ export function maintainClawPackageLifecycleLease(
     }
   }, LEASE_TTL_MS / 3);
   heartbeat.unref();
-  return {
+  const assertActive = () => {
+    if (heartbeatError) {
+      throw heartbeatError instanceof Error
+        ? heartbeatError
+        : new Error(formatErrorMessage(heartbeatError));
+    }
+    writeAuthorities.get(lease)?.assertCurrent();
+  };
+  const maintained: MaintainedClawPackageLifecycleLease = {
     assertCurrent: () => {
-      if (heartbeatError) {
-        throw heartbeatError instanceof Error
-          ? heartbeatError
-          : new Error(formatErrorMessage(heartbeatError));
-      }
+      assertActive();
       lease.heartbeat();
     },
     release: () => {
@@ -188,6 +188,11 @@ export function maintainClawPackageLifecycleLease(
       lease.release();
     },
   };
+  const authority = writeAuthorities.get(lease);
+  if (authority) {
+    writeAuthorities.set(maintained, { ...authority, assertCurrent: assertActive });
+  }
+  return maintained;
 }
 
 export async function withClawPackageLifecycleLease<T>(

@@ -496,7 +496,7 @@ describe("agent command static capabilities", () => {
   const cases = [
     { inventory: "empty", contextTokens: 1_000_000, thinking: "medium" },
     { inventory: "authored", contextTokens: 640_000, thinking: "off" },
-    { inventory: "replace", contextTokens: 1_000_000, thinking: "medium" },
+    { inventory: "replace", contextTokens: 320_000, thinking: "off" },
     { inventory: "generic", contextTokens: 200_000, thinking: "off" },
     { inventory: "explicit off", contextTokens: 1_000_000, thinking: "off" },
   ] as const;
@@ -567,20 +567,7 @@ describe("agent command static capabilities", () => {
             baseUrl,
             api: "openai-completions",
             apiKey: key,
-            models:
-              testCase.inventory === "replace"
-                ? [
-                    {
-                      id: "claude-opus-4-6",
-                      name: "Claude Opus 4.6",
-                      reasoning: true,
-                      input: ["text", "image"],
-                      contextWindow: 1_000_000,
-                      maxTokens: 128_000,
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    },
-                  ]
-                : ([] as Array<Record<string, unknown>>),
+            models: [] as Array<Record<string, unknown>>,
           };
           const providers: Record<string, typeof litellmProvider> = { litellm: litellmProvider };
           const config = {
@@ -604,27 +591,23 @@ describe("agent command static capabilities", () => {
               providers,
             },
           };
-          if (testCase.inventory === "authored") {
+          if (testCase.inventory === "authored" || testCase.inventory === "replace") {
             litellmProvider.models = [
               {
                 id: config.agents.defaults.model.primary.slice("litellm/".length),
                 name: "Authored fixture",
                 reasoning: false,
                 input: ["text", "image"],
-                contextWindow: 640_000,
+                contextWindow: testCase.inventory === "replace" ? 320_000 : 640_000,
                 maxTokens: 128_000,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ];
-          } else if (testCase.inventory === "replace") {
-            expect(litellmProvider.models).toHaveLength(1);
           } else if (testCase.inventory === "generic") {
             config.models.providers = {
               "proxy-fixture": { baseUrl, api: "openai-completions", apiKey: key, models: [] },
             };
             config.agents.defaults.model.primary = "proxy-fixture/plain-fixture";
-          } else {
-            litellmProvider.models = [];
           }
           await fs.writeFile(configPath, JSON.stringify(config));
           expect(requests).toEqual([]);

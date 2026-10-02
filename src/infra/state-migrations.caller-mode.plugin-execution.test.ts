@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pluginDoctorContractRegistryLoaderState } from "../plugins/doctor-contract-registry-loader-state.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -22,7 +24,6 @@ import {
   createCallerModeExecutionFixture,
   expectBlockedTailInPlanOrder,
   expectPlanReceiptDescriptorsToMatch,
-  writeLegacyStateSchemaV1,
 } from "./state-migrations.caller-mode.test-helpers.js";
 import {
   autoMigrateLegacyState,
@@ -437,7 +438,7 @@ module.exports = { stateMigrations: [{
       excludeDoctorOnly: true,
     },
   ])(
-    "discovers live plugin actions across index migration (legacy root: $legacyRoot, phase: $phase, indexed: $fromInstallIndex, direct: $direct, legacy schema: $legacySchema, ordinary-only: $excludeDoctorOnly)",
+    "discovers live plugin actions across state root and schema preparation (legacy root: $legacyRoot, phase: $phase, indexed: $fromInstallIndex, direct: $direct, legacy schema: $legacySchema, ordinary-only: $excludeDoctorOnly)",
     async ({ phase, legacyRoot, fromInstallIndex, direct, legacySchema, excludeDoctorOnly }) => {
       const fixture = await makeFixture();
       // This execution fixture has no candidate package. Its config-root plugin directory
@@ -453,16 +454,28 @@ module.exports = { stateMigrations: [{
         : path.join(legacyRoot ? fixture.root : stateDir, "extensions", pluginId);
       const markerPath = path.join(fixture.root, "relocated-action-ran");
       const doctorOnlyMarkerPath = path.join(fixture.root, "doctor-only-action-ran");
+      fs.mkdirSync(legacyStateDir, { recursive: true });
       fs.mkdirSync(pluginRoot, { recursive: true });
-      fs.mkdirSync(path.join(legacyStateDir, "plugins"), { recursive: true });
-      fs.writeFileSync(
-        path.join(legacyStateDir, "plugins", "installs.json"),
-        JSON.stringify({
-          records: fromInstallIndex
-            ? { [pluginId]: { source: "path", sourcePath: pluginRoot, installPath: pluginRoot } }
-            : {},
-        }),
-      );
+      const installRecords = {
+        [pluginId]: { source: "path" as const, sourcePath: pluginRoot, installPath: pluginRoot },
+      };
+      if (fromInstallIndex && !legacySchema) {
+        await writePersistedInstalledPluginIndex(
+          {
+            version: 1,
+            hostContractVersion: "2026.7.1",
+            compatRegistryVersion: "test",
+            migrationVersion: 1,
+            policyHash: "test",
+            generatedAtMs: 1,
+            installRecords,
+            plugins: [],
+            diagnostics: [],
+          },
+          { stateDir: legacyStateDir },
+        );
+        await closeOpenClawStateDatabaseAsync();
+      }
       fs.writeFileSync(
         path.join(pluginRoot, "package.json"),
         JSON.stringify({
@@ -523,7 +536,34 @@ module.exports = { stateMigrations: [{
         delete env.OPENCLAW_STATE_DIR;
       }
       if (legacySchema) {
-        writeLegacyStateSchemaV1(resolveOpenClawStateSqlitePath(env));
+        const databasePath = resolveOpenClawStateSqlitePath(env);
+        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+        const database = new DatabaseSync(databasePath);
+        try {
+          database.exec(
+            fs.readFileSync(
+              new URL("../../test/fixtures/sqlite/openclaw-state-schema-v1.sql", import.meta.url),
+              "utf8",
+            ),
+          );
+          database.exec("PRAGMA user_version = 1;");
+          database
+            .prepare(
+              "INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, '2026.7.35', 1, 1)",
+            )
+            .run();
+          database
+            .prepare(`
+            INSERT INTO installed_plugin_index (
+              index_key, version, host_contract_version, compat_registry_version,
+              migration_version, policy_hash, generated_at_ms, install_records_json,
+              plugins_json, diagnostics_json, updated_at_ms
+            ) VALUES ('installed-plugin-index', 1, '2026.7.35', 'test', 1, 'test', 1, ?, '[]', '[]', 1)
+          `)
+            .run(JSON.stringify(installRecords));
+        } finally {
+          database.close();
+        }
       }
       clearPluginDoctorContractRegistryCache();
 
@@ -557,7 +597,7 @@ module.exports = { stateMigrations: [{
         (receipt) => receipt.id === (legacyRoot ? "state-dir" : "plugin-install-index"),
       );
       expect(preludeReceipt, JSON.stringify(preludeReceipt)).toMatchObject({
-        outcome: "completed",
+        outcome: legacyRoot ? "completed" : "skipped",
       });
       expect(fs.realpathSync(legacyStateDir)).toBe(fs.realpathSync(stateDir));
       expect(result.warnings).toEqual([]);
@@ -587,7 +627,8 @@ module.exports = { stateMigrations: [{
         ).resolves.toMatchObject({
           changes: ["migrated relocated action"],
           warnings: [],
-          completedPluginIds: [pluginId],
+          // Nothing is deferred or retained here, so completion is not certified.
+          completedPluginIds: undefined,
         });
       } else {
         expect(
@@ -736,7 +777,7 @@ module.exports = { stateMigrations: [{
     ).toMatchObject({
       outcome: "refused",
       requiredness: "required",
-      refusal: { code: "step-refused" },
+      refusal: { code: "unsupported-plugin-install-index" },
     });
     expect(targetDiscovery).not.toHaveBeenCalled();
     expect(fs.readFileSync(sourcePath, "utf8")).toBe("{invalid");

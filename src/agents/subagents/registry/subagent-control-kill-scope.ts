@@ -9,13 +9,12 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
-import { resolveSessionAgentId } from "../../agent-scope.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureSubagentControllerOwnsRun,
   getLatestOwnedSubagentRun,
   isCurrentSubagentRun,
-  isSameSubagentRunGeneration,
   type ResolvedSubagentController,
 } from "./subagent-control-scope.js";
 import {
@@ -56,7 +55,7 @@ export type KillSelection = {
 };
 
 export type KillScope = {
-  cancellationControl: SubagentCancellationControl | undefined;
+  cancellationControl: SubagentCancellationControl;
   refresh: () => Promise<number>;
   stateContext: OpenClawStateWorkerContext;
 };
@@ -110,7 +109,10 @@ export async function withSubagentKillScope<T>(
       );
       if (
         !entry ||
-        !isSameSubagentRunGeneration(entry, snapshot) ||
+        entry.childSessionKey !== snapshot.childSessionKey ||
+        entry.runId !== snapshot.runId ||
+        entry.generation !== snapshot.generation ||
+        entry.createdAt !== snapshot.createdAt ||
         selected.has(entry.childSessionKey)
       ) {
         continue;
@@ -197,6 +199,7 @@ export async function withSubagentKillScope<T>(
               entry.childSessionKey,
               () => assertSubagentRegistryWriteSourceCurrent(stateContext),
               entry.execution.transcriptTarget,
+              entry.childAgentId,
             );
             releaseSessions.push(session.release);
             if (!tree.canTraverse(false)) {
@@ -229,10 +232,7 @@ export async function withSubagentKillScope<T>(
     for (const { tree } of pending) {
       const controller = {
         controllerSessionKey: tree.entry.childSessionKey,
-        controllerAgentId: resolveSessionAgentId({
-          config: params.cfg,
-          sessionKey: tree.entry.childSessionKey,
-        }),
+        controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
       };
       capture(
         pending,
@@ -278,10 +278,7 @@ export async function withSubagentKillScope<T>(
         hold(tree);
         const controller = {
           controllerSessionKey: tree.entry.childSessionKey,
-          controllerAgentId: resolveSessionAgentId({
-            config: params.cfg,
-            sessionKey: tree.entry.childSessionKey,
-          }),
+          controllerAgentId: resolveSubagentChildSessionOwner(tree.entry, params.cfg).agentId,
         };
         // Retirement preserves captured work, not discovery beneath a missing ancestor.
         const candidates = await withSubagentRunReadSnapshot(

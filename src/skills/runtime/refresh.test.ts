@@ -1,6 +1,7 @@
 import path from "node:path";
-import type { WatchEntry, WatchInvalidation } from "@openclaw/fs-safe/watch";
+import type { WatchEntry, WatchHealth, WatchInvalidation } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { SkillSnapshot } from "../types.js";
@@ -10,7 +11,18 @@ import {
 } from "./refresh.watcher.test-support.js";
 
 const observer = createSkillsWatcherMock();
+const warnings = vi.hoisted(() => vi.fn());
 vi.mock("@openclaw/fs-safe/watch", () => ({ watch: observer.watchMock }));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "gateway/skills" ? { ...logger, warn: warnings } : logger;
+    },
+  };
+});
 vi.mock("../loading/plugin-skills.js", () => ({
   resolvePluginSkillRoots: vi.fn(() => []),
   resolvePluginSkillRootsFromMetadata: vi.fn(() => []),
@@ -20,6 +32,7 @@ beforeEach(() => vi.resetModules());
 const fixture = useSkillsWatcherFixture(observer);
 let refresh: typeof import("./refresh.js");
 beforeEach(async () => {
+  warnings.mockClear();
   refresh = await import("./refresh.js");
 });
 
@@ -37,6 +50,49 @@ function observeScan(
     observed.options.onHealth?.({ ...observed.subscription.health(), state: "ready" });
   }
 }
+
+it.each([
+  { mode: "false", interval: undefined, expectedInterval: 30_000, failure: undefined },
+  {
+    mode: "false",
+    interval: "100",
+    expectedInterval: 30_000,
+    failure: { operation: "watch", code: "ENOTSUP", error: new Error("unsupported backend") },
+  },
+  { mode: "false", interval: "60000", expectedInterval: 60_000, failure: undefined },
+  { mode: "true", interval: "100", expectedInterval: 30_000, failure: undefined },
+] as const)(
+  "bounds skills polling and reports automatic fallback once ($mode, $interval)",
+  async ({ mode, interval, expectedInterval, failure }) => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", mode);
+    vi.stubEnv("CHOKIDAR_INTERVAL", interval);
+    refresh.ensureSkillsWatcher({ workspaceDir: fixture.workspaceDir });
+    await observer.readyAll();
+    expect(observer.subscriptions.length).toBeGreaterThan(0);
+    for (const observed of observer.subscriptions) {
+      expect(observed.options.pollIntervalMs).toBe(expectedInterval);
+    }
+    const observed = observer.forRoot(path.join(fixture.workspaceDir, "skills"));
+    for (const state of ["reconciling", "ready", "reconciling", "ready"] as const) {
+      const health: WatchHealth = { state, mode: "poll", directories: 1, failure };
+      observed.options.onHealth?.(health);
+    }
+    if (mode === "true") {
+      expect(warnings).not.toHaveBeenCalled();
+    } else {
+      expect(warnings).toHaveBeenCalledTimes(1);
+      expect(warnings).toHaveBeenCalledWith(
+        expect.stringContaining(`fallback polling (${path.join(fixture.workspaceDir, "skills")})`),
+      );
+      expect(warnings).toHaveBeenCalledWith(expect.stringContaining(`${expectedInterval} ms`));
+      expect(warnings).toHaveBeenCalledWith(
+        expect.stringContaining(
+          failure ? "ENOTSUP: Error: unsupported backend" : "fs-safe did not report a reason",
+        ),
+      );
+    }
+  },
+);
 
 it("refreshes shared snapshots after native watch exhaustion until shutdown", async () => {
   const { resolveReusableWorkspaceSkillSnapshot } = await import("./session-snapshot.js");

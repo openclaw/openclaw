@@ -685,19 +685,19 @@ describe("worker session placement store", () => {
       runId: "worker-ack-current-run",
     });
 
-    expect(() => store.updateAckCursors({ claim: firstClaim, transcript: 4 })).toThrow(
+    await expect(store.updateAckCursors({ claim: firstClaim, transcript: 4 })).rejects.toThrow(
       "Cannot ACK stale worker turn",
     );
     expect(store.get(SESSION.sessionId)?.lastTranscriptAckCursor).toBeNull();
     expect(
-      store.updateAckCursors({
+      await store.updateAckCursors({
         claim: currentClaim,
         transcript: 4,
         liveEvent: 9,
       }),
     ).toMatchObject({ lastTranscriptAckCursor: 4, lastLiveEventAckCursor: 9 });
     expect(
-      store.updateAckCursors({
+      await store.updateAckCursors({
         claim: currentClaim,
         transcript: 3,
         liveEvent: 8,

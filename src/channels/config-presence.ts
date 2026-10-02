@@ -70,10 +70,6 @@ function listChannelEnvPrefixes(
   ]);
 }
 
-function hasPersistedChannelState(env: NodeJS.ProcessEnv): boolean {
-  return fs.existsSync(resolveStateDir(env, os.homedir));
-}
-
 /** Lists channel ids detected from config, env vars, or persisted auth state. */
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
@@ -152,7 +148,10 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
   }
 
-  if (options.includePersistedAuthState !== false && hasPersistedChannelState(env)) {
+  if (
+    options.includePersistedAuthState !== false &&
+    fs.existsSync(resolveStateDir(env, os.homedir))
+  ) {
     // Persisted auth can make a channel usable even when config/env is empty, but only probe it
     // when the state directory exists to keep startup/status checks cheap.
     for (const channelId of listBundledChannelIdsWithPersistedAuthState(options.discovery)) {

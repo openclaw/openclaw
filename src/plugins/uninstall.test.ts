@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { runCommandWithTimeout } from "../process/exec.js";
+import { npmCommandArgs } from "../test-utils/npm-command.js";
 import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -314,8 +315,7 @@ function expectNpmUninstallCommand(params: { packageName: string; npmRoot: strin
   if (!command) {
     throw new Error("Expected npm uninstall command");
   }
-  expect(command[0]).toEqual([
-    "npm",
+  expect(npmCommandArgs(command[0])).toEqual([
     "uninstall",
     "--loglevel=error",
     "--legacy-peer-deps",
@@ -1745,7 +1745,7 @@ describe("uninstallPlugin", () => {
       `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
     );
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[], options?: unknown) => {
-      if (argv[1] === "uninstall") {
+      if (npmCommandArgs(argv)?.[0] === "uninstall") {
         expect(argv).toContain("--legacy-peer-deps");
         await fs.rm(removedPluginDir, { recursive: true, force: true });
         const rootManifest = JSON.parse(
@@ -1765,7 +1765,7 @@ describe("uninstallPlugin", () => {
           termination: "exit",
         };
       }
-      if (argv[1] === "install" && argv.includes("--package-lock-only")) {
+      if (npmCommandArgs(argv)?.[0] === "install" && argv.includes("--package-lock-only")) {
         const cwd = (options as { cwd?: string } | undefined)?.cwd;
         expect(cwd).toBeTruthy();
         await fs.writeFile(
@@ -1781,7 +1781,7 @@ describe("uninstallPlugin", () => {
           termination: "exit",
         };
       }
-      if (argv[1] === "install") {
+      if (npmCommandArgs(argv)?.[0] === "install") {
         expect(argv).toContain("--legacy-peer-deps");
         expect(argv).toContain("--omit=peer");
         await fs.rm(runtimePeerDir, { recursive: true, force: true });

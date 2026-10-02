@@ -92,13 +92,11 @@ function expectVersion(db: DatabaseSync, version: number) {
 async function startWatcher() {
   const log = { warn: vi.fn() };
   const scheduled = createDeferredCore();
-  const schedule = scheduler.schedule.bind(scheduler);
-  const scheduling = vi.spyOn(scheduler, "schedule").mockImplementation((input) => {
-    const job = schedule(input);
-    if (input.id === "update.schema-publication") {
-      scheduled.resolve();
-    }
-    return job;
+  const arm = clock.clock.arm;
+  const scheduling = vi.spyOn(clock.clock, "arm").mockImplementation((run, delayMs) => {
+    const cancel = arm(run, delayMs);
+    scheduled.resolve();
+    return cancel;
   });
   try {
     watcher = startUpdateRunWatcher({ lifecycle, broadcast: vi.fn(), log });

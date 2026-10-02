@@ -23,6 +23,7 @@ import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
+import { i18n } from "../i18n/index.ts";
 import { loadOrCreateDeviceIdentity } from "../lib/nodes/index.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 
@@ -211,7 +212,7 @@ export async function buildBrowserGatewayConnectPlan({
       }),
       auth: nativeAuth?.auth ?? buildGatewayConnectAuth(selectedAuth),
       userAgent: navigator.userAgent,
-      locale: navigator.language,
+      locale: i18n.getRequestedLocale(),
     },
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,

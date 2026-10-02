@@ -122,7 +122,6 @@ function rethrowUnknownNodePairRequestId(
   throw error;
 }
 
-/** Register node pairing management commands. */
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
     nodes

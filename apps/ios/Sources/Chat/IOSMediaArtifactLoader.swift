@@ -22,9 +22,6 @@ struct IOSMediaArtifactLoader: Sendable {
     typealias RequestFactory = @Sendable (GatewayTLSParams, Int) -> Request
     typealias ConnectionProvider = @MainActor @Sendable () -> Connection?
 
-    static let maximumImageBytes = 12 * 1024 * 1024
-    static let maximumAudioBytes = 16 * 1024 * 1024
-    static let maximumVideoBytes = 16 * 1024 * 1024
     private let connectionProvider: ConnectionProvider
     private let requestFactory: RequestFactory
 
@@ -48,7 +45,7 @@ struct IOSMediaArtifactLoader: Sendable {
         playback: OpenClawChatPlaybackMode? = nil,
         expectedGatewayID: String) async throws -> OpenClawChatLoadedMedia
     {
-        let maximumBytes = Self.maximumBytes(for: kind)
+        let maximumBytes = kind.maximumDownloadBytes
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
            let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -128,14 +125,5 @@ struct IOSMediaArtifactLoader: Sendable {
         }
         guard data.count <= maximumBytes else { throw LoadError.payloadTooLarge }
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
-    }
-
-    private static func maximumBytes(for kind: OpenClawChatMediaKind) -> Int {
-        switch kind {
-        case .image: self.maximumImageBytes
-        case .audio: self.maximumAudioBytes
-        case .video: self.maximumVideoBytes
-        case .file: 100 * 1024 * 1024 // Gateway document limit (media-core/constants).
-        }
     }
 }

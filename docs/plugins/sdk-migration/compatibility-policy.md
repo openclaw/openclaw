@@ -272,7 +272,8 @@ existing plugins should not break during ordinary minor releases.
 The dated compatibility registry also tracks shipped annotations that do not
 belong to one legacy subpath. Unless a later date is listed below, these records
 use 2026-10-01 as the earliest review date; removal still requires the reader
-condition in the final column.
+condition in the final column. The October 1 families are `removal-pending`
+while those migrations remain unverified; their original dates are unchanged.
 
 | Compatibility code                                | Replacement                                                                                    | Removal condition                                                                                                    |
 | ------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
@@ -376,7 +377,8 @@ The `media-legacy-projection` compatibility record covers the old parallel
 media fields, payload builders, hook metadata aliases, and media template
 names. Its approved `removeAfter` date is **2026-10-01** (two release trains
 after the facts-first replacements shipped). Removal additionally requires a
-clean published-plugin artifact sweep at that time; migrate before the date.
+clean published-plugin artifact sweep. The record is now `removal-pending`
+with the original date preserved until that proof is complete.
 
 The unused `buildChannelTurnMediaPayload` alias has been removed from
 `openclaw/plugin-sdk/channel-inbound`. Its canonical

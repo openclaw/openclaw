@@ -1,3 +1,4 @@
+import type { LitElement } from "lit";
 import { expect, it } from "vitest";
 import type { ChatQueueItem, ChatReplyTarget } from "../lib/chat/chat-types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -159,12 +160,13 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 700 } },
       async ({ page }) => {
         await installMockGateway(page);
-        await page.goto(`${suite.server.baseUrl}settings`);
-        await page.evaluate(() => {
+        // The shell opens the Control UI database at startup.
+        await page.addInitScript(() => {
           IDBFactory.prototype.open = () => {
             throw new DOMException("Storage unavailable", "UnknownError");
           };
         });
+        await page.goto(`${suite.server.baseUrl}settings`);
         await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
         await page.evaluate(() => {
           const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
@@ -364,51 +366,84 @@ suite.define(() => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}settings`);
         await page.evaluate('import("/src/pages/chat/chat-outbox-recovery.ts")');
-        const hostHandle = await page.evaluateHandle((initialIncognito) => {
-          const replyState: { chatReplyTarget: ChatReplyTarget | null } = { chatReplyTarget: null };
-          const host = {
-            ...replyState,
-            settings: { gatewayUrl: "ws://recovery-fence.test" },
-            connected: true,
-            client: { recoveryScopeReady: true, recoveryScope: "owner" },
-            agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
-            sessionKey: "agent:main:main",
-            currentSessionId: "incarnation-a",
-            connectionEpoch: 1,
-            selectedChatSessionIncognito: initialIncognito,
-            chatMessage: "",
-            chatGoalDraftMode: undefined,
-            chatAttachments: [],
-            chatQueue: [],
-          };
-          sessionStorage.setItem(
-            `openclaw.control.chatComposer.v2:${encodeURIComponent(host.settings.gatewayUrl)}`,
-            JSON.stringify({
-              version: 2,
-              gatewayOwner: host.settings.gatewayUrl,
-              sessions: {
-                "global\u0000agent:main": {
-                  draft: "Retained confirmation draft",
-                  draftRevision: 1,
-                  updatedAt: 1,
-                },
+        const legacyKey = `openclaw.control.chatComposer.v2:${encodeURIComponent("ws://recovery-fence.test")}`;
+        const legacyValue = JSON.stringify({
+          version: 2,
+          gatewayOwner: "ws://recovery-fence.test",
+          sessions: {
+            "global\u0000agent:main": {
+              draft: "Retained confirmation draft",
+              draftRevision: 1,
+              updatedAt: 1,
+            },
+          },
+        });
+        const hostHandle = await page.evaluateHandle(
+          ({ initialIncognito, key, value }) => {
+            const replyState: { chatReplyTarget: ChatReplyTarget | null } = {
+              chatReplyTarget: null,
+            };
+            const host = {
+              ...replyState,
+              settings: { gatewayUrl: "ws://recovery-fence.test" },
+              connected: true,
+              client: { recoveryScopeReady: true, recoveryScope: "owner" },
+              agentsList: { defaultId: "main", mainKey: "main", scope: "per-sender" },
+              sessionKey: "agent:main:main",
+              currentSessionId: "incarnation-a",
+              connectionEpoch: 1,
+              selectedChatSessionIncognito: initialIncognito,
+              chatMessage: "",
+              chatGoalDraftMode: undefined,
+              chatAttachments: [],
+              chatQueue: [],
+            };
+            sessionStorage.setItem(key, value);
+            const component = Object.assign(
+              document.createElement("openclaw-chat-outbox-recovery"),
+              {
+                host,
+                identity: "unchanged-route-and-owner",
               },
-            }),
-          );
-          const component = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
-            host,
-            identity: "unchanged-route-and-owner",
-          });
-          component.style.cssText =
-            "position: fixed; inset: 24px; z-index: 100; background: white; color: black";
-          document.body.append(component);
-          return host;
-        }, change === "incognito");
+            );
+            component.style.cssText =
+              "position: fixed; inset: 24px; z-index: 100; background: white; color: black";
+            document.body.append(component);
+            return host;
+          },
+          { initialIncognito: change === "incognito", key: legacyKey, value: legacyValue },
+        );
         const notice = page.locator("openclaw-chat-outbox-recovery");
-        await notice.locator("summary").click();
         const restore = notice.getByRole("button", { name: "Restore here for review" });
         if (change === "incognito") {
-          expect(await restore.isDisabled()).toBe(true);
+          await notice.evaluate(async (element) => {
+            const component = element as LitElement;
+            await component.updateComplete;
+            await component.updateComplete;
+          });
+          expect(await notice.locator("summary").count()).toBe(0);
+          expect(
+            await notice.getByText("Retained confirmation draft", { exact: true }).count(),
+          ).toBe(0);
+          expect(await restore.count()).toBe(0);
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          expect(await page.evaluate((key) => sessionStorage.getItem(key), legacyKey)).toBe(
+            legacyValue,
+          );
+          // Leaving Incognito reveals the retained source, never an adopted destination.
+          await hostHandle.evaluate((host) => {
+            host.selectedChatSessionIncognito = false;
+            const component = document.querySelector(
+              "openclaw-chat-outbox-recovery",
+            ) as LitElement & {
+              identity: string;
+            };
+            component.identity = "non-incognito-review-owner";
+          });
+        }
+        await notice.locator("summary").click();
+        if (change === "incognito") {
+          expect(await restore.isDisabled()).toBe(false);
         } else {
           await restore.click();
           const dialog = page.locator("openclaw-modal-dialog");
@@ -452,6 +487,15 @@ suite.define(() => {
         });
         expect(records.sessions).toEqual({});
         expect(Object.keys(records.recovery)).toHaveLength(1);
+        expect(await hostHandle.evaluate((host) => host.chatMessage)).toBe("");
+        expect(
+          await page.evaluate(() => {
+            const raw = sessionStorage.getItem(
+              `openclaw.control.chatComposer.v4:${encodeURIComponent("ws://recovery-fence.test")}:account:owner`,
+            );
+            return raw ? JSON.parse(raw).sessions : {};
+          }),
+        ).toEqual({});
         if (change === "reply") {
           expect(await hostHandle.evaluate((host) => host.chatReplyTarget)).toEqual({
             messageId: "newer-quote",
