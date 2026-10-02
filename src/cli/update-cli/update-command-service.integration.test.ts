@@ -27,6 +27,7 @@ import * as startRepair from "../daemon-cli/start-repair.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { registerGenerationRecoveryTests } from "./update-command-generation.test-support.js";
 import { registerRestartOutcomeTests } from "./update-command-restart-outcome.test-support.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { assertGatewayServiceManagementAllowedForUpdate } from "./update-command-service-plan.js";
 import {
   createServiceActivationFixture,
@@ -117,6 +118,11 @@ vi.mock("../../daemon/launchd-system.js", async (importOriginal) => ({
 vi.mock("../../infra/restart-stale-pids.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-stale-pids.js")>()),
   cleanStaleGatewayProcessesSync: () => [],
+  // Simulated service platforms must not read the host's native ancestry.
+  inspectSelfAndAncestorPidsSync: () => ({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  }),
   terminateStaleGatewayPids: mocks.terminateStale,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({
@@ -267,6 +273,7 @@ afterAll(() => inspectionWorkers.close());
 beforeEach(async () => {
   vi.clearAllMocks();
   mocks.exit.mockReset();
+  stubNodeRuntime();
   mockProcessPlatform("linux");
   ({ root, configPath, envSnapshot, servingOwner } = await createServiceActivationFixture());
   const runEnv = { ...process.env };

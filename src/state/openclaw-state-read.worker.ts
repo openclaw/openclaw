@@ -84,6 +84,7 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
+import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
 import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
@@ -229,6 +230,12 @@ serveOwnedWorkerTasks(
               return {
                 type: command.type,
                 status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
+              };
+            }
+            if (command.type === "agentDeletionJournal.authority") {
+              return {
+                type: command.type,
+                authority: readAgentDeletionJournalAuthorityInDatabase(db, command.agentId),
               };
             }
             if (command.type === "deliveryQueue.outbound") {

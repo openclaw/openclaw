@@ -188,6 +188,54 @@ describe("native conversation contract", () => {
     });
   });
 
+  it.each(["current", "superseded", "retired"] as const)(
+    "waits for rendered session actions without opening a stale menu (%s)",
+    async (owner) => {
+      const f = fixture(["session-actions-v1"]);
+      const page = document.createElement("openclaw-chat-page");
+      const pane = document.createElement("openclaw-chat-pane");
+      pane.sessionKey = f.data.sessionKey;
+      pane.classList.add("chat-pane-cache__pane--active");
+      page.append(pane);
+      document.body.append(page);
+      const results = () => f.messages.filter((message) => message.type === "command-result");
+      f.command("open-session-actions", {
+        agentId: f.data.agentId,
+        sessionKey: f.data.sessionKey,
+      });
+      await flush();
+      await vi.dynamicImportSettled();
+      await flush();
+      expect(results()).toEqual([]);
+
+      if (owner === "superseded") {
+        f.data.sessionKey = "agent:main:other";
+        f.changed();
+      } else if (owner === "retired") {
+        f.bridge.dispose();
+      }
+      const menu = document.createElement("openclaw-chat-header-session-menu");
+      const dropdown = document.createElement("wa-dropdown");
+      dropdown.open = false;
+      menu.append(dropdown);
+      pane.append(menu);
+      await flush();
+      expect(dropdown.open).toBe(owner === "current");
+      if (owner === "current") {
+        expect(results()).toEqual([]);
+        dropdown.dispatchEvent(new Event("wa-after-show"));
+        await flush();
+        expect(results()).toMatchObject([{ requestId: "request-1", ok: true }]);
+      } else if (owner === "superseded") {
+        expect(results()).toMatchObject([
+          { requestId: "request-1", ok: false, error: "unavailable" },
+        ]);
+      } else {
+        expect(results()).toEqual([]);
+      }
+    },
+  );
+
   it("requires the conversation capability and a callable handler", () => {
     const f = fixture();
     f.bridge.dispose();

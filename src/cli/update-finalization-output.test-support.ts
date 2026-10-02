@@ -68,11 +68,15 @@ const recoveryClockUrls = new Map([
 ]);
 const doctorSource = `
 import { intro, note, outro } from ${JSON.stringify(pathToFileURL(require.resolve("@clack/prompts")).href)};
+import { retainUpdateDoctorProcesses } from ${JSON.stringify(sourceUrl("../infra/update-doctor-process-custody.ts"))};
+import { withCommandProcessScope } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
 export async function doctorCommand() {
   if (process.argv.includes('--lint')) {
     console.log(JSON.stringify({ ok: true, checksRun: 1, checksSkipped: 0, findings: [] }));
     return;
   }
+  using custody = await retainUpdateDoctorProcesses();
+  const run = async () => {
   if (process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION !== '0') {
     throw new Error('Update Doctor unexpectedly allowed gateway activation');
   }
@@ -102,6 +106,8 @@ export async function doctorCommand() {
         JSON.stringify({status:'ok', warnings:['Optional probe failed; run openclaw doctor after updating.']}));`
       : ""
   }
+  };
+  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
 }
 `;
 const installedEntry = path.join(root, "installed-cli.mjs");

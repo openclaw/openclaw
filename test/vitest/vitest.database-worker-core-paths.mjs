@@ -731,6 +731,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tts/tts-summary.resources.test.ts",
   "src/agents/simple-completion-runtime.plugin-scope.test.ts",
   "src/agents/tools/pdf-tool.static-runtime.test.ts",
+  "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.chat-metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.test.ts",
