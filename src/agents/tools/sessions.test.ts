@@ -238,6 +238,7 @@ function createMainSessionsSendTool() {
 async function executeFireAndForgetA2AFrom(
   requesterSessionKey: string,
   options?: {
+    expectReplyFlow?: boolean;
     mainKey?: string;
     dmScope?: NonNullable<SessionsToolTestConfig["session"]["dmScope"]>;
     bindingDmScope?: NonNullable<SessionsToolTestConfig["session"]["dmScope"]>;
@@ -339,10 +340,12 @@ async function executeFireAndForgetA2AFrom(
     }),
   );
   const flowParams = vi.mocked(runSessionsSendA2AFlow).mock.calls[0]?.[0];
-  if (!flowParams) {
+  if (options?.expectReplyFlow === false) {
+    expect(requireDetails(result)).toMatchObject({ delivery: { status: "skipped" } });
+  } else if (!flowParams) {
     throw new Error("expected A2A flow");
   }
-  return flowParams;
+  return flowParams!;
 }
 
 beforeEach(() => {
@@ -1554,21 +1557,30 @@ describe("sessions_send gating", () => {
     {
       label: "canonical cron run",
       requesterSessionKey: "agent:main:cron:job:run:abc",
+      expected: false,
       expectedRequesterSessionKey: "agent:main:cron:job:run:abc",
     },
     {
       label: "normal requester",
       requesterSessionKey: "agent:main:telegram:direct:user",
+      expected: true,
       expectedRequesterSessionKey: "agent:main:telegram:direct:user",
     },
     {
       label: "non-canonical cron-like requester",
       requesterSessionKey: "agent:main:slack:cron:job:run:uuid",
+      expected: true,
       expectedRequesterSessionKey: "agent:main:slack:cron:job:run:uuid",
     },
   ] as const)(
-    "keeps requester delivery on the caller key for a $label",
-    async ({ requesterSessionKey, expectedRequesterSessionKey }) => {
+    "starts requester delivery only when eligible for a $label",
+    async ({ requesterSessionKey, expected, expectedRequesterSessionKey }) => {
+      if (!expected) {
+        const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
+        await executeFireAndForgetA2AFrom(requesterSessionKey, { expectReplyFlow: false });
+        expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+        return;
+      }
       const flowParams = await executeFireAndForgetA2AFrom(requesterSessionKey);
 
       expect(flowParams.requesterSessionKey).toBe(expectedRequesterSessionKey);
