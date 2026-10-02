@@ -2215,7 +2215,7 @@ final class NodeAppModel {
         self.failedInvokeResponse(request, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
     }
 
-    private static func failedInvokeResponse(
+    private nonisolated static func failedInvokeResponse(
         _ request: BridgeInvokeRequest,
         code: OpenClawNodeErrorCode,
         message: String) -> BridgeInvokeResponse
