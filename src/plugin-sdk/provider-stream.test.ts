@@ -10,6 +10,7 @@ import {
   composeProviderStreamWrappers,
   createMoonshotThinkingWrapper,
   createPlainTextToolCallCompatWrapper,
+  MOONSHOT_THINKING_STREAM_HOOKS,
 } from "./provider-stream.js";
 
 type StreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
@@ -420,7 +421,7 @@ describe("buildProviderStreamFamilyHooks", () => {
     expectDefaultThinkingBudget(kilocodeAutoPayload);
     expect(kilocodeAutoPayload).not.toHaveProperty("reasoning");
 
-    const moonshotHooks = buildProviderStreamFamilyHooks("moonshot-thinking");
+    const moonshotHooks = MOONSHOT_THINKING_STREAM_HOOKS;
     const moonshotStream = requireStreamFn(
       requireWrapStreamFn(moonshotHooks.wrapStreamFn)({
         streamFn: baseStreamFn,

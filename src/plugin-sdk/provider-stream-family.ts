@@ -12,6 +12,7 @@ export {
   buildProviderStreamFamilyHooks,
   getOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
+  MOONSHOT_THINKING_STREAM_HOOKS,
   resolveOpenAIFastMode,
   resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,

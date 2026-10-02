@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildProviderReplayFamilyHooks,
   modelCostsEqual,
+  NATIVE_ANTHROPIC_REPLAY_HOOKS,
+  PASSTHROUGH_GEMINI_REPLAY_HOOKS,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -396,7 +398,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     expect(nativeIdsPolicy).not.toHaveProperty("toolCallIdMode");
 
     expectFields(
-      buildProviderReplayFamilyHooks({ family: "passthrough-gemini" }).buildReplayPolicy?.({
+      PASSTHROUGH_GEMINI_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "openrouter",
         modelApi: "openai-completions",
         modelId: "gemini-2.5-pro",
@@ -425,7 +427,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     );
 
     expectFields(
-      buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }).buildReplayPolicy?.({
+      NATIVE_ANTHROPIC_REPLAY_HOOKS.buildReplayPolicy?.({
         provider: "anthropic",
         modelApi: "anthropic-messages",
         modelId: "claude-sonnet-4-6",

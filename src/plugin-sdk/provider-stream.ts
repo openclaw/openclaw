@@ -175,6 +175,9 @@ export function buildProviderStreamFamilyHooks(
   throw new Error("Unsupported provider stream family");
 }
 
+/** @deprecated Moonshot provider-owned stream hook shortcut; use local provider hooks instead. */
+export const MOONSHOT_THINKING_STREAM_HOOKS = buildProviderStreamFamilyHooks("moonshot-thinking");
+
 // Public stream-wrapper helpers for provider plugins.
 
 export {

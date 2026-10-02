@@ -411,3 +411,13 @@ export function buildProviderReplayFamilyHooks(
   }
   throw new Error("Unsupported provider replay family");
 }
+
+/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
+export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "native-anthropic-by-model",
+});
+
+/** @deprecated Google provider-owned replay hook shortcut; use local provider hooks instead. */
+export const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
+  family: "passthrough-gemini",
+});
