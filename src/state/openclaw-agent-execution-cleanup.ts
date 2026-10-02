@@ -29,6 +29,7 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
     params.lease.sharedStatePath,
     context,
     () => params.assertOwned(),
+    observed,
   ).catch((error: unknown) => {
     if (error instanceof Error) {
       error.message += ` (leaseId=${params.lease.leaseId}, path=${params.lease.path})`;

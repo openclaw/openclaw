@@ -5,6 +5,10 @@ import type {
   Model,
   SimpleStreamOptions,
 } from "../../llm/types.js";
+import type {
+  OAuthCredentials,
+  OAuthLoginCallbacks as ProviderOAuthLoginCallbacks,
+} from "../../plugin-sdk/provider-oauth-runtime.js";
 
 /** Shared fields accepted by extension and registry provider registration. */
 export interface ProviderConfigBase {
@@ -54,4 +58,27 @@ export interface ProviderModelConfig {
   headers?: Record<string, string>;
   /** OpenAI compatibility settings. */
   compat?: Model["compat"];
+}
+
+export interface OAuthLoginCallbacks extends ProviderOAuthLoginCallbacks {}
+
+// Provider Registration Types
+
+/** Configuration for registering a provider via api.registerProvider(). */
+export interface ProviderConfig extends ProviderConfigBase {
+  /** Models to register. If provided, replaces all existing models for this provider. */
+  models?: ProviderModelConfig[];
+  /** OAuth provider for /login support. The `id` is set automatically from the provider name. */
+  oauth?: {
+    /** Display name for the provider in login UI. */
+    name: string;
+    /** Run the login flow, return credentials to persist. */
+    login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials>;
+    /** Refresh expired credentials, return updated credentials to persist. */
+    refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials>;
+    /** Convert credentials to API key string for the provider. */
+    getApiKey(credentials: OAuthCredentials): string;
+    /** Optional: modify models for this provider (e.g., update baseUrl based on credentials). */
+    modifyModels?(models: Model[], credentials: OAuthCredentials): Model[];
+  };
 }

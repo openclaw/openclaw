@@ -108,7 +108,7 @@ Everything the model receives counts, including:
 
 ## How OpenClaw builds the system prompt
 
-The system prompt is **OpenClaw-owned** and rebuilt each run. It includes:
+The system prompt is **OpenClaw-owned** and rendered each run. It includes:
 
 - Tool list + short descriptions.
 - Skills list (metadata only; see below).
@@ -118,6 +118,12 @@ The system prompt is **OpenClaw-owned** and rebuilt each run. It includes:
 - Injected workspace bootstrap files under **Project Context**.
 
 Full breakdown: [System Prompt](/concepts/system-prompt).
+
+On supported direct Anthropic API-key routes, OpenClaw keeps the stable system
+prefix pinned for the session and sends changed sections as system messages
+after the current user turn. The dynamic suffix keeps updating normally.
+Changing the route or compacting history starts a new prefix series; after a
+Gateway restart, a changed stable prefix also starts a new series.
 
 ## Injected workspace files (Project Context)
 
@@ -179,8 +185,22 @@ remains an unchanged cached prefix. Retained carriers count toward the context
 window until compaction, which does not split a user message from its carrier.
 Carriers contain only the delimited context body; interpretation guidance lives
 once in the stable system prompt.
-Other transports keep transient metadata at the request tail to preserve their cached
-history prefix when the next user turn removes it.
+
+Supported direct Anthropic API-key routes also preserve runtime context
+append-only, using system messages after the user turn and its other queued
+context. These messages need no delimiters and clear at the next user message:
+they remain in the transcript but no longer consume input tokens. Persistent
+system-prompt updates use the same system-message channel without clearing.
+Tool results and queued extension context also clear earlier copies; OpenClaw
+renews the current user turn's runtime context after those continuations.
+Other prefix-binding Claude routes retain their delimited user-role carriers.
+See [Anthropic retained thinking](/providers/anthropic#tool-calls-and-retained-thinking)
+for supported models and route limits.
+
+Transient carriers remain the cheaper shape on routes without this capability
+when thinking does not bind the prefix. Those routes keep metadata at the
+request tail and remove it on the next user turn, preserving the cached history
+without retaining old context or repeated cache-read charges.
 
 Docs: [Session](/concepts/session), [Compaction](/concepts/compaction), [Session pruning](/concepts/session-pruning).
 

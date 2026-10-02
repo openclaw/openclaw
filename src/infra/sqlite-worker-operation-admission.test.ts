@@ -28,6 +28,7 @@ it.each(["revoke", "close", "self-fence", "request-revoke", "late-revoke"] as co
   "waits for the live owner's %s decision when host scheduling is delayed",
   (outcome) => {
     const revoked = new Error("Synthetic owner authority revoked");
+    const observed: SqliteWorkerAdmissionRequest[] = [];
     let requestCurrent = outcome !== "request-revoke";
     let databaseCurrent = true;
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
@@ -41,6 +42,9 @@ it.each(["revoke", "close", "self-fence", "request-revoke", "late-revoke"] as co
         databaseCurrent = false;
       }
       grant();
+    });
+    admission.observeRequests((request) => {
+      observed.push(request);
     });
     admission.bindDatabaseAuthority({
       databasePath: path.resolve("synthetic-delayed-writer.sqlite"),
@@ -90,6 +94,9 @@ it.each(["revoke", "close", "self-fence", "request-revoke", "late-revoke"] as co
         });
         expect(admission.failureSource).toBe(outcome === "revoke" ? "domain" : "authority");
       }
+      expect(observed).toEqual([{ stage: "transaction", facts: undefined }]);
+      expect(admission.committed).toBeUndefined();
+      expect(admission.settlement).toBeUndefined();
     } finally {
       admission.finish();
     }

@@ -2,14 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
-import type { ContextEngine } from "../../../context-engine/types.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import { resolveDelegationCapability } from "../../delegation-capability.js";
 import { agentHarnessBuildsOpenClawTools } from "../../harness/tool-surface.js";
 import { applyAuthHeaderOverride, applyLocalNoAuthHeaderOverride } from "../../model-auth.js";
@@ -25,7 +23,6 @@ import {
   resolveAttemptWorkspaceSandbox,
   resolveHarnessWorkspace,
 } from "../../workspace-sandbox.js";
-import type { EmbeddedRunReplayState } from "../replay-state.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
@@ -36,41 +33,16 @@ import { EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE } from "./attempt-stage-timing.js";
 import { prepareAttemptSystemPromptAdditions } from "./attempt-system-prompt-additions.js";
 import { resolveAttemptDispatchApiKey } from "./auth-store.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
-import type { PreparedEmbeddedRunInput } from "./execution-context.js";
+import type { PreparedEmbeddedAttemptDispatchInput } from "./execution-context.js";
 import { resolveEmbeddedAttemptBasePrompt } from "./helpers.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 import { CODEX_HARNESS_ID, resolveAttemptTrajectoryAttribution } from "./runtime-resolution.js";
-import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
-import type { createEmbeddedRunTerminalRetryState } from "./terminal-retry-state.js";
 import { MAX_BEFORE_AGENT_FINALIZE_REVISIONS } from "./terminal-retry-state.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
 
-type PreparedRuntime = Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>>;
-type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
-type TerminalRetryState = ReturnType<typeof createEmbeddedRunTerminalRetryState>;
-
-export async function prepareAndDispatchEmbeddedRunAttempt(input: {
-  runInput: PreparedEmbeddedRunInput;
-  preparedRuntime: PreparedRuntime;
-  contextEngine: ContextEngine;
-  sessionPromptState: SessionPromptState;
-  terminalRetryState: TerminalRetryState;
-  replayState: EmbeddedRunReplayState;
-  provider: string;
-  modelId: string;
-  startupStagesEmitted: boolean;
-  bootstrapPromptWarningSignaturesSeen: string[];
-  resolveRuntimeFallbackReason: () => string | null;
-  observeToolOutcome: ToolOutcomeObserver;
-  isTurnTainted: () => boolean;
-  allocateToolOutcomeOrdinal: NonNullable<EmbeddedRunAttemptParams["allocateToolOutcomeOrdinal"]>;
-  getPostCompactionAbortError: () => Error | undefined;
-  setPostCompactionAbortController: (controller: AbortController | undefined) => void;
-  clearPostCompactionAbortController: (controller: AbortController) => void;
-  permissionChange?: EmbeddedRunAttemptParams["permissionChange"];
-}) {
+export async function prepareAndDispatchEmbeddedRunAttempt(
+  input: PreparedEmbeddedAttemptDispatchInput,
+) {
   const {
     runInput,
     preparedRuntime,

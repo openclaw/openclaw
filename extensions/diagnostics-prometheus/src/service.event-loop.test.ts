@@ -60,6 +60,22 @@ describe("diagnostics-prometheus runtime metrics", () => {
           trusted,
         );
       }
+      for (const [operation, count] of [
+        ["repository.identities", 4],
+        ["checkout.diff", 2],
+      ] as const) {
+        metrics.record(
+          {
+            ...baseEvent(),
+            type: "diagnostic.child_process.spawn",
+            family: "git",
+            operation,
+            count,
+            intervalMs: 60_000,
+          },
+          trusted,
+        );
+      }
       const rendered = metrics.render();
       for (const [kind, value] of Object.entries({
         rss: 1000,
@@ -77,7 +93,15 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
-      expect(rendered).toContain('openclaw_child_process_spawn_total{family="node"} 5\n');
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="git",operation="repository.identities"} 4\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_child_process_spawn_total{family="git",operation="checkout.diff"} 2\n',
+      );
       expect(rendered).toContain(
         'openclaw_worker_started_total{script="sqlite-store.worker.js"} 5\n',
       );

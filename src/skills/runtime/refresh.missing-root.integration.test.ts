@@ -3,6 +3,8 @@ import path from "node:path";
 import type { WatchSubscription } from "@openclaw/fs-safe/watch";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -235,9 +237,19 @@ it.each(["directory", "blocking file"] as const)(
     const owner = await import("./refresh-observation-source.js");
     const plan = vi.mocked(owner.skillsObservationScope).getMockImplementation()!;
     let replaced = false;
+    let replacementStarted = false;
+    const replacement = createDeferredCore();
+    void replacement.promise.catch(() => {});
     vi.mocked(owner.skillsObservationScope).mockImplementation((...args) => {
-      const work = plan(...args).then(async (scope) => {
-        if (path.resolve(args[1].path) === root && !replaced) {
+      const selected = path.resolve(args[1].path) === root && !replacementStarted;
+      replacementStarted ||= selected;
+      const work = (async () => {
+        // Root admission can finish out of order; hold companion probes before they plan or scan.
+        if (!selected) {
+          await racePromiseWithAbortSignal(replacement.promise, args[2]);
+        }
+        const scope = await plan(...args);
+        if (selected) {
           replaced = true;
           await fs.rm(root, { recursive: true });
           if (kind === "directory") {
@@ -250,19 +262,27 @@ it.each(["directory", "blocking file"] as const)(
           });
         }
         return scope;
-      });
+      })();
+      if (selected) {
+        void work.then(() => replacement.resolve(), replacement.reject);
+      }
       planning.push(work);
       return work;
     });
-    await ensure(config);
-    expect(replaced).toBe(true);
-    expect(read(config)).toEqual(["At startup"]);
-    await writeSkill({
-      dir: path.join(root, "guide"),
-      name: "guide",
-      description: "After startup",
-    });
-    await reconcile();
-    expect(read(config)).toEqual(["After startup"]);
+    try {
+      await ensure(config);
+      expect(replaced).toBe(true);
+      expect(read(config)).toEqual(["At startup"]);
+      await writeSkill({
+        dir: path.join(root, "guide"),
+        name: "guide",
+        description: "After startup",
+      });
+      await reconcile();
+      expect(read(config)).toEqual(["After startup"]);
+    } finally {
+      replacement.reject(createAbortError("Skills replacement fixture finished"));
+      await Promise.allSettled(planning);
+    }
   },
 );

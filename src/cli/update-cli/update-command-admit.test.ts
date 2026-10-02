@@ -141,6 +141,88 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it("refuses a dangling cron history directory link before activation", async () => {
+    const runs = path.join(path.dirname(configPath), "cron", "runs");
+    fs.mkdirSync(path.dirname(runs), { recursive: true });
+    fs.symlinkSync(path.join(home, "missing-history"), runs, "junction");
+    const originalTarget = fs.readlinkSync(runs);
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(3);
+    expect(readVerdict()).toMatchObject({
+      verdict: "refuse",
+      reasons: [expect.objectContaining({ code: "retired-state-format" })],
+    });
+    expect(stderr).toBe("");
+    expect(snapshotFiles()).toEqual(before);
+    expect(fs.readlinkSync(runs)).toBe(originalTarget);
+  });
+
+  it("refuses an uninspectable cron history path instead of permitting admission fallback", async () => {
+    const runs = path.join(path.dirname(configPath), "cron", "runs");
+    fs.mkdirSync(path.dirname(runs), { recursive: true });
+    fs.writeFileSync(runs, "retained operator data\n");
+    const before = snapshotFiles();
+
+    await updateAdmitCommand(contextPath);
+
+    expect(process.exitCode).toBe(3);
+    expect(readVerdict()).toMatchObject({
+      verdict: "refuse",
+      reasons: [
+        expect.objectContaining({
+          code: "retired-state-format",
+          message: expect.stringContaining("Cannot inspect potentially retired state"),
+        }),
+      ],
+    });
+    expect(stderr).toBe("");
+    expect(snapshotFiles()).toEqual(before);
+  });
+
+  it.each([
+    "cron/jobs.json",
+    "cron/jobs-state.json",
+    "cron/runs/retained.jsonl",
+    "custom-cron/jobs.json",
+  ])(
+    "refuses retired %s before a published updater can activate the candidate",
+    async (relative) => {
+      const stateDir = path.dirname(configPath);
+      const custom = relative.startsWith("custom-cron/");
+      const filename = path.join(custom ? home : stateDir, relative);
+      if (custom) {
+        writeConfig({ cron: { store: filename } });
+      }
+      fs.mkdirSync(path.dirname(filename), { recursive: true });
+      fs.writeFileSync(filename, "retained operator data\n");
+      const before = snapshotFiles();
+
+      await updateAdmitCommand(contextPath);
+
+      expect(process.exitCode).toBe(3);
+      expect(readVerdict()).toMatchObject({
+        verdict: "refuse",
+        reasons: [
+          expect.objectContaining({
+            code: "retired-state-format",
+            message: expect.stringContaining("Upgrade through OpenClaw 2026.9.7"),
+          }),
+        ],
+        facts: {
+          checks: expect.arrayContaining([
+            { name: "state-format", status: "refuse", detail: expect.any(String) },
+          ]),
+        },
+      });
+      expect(stderr).toBe("");
+      expect(snapshotFiles()).toEqual(before);
+      expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
+    },
+  );
+
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
     const before = snapshotFiles();
     const program = new Command().name("openclaw");

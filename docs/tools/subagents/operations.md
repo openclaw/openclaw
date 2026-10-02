@@ -108,6 +108,18 @@ sub-agent completions do not restart failed cleanup or reset its retry budget.
 Descendant completion still wakes the current requester ancestors waiting on that
 work. These cleanup retries are separate from [completion delivery](/tools/subagents/announce).
 
+When required registration has an unknown outcome or retained registry state
+forbids deleting the child session, a Gateway-hosted ordinary spawn's error keeps
+the child's session and run identifiers. If the first cancellation attempt also
+fails, the error reports unconfirmed termination and whether Gateway cleanup was
+scheduled. The Gateway retains the child's admission slot while retrying and
+rechecks the exact run owner before each attempt. If database admission retires
+while that child still runs, cancellation stops but its slot stays reserved until
+the child controller retires or Gateway shutdown takes over. The child session
+stays intact. Provisional session rollback, collector FIFO cleanup, and local
+embedded cleanup remain joined. Inspect the retained child before retrying the
+spawn.
+
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
 `scope-upgrade`, check the RPC caller before editing pairing state.

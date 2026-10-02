@@ -1,6 +1,8 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { pathToFileURL } from "node:url";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
@@ -121,6 +123,8 @@ function getVolumeCronJob(index) {
   const paddedIndex = String(index).padStart(6, "0");
   return {
     id: `volume-cron-${paddedIndex}`,
+    agentId: "main",
+    owner: { agentId: "main" },
     name: index === 0 ? "Archive crawl — 東京" : `Archive crawl ${paddedIndex}`,
     enabled: index % 5 !== 0,
     createdAtMs: VOLUME_CRON_CREATED_AT_MS + index,
@@ -138,7 +142,9 @@ function getVolumeCronJob(index) {
       message: `crawl archive partition ${paddedIndex} ${"z".repeat((index % 5) * 128)}`.trimEnd(),
     },
     state: {
-      nextRunAtMs: VOLUME_CRON_CREATED_AT_MS + 365 * 86_400_000 + index,
+      ...(index % 5 !== 0
+        ? { nextRunAtMs: VOLUME_CRON_CREATED_AT_MS + 365 * 86_400_000 + index }
+        : {}),
       ...(index % 11 === 0 ? { lastStatus: "error", lastError: "stale crawl lease" } : {}),
       crawlCursor: { partition: paddedIndex, offset: index * 1000 },
     },
@@ -248,15 +254,30 @@ function seedUpgradeVolumeSessions(stateDir) {
   }
 }
 
-function seedUpgradeVolumeCronJobs(stateDir) {
+async function seedUpgradeVolumeCronJobs(stateDir, packageRoot) {
+  assert(packageRoot, "volume cron fixture requires the installed baseline package root");
+  const packageJsonPath = path.join(path.resolve(packageRoot), "package.json");
+  const manifest = readJson(packageJsonPath);
+  assert(manifest.name === "openclaw", "volume cron SDK must belong to the installed package");
+  assert(
+    manifest.version === process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION,
+    "volume cron SDK version differs from the installed CLI",
+  );
+  const installedRequire = createRequire(packageJsonPath);
+  // Use the published writer so the fixture cannot initialize candidate schema or codecs.
+  const sdkUrl = pathToFileURL(installedRequire.resolve("openclaw/plugin-sdk/cron-store-runtime"));
+  const { loadCronStore, saveCronStore } = await import(sdkUrl.href);
   const spec = getVolumeSpec();
   const jobs = Array.from({ length: spec.cronJobs }, (_, index) => getVolumeCronJob(index));
-  writeJson(path.join(stateDir, "cron", "jobs.json"), { version: 1, jobs });
+  const storePath = path.join(stateDir, "cron", "jobs.json");
+  await saveCronStore(storePath, { version: 1, jobs });
+  assertVolumeCronJobs((await loadCronStore(storePath)).jobs, spec, "published SDK round-trip");
+  assert(!fs.existsSync(storePath), "published cron writer created a retired JSON store");
 }
 
-export function seedUpgradeVolume(stateDir) {
+export async function seedUpgradeVolume(stateDir, packageRoot) {
   seedUpgradeVolumeSessions(stateDir);
-  seedUpgradeVolumeCronJobs(stateDir);
+  await seedUpgradeVolumeCronJobs(stateDir, packageRoot);
   seedUpgradeVolumeSharedState(stateDir);
 }
 
@@ -296,7 +317,78 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
   assertUpgradeVolumeSharedState(stateDir, stage);
   const spec = getVolumeSpec();
   const fixtures = getVolumeSessionFixtures(spec);
-  const legacyCronPath = path.join(stateDir, "cron", "jobs.json");
+  assert(
+    !fs.existsSync(path.join(stateDir, "cron", "jobs.json")),
+    "volume cron fixture created a retired JSON store",
+  );
+  const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  assertHealthySqlite(stateDatabasePath, (db) => {
+    const rows = db
+      .prepare(
+        `SELECT job_id, job_json, state_json, enabled, payload_kind, updated_at,
+                runtime_updated_at_ms
+         FROM cron_jobs
+         WHERE job_id LIKE 'volume-cron-%'`,
+      )
+      .all();
+    assert(rows.length === spec.cronJobs, `volume cron job count changed: ${rows.length}`);
+    const jobsById = new Map(rows.map((row) => [row.job_id, row]));
+    for (let index = 0; index < spec.cronJobs; index += 1) {
+      const expected = getVolumeCronJob(index);
+      const row = jobsById.get(expected.id);
+      const actual = JSON.parse(row?.job_json ?? "null");
+      for (const field of [
+        "id",
+        "agentId",
+        "owner",
+        "name",
+        "enabled",
+        "createdAtMs",
+        "schedule",
+        "sessionTarget",
+        "wakeMode",
+        "delivery",
+        "payload",
+      ]) {
+        assertJsonEqual(actual?.[field], expected[field], `volume cron ${field} changed: ${index}`);
+      }
+      assert(row?.updated_at === expected.updatedAtMs, `volume cron timestamp changed: ${index}`);
+      assert(
+        row?.runtime_updated_at_ms === expected.updatedAtMs,
+        `volume cron runtime timestamp changed: ${index}`,
+      );
+      const actualState = JSON.parse(row?.state_json ?? "null");
+      assertJsonEqual(
+        actualState?.crawlCursor,
+        expected.state.crawlCursor,
+        `volume cron residual state changed: ${index}`,
+      );
+      assert(
+        row?.enabled === (expected.enabled ? 1 : 0),
+        `volume cron enabled column changed: ${index}`,
+      );
+      assert(row?.payload_kind === "agentTurn", `volume cron payload kind changed: ${index}`);
+      assert(
+        (actualState?.nextRunAtMs ?? null) ===
+          (expected.enabled ? expected.state.nextRunAtMs : null),
+        `volume cron next-run state changed: ${index}`,
+      );
+      assert(
+        (actualState?.runningAtMs ?? null) === null,
+        `volume cron running state changed: ${index}`,
+      );
+      assert(
+        (actualState?.lastRunStatus ?? actualState?.lastStatus ?? null) ===
+          (expected.state.lastStatus ?? null),
+        `volume cron status state changed: ${index}`,
+      );
+      assert(
+        (actualState?.lastError ?? null) === (expected.state.lastError ?? null),
+        `volume cron error state changed: ${index}`,
+      );
+    }
+  });
+
   if (stage === "baseline") {
     const stores = new Map(
       VOLUME_AGENT_IDS.map((agentId) => [
@@ -318,7 +410,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         );
       }
     }
-    assertVolumeCronJobs(readJson(legacyCronPath).jobs ?? [], spec, "volume baseline");
     return;
   }
 
@@ -328,7 +419,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
       `${agentId} volume legacy session store remained active`,
     );
   }
-  assert(!fs.existsSync(legacyCronPath), "volume legacy cron store remained active");
   let migratedSessions = 0;
   let migratedEvents = 0;
   for (const agentId of VOLUME_AGENT_IDS) {
@@ -415,72 +505,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
   }
   assert(migratedSessions === spec.sessions, `volume session count changed: ${migratedSessions}`);
 
-  const stateDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
-  assertHealthySqlite(stateDatabasePath, (db) => {
-    const rows = db
-      .prepare(
-        `SELECT job_id, job_json, state_json, enabled, payload_kind, updated_at,
-                runtime_updated_at_ms
-         FROM cron_jobs
-         WHERE job_id LIKE 'volume-cron-%'`,
-      )
-      .all();
-    assert(rows.length === spec.cronJobs, `volume cron job count changed: ${rows.length}`);
-    const jobsById = new Map(rows.map((row) => [row.job_id, row]));
-    for (let index = 0; index < spec.cronJobs; index += 1) {
-      const expected = getVolumeCronJob(index);
-      const row = jobsById.get(expected.id);
-      const actual = JSON.parse(row?.job_json ?? "null");
-      for (const field of [
-        "id",
-        "name",
-        "enabled",
-        "createdAtMs",
-        "schedule",
-        "sessionTarget",
-        "wakeMode",
-        "delivery",
-        "payload",
-      ]) {
-        assertJsonEqual(actual?.[field], expected[field], `volume cron ${field} changed: ${index}`);
-      }
-      assert(row?.updated_at === expected.updatedAtMs, `volume cron timestamp changed: ${index}`);
-      assert(
-        row?.runtime_updated_at_ms === expected.updatedAtMs,
-        `volume cron runtime timestamp changed: ${index}`,
-      );
-      const actualState = JSON.parse(row?.state_json ?? "null");
-      assertJsonEqual(
-        actualState?.crawlCursor,
-        expected.state.crawlCursor,
-        `volume cron residual state changed: ${index}`,
-      );
-      assert(
-        row?.enabled === (expected.enabled ? 1 : 0),
-        `volume cron enabled column changed: ${index}`,
-      );
-      assert(row?.payload_kind === "agentTurn", `volume cron payload kind changed: ${index}`);
-      assert(
-        (actualState?.nextRunAtMs ?? null) ===
-          (expected.enabled ? expected.state.nextRunAtMs : null),
-        `volume cron next-run state changed: ${index}`,
-      );
-      assert(
-        (actualState?.runningAtMs ?? null) === null,
-        `volume cron running state changed: ${index}`,
-      );
-      assert(
-        (actualState?.lastRunStatus ?? actualState?.lastStatus ?? null) ===
-          (expected.state.lastStatus ?? null),
-        `volume cron status state changed: ${index}`,
-      );
-      assert(
-        (actualState?.lastError ?? null) === (expected.state.lastError ?? null),
-        `volume cron error state changed: ${index}`,
-      );
-    }
-  });
-
   const archivedStores = new Map();
   const archivedTranscripts = new Map();
   for (const agentId of VOLUME_AGENT_IDS) {
@@ -553,14 +577,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
     assertJsonEqual(events, expected, `archived volume transcript changed: ${index}`);
   }
 
-  const cronArchiveEntries = fs
-    .readdirSync(path.dirname(legacyCronPath))
-    .filter((entry) => /^jobs\.json\.migrated(?:\.\d+)?$/u.test(entry));
-  assert(cronArchiveEntries.length === 1, "volume legacy cron archive count changed");
-  const archivedCronJobs = readJson(
-    path.join(path.dirname(legacyCronPath), cronArchiveEntries[0]),
-  ).jobs;
-  assertVolumeCronJobs(archivedCronJobs ?? [], spec, "archived volume");
   process.stdout.write(
     `sqlite-volume sessions=${migratedSessions} events=${migratedEvents} cronJobs=${spec.cronJobs}\n`,
   );

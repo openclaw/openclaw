@@ -43,6 +43,7 @@ import {
   type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 export function readSessionTranscriptJsonlBytesInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -116,13 +117,14 @@ export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
 ): SessionEntryMaintenancePlan {
   let preservation: SessionMaintenancePreservationSnapshot | undefined;
   return prepareSessionEntryMaintenanceInDatabase(
     database,
     params,
     () => (preservation ??= readPreservation()),
-  )(database);
+  )(database, onArchived);
 }
 
 /** Prepare outside write admission; compare only selected rows and protection dependencies inside it. */
@@ -130,7 +132,10 @@ export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
-): (database: OpenClawAgentDatabase) => SessionEntryMaintenancePlan {
+): (
+  database: OpenClawAgentDatabase,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+) => SessionEntryMaintenancePlan {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
     return emptySessionEntryMaintenancePlan;
@@ -228,7 +233,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     };
   };
   const expected = selectedKeys.length > 0 ? readInputs(reader) : undefined;
-  return (database) => {
+  return (database, onArchived) => {
     if (
       expected &&
       (!isDeepStrictEqual(expected, readInputs(database)) ||
@@ -286,6 +291,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       };
       delete entry.archivedBy;
       writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
+      onArchived?.(key, previousEntry, entry);
       archivedSessionKeys.push(key);
       if (entry.worktree) {
         archivedWorktrees.push({

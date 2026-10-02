@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
@@ -43,6 +43,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createTestAdmittedRunContext } from "./admitted-run-context.test-support.js";
 import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
+import { createLifecycleHooks, setHookRunnerForTest } from "./cli-runner.hooks.test-support.js";
 import {
   restoreCliRunnerTestDeps,
   runPreparedCliAgent as runPreparedCliAgentCore,
@@ -96,41 +97,8 @@ vi.mock("../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
-const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-hooks-");
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
-
-type HookRunnerGlobalStateForTest = {
-  hookRunner: unknown;
-  registry: unknown;
-};
-
-function setHookRunnerForTest(hookRunner: unknown): void {
-  // Keep the module-level hook runner singleton aligned with the mocked getter.
-  mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
-  const globalStore = globalThis as Record<PropertyKey, unknown>;
-  const state = (globalStore[hookRunnerGlobalStateKey] as
-    | HookRunnerGlobalStateForTest
-    | undefined) ?? {
-    hookRunner: null,
-    registry: null,
-  };
-  state.hookRunner = hookRunner;
-  state.registry = null;
-  globalStore[hookRunnerGlobalStateKey] = state;
-}
-
-function createLifecycleHooks(hooks: string[], onAgentEnd: () => Promise<void> = async () => {}) {
-  const hookRunner = {
-    hasHooks: vi.fn((hookName: string) => hooks.includes(hookName)),
-    runLlmInput: vi.fn(async () => undefined),
-    runLlmOutput: vi.fn(async () => undefined),
-    runAgentEnd: vi.fn(onAgentEnd),
-  };
-  setHookRunnerForTest(hookRunner);
-  return hookRunner;
-}
 
 function createSessionFixture(params?: {
   history?: Array<{ role: "user"; content: string }>;
@@ -533,7 +501,7 @@ describe("runCliAgent reliability", () => {
 
   afterEach(() => {
     restoreCliRunnerTestDeps();
-    mockGetGlobalHookRunner.mockReset();
+    vi.mocked(getGlobalHookRunner).mockReset();
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
@@ -1766,6 +1734,7 @@ describe("runCliAgent reliability", () => {
   });
 
   it("blocks CLI runs before llm_input and model execution when before_agent_run blocks", async () => {
+    const agentEndStarted = createDeferred();
     let releaseAgentEnd: () => void = () => undefined;
     const agentEndSettled = new Promise<void>((resolve) => {
       releaseAgentEnd = resolve;
@@ -1783,7 +1752,10 @@ describe("runCliAgent reliability", () => {
         },
       })),
       runLlmInput: vi.fn(async () => undefined),
-      runAgentEnd: vi.fn(() => agentEndSettled),
+      runAgentEnd: vi.fn(() => {
+        agentEndStarted.resolve();
+        return agentEndSettled;
+      }),
     };
     setHookRunnerForTest(hookRunner);
     const { dir, sessionTarget, storePath } = createSessionFixture({
@@ -1807,9 +1779,12 @@ describe("runCliAgent reliability", () => {
       return result;
     });
 
-    await vi.waitFor(() => {
-      expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
-    });
+    await awaitGateBeforeSettlement(
+      agentEndStarted.promise,
+      run,
+      "Blocked CLI run settled before agent_end",
+    );
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
     await Promise.resolve();
     expect(resolved).toBe(false);
 

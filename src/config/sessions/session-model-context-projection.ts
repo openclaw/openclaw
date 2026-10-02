@@ -135,6 +135,15 @@ export function projectResetBoundaryNavigationSql(event: Expression<string>): Ra
     ELSE ${event} END`;
 }
 
+function systemUpdateKindSql(event: Expression<unknown>): RawBuilder<string | null> {
+  return /* kysely-allow-raw: only bounded operator kinds cross the navigation boundary. */ sql<
+    string | null
+  >`CASE
+    WHEN json_extract(${event}, '$.customType') = 'openclaw.system-update'
+      AND json_extract(${event}, '$.details.kind') IN ('prompt-update', 'runtime-context')
+    THEN json_extract(${event}, '$.details.kind') ELSE NULL END`;
+}
+
 /** Lightweight tree/state records; these never serve as persisted transcript evidence. */
 export function projectModelContextNavigationSql(
   event: Expression<string | Uint8Array>,
@@ -162,6 +171,9 @@ export function projectModelContextNavigationSql(
     "customType",
     "display",
   ]);
+  const messageOperatorKind = systemUpdateKindSql(message);
+  const entryOperatorKind = systemUpdateKindSql(event);
+  const customMessage = /* kysely-allow-raw: custom-message navigation omits payload text. */ sql<string>`json_set(${entry}, '$.content', json('[]'))`;
   const calls = /* kysely-allow-raw: pairing needs call identities, never tool arguments or result bodies. */ sql<string>`(SELECT json_group_array(json_object(
     'type', ${contentPropertySql(event, "type")}, 'id', ${contentPropertySql(event, "id")},
     'name', ${contentPropertySql(event, "name")}))
@@ -174,8 +186,14 @@ export function projectModelContextNavigationSql(
     WHEN 'message' THEN json_set(${entry}, '$.message', json_set(${messageFacts},
       '$.content', json(${calls}), '$.command', '', '$.output', '',
       '$.providerReplay', json_object('type', json_extract(${event}, '$.message.providerReplay.type')),
-      '$.details', json_object(${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}, json(CASE WHEN (${synthetic}) THEN 'true' ELSE 'false' END))))
-    WHEN 'custom_message' THEN json_set(${entry}, '$.content', json('[]'))
+      '$.details', json_patch(json_object(${SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY}, json(CASE WHEN (${synthetic}) THEN 'true' ELSE 'false' END)),
+        CASE WHEN ${messageOperatorKind} IS NULL THEN json('{}') ELSE json_object('kind', ${messageOperatorKind}) END)))
+    WHEN 'custom_message' THEN CASE WHEN ${entryOperatorKind} IS NULL THEN ${customMessage}
+      ELSE json_set(${customMessage}, '$.details', json_object('kind', ${entryOperatorKind})) END
+    WHEN 'custom' THEN CASE WHEN json_extract(${event}, '$.customType') = 'openclaw.system-prompt'
+      THEN json_set(${entry}, '$.data', json_object('restart', json(CASE
+        WHEN json_type(${event}, '$.data.restart') = 'true' THEN 'true' ELSE 'false' END)))
+      ELSE ${entry} END
     WHEN 'compaction' THEN json_set(${entry}, '$.summary', '')
     WHEN 'branch_summary' THEN json_set(${entry}, '$.summary', '')
     ELSE ${entry} END`;

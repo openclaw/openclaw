@@ -30,7 +30,7 @@ describe("ACP session listing", () => {
       const scope = { cfg, env, databasePath };
       const sessionKey = "agent:codex:acp:s1";
       await replaceSessionEntry(
-        { agentId: "codex", storePath, sessionKey },
+        { agentId: "codex", storePath, sessionKey, env },
         {
           sessionId: "sess-acp",
           updatedAt: 100,

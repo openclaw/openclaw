@@ -1,3 +1,22 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isCanonicalSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+
+export const LEGACY_SESSION_PROVIDER_FIELDS = [
+  ["provider", "channel"],
+  ["lastProvider", "lastChannel"],
+] as const;
+
+export function hasLegacySessionProviderState(value: object): boolean {
+  return (
+    isRecord(value) &&
+    !isCanonicalSessionDeliveryState(value.delivery) &&
+    LEGACY_SESSION_PROVIDER_FIELDS.some(
+      ([legacy, current]) =>
+        typeof value[legacy] === "string" && typeof value[current] !== "string",
+    )
+  );
+}
+
 export const LEGACY_SESSION_ENTRY_STATE_FIELDS = [
   "pendingFinalDeliveryCreatedAt",
   "pendingFinalDeliveryLastAttemptAt",
@@ -21,6 +40,7 @@ export const LEGACY_SESSION_ENTRY_STATE_FIELDS = [
 export function hasLegacySessionEntryState(value: object): boolean {
   return (
     ("pendingFinalDelivery" in value && typeof value.pendingFinalDelivery === "boolean") ||
+    hasLegacySessionProviderState(value) ||
     LEGACY_SESSION_ENTRY_STATE_FIELDS.some((field) => Object.hasOwn(value, field))
   );
 }

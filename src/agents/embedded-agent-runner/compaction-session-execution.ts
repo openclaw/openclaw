@@ -154,6 +154,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       missingToolResultText: responsesApi ? "aborted" : undefined,
       allowedToolNames,
       withCompactionPersistence: params.transcriptByteCompactionPersistence,
+      withCompactionPersistenceAsync: params.transcriptByteCompactionPersistenceAsync,
     });
     compactionSessionManager = sessionManager;
     const recordUsage = accountingRecorder?.recordUsage
