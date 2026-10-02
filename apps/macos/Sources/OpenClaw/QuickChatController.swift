@@ -207,11 +207,11 @@ final class QuickChatController: NSObject {
         panel.alphaValue = 1
         if wasVisible {
             OverlayPanelFactory.applyFrame(window: panel, target: target, animate: true)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         } else {
             let start = QuickChatPlacement.scaledRect(target, factor: 0.96)
             OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.16)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
         self.focusEditor()
     }
@@ -253,7 +253,7 @@ final class QuickChatController: NSObject {
             if self.transitionID != dismissalID, self.isVisible {
                 panel.alphaValue = 1
                 panel.setFrame(self.targetFrame(), display: true)
-                panel.makeKeyAndOrderFront(nil)
+                AppActivation.shared.makeKeyAndOrderFront(window: panel)
                 self.focusEditor()
             }
         }
@@ -342,7 +342,7 @@ final class QuickChatController: NSObject {
         guard self.isVisible, let panel = self.panel, panel.attachedSheet == nil,
               let textView = self.textView
         else { return }
-        panel.makeKeyAndOrderFront(nil)
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         panel.makeFirstResponder(textView)
         let transitionID = self.transitionID
         DispatchQueue.main.async { [weak self, weak panel, weak textView] in
@@ -501,7 +501,7 @@ final class QuickChatController: NSObject {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID {
             return true
         }
-        guard targetApp.activate(options: []) else { return false }
+        guard AppActivation.shared.activate(application: targetApp) else { return false }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(1))
         while clock.now < deadline {

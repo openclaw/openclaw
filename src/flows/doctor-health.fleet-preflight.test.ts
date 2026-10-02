@@ -86,7 +86,7 @@ it("preserves original config bytes before Doctor relocates and repairs legacy s
     fs.renameSync(state.stateDir, legacyRoot);
     const expiredRunId = `doctor-${randomUUID()}`;
     const expiredCapture = path.join(resolveUpdateCaptureRoot(legacyRoot), expiredRunId);
-    fs.mkdirSync(expiredCapture, { recursive: true });
+    fs.mkdirSync(expiredCapture, { recursive: true, mode: 0o700 });
     fs.writeFileSync(
       path.join(expiredCapture, "manifest.json"),
       JSON.stringify({

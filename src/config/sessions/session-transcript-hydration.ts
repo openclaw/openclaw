@@ -17,10 +17,8 @@ import {
   type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
-import {
-  readSessionTranscriptMaintenance,
-  type SessionTranscriptMaintenanceRead,
-} from "./session-transcript-maintenance-read.js";
+import type { SessionTranscriptMaintenanceRead } from "./session-transcript-hydration.types.js";
+import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,

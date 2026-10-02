@@ -4,6 +4,10 @@ import Testing
 @testable import OpenClawChatUI
 
 private actor SidebarQueryTransport: OpenClawChatSidebarTransport {
+    func loadSidebarAgentAvatar(_: String) async -> Data? {
+        nil
+    }
+
     struct Pending: Sendable {
         let request: OpenClawChatGatewayRequest
         let reply: CheckedContinuation<Data, any Error>
@@ -82,8 +86,14 @@ struct ChatSessionSidebarQueryTests {
         let transport = SidebarQueryTransport()
         let agentID = allAgents ? nil : "main"
         let owner = self.owner(transport, query: .init(agentID: agentID))
-        let parent = #"{"key":"agent:main:parent","sessionId":"parent","owner":{"actor":{"type":"human","id":"alice"}},"childSessions":["agent:main:child"]}"#
-        let child = #"{"key":"agent:main:child","sessionId":"child","owner":{"actor":{"type":"human","id":"bob"}},"unread":true,"status":"failed"}"#
+        let parent = #"""
+        {"key":"agent:main:parent","sessionId":"parent","owner":{"actor":{"type":"human","id":"alice"}},
+         "childSessions":["agent:main:child"]}
+        """#
+        let child = #"""
+        {"key":"agent:main:child","sessionId":"child","owner":{"actor":{"type":"human","id":"bob"}},
+         "unread":true,"status":"failed"}
+        """#
         _ = await self.load(owner, transport, self.page([parent, child]))
         if owner.setQuery(.init(agentID: agentID, ownerId: "alice")) {
             _ = await self.load(owner, transport, self.page([parent]))
@@ -97,7 +107,8 @@ struct ChatSessionSidebarQueryTests {
         updated.childSessions = ["agent:main:child"]
         owner.receive([updated], read: owner.beginRead())
         #expect(owner.rowsIncludingLoadedDescendants.count == 2)
-        let wake = Date.now.addingTimeInterval(3600)
+        // Fractional seconds can round upward through the wire millisecond conversion.
+        let wake = Date(timeIntervalSince1970: Date.now.timeIntervalSince1970.rounded(.up) + 3600)
         updated.snoozedUntil = wake.timeIntervalSince1970 * 1000
         owner.receive([updated], read: owner.beginRead())
         #expect(owner.rows(at: wake.addingTimeInterval(-1)).isEmpty)

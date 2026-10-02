@@ -46,6 +46,7 @@ vi.mock("./subagent-control-session.js", () => ({
       updatedAt: 1,
     },
     assertCurrent: assertOwner,
+    prepareRead: () => undefined,
     withPublication: async <T>(run: () => Promise<T>) => {
       assertOwner();
       return await run();

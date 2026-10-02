@@ -429,8 +429,8 @@ final class ControlChannel {
                 alert.messageText = issue.problem.title
                 alert.informativeText = issue.message
                 alert.addButton(withTitle: String(localized: "OK"))
-                NSApp.activate(ignoringOtherApps: true)
-                alert.runModal()
+                AppActivation.shared.activate()
+                AppActivation.shared.presentAlert(alert)
             }
         }
         return message

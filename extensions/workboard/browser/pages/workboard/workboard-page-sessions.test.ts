@@ -290,6 +290,35 @@ function button(page: ReturnType<typeof mountPage>, label: string) {
   );
 }
 
+it("shows a non-blocking classifying status only for empty pending boards and rereads on classification changes", async () => {
+  const page = sessionsPage();
+  const sessions = page.result.sessions.splice(0);
+  page.result.classifying = true;
+  await page.connect();
+  const statuses = () =>
+    [...page.container.querySelectorAll('[role="status"]')].map((entry) =>
+      entry.textContent?.trim(),
+    );
+  expect(statuses()).toContain("Classifying sessions…");
+  expect(statuses()).toContain("Utility model temporarily unavailable");
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(0);
+  expect(button(page, "Refresh").disabled).toBe(false);
+
+  page.result.sessions.push(...sessions);
+  page.fixture.emit("plugin.workboard.changed", { epoch: "classification", revision: 1 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(2);
+  expect(statuses()).not.toContain("Classifying sessions…");
+  expect(statuses()).toContain("Utility model temporarily unavailable");
+
+  delete page.result.classifying;
+  page.result.sessions.splice(0);
+  page.fixture.emit("plugin.workboard.changed", { epoch: "classification", revision: 2 });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(page.container.querySelectorAll(".workboard-session-tile")).toHaveLength(0);
+  expect(statuses()).not.toContain("Classifying sessions…");
+});
+
 it("renders session columns, owner avatars and canonical facts without card controls or an unavailable dock", async () => {
   const page = sessionsPage();
   await page.connect();

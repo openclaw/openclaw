@@ -5607,6 +5607,46 @@ describe("ci workflow guards", () => {
         "blacksmith-16vcpu-ubuntu-2404",
       );
     }
+    const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
+    const lintRunner = workflow.jobs["check-lint-hosted-core-shard"]["runs-on"];
+    for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+      for (const authorAssociation of ["NONE", "CONTRIBUTOR", "OWNER"]) {
+        const fork = {
+          ...plannerContext,
+          runnerBackend,
+          runnerProfile: "github" as const,
+          headRepository: "contributor/openclaw",
+          authorAssociation,
+        };
+        for (const runner of [plannerRunner, typeRunner, lintRunner]) {
+          expect(evaluateWorkflowExpression(runner, fork)).toBe("blacksmith-16vcpu-ubuntu-2404");
+          for (const override of [
+            { runnerBackend: "github" },
+            { runAttempt: 2 },
+            { eventName: "workflow_dispatch" },
+            { repository: "contributor/openclaw" },
+          ] as const) {
+            expect(evaluateWorkflowExpression(runner, { ...fork, ...override })).toBe(
+              "ubuntu-24.04",
+            );
+          }
+        }
+        // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
+        if (runnerBackend !== "hybrid") {
+          expect(evaluateWorkflowExpression(typeRunner, { ...fork, frozenTarget: true })).toBe(
+            "ubuntu-24.04",
+          );
+        }
+        expect(evaluateWorkflowExpression(lintRunner, { ...fork, frozenTarget: true })).toBe(
+          "ubuntu-24.04",
+        );
+        for (const stripe of [1, 2, 3, 4, 5]) {
+          expect(evaluateWorkflowExpression(lintRunner, { ...fork, matrix: { stripe } })).toBe(
+            "blacksmith-16vcpu-ubuntu-2404",
+          );
+        }
+      }
+    }
     const qualification = {
       ...plannerContext,
       eventName: "workflow_dispatch" as const,
@@ -5624,10 +5664,8 @@ describe("ci workflow guards", () => {
     ).toEqual({ group: "test-group", labels: "blacksmith-16vcpu-ubuntu-2404" });
     for (const override of [
       { runnerBackend: "github" },
-      { runnerBackend: "blacksmith" },
       { runnerBackend: "runson" },
       { preflightOutputs: { node_runner_backend: "runson" } },
-      { headRepository: "contributor/openclaw" },
       { repository: "contributor/openclaw" },
       { runAttempt: 2 },
       { frozenTarget: true },

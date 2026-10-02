@@ -343,6 +343,7 @@ async function compactEmbeddedAgentSessionImpl(
     const preparedParams = {
       ...params,
       ...(placementSandbox ? { sandbox: placementSandbox } : {}),
+      memorySandboxed: (placementSandbox ?? params.sandbox)?.enabled === true,
       config: projectCodexHostTranscriptBytePreflightConfig(
         lease.snapshot.config,
         Boolean(host.transcriptBytePreflightHarness),

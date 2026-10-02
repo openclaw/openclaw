@@ -486,6 +486,9 @@ export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentToo
     !embedded || options?.allowGatewaySubagentBinding === true
       ? createSessionsSpawnTool({
           ...options,
+          // Only a keyed parent has a stored incarnation for spawn to check.
+          expectedParentSessionId:
+            (options?.runSessionKey ?? options?.agentSessionKey) ? options?.sessionId : undefined,
           agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           requesterTurnRunId: options?.runId,
           completionOwnerKey: options?.runSessionKey,

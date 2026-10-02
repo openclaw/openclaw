@@ -210,6 +210,7 @@ struct TailscaleIntegrationSection: View {
                 if let url = Self.dashboardURL(host: host) {
                     Link(url.absoluteString, destination: url)
                         .font(.callout.monospaced())
+                        .environment(\.openURL, AppActivation.shared.openURLAction)
                 } else {
                     Text(host)
                         .font(.callout.monospaced())

@@ -28,6 +28,7 @@ export type SubagentKillSession = {
   storePath: string;
   entry?: SessionEntry;
   assertCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   withPublication: <T>(run: () => Promise<T>) => Promise<T>;
   release: () => void | Promise<void>;
 };
@@ -146,6 +147,7 @@ export async function prepareSubagentKillSession(
           entry,
           release,
           assertCurrent,
+          prepareRead: lifetime.prepareRead,
           withPublication: (run) =>
             // The consumer checks its retained authority after joining the writer FIFO.
             runOpenClawAgentWriteAdmission(database, run),

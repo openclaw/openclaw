@@ -241,6 +241,81 @@ describe("sidebar people workload", () => {
     expect(person(sidebar, "bea").getAttribute("aria-description")).toContain("2 running");
   });
 
+  it("filters and sorts people locally using full workload counts", async () => {
+    const { sidebar, gateway, request } = await mountWorkload(undefined, true);
+    gateway.publishEvent("presence", {
+      presence: [...presence(), { instanceId: "raw", ts: NOW, user: { id: "raw", name: "Aaron" } }],
+    });
+    const reads = request.mock.calls.length;
+    const view = sidebar.sidebarMenus.host.people;
+    view.setSortMode("running");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["bea", "ada", "cy", "Aaron"]);
+    view.setSortMode("name");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["Aaron", "ada", "bea", "cy"]);
+    view.setSortMode("open");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada", "bea", "cy", "Aaron"]);
+    view.setStatusFilter("running");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada", "bea"]);
+    expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
+    expect(counts(sidebar, "bea")).toEqual(["2", "3"]);
+    expect(request).toHaveBeenCalledTimes(reads);
+  });
+
+  it("keeps the filter recoverable for unavailable counts and empty matches", async () => {
+    const pending = createDeferred<SessionsListResult>();
+    const { sidebar } = await mountWorkload(() => pending.promise);
+    sidebar.sidebarMenus.host.people.setStatusFilter("running");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual([]);
+    expect(sidebar.querySelector(".sidebar-session-empty-hint")?.textContent).toBe(
+      "Session counts unavailable",
+    );
+    pending.resolve(summary([]));
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual([]);
+    expect(sidebar.querySelector(".sidebar-online .sidebar-session-empty-hint")?.textContent).toBe(
+      "No people match this filter",
+    );
+    expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
+    sidebar.sidebarMenus.host.people.resetView();
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
+  });
+
+  it("dismisses compact people menus on selection and only offers reset for changed settings", async () => {
+    const { sidebar } = await mountWorkload();
+    const open = async () => {
+      await click(sidebar, ".sidebar-online__filter-toggle");
+      await vi.dynamicImportSettled();
+      await settle(sidebar);
+    };
+    await open();
+    expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
+    expect(sidebar.querySelector("#sidebar-people-status")?.textContent).toContain("All");
+    await click(sidebar, "#sidebar-people-status");
+    await click(
+      sidebar,
+      'openclaw-select-picker:has(#sidebar-people-status) [data-value="running"]',
+    );
+    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+    expect(names(sidebar)).toEqual(["ada", "bea"]);
+    await open();
+    await click(sidebar, "#sidebar-people-sort");
+    await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
+    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+    expect(names(sidebar)).toEqual(["bea", "ada"]);
+    await open();
+    await click(sidebar, "#sidebar-people-reset");
+    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
+    expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
+    await open();
+    expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
+  });
+
   it("keeps all mixed Active, Idle, and Online-only people, including zero counts, in presence order", async () => {
     const { sidebar, gateway } = await mountWorkload(undefined, true);
     const entries = presence(true);

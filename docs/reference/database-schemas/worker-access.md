@@ -16,6 +16,21 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Inventory classifications describe counted operations, not whole-module runtime
+safety. Reviewed mixed modules use named operation paths rather than line numbers;
+unreviewed operations retain their conservative file classification. Trace every
+production caller before adding an operation exception, and update existing
+reviewed overrides instead of shadowing them with worker-module entries. The
+ratchet applies the same classification rules to the base and candidate sources,
+so metadata corrections alone do not offset unrelated T1 growth.
+
+Canonical-repair mutations are T2 Doctor work, but its exact-row reader remains
+runtime debt through the Gateway's legacy-main agent-creation check. Claw
+provenance's counted CLI writes do not cover its raw Gateway SQL reads. Shared
+incognito category readers and native approval SDK compatibility retain their
+existing classifications. A metadata reclassification changes neither execution
+nor update behavior.
+
 Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
 through the existing transcript writer worker. Custom-message appends use the
 same worker and adopt their committed view before notifying observers. Bootstrap
@@ -523,6 +538,19 @@ including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
 
+Worker transcript replay-ledger begin, completion, and exact discard use typed
+`placementTranscript` commands in the existing shared-state registry. The
+placement mutation owner captures physical store identity before yielding,
+rechecks live host authority at transaction and commit admission, and returns
+acknowledged receipts through the existing keyed session queue. Pending records
+commit before agent transcript effects; terminal results commit before the RPC
+reply. Lost replies use native commit receipts, never write replay. Unknown
+outcomes retain pending recovery. Only the invocation holding a fresh claim may
+discard after a known rollback, using its original store and exact row identity
+even if request authority has since ended. Database close joins accepted work.
+The agent transcript writer, schema, stored bytes, retention, and update behavior
+are unchanged.
+
 Staged workspace-result pointers also commit through that placement worker. The
 same transaction checks the pending-result claim, immutable staged ref, and exact
 repository session owner, with live caller guards rechecked at admission and
@@ -929,6 +957,15 @@ history reads, publishing the response in that synchronous frame. Cron run
 history keeps its recorded transcript when the live session advances. Responses
 own their nested metadata independently of resident rows.
 
+Durable RPC history pages resolve profile avatars, automation labels, and legacy
+compaction metrics before the worker serializes the bounded message array. Its
+owned UTF-8 buffer transfers once to the host; coalesced readers share those
+immutable bytes while retaining independent page metadata. The WebSocket owner
+embeds the array in its text frame without parsing it. Internal object consumers
+and current operator model restrictions retain their existing presentation
+contracts. Cursor deltas and HTTP history keep their existing readers. This
+changes no stored transcript bytes, schema, retention, or update behavior.
+
 Pending-input history and exact pending-message reads use the same history worker
 for durable stores. Pages retain the 20-item and payload byte limits, ordering,
 and consumed-input filtering. Stale interruption commits through the agent writer,
@@ -1175,15 +1212,19 @@ a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
 
-Cron display names are prepared through the existing shared-state read worker.
+Cron display names are prepared through the existing shared-state and history workers.
 Live resolvers retain their physical database generation; cron's mutation owner
 invalidates them on commit or uncertain settlement and publishes acknowledged
 name postimages before notifications. History, message lookup, and live streams
-refresh names at their existing asynchronous preparation boundaries. Deleted jobs
+refresh names at their existing asynchronous preparation boundaries; RPC history
+prepares names inside its admitted worker before encoding transferred response bytes. Default
+partition selection follows the captured request environment when a worker is reused. Deleted jobs
 use the existing “Automation” label. Unprepared or invalidated lookups fail with a
 refresh instruction instead of reading SQLite or showing an old name. The native
 name query remains only inside worker commands and Doctor's existing one-shot
 transaction hooks. Schemas, stored bytes, retention, and update behavior are unchanged.
+Read-only legacy state without a cron table retains the same fallback, using recorded
+schema facts without repairing the source database.
 
 Cron reservation creation, activation, exact reservation cleanup, and stale-family removal use typed
 commands through the existing worker mutation owner. The host retains the

@@ -13,7 +13,7 @@ auth health, sandbox images, and plugin installs.
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
-    Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. Session rows that still need `provider`, `lastProvider`, or `room` converted to their current fields are refused without changing the original store. Preserve a backup and use an older OpenClaw release to migrate those rows before upgrading. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
+    Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. The July Doctor importer could still leave `provider` and `lastProvider` aliases on session rows. Session reads refuse those rows with a migration-required error until `openclaw doctor --fix` runs; Doctor backs up the affected SQLite databases, then rewrites the aliases into the canonical `delivery` state and its query projections together. Rows that still need the retired `room` → `groupChannel` conversion are refused without changing the original store: preserve the state, install OpenClaw `2026.9.5`, run `openclaw doctor --fix`, then upgrade again. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
 
     Doctor can migrate supported on-disk layouts into the current structure:
 

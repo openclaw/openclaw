@@ -63,7 +63,6 @@ extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/model-picker.view.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
-extensions/discord/src/monitor/native-command.ts
 extensions/discord/src/outbound-adapter.test.ts
 extensions/discord/src/send.sends-basic-channel-messages.test.ts
 extensions/fal/image-generation-provider.ts
@@ -471,7 +470,6 @@ src/gateway/server-methods/config.ts
 src/gateway/server-methods/cron.ts
 src/gateway/server-methods/cron.validation.test.ts
 src/gateway/server-methods/doctor.test.ts
-src/gateway/server-methods/doctor.ts
 src/gateway/server-methods/models-auth-status.test.ts
 src/gateway/server-methods/models.test.ts
 src/gateway/server-methods/nodes.invoke-wake.test.ts

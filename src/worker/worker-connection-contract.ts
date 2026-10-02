@@ -53,8 +53,6 @@ export type WorkerConnectionOptions = {
   requestTimeoutMs?: number;
   createSocket?: (url: string, options: GatewayWebSocketClientOptions) => WebSocket;
   heartbeatStatus?: () => WorkerHeartbeatParams["status"];
-  /** The connect frame was written; this does not establish admission. */
-  onAdmissionRequestSent?: () => void;
   onConnectionFailure?: (error: Error | undefined) => void;
 };
 

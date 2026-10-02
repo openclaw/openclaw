@@ -434,7 +434,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.reconnectTask = nil
         self.browserSignInRoute = nil
         self.deviceSettingsMessageHandler.stopObserving()
-        if window.isMiniaturized { window.deminiaturize(nil) }
+        if window.isMiniaturized { AppActivation.shared.deminiaturize(window: window) }
         window.isExcludedFromWindowsMenu = true
         window.orderOut(nil)
     }
@@ -451,11 +451,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 window.setFrame(WindowPlacement.centeredFrame(size: DashboardWindowLayout.windowSize), display: false)
             }
         }
-        showWindow(nil)
-        window?.makeKeyAndOrderFront(nil)
+        AppActivation.shared.showWindow(controller: self)
+        AppActivation.shared.makeKeyAndOrderFront(window: window)
         window?.makeFirstResponder(self.webView)
-        window?.orderFrontRegardless()
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.orderFrontRegardless(window: window)
+        AppActivation.shared.activate()
         self.requestBrowserProfileImportOfferIfNeeded()
         self.refreshGatewayHealth()
     }
@@ -533,7 +533,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 
     private func openExternal(_ url: URL) {
         guard ControlUIDocumentHost.isExternalURL(url) || ControlUIDocumentHost.isEditorURL(url) else { return }
-        NSWorkspace.shared.open(url)
+        AppActivation.shared.open(url)
     }
 
     fileprivate func receiveMessage(_ message: WKScriptMessage) {
@@ -1139,11 +1139,11 @@ extension DashboardWindowController {
                   port: origin.port,
                   dashboardURL: self.currentURL)
         else {
-            decisionHandler(.prompt)
+            decisionHandler(ControlUIDocumentHost.mediaCaptureDecision(.prompt))
             return
         }
         let authorized = mediaTypes.allSatisfy { AVCaptureDevice.authorizationStatus(for: $0) == .authorized }
-        decisionHandler(authorized ? .grant : .prompt)
+        decisionHandler(ControlUIDocumentHost.mediaCaptureDecision(authorized ? .grant : .prompt))
     }
 
     static func shouldReloadDashboard(

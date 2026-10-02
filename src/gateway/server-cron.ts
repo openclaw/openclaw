@@ -7,6 +7,7 @@ import {
   resolveAgentEntry,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope-config.js";
+import { isEmbeddedAgentSessionHeldByOtherRun } from "../agents/embedded-agent-runner/runs.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -715,6 +716,16 @@ export function buildGatewayCronService(params: {
     },
     cleanupTimedOutAgentRun: async ({ job, execution }) => {
       if (!execution?.sessionId) {
+        return;
+      }
+      if (
+        execution.runId &&
+        isEmbeddedAgentSessionHeldByOtherRun(execution.sessionId, execution.runId)
+      ) {
+        cronLogger.warn(
+          { jobId: job.id, sessionId: execution.sessionId, sessionKey: execution.sessionKey },
+          "cron: timed-out agent run already left its session; kept the current run",
+        );
         return;
       }
       const result = await abortAndDrainEmbeddedAgentRun({

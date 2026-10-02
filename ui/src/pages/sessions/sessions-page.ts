@@ -27,7 +27,7 @@ import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import {
   readSessionMethodAccess,
@@ -1214,13 +1214,13 @@ class SessionsPage extends OpenClawLightDomElement {
     );
     void fetchSessionMenuWork({
       client: scope.client,
-      loadPullRequests:
-        isGatewayMethodAdvertised(
-          scope.context.gateway.snapshot,
-          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true
-          ? () => store.load(this, pullRequestKey)
-          : undefined,
+      loadPullRequests: canCallGatewayMethod(
+        scope.context.gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+        ? () => store.load(this, pullRequestKey)
+        : undefined,
       worktreeId: row.worktree.id,
       execNode: row.execNode,
     }).then((work) => {

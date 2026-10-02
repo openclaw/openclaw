@@ -16,6 +16,7 @@ import {
   prepareForwardedMessageCronJobNameResolver,
   projectForwardedMessages,
 } from "./chat-display-projection.history.js";
+import { SerializedJsonArray } from "./serialized-json.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import {
   readSessionHistorySnapshotAsync,
@@ -165,16 +166,15 @@ it("batches automation names across history reads after rename and deletion with
           label: name ? (index % jobCount === 0 ? name : `${name} ${index}`) : "Automation",
         },
       }));
-      expect(
-        (await measure(`${name}-rpc`, () => readChatHistoryPage(pageParams))).messages,
-      ).toMatchObject(expected);
-      expect(
-        (
-          await measure(`${name}-anchor`, () =>
-            readChatHistoryPage({ ...pageParams, messageId: "forwarded-result" }),
-          )
-        ).messages,
-      ).toMatchObject(expected);
+      for (const messageId of [undefined, "forwarded-result"]) {
+        const page = await measure(`${name}-${messageId ? "anchor" : "rpc"}`, () =>
+          readChatHistoryPage({ ...pageParams, messageId, encodeResponse: true }),
+        );
+        expect(page.encodedResponse?.messages).toBeInstanceOf(Uint8Array);
+        expect(new SerializedJsonArray(page.encodedResponse!.messages).materialize()).toMatchObject(
+          expected,
+        );
+      }
       for (const limit of [messages.length + 10, undefined]) {
         const snapshot = await measure(`${name}-http-${limit}`, () =>
           readSessionHistorySnapshotAsync({

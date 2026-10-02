@@ -1,9 +1,3 @@
-/**
- * OpenClaw-managed Chrome profile decoration.
- *
- * Applies managed-browser policy, a stable profile name, color, download
- * directory, and clean-exit markers to Chrome's profile files.
- */
 import path from "node:path";
 import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -46,7 +40,6 @@ function parseHexRgbToSignedArgbInt(hex: string): number | null {
   return (0xff << 24) | rgb;
 }
 
-/** Return true when a managed Chrome profile already has desired decoration. */
 export function isProfileDecorated(
   userDataDir: string,
   desiredName: string,
@@ -96,7 +89,6 @@ export function usesOpenClawMockKeychain(userDataDir: string): boolean {
   );
 }
 
-/** Disable Chromium network prediction in an OpenClaw-managed Chrome profile. */
 export function ensureProfileNetworkPredictionDisabled(userDataDir: string) {
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const prefs = safeReadJson(preferencesPath) ?? {};
@@ -164,7 +156,6 @@ export function decorateOpenClawProfile(
   saveJsonFile(preferencesPath, prefs);
 }
 
-/** Mark the managed Chrome profile as cleanly exited. */
 export function ensureProfileCleanExit(userDataDir: string) {
   const preferencesPath = path.join(userDataDir, "Default", "Preferences");
   const prefs = safeReadJson(preferencesPath) ?? {};

@@ -118,6 +118,16 @@ export function buildStatusMemoryValue(params: {
     const slot = params.memoryPlugin.slot ? `plugin ${params.memoryPlugin.slot}` : "plugin";
     return theme.muted(`enabled (${slot}) · ${params.memoryUnavailableLabel ?? "unavailable"}`);
   }
+  if ("health" in params.memory) {
+    const detail = params.memory.health.message ? ` · ${params.memory.health.message}` : "";
+    const status =
+      params.memory.health.status === "ready"
+        ? theme.success("ready")
+        : params.memory.health.status === "degraded"
+          ? theme.warn("degraded")
+          : theme.warn("unavailable");
+    return `plugin ${params.memory.provider} · ${status}${detail}`;
+  }
   const parts: string[] = [];
   const dirtySuffix = params.memory.dirty ? ` · ${theme.warn("dirty")}` : "";
   parts.push(`${params.memory.files} files · ${params.memory.chunks} chunks${dirtySuffix}`);

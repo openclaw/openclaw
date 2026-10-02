@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
@@ -8,6 +11,32 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { noteCronJobsStoreCommit, saveCronJobsStore, saveCronJobsStoreChanges } from "../store.js";
 import type { CronStoreFile } from "../types.js";
 import { prepareCronJobNameResolver } from "./job-name.js";
+
+it("reads absent cron metadata in legacy shared state without repairing it", async () => {
+  await withOpenClawTestState({ label: "cron-name-legacy" }, async (fixture) => {
+    const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1;");
+    } finally {
+      database.close();
+    }
+    const before = await fs.readFile(databasePath);
+    const sql = observeMainThreadSql();
+    try {
+      const resolveName = await prepareCronJobNameResolver(
+        ["legacy"],
+        fixture.statePath("cron", "jobs.json"),
+      );
+      expect(resolveName("legacy")).toBeUndefined();
+      sql.expectIdle();
+      expect(await fs.readFile(databasePath)).toEqual(before);
+    } finally {
+      sql.restore();
+    }
+  });
+});
 
 it("retains committed names across saves without caller SQL and refuses invalidated generations", async () => {
   await withOpenClawTestState({ label: "cron-name-publication" }, async (fixture) => {

@@ -25,6 +25,7 @@ import { createRuntimeBase } from "./runtime-base.js";
 import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
+import { subscribeRuntimeSessionChanges } from "./session-changes.js";
 import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
@@ -46,10 +47,15 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.dispatchTrustedPluginGatewayMethod(method, params, options);
     },
+    openPluginPanel: async (params) => {
+      const runtime = await loadGatewayPluginRuntime();
+      return runtime.openPluginPanelForRequester(params);
+    },
     readSessionFacts: async (params) => {
       const runtime = await loadGatewayPluginRuntime();
       return runtime.readTrustedPluginSessionFacts(params);
     },
+    subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {
         profileId: params.profileId,

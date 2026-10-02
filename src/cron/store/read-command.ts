@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadResult,
@@ -53,7 +54,9 @@ export function readCronStateCommandInDatabase(
         snapshot: readCronScratchSnapshotInDatabase(db, command),
       };
     case "cron.jobNames": {
-      const storeKey = command.storePath ?? resolveCronJobsStorePath();
+      const storeKey =
+        command.storePath ??
+        resolveCronJobsStorePath(undefined, getSqliteWorkerStateContext().environment);
       return {
         type: command.type,
         storeKey,

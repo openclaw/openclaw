@@ -1,16 +1,14 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readTranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
+import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
 } from "../../config/sessions/session-history-types.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessagesWithState,
-  createCurrentUserProfileMessageProjector,
-} from "../chat-display-projection.core.js";
+import { projectChatDisplayMessagesWithState } from "../chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
   prepareForwardedMessageCronJobNameResolver,
@@ -85,35 +83,18 @@ export async function readChatHistoryPage(
   }
   const { readSessionHistoryPageInWorker } =
     await import("../../config/sessions/session-history-worker-runtime.js");
-  const page = await readSessionHistoryPageInWorker(
+  return readSessionHistoryPageInWorker(
     {
       kind: "rpc",
       params: {
         ...params,
+        compactionMetrics: readLegacyCompactionMetrics(params.entry),
         sessionId: params.sessionId,
         storePath: params.storePath,
-        entry: params.entry
-          ? {
-              sessionId: params.entry.sessionId,
-              updatedAt: params.entry.updatedAt,
-              sessionStartedAt: params.entry.sessionStartedAt,
-            }
-          : undefined,
       },
     },
     signal,
   );
-  if (page.encodedResponse) {
-    return page;
-  }
-  const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  return {
-    ...page,
-    messages: (await refreshForwardedLabels(page.messages)).map((message) => {
-      const record = asOptionalRecord(message);
-      return record ? project(record) : message;
-    }),
-  };
 }
 
 async function refreshForwardedLabels(messages: unknown[]): Promise<unknown[]> {
@@ -144,7 +125,7 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
   const page = await readChatHistoryPageKernel(params, {
     readers: { ...sessionTranscriptReaders, subagentCoordination },
     resolveCurrentUserProfileDisplay,
-    // Local and worker kernels defer names to the completed page's asynchronous refresh.
+    // The completed local page receives worker-prepared names before publication.
     resolveCronJobName: () => undefined,
     ...(cliSessionId
       ? {
