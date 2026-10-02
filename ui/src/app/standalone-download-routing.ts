@@ -1,6 +1,6 @@
-import { isStandaloneDisplay, saveStandaloneUrl } from "../lib/download.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { openExternalUrlSafe, resolveSafeExternalUrl } from "../lib/open-external-url.ts";
+import { isStandaloneDisplay } from "../lib/standalone-display.ts";
 
 const GATEWAY_FILE_ROUTE = "/__openclaw__/";
 
@@ -48,7 +48,11 @@ export function startStandaloneDownloadRouting(options: { signal?: AbortSignal }
         return;
       }
       event.preventDefault();
-      void saveStandaloneUrl(url.href, anchor.getAttribute("download") ?? undefined);
+      const filename = anchor.getAttribute("download") ?? undefined;
+      // The save path loads on first use to keep it out of the startup bundle.
+      void import("../lib/download.ts").then(({ saveStandaloneUrl }) =>
+        saveStandaloneUrl(url.href, filename),
+      );
       return;
     }
     const rawFile =

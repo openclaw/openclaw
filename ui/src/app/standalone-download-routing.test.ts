@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const toastMock = vi.hoisted(() => ({ showToast: vi.fn(() => true) }));
 vi.mock("../lib/toast.ts", () => toastMock);
 
+// Preload the lazily imported save path so clicks settle within a few ticks.
+import "../lib/download.ts";
 import { startStandaloneDownloadRouting } from "./standalone-download-routing.ts";
 
 const MEDIA_HREF = "/__openclaw__/assistant-media?source=docs%2Fbrochure.pdf&ticket=t1";

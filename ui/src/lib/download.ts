@@ -1,4 +1,5 @@
 import { t } from "../i18n/index.ts";
+import { isStandaloneDisplay } from "./standalone-display.ts";
 import { showToast } from "./toast.ts";
 
 export function downloadTextFile(filename: string, content: string, type = "text/plain"): void {
@@ -21,23 +22,6 @@ function clickBlobDownload(filename: string, content: Blob): void {
   link.click();
   // Safari reads the blob after the click returns, so keep the URL alive for a while.
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
-}
-
-/**
- * Home screen web apps (iOS "Add to Home Screen") have no browser chrome, so a
- * file navigation replaces the app with no way back and no way to save it.
- */
-export function isStandaloneDisplay(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  // iOS Safari reports home screen apps through the non-standard navigator.standalone.
-  if (Reflect.get(navigator, "standalone") === true) {
-    return true;
-  }
-  return typeof window.matchMedia === "function"
-    ? window.matchMedia("(display-mode: standalone)").matches
-    : false;
 }
 
 function shareableFile(filename: string, content: Blob): File | null {
