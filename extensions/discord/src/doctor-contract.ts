@@ -12,7 +12,6 @@ import {
 import {
   asObjectRecord,
   defineChannelAliasMigration,
-  collectChannelAccountScopes,
   hasLegacyAccountStreamingAliases,
   normalizeChannelAccounts,
   stripRetiredChannelKeys,
@@ -40,31 +39,6 @@ const streamingAliasMigration = defineChannelAliasMigration({
   accountStreamingReplacesRoot: true,
   dm: { root: true, accounts: true },
 });
-
-const RETIRED_CONFIG_GUIDANCE =
-  'Discord settings retired before July 2026 require an intermediate upgrade. Install OpenClaw 2026.9.7, run "openclaw doctor --fix", then upgrade again; the original config is unchanged.';
-
-function findRetiredDiscordSetting(value: unknown): string | undefined {
-  const entry = asObjectRecord(value);
-  const tts = asObjectRecord(asObjectRecord(entry?.voice)?.tts);
-  for (const key of ["openai", "elevenlabs", "microsoft", "edge"]) {
-    if (tts && Object.hasOwn(tts, key)) {
-      return `voice.tts.${key}`;
-    }
-  }
-  for (const [guildId, guild] of Object.entries(asObjectRecord(entry?.guilds) ?? {})) {
-    const channels = asObjectRecord(asObjectRecord(guild)?.channels);
-    for (const [channelId, channelValue] of Object.entries(channels ?? {})) {
-      const channel = asObjectRecord(channelValue);
-      for (const key of ["allow", "agentId"]) {
-        if (channel && Object.hasOwn(channel, key)) {
-          return `guilds.${guildId}.channels.${channelId}.${key}`;
-        }
-      }
-    }
-  }
-  return undefined;
-}
 
 function hasUnsupportedRealtimeWakeNamesInVoice(value: unknown): boolean {
   const voice = asObjectRecord(value);
@@ -150,20 +124,6 @@ function normalizeUnsupportedRealtimeWakeNames(
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   {
     path: ["channels", "discord"],
-    message: RETIRED_CONFIG_GUIDANCE,
-    match: (value) => findRetiredDiscordSetting(value) !== undefined,
-  },
-  {
-    path: ["channels", "discord", "accounts"],
-    message: RETIRED_CONFIG_GUIDANCE,
-    match: (value) =>
-      hasLegacyAccountStreamingAliases(
-        value,
-        (account) => findRetiredDiscordSetting(account) !== undefined,
-      ),
-  },
-  {
-    path: ["channels", "discord"],
     message:
       'channels.discord.voice.realtime.wakeNames entries longer than two words are unsupported; use one- or two-word activation names. Run "openclaw doctor --fix".',
     match: hasUnsupportedDiscordRealtimeWakeNames,
@@ -184,13 +144,6 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
-  for (const { prefix, account } of collectChannelAccountScopes({ cfg, channelId: "discord" })) {
-    const retired = findRetiredDiscordSetting(account);
-    if (retired) {
-      throw new Error(`${prefix}.${retired}: ${RETIRED_CONFIG_GUIDANCE}`);
-    }
-  }
-
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
   const tuningKnobs = stripRetiredChannelKeys({
     cfg: aliases.config,

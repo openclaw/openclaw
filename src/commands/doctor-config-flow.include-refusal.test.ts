@@ -103,6 +103,61 @@ describe("doctor config persistence", () => {
     });
   });
 
+  it("refuses retired Discord inputs before include repair or backup recovery", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        channels: { $include: "./channels.json" },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const includePath = path.join(path.dirname(configPath), "channels.json");
+      const entry = {
+        voice: {
+          tts: {
+            openai: { voice: "alloy" },
+            elevenlabs: { voiceId: "fixture-voice" },
+            microsoft: { voice: "en-US-AriaNeural" },
+            edge: { voice: "en-US-GuyNeural" },
+          },
+        },
+        guilds: { "100": { channels: { "200": { allow: false, agentId: "main" } } } },
+      };
+      const includedBytes = JSON.stringify({
+        discord: { ...entry, accounts: { work: entry } },
+      });
+      await fs.writeFile(includePath, includedBytes);
+      const rootBytes = await fs.readFile(configPath, "utf8");
+      const backupBytes = '{"gateway":{"mode":"local"}}\n';
+      await fs.writeFile(`${configPath}.bak`, backupBytes);
+
+      const failure = await prepareDoctorContext(configPath).then(
+        () => null,
+        (error: unknown) => error,
+      );
+
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toHaveProperty(
+        "message",
+        expect.stringContaining("Install OpenClaw 2026.9.7"),
+      );
+      for (const prefix of ["channels.discord", "channels.discord.accounts.work"]) {
+        for (const field of [
+          "voice.tts.openai",
+          "voice.tts.elevenlabs",
+          "voice.tts.microsoft",
+          "voice.tts.edge",
+          "guilds.100.channels.200.allow",
+          "guilds.100.channels.200.agentId",
+        ]) {
+          expect(failure).toHaveProperty("message", expect.stringContaining(`${prefix}.${field}`));
+        }
+      }
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootBytes);
+      await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includedBytes);
+      await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupBytes);
+    });
+  });
+
   it("preserves browser references across authorized successive writes and environment rotation", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync(

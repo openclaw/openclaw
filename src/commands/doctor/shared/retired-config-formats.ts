@@ -88,6 +88,21 @@ export function findRetiredConfigUpgradeRequirement(
   checkKeys(config.gateway, "gateway", ["webchat"]);
   checkKeys(channels, "channels", ["webchat"]);
   checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
+  const beforeDiscord = retired.length;
+  visitChannelEntries(config, "discord", (scope, configPath) => {
+    const voice = isRecord(scope.voice) ? scope.voice : {};
+    checkKeys(voice.tts, `${configPath}.voice.tts`, ["openai", "elevenlabs", "microsoft", "edge"]);
+    for (const [guildId, guild] of Object.entries(isRecord(scope.guilds) ? scope.guilds : {})) {
+      const guildChannels = isRecord(guild) && isRecord(guild.channels) ? guild.channels : {};
+      for (const [channelId, channel] of Object.entries(guildChannels)) {
+        checkKeys(channel, `${configPath}.guilds.${guildId}.channels.${channelId}`, [
+          "allow",
+          "agentId",
+        ]);
+      }
+    }
+  });
+  const bridgeVersion = retired.length > beforeDiscord ? "2026.9.7" : "2026.9.5";
   visitChannelEntries(config, "telegram", (scope, configPath) => {
     checkKeys(scope, configPath, [
       "streamMode",
@@ -135,7 +150,7 @@ export function findRetiredConfigUpgradeRequirement(
   return {
     message: `Config contains retired pre-July-2026 settings: ${retired.join(", ")}. Doctor cannot remove these settings safely.`,
     nextAction:
-      `Install OpenClaw 2026.9.5, run "${formatCliCommand("openclaw doctor --fix")}", then upgrade to latest. ` +
+      `Install OpenClaw ${bridgeVersion}, run "${formatCliCommand("openclaw doctor --fix")}", then upgrade to latest. ` +
       "See https://docs.openclaw.ai/install/updating#upgrading-very-old-versions.",
   };
 }

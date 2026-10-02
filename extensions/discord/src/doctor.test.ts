@@ -234,31 +234,6 @@ describe("discord doctor", () => {
     ]);
   });
 
-  it.each([
-    ...["openai", "elevenlabs", "microsoft", "edge"].map((provider) => ({
-      path: `voice.tts.${provider}`,
-      entry: { voice: { tts: { [provider]: { voice: "retained-voice" } } } },
-    })),
-    ...["allow", "agentId"].map((key) => ({
-      path: `guilds.100.channels.200.${key}`,
-      entry: { guilds: { "100": { channels: { "200": { [key]: "retained-value" } } } } },
-    })),
-  ])("preserves retired $path and names the bridge release", ({ path, entry }) => {
-    for (const accountScope of [false, true]) {
-      const cfg = {
-        channels: {
-          discord: accountScope ? { accounts: { work: entry } } : entry,
-        },
-      } as OpenClawConfig;
-      const before = structuredClone(cfg);
-      const prefix = accountScope ? "channels.discord.accounts.work" : "channels.discord";
-      expect(() => getDiscordCompatibilityNormalizer()({ cfg })).toThrow(
-        `${prefix}.${path}: Discord settings retired before July 2026 require an intermediate upgrade. Install OpenClaw 2026.9.7`,
-      );
-      expect(cfg).toEqual(before);
-    }
-  });
-
   it("preserves supported provider maps and channel bindings", () => {
     const cfg: OpenClawConfig = {
       channels: {
