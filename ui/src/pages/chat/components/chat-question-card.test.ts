@@ -72,16 +72,14 @@ describe("shared question panel", () => {
 
   function drawGateway(
     prompt: QuestionPrompt,
-    callbacks: {
-      onSubmit?: (answers: Record<string, string[]>) => void | Promise<void>;
-      onSkip?: () => void | Promise<void>;
-    } = {},
+    callbacks: Parameters<typeof createGatewayQuestionPanelProps>[1] = {},
   ) {
     let collapsed = false;
     const redraw = () => {
       render(
         html`<openclaw-chat-question-panel
           .props=${createGatewayQuestionPanelProps(prompt, {
+            ...callbacks,
             collapsed,
             onCollapsedChange: (nextCollapsed) => {
               collapsed = nextCollapsed;
@@ -308,7 +306,31 @@ describe("shared question panel", () => {
     );
   });
 
-  it("supports numeric selection and Enter submission while focused", async () => {
+  it.each([
+    { name: "Enter from the panel", selector: ".chat-question-panel", keys: {} },
+    {
+      name: "Ctrl+Enter from the panel",
+      selector: ".chat-question-panel",
+      keys: { ctrlKey: true },
+    },
+    {
+      name: "Meta+Enter from the panel",
+      selector: ".chat-question-panel",
+      keys: { metaKey: true },
+    },
+    {
+      name: "Ctrl+Enter from a choice",
+      selector: '[role="radio"][aria-checked="true"]',
+      keys: { ctrlKey: true },
+    },
+    {
+      name: "Meta+Enter from a choice",
+      selector: '[role="radio"][aria-checked="true"]',
+      keys: { metaKey: true },
+    },
+    { name: "Ctrl+Enter from empty Other", selector: "textarea", keys: { ctrlKey: true } },
+    { name: "Meta+Enter from empty Other", selector: "textarea", keys: { metaKey: true } },
+  ])("supports numeric selection and submission: $name", async ({ selector, keys }) => {
     const onSubmit = vi.fn();
     drawGateway(gatewayPrompt(), { onSubmit });
     const panel = await panelIn(container);
@@ -320,8 +342,72 @@ describe("shared question panel", () => {
       container.querySelectorAll<HTMLElement>('[role="radio"]')[1]?.getAttribute("aria-checked"),
     ).toBe("true");
 
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Detailed"] });
+    const target = container.querySelector<HTMLElement>(selector)!;
+    target.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: "Enter",
+      ...keys,
+      bubbles: true,
+      cancelable: true,
+    });
+    target.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["Detailed"] });
+  });
+
+  it.each([
+    { name: "external step", selector: "a" },
+    { name: "Skip", selector: ".chat-question-panel__skip" },
+    { name: "Back", selector: ".chat-question-panel__back" },
+    { name: "previous request", selector: ".chat-question-panel__request-nav button:first-child" },
+    { name: "next request", selector: ".chat-question-panel__request-nav button:last-child" },
+    { name: "collapse", selector: ".chat-question-panel__collapse" },
+    { name: "dismiss error", selector: ".chat-question-panel__error-dismiss" },
+    { name: "Submit", selector: ".chat-question-panel__advance" },
+  ])("leaves Enter activation to the focused $name control", async ({ selector }) => {
+    const prompt = gatewayPrompt({
+      error: "Try again",
+      questions: [
+        ...gatewayPrompt().questions,
+        freeTextQuestion({ url: "https://example.test/confirm" }),
+      ],
+      drafts: new Map([["value", { selected: new Set<string>(), freeText: "Confirmed" }]]),
+    });
+    const onSubmit = vi.fn();
+    const onSkip = vi.fn();
+    const onPreviousRequest = vi.fn();
+    const onNextRequest = vi.fn();
+    drawGateway(prompt, {
+      onSubmit,
+      onSkip,
+      onPreviousRequest,
+      onNextRequest,
+      requestPosition: { current: 2, total: 3 },
+    });
+    const panel = await panelIn(container);
+    container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
+    await panel.updateComplete;
+    expect(container.querySelector(".chat-question-panel__progress")?.textContent).toBe("2/2");
+    expect(
+      container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,
+    ).toBe(false);
+    const target = container.querySelector<HTMLElement>(selector)!;
+    target.focus();
+
+    for (const keys of [{}, { ctrlKey: true }, { metaKey: true }]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        ...keys,
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(false);
+      expect(onSubmit).not.toHaveBeenCalled();
+      expect(onSkip).not.toHaveBeenCalled();
+      expect(onPreviousRequest).not.toHaveBeenCalled();
+      expect(onNextRequest).not.toHaveBeenCalled();
+    }
   });
 
   it("leaves modified numeric shortcuts to the browser", async () => {
@@ -423,21 +509,6 @@ describe("shared question panel", () => {
     },
   );
 
-  it("uses Ctrl+Enter in empty Other to submit an already-selected option", async () => {
-    const onSubmit = vi.fn();
-    drawGateway(gatewayPrompt(), { onSubmit });
-    const panel = await panelIn(container);
-
-    container.querySelector<HTMLButtonElement>('[role="radio"]')?.click();
-    await panel.updateComplete;
-    const other = container.querySelector<HTMLTextAreaElement>(".chat-question-panel__other")!;
-    other.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
-    );
-
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
-  });
-
   it("collapses without answering and exposes gateway cancellation through Skip", async () => {
     const onSkip = vi.fn();
     drawGateway(gatewayPrompt(), { onSkip });
@@ -534,6 +605,12 @@ describe("shared question panel", () => {
       button.click();
       await panel.updateComplete;
       expect(button.disabled).toBe(true);
+      container
+        .querySelector<HTMLElement>(".chat-question-panel")!
+        .dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }),
+        );
+      expect(callback).toHaveBeenCalledOnce();
 
       // A retired transport can settle normally while reconnect recovery keeps the prompt pending.
       pending.resolve();
