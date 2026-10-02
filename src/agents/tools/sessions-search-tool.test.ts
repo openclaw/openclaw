@@ -102,6 +102,61 @@ function createTool(params: {
 }
 
 describe("sessions_search tool", () => {
+  it("searches only same-channel candidates before returning snippets", async () => {
+    const requester = "agent:main:slack:channel:c111:thread:1.001";
+    const sibling = "agent:main:slack:channel:c111:thread:1.002";
+    const other = "agent:main:slack:channel:c222:thread:1.003";
+    const row = (key: string, to: string) => ({
+      key,
+      agentId: "main",
+      chatType: "channel",
+      space: "t111",
+      origin: { provider: "slack", chatType: "channel" },
+      deliveryContext: { channel: "slack", accountId: "default", to },
+    });
+    const rows = [
+      row(requester, "channel:c111"),
+      row(sibling, "channel:c111"),
+      row(other, "channel:c222"),
+    ];
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "channel" } } },
+      agentSessionKey: requester,
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        if (request.method === "sessions.describe") {
+          return { session: rows[0] } as T;
+        }
+        if (request.method === "sessions.list") {
+          return { sessions: rows, hasMore: false } as T;
+        }
+        const keys = (request.params as { sessionKeys?: string[] }).sessionKeys ?? [];
+        return {
+          results: keys.map((key) =>
+            hit({
+              sessionKey: key,
+              snippet: key === other ? "OTHER CUSTOMER SECRET" : "same channel context",
+            }),
+          ),
+        } as T;
+      },
+    });
+    const result = await tool.execute("channel-search", { query: "context" });
+    expect(result.details).toMatchObject({
+      results: [
+        expect.objectContaining({ sessionKey: requester }),
+        expect.objectContaining({ sessionKey: sibling }),
+      ],
+    });
+    expect(JSON.stringify(result.details)).not.toContain("OTHER CUSTOMER SECRET");
+    const searched = requests
+      .filter((request) => request.method === "sessions.search")
+      .flatMap((request) => (request.params as { sessionKeys: string[] }).sessionKeys);
+    expect(searched).toContain(sibling);
+    expect(searched).not.toContain(other);
+  });
+
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it("rejects a literal global target owned by another fixed-store agent when agent-to-agent is disabled", async () => {
