@@ -459,6 +459,17 @@ original shared-state generation.
 
 ## Carry facts, publish after commit
 
+Workspace snapshots and conditional alias registration, first-writer setup merges,
+and exact expired-state deletion use the shared-state writer. Read-only snapshots
+retain the existing reader. The host captures the physical database and filesystem
+evidence before waiting, rechecks current authority and workspace identity at
+transaction and commit admission, and validates the evidence after delivery.
+Expiry rereads current setup and attestation rows, preserving the 24-hour and
+future-timestamp protections. Native commit receipts retire the stored workspace's
+file cache even if ordinary result delivery fails; uncertain writes are never
+replayed. Explicit agent deletion and Doctor relocation retain their existing
+transaction owners. Schemas, retention, durability, and update behavior are unchanged.
+
 Session branch summaries retain compact counts and headlines in the transcript
 read worker, keyed by physical database identity and the transcript rewrite/append
 watermark. After a complete scan verifies unique indexed identities and backward

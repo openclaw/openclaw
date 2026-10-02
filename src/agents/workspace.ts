@@ -53,13 +53,16 @@ import {
   LEGACY_WORKSPACE_STATE_CURRENT_FILENAME,
   LEGACY_WORKSPACE_STATE_DIRNAME,
 } from "./workspace-legacy-state.js";
+import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
 import { WorkspaceVanishedError } from "./workspace-state-identity.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
+  hasRecentWorkspaceSetupState,
+  hasWorkspaceSetupStateMarker,
+  recentWorkspaceAttestation,
   mergeWorkspaceSetupState,
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  WORKSPACE_ATTESTATION_RECENT_MS,
   type WorkspaceAttestation,
   type WorkspaceStateSnapshot,
   type WorkspaceSetupState,
@@ -342,6 +345,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   bootstrapExists?: boolean;
   beforePersistentApply?: () => void;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
+  const assertEvidence = captureWorkspaceStateFilesystemGuard(params.dir);
   const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
   if (
     typeof params.state.setupCompletedAt === "string" &&
@@ -366,8 +370,13 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   };
   params.beforePersistentApply?.();
   const persistedState = await mergeWorkspaceSetupState(params.dir, repairedState, undefined, {
-    assertCurrent: params.beforePersistentApply,
+    assertCurrent: () => {
+      params.beforePersistentApply?.();
+      assertEvidence();
+    },
   });
+  params.beforePersistentApply?.();
+  assertEvidence();
   if (!bootstrapExists) {
     return { repaired: true, bootstrapExists: false, state: persistedState };
   }
@@ -396,22 +405,6 @@ async function collectGeneratedBootstrapHashes(dir: string): Promise<Map<string,
   return hashes;
 }
 
-function recentWorkspaceAttestation(
-  attestation: WorkspaceAttestation | undefined,
-  nowMs = Date.now(),
-): WorkspaceAttestation | undefined {
-  if (!attestation) {
-    return undefined;
-  }
-  const ageMs = nowMs - attestation.attestedAtMs;
-  // Clock rollback must not turn disappearance protection into permission to
-  // reseed. A healthy workspace refreshes the future-dated row below.
-  if (ageMs > WORKSPACE_ATTESTATION_RECENT_MS) {
-    return undefined;
-  }
-  return attestation;
-}
-
 async function maybeWriteWorkspaceAttestation(
   dir: string,
   beforePersistentApply?: () => void,
@@ -434,20 +427,6 @@ async function maybeWriteWorkspaceAttestation(
     // the auxiliary disappearance evidence could not be refreshed.
   }
   beforePersistentApply?.();
-}
-
-function hasWorkspaceSetupStateMarker(state: WorkspaceSetupState): boolean {
-  return Boolean(state.bootstrapSeededAt || state.setupCompletedAt);
-}
-
-function hasRecentWorkspaceSetupState(
-  snapshot: WorkspaceStateSnapshot,
-  nowMs = Date.now(),
-): boolean {
-  if (!hasWorkspaceSetupStateMarker(snapshot.setup) || snapshot.setupUpdatedAtMs === undefined) {
-    return false;
-  }
-  return nowMs - snapshot.setupUpdatedAtMs <= WORKSPACE_ATTESTATION_RECENT_MS;
 }
 
 async function workspaceAttestationHasSurvivalEvidence(params: {
@@ -508,6 +487,7 @@ async function readCanonicalWorkspaceStateSnapshot(
   assertCurrent?: () => void,
 ): Promise<WorkspaceStateSnapshot> {
   const snapshot = await readWorkspaceStateSnapshot(dir, { ...options, assertCurrent });
+  assertCurrent?.();
   assertNoUnmigratedWorkspaceState({
     workspaceDir: dir,
   });
@@ -742,15 +722,21 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   const beforePersistentApply = params?.beforePersistentApply;
+  let assertExpiryEvidence: () => void;
   const clearExpiredState = async () => {
     beforePersistentApply?.();
     if (
       !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
-        assertCurrent: beforePersistentApply,
+        assertCurrent: () => {
+          beforePersistentApply?.();
+          assertExpiryEvidence();
+        },
       }))
     ) {
       throw new WorkspaceVanishedError({ workspaceDir: dir });
     }
+    beforePersistentApply?.();
+    assertExpiryEvidence();
   };
   const purpose = params?.purpose?.trim();
   if (purpose && (params?.templates || getAgentWorkspaceAccess(dir))) {
@@ -779,6 +765,7 @@ export async function ensureAgentWorkspace(params?: {
   let reseedingExpiredWorkspaceState = false;
   const recentAttestation = recentWorkspaceAttestation(initialState.attestation);
   const recentSetupState = hasRecentWorkspaceSetupState(initialState);
+  assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir);
   const workspaceExists = await pathExists(dir);
 
   if (!workspaceExists) {
@@ -793,6 +780,7 @@ export async function ensureAgentWorkspace(params?: {
 
   beforePersistentApply?.();
   await fs.mkdir(dir, { recursive: true });
+  assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir);
 
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   if (!params?.ensureBootstrapFiles) {

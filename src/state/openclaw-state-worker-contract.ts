@@ -10,6 +10,7 @@ import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
 } from "../agents/workspace-state-store.kernel.js";
+import type { WorkspaceStateWorkerOperations } from "../agents/workspace-state-store.worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
@@ -68,6 +69,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &

@@ -2,6 +2,7 @@ import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.work
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
+import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
 import {
   patchConfigHealthEntryInDatabase,
@@ -206,6 +207,13 @@ export function executeSharedStateCommand(
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return result;
     }, writeOptions);
+  }
+  if (
+    command.type === "workspace.snapshotAndRegister" ||
+    command.type === "workspace.mergeSetup" ||
+    command.type === "workspace.expire"
+  ) {
+    return executeWorkspaceStateCommand(command, database, writeOptions);
   }
   if (command.type === "sandboxRegistry.write") {
     return writeSandboxRegistry(command.input, writeOptions);
