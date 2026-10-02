@@ -1,17 +1,22 @@
-import type { WorkboardSessionPlacement } from "@openclaw/workboard-contract";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
+import { WorkboardStore } from "./store.js";
+import { createKernelStores } from "./test/sqlite-kernel.js";
 import {
   createWorkboardSqliteTestHarness,
   createWorkboardSqliteTestStore,
 } from "./test/sqlite-store.js";
 
-function placement(overrides: Partial<WorkboardSessionPlacement> = {}): WorkboardSessionPlacement {
+function placement(
+  overrides: Partial<WorkboardSessionPlacementWrite> = {},
+): WorkboardSessionPlacementWrite {
   return {
     sessionKey: "agent:main:example",
     columnId: "working",
-    source: "state",
-    reason: "active",
-    factsHash: "facts-1",
+    source: "operator",
+    reason: "pinned",
+    factsHash: "",
     updatedAt: 1000,
     ...overrides,
   };
@@ -45,17 +50,17 @@ describe("Sessions board storage", () => {
     await expect(store.upsertBoard({ id: "inferred", kind: "sessions" })).rejects.toThrow(
       "kind cannot be changed",
     );
-    await store.updateSessionsBoard("sessions", { instructions: "Sort by urgency." });
+    await store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 24 } });
     expect(await store.upsertBoard({ id: "sessions", name: "Renamed" })).toMatchObject({
       kind: "sessions",
       name: "Renamed",
-      sessions: { instructions: "Sort by urgency." },
+      sessions: { scope: { maxAgeHours: 24 } },
     });
     expect(
       (await store.listBoards()).boards.find((entry) => entry.id === "sessions"),
     ).toMatchObject({
       kind: "sessions",
-      sessions: { instructions: "Sort by urgency." },
+      sessions: { scope: { maxAgeHours: 24 } },
       total: 0,
     });
     expect(
@@ -122,7 +127,6 @@ describe("Sessions board storage", () => {
           match: { run: ["running"] },
         })),
       },
-      { instructions: "x".repeat(2001) },
       { scope: { maxAgeHours: -1 } },
       { scope: { includeArchived: "yes" } },
       { scope: { agentIds: [""] } },
@@ -146,7 +150,6 @@ describe("Sessions board storage", () => {
           fallback: true,
         },
       ],
-      instructions: "Keep related sessions together.",
       scope: { agentIds: ["main"], includeArchived: true, maxAgeHours: 24 },
       agentSessionKey: "agent:main:board-agent",
     });
@@ -157,63 +160,84 @@ describe("Sessions board storage", () => {
       maxAgeHours: 24,
     });
     await store.upsertBoard({ id: "cards" });
-    await expect(store.updateSessionsBoard("cards", { instructions: "invalid" })).rejects.toThrow(
-      "not a Sessions board",
-    );
+    await expect(
+      store.updateSessionsBoard("cards", { scope: { includeArchived: true } }),
+    ).rejects.toThrow("not a Sessions board");
   });
 
-  it("atomically rejects stale model batches after operator moves or spec changes", async () => {
+  it("rejects stale pins after an operator move or spec change", async () => {
     const store = createWorkboardSqliteTestStore();
     await store.upsertBoard({ id: "sessions", kind: "sessions" });
     const { sessions: expectedSpec } = await store.getSessionsBoard("sessions");
     const changes = vi.fn();
     store.subscribeChanges(changes);
-    expect(await store.writeSessionPlacements("sessions", [placement()], { expectedSpec })).toBe(
-      true,
-    );
+    expect(await store.writeSessionPlacement("sessions", placement(), { expectedSpec })).toBe(true);
     expect(
-      await store.writeSessionPlacements(
+      await store.writeSessionPlacement(
         "sessions",
-        [
-          {
-            ...placement({ columnId: "merged", source: "operator", reason: "pinned" }),
-            expectedUpdatedAt: 1000,
-          },
-        ],
+        placement({ columnId: "merged", expectedUpdatedAt: 1000 }),
         { expectedSpec },
       ),
     ).toBe(true);
-    // The worker advances same-millisecond writes, so a delayed read cannot overwrite a pin.
+    // Same-millisecond writes still advance the revision and fence delayed moves.
     expect(await store.listSessionPlacements("sessions")).toEqual([
-      placement({ columnId: "merged", source: "operator", reason: "pinned", updatedAt: 1001 }),
+      placement({ columnId: "merged", updatedAt: 1001 }),
     ]);
     expect(
-      await store.writeSessionPlacements(
-        "sessions",
-        [
-          placement({ sessionKey: "agent:main:new" }),
-          { ...placement({ source: "model" }), expectedUpdatedAt: 1000 },
-        ],
-        { expectedSpec },
-      ),
+      await store.writeSessionPlacement("sessions", placement({ expectedUpdatedAt: 1000 }), {
+        expectedSpec,
+      }),
     ).toBe(false);
-    expect(await store.listSessionPlacements("sessions")).toHaveLength(1);
     expect(changes).toHaveBeenCalledTimes(2);
-    await store.updateSessionsBoard("sessions", { instructions: "Prioritize review." });
+    await store.updateSessionsBoard("sessions", { scope: { includeArchived: true } });
     expect(
-      await store.writeSessionPlacements(
-        "sessions",
-        [placement({ sessionKey: "agent:main:new" })],
-        { expectedSpec },
-      ),
+      await store.writeSessionPlacement("sessions", placement({ expectedUpdatedAt: 1001 }), {
+        expectedSpec,
+      }),
     ).toBe(false);
-    expect(await store.listSessionPlacements("sessions")).toHaveLength(1);
+    expect(await store.listSessionPlacements("sessions")).toEqual([
+      placement({ columnId: "merged", updatedAt: 1001 }),
+    ]);
     const current = await store.getSessionsBoard("sessions");
     await expect(
-      store.writeSessionPlacements("sessions", [placement({ columnId: "missing" })], {
+      store.writeSessionPlacement("sessions", placement({ columnId: "missing" }), {
         expectedSpec: current.sessions,
       }),
     ).rejects.toThrow("Unknown sessions board column");
+  });
+
+  it("normalizes retired instructions and repairs placements while preserving operator pins", async () => {
+    const { store, dbPath } = createWorkboardSqliteTestHarness({
+      createStores: createKernelStores,
+    });
+    const board = await store.upsertBoard({ id: "sessions", kind: "sessions" });
+    await store.writeSessionPlacement("sessions", placement(), { expectedSpec: board.sessions! });
+    await store.close();
+    {
+      using legacy = new DatabaseSync(dbPath);
+      const insert = legacy.prepare(
+        "INSERT INTO workboard_session_placements VALUES (?, ?, ?, ?, ?, ?, ?)",
+      );
+      for (const source of ["state", "model"]) {
+        insert.run("sessions", `agent:main:${source}`, "working", source, "old", "old-hash", 1000);
+      }
+      legacy
+        .prepare("UPDATE workboard_boards SET sessions_spec = ? WHERE id = ?")
+        .run(
+          JSON.stringify({ ...board.sessions, instructions: "Retired instructions" }),
+          "sessions",
+        );
+    }
+    const stores = createKernelStores(dbPath);
+    const reopened = new WorkboardStore(stores.cards, stores);
+    try {
+      expect((await reopened.getSessionsBoard("sessions")).sessions).toEqual(board.sessions);
+      expect(await reopened.repairSessionPlacements()).toBe(2);
+      expect(await reopened.repairSessionPlacements()).toBe(0);
+      expect(await reopened.listSessionPlacements("sessions")).toEqual([placement()]);
+    } finally {
+      await reopened.close();
+    }
   });
 
   it("deletes only the sessions board and its placements", async () => {
@@ -223,25 +247,60 @@ describe("Sessions board storage", () => {
       agentSessionKey: "agent:main:board-agent",
     });
     const card = await store.create({ title: "Keep this card" });
-    await store.writeSessionPlacements("sessions", [placement()], { expectedSpec: board.sessions });
+    await store.writeSessionPlacement("sessions", placement(), { expectedSpec: board.sessions });
     expect(await store.deleteBoard("sessions")).toEqual({ deleted: true });
     expect(await stores.sessionsBoard.listPlacements("sessions")).toEqual([]);
     await expect(store.getSessionsBoard("sessions")).rejects.toThrow("board not found");
     expect(await store.list()).toEqual([card]);
   });
 
-  it("rechecks classifier authority at the worker write boundary", async () => {
-    const store = createWorkboardSqliteTestStore();
-    await store.upsertBoard({ id: "sessions", kind: "sessions" });
-    const board = await store.getSessionsBoard("sessions");
-    await expect(
-      store.writeSessionPlacements("sessions", [placement()], {
-        expectedSpec: board.sessions,
-        assertCurrent: () => {
-          throw new Error("classifier owner retired");
-        },
-      }),
-    ).rejects.toThrow("classifier owner retired");
-    expect(await store.listSessionPlacements("sessions")).toEqual([]);
-  });
+  it.each(["update", "write"] as const)(
+    "rejects %s when caller authority ends before the worker write",
+    async (action) => {
+      const { store, stores } = createWorkboardSqliteTestHarness();
+      await store.upsertBoard({ id: "sessions", kind: "sessions" });
+      const board = await store.getSessionsBoard("sessions");
+      const entered = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      let active = true;
+      const assertCurrent = () => {
+        if (!active) {
+          throw new Error("Caller authority is no longer active.");
+        }
+      };
+      const pause = async () => {
+        entered.resolve();
+        await release.promise;
+      };
+      const update = stores.sessionsBoard.update.bind(stores.sessionsBoard);
+      const write = stores.sessionsBoard.writePlacement.bind(stores.sessionsBoard);
+      using updateSpy = vi.spyOn(stores.sessionsBoard, "update");
+      updateSpy.mockImplementation(async (...args) => {
+        await pause();
+        return update(...args);
+      });
+      using writeSpy = vi.spyOn(stores.sessionsBoard, "writePlacement");
+      writeSpy.mockImplementation(async (...args) => {
+        await pause();
+        return write(...args);
+      });
+      const pending =
+        action === "update"
+          ? store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 1 } }, assertCurrent)
+          : store.writeSessionPlacement("sessions", placement(), {
+              expectedSpec: board.sessions,
+              assertCurrent,
+            });
+      const rejected = expect(pending).rejects.toThrow("Caller authority is no longer active.");
+      try {
+        await entered.promise;
+        active = false;
+      } finally {
+        release.resolve();
+      }
+      await rejected;
+      expect(await store.getSessionsBoard("sessions")).toEqual(board);
+      expect(await store.listSessionPlacements("sessions")).toEqual([]);
+    },
+  );
 });

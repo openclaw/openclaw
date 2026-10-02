@@ -41,7 +41,6 @@ export type WorkboardSessionsColumn = {
 };
 export type WorkboardSessionsBoardSpec = {
   columns: WorkboardSessionsColumn[];
-  instructions?: string;
   scope?: { agentIds?: string[]; includeArchived?: boolean; maxAgeHours?: number };
   agentSessionKey?: string;
 };
@@ -72,7 +71,7 @@ export type WorkboardSessionFacts = {
 export type WorkboardSessionPlacement = {
   sessionKey: string;
   columnId: string;
-  source: "state" | "model" | "operator";
+  source: "state" | "operator";
   reason: string;
   factsHash: string;
   updatedAt: number;
@@ -89,8 +88,6 @@ export type WorkboardSessionsBoardRead = {
   >;
   people?: SessionPerson[];
   warning?: string;
-  classifying?: true;
-  classifiedAt?: number;
 };
 
 export function createDefaultWorkboardSessionsBoardSpec(): WorkboardSessionsBoardSpec {
@@ -101,23 +98,21 @@ export function createDefaultWorkboardSessionsBoardSpec(): WorkboardSessionsBoar
         label: "Needs input",
         color: "yellow",
         description:
-          "Waiting for the user to answer a question, approve an action, or supply missing input, including idle sessions whose last assistant turn asks for that input.",
+          "Observer health is waiting on the user for an answer, approval, or missing input.",
         match: { health: ["waiting-on-user"] },
       },
       {
         id: "working",
         label: "Working",
         color: "blue",
-        description:
-          "An active session making progress or wrapping up, including active sessions that do not have an observer assessment yet.",
+        description: "An active run with observer health on-track, grinding, or wrapping-up.",
         match: { run: ["active"], health: ["on-track", "grinding", "wrapping-up"] },
       },
       {
         id: "stuck",
         label: "Stuck",
         color: "red",
-        description:
-          "Work is stuck or failed, including a failed run even when no observer assessment is available.",
+        description: "Observer health is stuck or failed.",
         match: { health: ["stuck", "failed"] },
       },
       {
@@ -138,8 +133,7 @@ export function createDefaultWorkboardSessionsBoardSpec(): WorkboardSessionsBoar
         id: "done",
         label: "Done",
         color: "green",
-        description:
-          "Work is complete or idle without a pending question, approval, failure, or review. Unresolved sessions fall back here.",
+        description: "Observer health is done, or no earlier column rule matches.",
         match: { health: ["done"] },
         fallback: true,
       },
@@ -260,11 +254,11 @@ function normalizeScope(value: unknown): NonNullable<WorkboardSessionsBoardSpec[
   };
 }
 
-const SPEC_KEYS = ["columns", "instructions", "scope", "agentSessionKey"];
+const SPEC_KEYS = ["columns", "scope", "agentSessionKey"];
 
 /** Shared validation for durable specifications, agent tools, and the board editor. */
 export function normalizeWorkboardSessionsBoardSpec(value: unknown): WorkboardSessionsBoardSpec {
-  const input = record(value, "sessions board specification", SPEC_KEYS);
+  const input = record(value, "sessions board specification", [...SPEC_KEYS, "instructions"]);
   if (!Array.isArray(input.columns) || input.columns.length < 2 || input.columns.length > 12) {
     throw new Error("sessions board columns must contain 2..12 columns.");
   }
@@ -277,9 +271,6 @@ export function normalizeWorkboardSessionsBoardSpec(value: unknown): WorkboardSe
   }
   return {
     columns,
-    ...(input.instructions !== undefined
-      ? { instructions: text(input.instructions, "instructions", 0, 2000) }
-      : {}),
     ...(input.scope !== undefined ? { scope: normalizeScope(input.scope) } : {}),
     ...(input.agentSessionKey !== undefined
       ? { agentSessionKey: text(input.agentSessionKey, "agentSessionKey", 1) }

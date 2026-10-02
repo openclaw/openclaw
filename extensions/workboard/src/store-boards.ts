@@ -148,21 +148,25 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     );
   }
 
-  writeSessionPlacements(
+  repairSessionPlacements(): Promise<number> {
+    return this.enqueueMutation(() =>
+      this.trackMutation(() => this.sessionsBoardStore.repairPlacements()),
+    );
+  }
+
+  writeSessionPlacement(
     boardId: string,
-    placements: WorkboardSessionPlacementWrite[],
+    placement: WorkboardSessionPlacementWrite,
     options: { expectedSpec: WorkboardSessionsBoardSpec; assertCurrent?: () => void },
   ): Promise<boolean> {
     return this.enqueueMutation(
       () =>
-        this.trackMutation(
-          () =>
-            this.sessionsBoardStore.writePlacements(
-              normalizeBoardIdRequired(boardId),
-              placements,
-              options.expectedSpec,
-            ),
-          (written) => written && placements.length > 0,
+        this.trackMutation(() =>
+          this.sessionsBoardStore.writePlacement(
+            normalizeBoardIdRequired(boardId),
+            placement,
+            options.expectedSpec,
+          ),
         ),
       options.assertCurrent,
     );

@@ -57,7 +57,7 @@ describe("workboard tools", () => {
       throw new Error("Expected Sessions board tools from the registered factory.");
     }
     for (const [name, input] of [
-      ["update", { instructions: "Revoked edit" }],
+      ["update", { scope: { includeArchived: true } }],
       ["move", { sessionKey: "agent:main:one", columnId: "working" }],
     ] as const) {
       const tool = expectDefined(
@@ -102,14 +102,14 @@ describe("workboard tools", () => {
         board: { id: "sessions", kind: "sessions" },
         sessions: [],
       });
-      await update.execute("update-one", { instructions: "Highlight approvals." });
+      await update.execute("update-one", { scope: { includeArchived: true } });
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { instructions: "Highlight approvals." },
+        sessions: { scope: { includeArchived: true } },
       });
       await store.upsertBoard({ id: "another", kind: "sessions" });
       for (const [tool, input] of [
         [read, {}],
-        [update, { instructions: "Ambiguous target." }],
+        [update, { scope: { includeArchived: false } }],
         [move, { sessionKey: "agent:main:example", columnId: "working" }],
       ] as const) {
         await expect(tool.execute("ambiguous", input)).rejects.toThrow(
@@ -125,7 +125,7 @@ describe("workboard tools", () => {
       );
       await expect(read.execute("invalid", { boardId: 42 })).rejects.toThrow();
       await expect(store.getSessionsBoard("sessions")).resolves.toMatchObject({
-        sessions: { instructions: "Highlight approvals." },
+        sessions: { scope: { includeArchived: true } },
       });
     } finally {
       await sessionsBoard.stop();

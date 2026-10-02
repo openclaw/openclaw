@@ -41,7 +41,7 @@ describe("workboard gateway methods", () => {
     registerWorkboardGatewayMethods({ api, store, sessionsBoard });
     const respond = vi.fn();
     await methods.get("workboard.sessionsBoard.update")!.handler({
-      params: { boardId: "sessions", patch: { instructions: "Revoked edit" } },
+      params: { boardId: "sessions", patch: { scope: { includeArchived: true } } },
       hasCurrentClientAuthority: () => false,
       respond,
     } as never);
@@ -53,7 +53,7 @@ describe("workboard gateway methods", () => {
     // Role/scope/profile authorization is rechecked too, not just transport currentness.
     const revokedRole = vi.fn();
     await methods.get("workboard.sessionsBoard.update")!.handler({
-      params: { boardId: "sessions", patch: { instructions: "Scope revoked" } },
+      params: { boardId: "sessions", patch: { scope: { includeArchived: true } } },
       hasCurrentClientAuthority: () => true,
       sessionMutationAuthorization: {
         assertCurrent: () => {
@@ -287,7 +287,6 @@ describe("workboard gateway methods", () => {
       "workboard.sessionsBoard.read",
       "workboard.sessionsBoard.update",
       "workboard.sessionsBoard.move",
-      "workboard.sessionsBoard.refresh",
       "workboard.boards.archive",
       "workboard.boards.delete",
       "workboard.cards.stats",
@@ -424,7 +423,7 @@ describe("workboard gateway methods", () => {
       expect(created.mock.calls[0]?.[1]).toMatchObject({
         board: { id: "sessions", kind: "sessions", sessions: { columns: expect.any(Array) } },
       });
-      for (const action of ["read", "update", "move", "refresh"]) {
+      for (const action of ["read", "update", "move"]) {
         expect(methods.get(`workboard.sessionsBoard.${action}`)?.opts).toEqual({
           scope: action === "read" ? "operator.read" : "operator.write",
         });
@@ -451,10 +450,10 @@ describe("workboard gateway methods", () => {
       }
       const updated = await invoke("workboard.sessionsBoard.update", {
         boardId: "sessions",
-        patch: { instructions: "Keep approval requests in Needs input." },
+        patch: { scope: { includeArchived: true } },
       });
       expect(updated.mock.calls[0]?.[1]).toMatchObject({
-        board: { sessions: { instructions: "Keep approval requests in Needs input." } },
+        board: { sessions: { scope: { includeArchived: true } } },
       });
       const beforeInvalid = await store.getSessionsBoard("sessions");
       const invalidRequests = [
@@ -513,7 +512,6 @@ describe("workboard gateway methods", () => {
           { boardId: "sessions", sessionKey: "agent:main:a", columnId: 2 },
           /columnId required/,
         ],
-        ["workboard.sessionsBoard.refresh", { boardId: "" }, /boardId required/],
         ["workboard.boards.upsert", { id: "sessions", kind: "cards" }, /kind cannot be changed/],
       ] as const;
       for (const [name, input, message] of invalidRequests) {
