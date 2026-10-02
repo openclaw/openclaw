@@ -6,7 +6,7 @@ const clientMocks = vi.hoisted(() => ({
   browserCloseTabByRawTargetId: vi.fn(async () => {}),
 }));
 
-vi.mock("./client.js", () => clientMocks);
+vi.mock("./client-tab-close.runtime.js", () => clientMocks);
 
 import {
   closeTrackedBrowserTabsForSessions,
@@ -456,6 +456,9 @@ describe("session tab registry", () => {
       const first = ownerTiming === "published" ? beginOwner() : beginDefault();
       const second = ownerTiming === "published" ? beginDefault() : beginOwner();
       try {
+        if (ownerTiming === "default-client") {
+          await first;
+        }
         expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
           ownerTiming === "default-client" ? 1 : 0,
         );
