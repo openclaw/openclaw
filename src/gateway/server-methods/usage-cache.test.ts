@@ -5,20 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 
 function createSummary(totalTokens = 1) {
-  return {
-    updatedAt: Date.now(),
-    startDate: "2026-02-01",
-    endDate: "2026-02-02",
-    daily: [],
-    totals: {
-      totalTokens,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalCost: 0,
-    },
-  };
+  return { totals: { totalTokens } };
 }
 
 type Summary = ReturnType<typeof createSummary> & { complete?: boolean };
@@ -28,8 +15,6 @@ let cache: Map<string, UsageCacheEntry<Summary>>;
 let now = 1_000;
 
 describe("usage result cache", () => {
-  const DAY_MS = 24 * 60 * 60 * 1000;
-
   beforeEach(() => {
     cache = new Map();
     now = 1_000;
@@ -77,30 +62,7 @@ describe("usage result cache", () => {
     expect(drained).toBe(true);
   });
 
-  it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
-    const configRef = {};
-    const ITERATIONS = 600;
-    for (let i = 0; i < ITERATIONS; i++) {
-      const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-      const endMs = startMs + (i % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-      await loadUsageResultCached({
-        cache,
-        cacheKey: `${startMs}-${endMs}`,
-        configRef,
-        load: loadSummary,
-      });
-    }
-    // Observe retained entries as well as lookup behavior; empty-key leaks must fail.
-    expect(cache.size).toBeLessThan(ITERATIONS);
-    const lastStartMs = Date.UTC(2026, 0, 1) + (ITERATIONS - 1) * DAY_MS;
-    const lastEndMs = lastStartMs + ((ITERATIONS - 1) % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-    expect(cache.has(`${lastStartMs}-${lastEndMs}`)).toBe(true);
-    const firstStartMs = Date.UTC(2026, 0, 1);
-    const firstEndMs = firstStartMs + DAY_MS - 1;
-    expect(cache.has(`${firstStartMs}-${firstEndMs}`)).toBe(false);
-  });
-
-  it("evicts settled entries before in-flight entries when possible", async () => {
+  it("bounds the cache by evicting the oldest settled entry before an in-flight entry", async () => {
     const configRef = {};
     const pending = createDeferredCore<Summary>();
     loadSummary.mockReturnValueOnce(pending.promise);
@@ -110,17 +72,18 @@ describe("usage result cache", () => {
     try {
       await Promise.resolve();
       for (let i = 0; i < 256; i++) {
-        const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-        const endMs = startMs + DAY_MS - 1;
         await loadUsageResultCached({
           cache,
-          cacheKey: `${startMs}-${endMs}`,
+          cacheKey: String(i),
           configRef,
           load: loadSummary,
         });
       }
       repeated = loadUsageResultCached(params);
       await Promise.resolve();
+      expect(cache.size).toBe(256);
+      expect(cache.has("0")).toBe(false);
+      expect(cache.has("255")).toBe(true);
       expect(cache.has(params.cacheKey)).toBe(true);
       expect(loadSummary).toHaveBeenCalledTimes(257);
     } finally {

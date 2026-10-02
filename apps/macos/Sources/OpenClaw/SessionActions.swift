@@ -9,7 +9,7 @@ enum SessionActions {
         thinking: String?? = nil,
         verbose: String?? = nil) async throws
     {
-        let request = OpenClawChatGatewayRequests.patchSessionPreferences(
+        let request = OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: key,
             agentID: nil,
             thinkingLevel: thinking,

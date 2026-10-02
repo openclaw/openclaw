@@ -39,6 +39,7 @@ import type {
   SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import type {
+  SessionEntryStatusSelection,
   SessionTranscriptContextVersion,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -373,6 +374,7 @@ export type SessionExactEntriesWorkerSelection =
 
 type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
   env: NodeJS.ProcessEnv;
+  statusSelection?: SessionEntryStatusSelection;
   lifecycleSessionKey?: string;
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
@@ -387,6 +389,7 @@ export type SessionExactEntriesWorkerResult = {
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   pendingArchives?: boolean;
+  statusFound?: boolean;
   databaseIdentity?: {
     identity: string;
     incarnation: string;

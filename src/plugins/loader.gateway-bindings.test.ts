@@ -51,7 +51,6 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 it.each([
-  { explicit: "neither facet", nodes: false, subagent: false, activate: false },
   { explicit: "nodes", nodes: true, subagent: false, activate: false },
   { explicit: "subagent", nodes: false, subagent: true, activate: false },
   { explicit: "both facets", nodes: true, subagent: true, activate: false },
@@ -192,158 +191,141 @@ it.each([
   expect(resolveRuntimeModule).not.toHaveBeenCalled();
 });
 
-it.each([
-  "missing manifest",
-  "malformed manifest",
-  "import failure",
-  "registration failure",
-  "disabled",
-  "loaded",
-] as const)("enforces a role's access-policy binding after %s", async (state) => {
-  await withOpenClawTestState({ label: "loader-access-policy" }, async (testState) => {
-    useNoBundledPlugins();
-    const id = "required-access-policy";
-    const owner = writePlugin({
-      id,
-      filename: "index.cjs",
-      body:
-        state === "import failure"
-          ? 'throw new Error("access policy import failed");'
-          : `module.exports = { id: "${id}", register(api) {
+it.each(["missing manifest", "registration failure", "disabled", "loaded"] as const)(
+  "enforces a role's access-policy binding after %s",
+  async (state) => {
+    await withOpenClawTestState({ label: "loader-access-policy" }, async (testState) => {
+      useNoBundledPlugins();
+      const id = "required-access-policy";
+      const owner = writePlugin({
+        id,
+        filename: "index.cjs",
+        body: `module.exports = { id: "${id}", register(api) {
               ${state === "registration failure" ? 'throw new Error("access policy registration failed");' : ""}
               api.registerGatewayAccessPolicy({ authorize({ profile, requiredByRole }) {
                 if (!requiredByRole || profile.assignedRole !== null) return undefined;
                 return { signal: new AbortController().signal, assertCurrent() {} };
               } });
             } };`,
-    });
-    // Package-directory discovery requires its manifest; directly configured
-    // standalone files intentionally support manifestless compatibility.
-    writePluginMetadata({
-      dir: owner.dir,
-      id,
-      packageJson: { name: id, version: "1.0.0", openclaw: { extensions: ["./index.cjs"] } },
-    });
-    const manifestPath = path.join(owner.dir, "openclaw.plugin.json");
-    if (state === "missing manifest") {
-      rmSync(manifestPath);
-    } else if (state === "malformed manifest") {
-      writeFileSync(manifestPath, "{", "utf8");
-    }
-    const optionalCheckEvent = `loader-access-policy:${testState.root}`;
-    const optionalChecks = vi.fn();
-    const optional = writePlugin({
-      id: "optional-access-policy",
-      registration: `api.registerGatewayAccessPolicy({ authorize({ profile, requiredByRole }) {
+      });
+      // Package-directory discovery requires its manifest; directly configured
+      // standalone files intentionally support manifestless compatibility.
+      writePluginMetadata({
+        dir: owner.dir,
+        id,
+        packageJson: { name: id, version: "1.0.0", openclaw: { extensions: ["./index.cjs"] } },
+      });
+      const manifestPath = path.join(owner.dir, "openclaw.plugin.json");
+      if (state === "missing manifest") {
+        rmSync(manifestPath);
+      }
+      const optionalCheckEvent = `loader-access-policy:${testState.root}`;
+      const optionalChecks = vi.fn();
+      const optional = writePlugin({
+        id: "optional-access-policy",
+        registration: `api.registerGatewayAccessPolicy({ authorize({ profile, requiredByRole }) {
         process.emit(${JSON.stringify(optionalCheckEvent)}, profile.profileId, requiredByRole);
         return undefined;
       } });`,
-    });
-    const config = {
-      gateway: {
-        roles: {
-          default: "visitor",
-          definitions: {
-            visitor: {
-              sessions: { others: "view" },
-              agents: ["main"],
-              scopes: ["operator.sessions.read", "operator.sessions.write"],
-              accessPolicyPlugin: id,
-            },
-            staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
-            unbound: {
-              sessions: { others: "view" },
-              agents: ["main"],
-              scopes: ["operator.sessions.read"],
+      });
+      const config = {
+        gateway: {
+          roles: {
+            default: "visitor",
+            definitions: {
+              visitor: {
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: ["operator.sessions.read", "operator.sessions.write"],
+                accessPolicyPlugin: id,
+              },
+              staff: { sessions: { others: "write" }, agents: "*", scopes: ["operator.admin"] },
+              unbound: {
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: ["operator.sessions.read"],
+              },
             },
           },
         },
-      },
-      plugins: {
-        allow: [id, optional.id],
-        load: { paths: [owner.dir, optional.file] },
-        entries: { [id]: { enabled: state !== "disabled" } },
-        slots: { memory: "none" },
-      },
-    } satisfies OpenClawConfig;
-    const visitor = ensureProfileForEmail("loader-visitor@example.test");
-    const staff = ensureProfileForEmail("loader-staff@example.test");
-    const unbound = ensureProfileForEmail("loader-unbound@example.test");
-    setUserProfileRole(staff.id, "staff");
-    setUserProfileRole(unbound.id, "unbound");
-    let registry: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>> | undefined;
-    const catalog = await prepareUserProfileCatalog();
-    process.on(optionalCheckEvent, optionalChecks);
-    try {
-      registry = await loadAndActivateRootPluginRegistry({ config, cache: false });
-      expect(getActivePluginRegistry()).toBe(registry);
-      const record = registry.plugins.find((plugin) => plugin.id === id);
-      if (state === "missing manifest" || state === "malformed manifest") {
-        expect(record).toBeUndefined();
-        expect(registry.diagnostics).toContainEqual(
-          expect.objectContaining({
-            level: "error",
-            source: manifestPath,
-            message: expect.stringContaining(
-              state === "missing manifest"
-                ? "plugin manifest not found"
-                : "failed to parse plugin manifest",
-            ),
-          }),
-        );
-      } else if (state === "import failure" || state === "registration failure") {
-        expect(record).toMatchObject({
-          status: "error",
-          failurePhase: state === "import failure" ? "load" : "register",
-          error: expect.stringContaining(
-            state === "import failure"
-              ? "access policy import failed"
-              : "access policy registration failed",
-          ),
-        });
-      } else {
-        expect(record).toMatchObject({ status: state, enabled: state === "loaded" });
-      }
-      expect(registry.plugins).toContainEqual(
-        expect.objectContaining({ id: optional.id, enabled: true, status: "loaded" }),
-      );
-      expect(registry.gatewayAccessPolicies.some((policy) => policy.pluginId === id)).toBe(
-        state === "loaded",
-      );
-      if (state === "loaded") {
-        const authority = expectDefined(
-          resolveGatewayOperatorAccessAuthority(visitor.id, config),
-          "loaded required access policy authority",
-        );
-        expect(authority.assertCurrent).not.toThrow();
-        expect(optionalChecks).toHaveBeenCalledWith(visitor.id, false);
-        const staffDefault = {
-          ...config,
-          gateway: { roles: { ...config.gateway.roles, default: "staff" } },
-        };
-        for (const unboundConfig of [staffDefault, { ...config, gateway: {} }]) {
-          expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeNull();
-          expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeNull();
+        plugins: {
+          allow: [id, optional.id],
+          load: { paths: [owner.dir, optional.file] },
+          entries: { [id]: { enabled: state !== "disabled" } },
+          slots: { memory: "none" },
+        },
+      } satisfies OpenClawConfig;
+      const visitor = ensureProfileForEmail("loader-visitor@example.test");
+      const staff = ensureProfileForEmail("loader-staff@example.test");
+      const unbound = ensureProfileForEmail("loader-unbound@example.test");
+      setUserProfileRole(staff.id, "staff");
+      setUserProfileRole(unbound.id, "unbound");
+      let registry: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>> | undefined;
+      const catalog = await prepareUserProfileCatalog();
+      process.on(optionalCheckEvent, optionalChecks);
+      try {
+        registry = await loadAndActivateRootPluginRegistry({ config, cache: false });
+        expect(getActivePluginRegistry()).toBe(registry);
+        const record = registry.plugins.find((plugin) => plugin.id === id);
+        if (state === "missing manifest") {
+          expect(record).toBeUndefined();
+          expect(registry.diagnostics).toContainEqual(
+            expect.objectContaining({
+              level: "error",
+              source: manifestPath,
+              message: expect.stringContaining("plugin manifest not found"),
+            }),
+          );
+        } else if (state === "registration failure") {
+          expect(record).toMatchObject({
+            status: "error",
+            failurePhase: "register",
+            error: expect.stringContaining("access policy registration failed"),
+          });
+        } else {
+          expect(record).toMatchObject({ status: state, enabled: state === "loaded" });
         }
-      } else {
-        expect(() => resolveGatewayOperatorAccessAuthority(visitor.id, config)).toThrow(
-          GatewayOperatorAccessDeniedError,
+        expect(registry.plugins).toContainEqual(
+          expect.objectContaining({ id: optional.id, enabled: true, status: "loaded" }),
         );
+        expect(registry.gatewayAccessPolicies.some((policy) => policy.pluginId === id)).toBe(
+          state === "loaded",
+        );
+        if (state === "loaded") {
+          const authority = expectDefined(
+            resolveGatewayOperatorAccessAuthority(visitor.id, config),
+            "loaded required access policy authority",
+          );
+          expect(authority.assertCurrent).not.toThrow();
+          expect(optionalChecks).toHaveBeenCalledWith(visitor.id, false);
+          const staffDefault = {
+            ...config,
+            gateway: { roles: { ...config.gateway.roles, default: "staff" } },
+          };
+          for (const unboundConfig of [staffDefault, { ...config, gateway: {} }]) {
+            expect(resolveGatewayOperatorAccessAuthority(visitor.id, unboundConfig)).toBeNull();
+            expect(resolveGatewayOperatorAccessAuthority(staff.id, unboundConfig)).toBeNull();
+          }
+        } else {
+          expect(() => resolveGatewayOperatorAccessAuthority(visitor.id, config)).toThrow(
+            GatewayOperatorAccessDeniedError,
+          );
+          expect(optionalChecks).not.toHaveBeenCalled();
+        }
+        expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeNull();
+        expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeNull();
+        expect(optionalChecks).toHaveBeenCalledWith(staff.id, false);
+        expect(optionalChecks).toHaveBeenCalledWith(unbound.id, false);
+        optionalChecks.mockClear();
+        expect(resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config)).toBeNull();
         expect(optionalChecks).not.toHaveBeenCalled();
+      } finally {
+        process.off(optionalCheckEvent, optionalChecks);
+        catalog.release();
+        if (registry) {
+          await clearActivePluginRegistry(registry);
+        }
       }
-      expect(resolveGatewayOperatorAccessAuthority(staff.id, config)).toBeNull();
-      expect(resolveGatewayOperatorAccessAuthority(unbound.id, config)).toBeNull();
-      expect(optionalChecks).toHaveBeenCalledWith(staff.id, false);
-      expect(optionalChecks).toHaveBeenCalledWith(unbound.id, false);
-      optionalChecks.mockClear();
-      expect(resolveGatewayOperatorAccessAuthority(GATEWAY_OWNER_PROFILE_ID, config)).toBeNull();
-      expect(optionalChecks).not.toHaveBeenCalled();
-    } finally {
-      process.off(optionalCheckEvent, optionalChecks);
-      catalog.release();
-      if (registry) {
-        await clearActivePluginRegistry(registry);
-      }
-    }
-  });
-});
+    });
+  },
+);

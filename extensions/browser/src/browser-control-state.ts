@@ -70,7 +70,6 @@ export async function ensureBrowserControlRuntime(params: {
   port: number;
   resolved: BrowserServerState["resolved"];
   owner: BrowserControlOwner;
-  onWarn: (message: string) => void;
 }): Promise<BrowserServerState> {
   if (state && isBrowserRuntimeRunning(state)) {
     if (params.server) {
@@ -91,7 +90,6 @@ export async function ensureBrowserControlRuntime(params: {
     server: params.server ?? null,
     port: params.port,
     resolved: params.resolved,
-    onWarn: params.onWarn,
   });
   owner = params.owner;
   return state;
