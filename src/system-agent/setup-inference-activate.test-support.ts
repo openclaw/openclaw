@@ -82,7 +82,9 @@ export async function fixture(
     modelRef,
     modelId: "gpt-5.4-mini",
     api: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
-    baseUrl: options.subscription ? "https://chatgpt.com/backend-api" : "https://provider.example/v1",
+    baseUrl: options.subscription
+      ? "https://chatgpt.com/backend-api"
+      : "https://provider.example/v1",
     credential,
     profileId: "openai:fixture",
   };
