@@ -9,7 +9,7 @@ describe("extractTextCached", () => {
       "[Subagent Context] You are running as a subagent (depth 1/5). Complete the current [Subagent Task]; inherited conversation is background context, not your assignment.\n\n[Subagent Task]\n\nInvestigate Side chat.\n\nBegin. Execute the assigned task to completion.";
     const message = { role: "user", content: [{ type: "text", text }] };
     expect(extractTextCached(message)).toBe("Investigate Side chat.");
-    expect(message.content[0].text).toBe(text);
+    expect(message.content).toEqual([{ type: "text", text }]);
     expect(extractText({ role: "assistant", content: text })).toBe(text);
   });
 

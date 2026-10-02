@@ -31,7 +31,7 @@ describe("message-normalizer", () => {
     expect(normalizeMessage(message).content).toEqual([
       { type: "text", text: "Investigate Side chat." },
     ]);
-    expect(message.content[0].text).toBe(text);
+    expect(message.content).toEqual([{ type: "text", text }]);
     expect(assistant(text).content).toEqual([{ type: "text", text }]);
   });
 

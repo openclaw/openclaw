@@ -16,7 +16,7 @@ describe("stripEnvelopeFromMessage", () => {
         role: "user",
         content: [{ type, text: "Investigate Side chat." }],
       });
-      expect(input.content[0].text).toBe(text);
+      expect(input.content).toEqual([{ type, text }]);
       const assistant = { role: "assistant", content: [{ type: "text", text }] };
       expect(stripEnvelopeFromMessage(assistant)).toBe(assistant);
     },
