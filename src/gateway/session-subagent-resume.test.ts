@@ -20,6 +20,7 @@ import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/sub
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -57,6 +58,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     agentId: "main",
     sessionKey: childSessionKey,
     defaultSessionId: sessionId,
+    lifecycleRevision: "resume-original-lifecycle",
   });
   await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
@@ -74,6 +76,7 @@ async function arrangePausedChild(childSessionKey = "agent:main:subagent:resume-
     cleanup: "keep",
     expectsCompletionMessage: true,
     queued: true,
+    sessionEntry: loadSessionEntry({ agentId: "main", sessionKey: childSessionKey }),
   });
   const entry = await updateRun(previousRunId, (draft) => {
     expect(markSubagentRunPausedAfterYield({ entry: draft })).toBe(true);
@@ -362,4 +365,521 @@ it("retires queued resume execution when the successor is cancelled", async () =
   expect(() => assertParentSubagentResumeSuccessorCurrent(state.resume, nextRunId)).toThrow(
     /no longer owns/,
   );
+});
+
+async function createRunningCallbackTool(
+  state: Awaited<ReturnType<typeof arrangePausedChild>>,
+  execute: (ctx: import("../plugins/tool-types.js").OpenClawPluginToolContext<2>) => Promise<void>,
+  runId = previousRunId,
+) {
+  const { registerAgentRunContext, clearAgentRunContext } =
+    await import("../infra/agent-run-registry.js");
+  const { createPluginRuntimeMock } =
+    await import("../plugin-sdk/test-helpers/plugin-runtime-mock.js");
+  const { createPluginRegistry } = await import("../plugins/registry.js");
+  const { createPluginRecord } = await import("../plugins/status.test-helpers.js");
+  const { createPluginToolFactoryContext } = await import("../plugins/tool-factory-context.js");
+  const { bindPluginToolCallbacks } = await import("../plugins/tool-factory-runtime.js");
+  state.entry = await updateRun(previousRunId, (draft) => {
+    draft.pauseReason = undefined;
+    draft.execution.status = "running";
+    delete draft.execution.endedAt;
+  });
+  registerAgentRunContext(runId, { agentId: "main", sessionKey: state.childSessionKey, sessionId });
+  const builder = createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    runtime: createPluginRuntimeMock(),
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: "callback-fixture",
+    contracts: { tools: ["callback_probe"] },
+  });
+  builder.registry.plugins.push(record);
+  builder.createApi(record, { config: {}, registrationMode: "full" }).registerTool(
+    {
+      contextVersion: 2,
+      create: (ctx) => ({
+        name: "callback_probe",
+        label: "Callback probe",
+        description: "Exercise callback authority",
+        parameters: { type: "object", properties: {} },
+        execute: async () => {
+          await execute(ctx);
+          return { content: [{ type: "text" as const, text: "pending" }], details: {} };
+        },
+      }),
+    },
+    { name: "callback_probe" },
+  );
+  const entry = builder.registry.tools[0]!;
+  const make = () => {
+    const ctx = createPluginToolFactoryContext({
+      entry,
+      registry: builder.registry,
+      runId,
+      context: { agentId: "main", sessionKey: state.childSessionKey, sessionId },
+      assertInvocationCurrent: () => {},
+    });
+    const raw = entry.factory(ctx);
+    if (!raw || Array.isArray(raw)) {
+      throw new Error("expected one callback tool");
+    }
+    return {
+      ctx,
+      tool: bindPluginToolCallbacks(entry, builder.registry, raw, ctx.assertInvocationCurrent),
+    };
+  };
+  return { make, close: () => clearAgentRunContext(runId) };
+}
+
+it.each(["returned", "rejected"] as const)(
+  "rejects detached callback issuance after the tool %s without durable or Gateway effects",
+  async (outcome) => {
+    const state = await arrangePausedChild();
+    const delayed = createDeferred();
+    let late: Promise<unknown> | undefined;
+    const scope = await createRunningCallbackTool(state, async (ctx) => {
+      // A legitimate live call proves the fixture reaches the real host/worker owner.
+      await ctx.issueAsyncCallback!({ ttlMs: 60_000 });
+      late = delayed.promise.then(() => ctx.issueAsyncCallback!({ ttlMs: 60_000 }));
+      if (outcome === "rejected") {
+        throw new Error("tool rejected");
+      }
+    });
+    const database = openOpenClawStateDatabase();
+    const snapshot = () => ({
+      ledger: database.db
+        .prepare("SELECT * FROM plugin_state_entries ORDER BY plugin_id, namespace, entry_key")
+        .all(),
+      queue: database.db
+        .prepare("SELECT * FROM delivery_queue_entries ORDER BY queue_name, id")
+        .all(),
+    });
+    const dispatch = vi.spyOn(
+      await import("./server-recovery-runtime-context.js"),
+      "dispatchGatewayLifecycleMethod",
+    );
+    try {
+      const call = scope.make().tool.execute("call", {});
+      if (outcome === "rejected") {
+        await expect(call).rejects.toThrow("tool rejected");
+      } else {
+        await call;
+      }
+      const before = snapshot();
+      expect(before.queue).toHaveLength(1);
+      const denied = expect(late).rejects.toThrow("tool execution");
+      delayed.resolve();
+      await denied;
+      expect(snapshot()).toEqual(before);
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      delayed.resolve();
+      await late?.catch(() => {});
+      scope.close();
+    }
+  },
+);
+
+it("revokes callback issuance on tool abort even while the child run remains live", async () => {
+  const state = await arrangePausedChild();
+  const controller = new AbortController();
+  const scope = await createRunningCallbackTool(state, async (ctx) => {
+    await ctx.issueAsyncCallback!({ ttlMs: 60_000 });
+    controller.abort();
+    await expect(ctx.issueAsyncCallback!({ ttlMs: 60_000 })).rejects.toThrow("tool execution");
+  });
+  const database = openOpenClawStateDatabase();
+  const dispatch = vi.spyOn(
+    await import("./server-recovery-runtime-context.js"),
+    "dispatchGatewayLifecycleMethod",
+  );
+  try {
+    await scope.make().tool.execute("aborted-tool", {}, controller.signal);
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM plugin_state_entries WHERE namespace = 'async-tool-callback'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM delivery_queue_entries WHERE queue_name = 'session-native-child'",
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(dispatch).not.toHaveBeenCalled();
+  } finally {
+    scope.close();
+  }
+});
+
+it("rejects a retained callback issuer used by another live factory context", async () => {
+  const state = await arrangePausedChild();
+  let retained: import("../plugins/tool-types.js").OpenClawPluginToolContext<2>["issueAsyncCallback"];
+  const scope = await createRunningCallbackTool(state, async () => {
+    await retained!({ ttlMs: 60_000 });
+  });
+  const database = openOpenClawStateDatabase();
+  const dispatch = vi.spyOn(
+    await import("./server-recovery-runtime-context.js"),
+    "dispatchGatewayLifecycleMethod",
+  );
+  try {
+    retained = scope.make().ctx.issueAsyncCallback;
+    await expect(scope.make().tool.execute("other-context", {})).rejects.toThrow("tool execution");
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM plugin_state_entries WHERE namespace = 'async-tool-callback'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM delivery_queue_entries WHERE queue_name = 'session-native-child'",
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(dispatch).not.toHaveBeenCalled();
+  } finally {
+    scope.close();
+  }
+});
+
+it.each(["different", "retired"] as const)(
+  "rejects a %s issuing run before SQLite or Gateway effects",
+  async (scenario) => {
+    const state = await arrangePausedChild();
+    const scope = await createRunningCallbackTool(
+      state,
+      async (ctx) => {
+        await ctx.issueAsyncCallback!({ ttlMs: 60_000 });
+      },
+      scenario === "different" ? "other-issuing-run" : previousRunId,
+    );
+    const entered = createDeferred();
+    const released = createDeferred();
+    const database = openOpenClawStateDatabase();
+    const dispatch = vi.spyOn(
+      await import("./server-recovery-runtime-context.js"),
+      "dispatchGatewayLifecycleMethod",
+    );
+    if (scenario === "retired") {
+      const reader = await import("../config/sessions/session-entry-read-runtime.js");
+      const read = reader.withSessionEntryReadOnlyInWorker;
+      vi.spyOn(reader, "withSessionEntryReadOnlyInWorker").mockImplementation(async (...args) => {
+        entered.resolve();
+        await released.promise;
+        return read(...args);
+      });
+    }
+    let call: Promise<unknown> | undefined;
+    try {
+      call = scope.make().tool.execute("wrong-run", {});
+      const denied = expect(call).rejects.toThrow(/native child/);
+      if (scenario === "retired") {
+        await entered.promise;
+        scope.close();
+        released.resolve();
+      }
+      await denied;
+      expect(
+        database.db
+          .prepare(
+            "SELECT count(*) AS count FROM plugin_state_entries WHERE namespace = 'async-tool-callback'",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        database.db
+          .prepare(
+            "SELECT count(*) AS count FROM delivery_queue_entries WHERE queue_name = 'session-native-child'",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(dispatch).not.toHaveBeenCalled();
+    } finally {
+      released.resolve();
+      await call?.catch(() => {});
+      scope.close();
+    }
+  },
+);
+
+async function assertCallbackResume(childSessionKey: string) {
+  const state = await arrangePausedChild(childSessionKey);
+  const { completeHostPluginAsyncCallback } =
+    await import("../agents/plugin-async-callback.host.js");
+  const { runPluginAsyncCallbackCommand } = await import("../agents/plugin-async-callback.js");
+  const { captureOpenClawStateWorkerContext } =
+    await import("../state/openclaw-state-worker-context.js");
+  const { loadPendingSessionDelivery } = await import("../infra/session-delivery-queue-storage.js");
+  const { deliverNativeChildCallback } = await import("./session-plugin-callback-delivery.js");
+  const recovery = await import("./server-recovery-runtime-context.js");
+  const queueContext = captureOpenClawStateWorkerContext();
+  const binding = {
+    pluginId: "example",
+    toolName: "remote_job",
+    childSessionKey: state.childSessionKey,
+    childSessionId: sessionId,
+    childRunId: previousRunId,
+    childGeneration: state.entry.generation,
+    childCreatedAt: state.entry.createdAt,
+  };
+  const issued = await runPluginAsyncCallbackCommand(
+    {
+      type: "pluginCallback.issue",
+      input: { binding, ttlMs: 60000 },
+    },
+    () => {},
+    queueContext,
+  );
+  // The initiating handle is not retained: a newly loaded plugin redeems only
+  // its private token through the public completion implementation.
+  expect(
+    await completeHostPluginAsyncCallback({
+      pluginId: "other",
+      token: issued.token,
+      resultText: "wrong owner",
+      assertPluginCurrent: () => {},
+    }),
+  ).toBe("unknown");
+  expect(
+    await completeHostPluginAsyncCallback({
+      pluginId: "example",
+      token: issued.token,
+      resultText: "remote result",
+      assertPluginCurrent: () => {},
+    }),
+  ).toBe("accepted");
+  const { loadPendingSessionDeliveries } =
+    await import("../infra/session-delivery-queue-storage.js");
+  const entries = await loadPendingSessionDeliveries(queueContext);
+  const queued = entries.find(
+    (entry) => entry.kind === "nativeChildFollowup" && !entry.callbackExpiryKey,
+  )!;
+  expect(queued.kind).toBe("nativeChildFollowup");
+  if (queued.kind !== "nativeChildFollowup") {
+    throw new Error("missing callback outbox");
+  }
+  expect(queued.message).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+  const completion = createDeferred<AgentWaitResult>();
+  fixture.gateway.mockReturnValue(completion.promise);
+  fixture.announce.mockResolvedValue("delivered");
+  const dispatch = vi
+    .spyOn(recovery, "dispatchGatewayLifecycleMethod")
+    .mockImplementation(async (_method, request, options) => {
+      const resume = options?.subagentResume;
+      if (!resume) {
+        throw new Error("missing trusted callback admission");
+      }
+      expect(resume.caller).toBeUndefined();
+      expect(request.expectedExistingSessionLifecycleRevision).toBe("resume-original-lifecycle");
+      const adopt = await prepareParentSubagentResume({
+        cfg: state.cfg,
+        resume,
+        sessionKey: state.childSessionKey,
+        getSessionId: () => sessionId,
+        runId: String(request.idempotencyKey),
+        task: String(request.message),
+        assertAdmissionCurrent: () => {},
+      });
+      return { status: "accepted", taskRunId: await adopt() };
+    });
+  await deliverNativeChildCallback({ entry: queued, queueContext });
+  const resumedRun = `plugin-callback:${queued.id}`;
+  expect(loadSubagentRegistryFromSqlite().get(resumedRun)).toMatchObject({
+    requesterSessionKey: parent,
+    taskRunId: previousRunId,
+  });
+  // Simulate recovery of the same still-pending durable outbox after acceptance.
+  expect(await loadPendingSessionDelivery(queued.id, queueContext)).not.toBeNull();
+  await deliverNativeChildCallback({ entry: queued, queueContext });
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  const { drainPendingSessionDelivery } =
+    await import("../infra/session-delivery-queue-recovery.js");
+  expect(
+    await drainPendingSessionDelivery({
+      id: queued.id,
+      queueContext,
+      logLabel: "callback recovery",
+      log: { info() {}, warn() {}, error() {} },
+      deliver: async (entry, context) => {
+        if (entry.kind !== "nativeChildFollowup") {
+          throw new Error("wrong queue kind");
+        }
+        await deliverNativeChildCallback({ entry, ...context });
+      },
+    }),
+  ).toBeNull();
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  expect(
+    await completeHostPluginAsyncCallback({
+      pluginId: "example",
+      token: issued.token,
+      resultText: "duplicate",
+      assertPluginCurrent: () => {},
+    }),
+  ).toBe("duplicate");
+  completion.resolve({
+    status: "ok",
+    startedAt: Date.now(),
+    endedAt: Date.now(),
+    terminalReply: { disposition: "visible", text: "Verified remote result" },
+  });
+  await fixture.settle();
+  expect(fixture.announce).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      childRunId: resumedRun,
+      requesterSessionKey: parent,
+      roundOneReply: "Verified remote result",
+    }),
+  );
+}
+
+it.each(["agent:main:subagent:callback-child", "agent:main:dashboard:visible-child"])(
+  "resumes a durable plugin callback through the original task and requester exactly once for %s",
+  assertCallbackResume,
+);
+
+it("dead-letters a callback timeout when its child never yields", async () => {
+  const state = await arrangePausedChild();
+  const { runOpenClawStateWriteTransaction } = await import("../state/openclaw-state-db.js");
+  const { issuePluginAsyncCallbackInDatabase } =
+    await import("../agents/plugin-async-callback.store.js");
+  const { captureOpenClawStateWorkerContext } =
+    await import("../state/openclaw-state-worker-context.js");
+  const { drainPendingSessionDelivery } =
+    await import("../infra/session-delivery-queue-recovery.js");
+  const { deliverNativeChildCallback } = await import("./session-plugin-callback-delivery.js");
+  const database = openOpenClawStateDatabase();
+  const issued = runOpenClawStateWriteTransaction(
+    () =>
+      issuePluginAsyncCallbackInDatabase(
+        database,
+        {
+          pluginId: "example",
+          toolName: "remote_job",
+          childSessionKey: state.childSessionKey,
+          childSessionId: sessionId,
+          childRunId: previousRunId,
+          childGeneration: state.entry.generation,
+          childCreatedAt: state.entry.createdAt,
+        },
+        100,
+        Date.now() - 2 * 60 * 60_000,
+      ),
+    { database },
+  );
+  state.entry = await updateRun(previousRunId, (draft) => {
+    draft.pauseReason = undefined;
+    draft.execution.status = "running";
+  });
+  const queueContext = captureOpenClawStateWorkerContext();
+  const { loadPendingSessionDelivery } = await import("../infra/session-delivery-queue-storage.js");
+  const entry = (await loadPendingSessionDelivery(issued.queueId, queueContext))!;
+  expect(entry.kind).toBe("nativeChildFollowup");
+  if (entry.kind !== "nativeChildFollowup") {
+    throw new Error("missing callback expiry");
+  }
+  // Before the grace deadline, a running child is still eligible to yield.
+  await expect(
+    deliverNativeChildCallback({
+      entry: { ...entry, yieldDeadline: Date.now() + 60_000 },
+      queueContext,
+    }),
+  ).rejects.toThrow("waiting for its originating child to yield");
+  // A committed result has the same bound: it cannot wait forever either.
+  await expect(
+    deliverNativeChildCallback({
+      entry: { ...entry, callbackExpiryKey: undefined, message: "completed result" },
+      queueContext,
+    }),
+  ).rejects.toThrow("did not yield before its delivery deadline");
+  const dispatch = vi.spyOn(
+    await import("./server-recovery-runtime-context.js"),
+    "dispatchGatewayLifecycleMethod",
+  );
+  expect(
+    await drainPendingSessionDelivery({
+      id: issued.queueId,
+      queueContext,
+      logLabel: "callback deadline",
+      log: { info() {}, warn() {}, error() {} },
+      deliver: async (queued, context) => {
+        if (queued.kind !== "nativeChildFollowup") {
+          throw new Error("wrong queue kind");
+        }
+        await deliverNativeChildCallback({ entry: queued, ...context });
+      },
+    }),
+  ).toBeNull();
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(await loadPendingSessionDelivery(issued.queueId, queueContext)).toBeNull();
+  expect(
+    database.db
+      .prepare("SELECT status FROM delivery_queue_entries WHERE id = ?")
+      .get(issued.queueId),
+  ).toEqual({ status: "failed" });
+});
+
+it("delivers an overdue callback timeout through the real queue instead of losing it at its deadline", async () => {
+  const state = await arrangePausedChild();
+  const { runOpenClawStateWriteTransaction } = await import("../state/openclaw-state-db.js");
+  const { issuePluginAsyncCallbackInDatabase } =
+    await import("../agents/plugin-async-callback.store.js");
+  const { captureOpenClawStateWorkerContext } =
+    await import("../state/openclaw-state-worker-context.js");
+  const { drainPendingSessionDelivery } =
+    await import("../infra/session-delivery-queue-recovery.js");
+  const { deliverNativeChildCallback } = await import("./session-plugin-callback-delivery.js");
+  const recovery = await import("./server-recovery-runtime-context.js");
+  const database = openOpenClawStateDatabase();
+  // Seed the same durable rows as a process that stopped before its deadline.
+  const issued = runOpenClawStateWriteTransaction(
+    () =>
+      issuePluginAsyncCallbackInDatabase(
+        database,
+        {
+          pluginId: "example",
+          toolName: "remote_job",
+          childSessionKey: state.childSessionKey,
+          childSessionId: sessionId,
+          childRunId: previousRunId,
+          childGeneration: state.entry.generation,
+          childCreatedAt: state.entry.createdAt,
+        },
+        100,
+        Date.now() - 1000,
+      ),
+    { database },
+  );
+  const dispatch = vi
+    .spyOn(recovery, "dispatchGatewayLifecycleMethod")
+    .mockImplementation(async (_method, request, options) => {
+      expect(request.message).toContain("expired without a result");
+      expect(request.expectedExistingSessionLifecycleRevision).toBe("resume-original-lifecycle");
+      expect(options?.subagentResume?.previousRunId).toBe(previousRunId);
+      return { status: "accepted", taskRunId: previousRunId };
+    });
+  expect(
+    await drainPendingSessionDelivery({
+      id: issued.queueId,
+      queueContext: captureOpenClawStateWorkerContext(),
+      logLabel: "expiry recovery",
+      log: { info() {}, warn() {}, error() {} },
+      deliver: async (entry, context) => {
+        if (entry.kind !== "nativeChildFollowup") {
+          throw new Error("wrong queue kind");
+        }
+        await deliverNativeChildCallback({ entry, ...context });
+      },
+    }),
+  ).toBeNull();
+  expect(dispatch).toHaveBeenCalledOnce();
 });

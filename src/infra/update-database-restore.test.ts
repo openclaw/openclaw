@@ -673,3 +673,72 @@ it("refuses replacement while a foreign process owns state maintenance", async (
     }
   });
 });
+
+it("refuses to rewind a consumed callback to its pre-completion backup", async () => {
+  await withOpenClawTestState(
+    { label: "callback-rollback", scenario: "minimal" },
+    async (state) => {
+      const { issuePluginAsyncCallbackInDatabase, completePluginAsyncCallbackInDatabase } =
+        await import("../agents/plugin-async-callback.store.js");
+      const { runOpenClawStateWriteTransaction } = await import("../state/openclaw-state-db.js");
+      let database = openOpenClawStateDatabase({ env: state.env });
+      const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const binding = {
+        pluginId: "rollback",
+        toolName: "job",
+        childSessionKey: "agent:main:subagent:callback",
+        childSessionId: "callback-session",
+        childRunId: "callback-run",
+        childCreatedAt: 1,
+      };
+      const issued = runOpenClawStateWriteTransaction(
+        () => issuePluginAsyncCallbackInDatabase(database, binding, 60_000),
+        { database },
+      );
+      const input = {
+        backupRoot: state.path("callback-package"),
+        stateDir: state.stateDir,
+        stagingRoot: state.path("snapshot-scratch"),
+        config: {},
+        env: state.env,
+      };
+      await fs.mkdir(input.backupRoot + ".databases", { mode: 0o700 });
+      await fs.mkdir(input.stagingRoot, { mode: 0o700 });
+      const backup = await createUpdateDatabaseBackupInProcess({
+        ...input,
+        inspectionPlan: await discoverUpdateStateSchemaInspectionInProcess(input),
+      });
+      await closeOpenClawStateDatabaseAsync();
+      const paths = [...backup.databases.map((entry) => entry.path), ...backup.missingPaths];
+      const expectedGenerations = await readUpdateDatabaseGenerationsIsolated(paths, {
+        env: state.env,
+      });
+      database = openOpenClawStateDatabase({ env: state.env });
+      const consume = () =>
+        runOpenClawStateWriteTransaction(
+          () =>
+            completePluginAsyncCallbackInDatabase({
+              database,
+              token: issued.token,
+              resultText: "completed external job",
+              assertOwnerCurrent: () => {},
+            }),
+          { database },
+        );
+      expect(consume().status).toBe("accepted");
+      await closeOpenClawStateDatabaseAsync();
+      expect(
+        await restoreUpdateDatabaseBackup({
+          backup,
+          runId: run.runId,
+          env: state.env,
+          assertCurrent: () => {},
+          expectedGenerations,
+        }),
+      ).toBeNull();
+      expect(backup.restoreRefusal).toContain("discard later writes");
+      database = openOpenClawStateDatabase({ env: state.env });
+      expect(consume().status).toBe("duplicate");
+    },
+  );
+});

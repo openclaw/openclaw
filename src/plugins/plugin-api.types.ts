@@ -89,6 +89,7 @@ import type {
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
+  OpenClawPluginAsyncToolCallbackStatus,
   OpenClawPluginHookOptions,
   OpenClawPluginToolFactory,
   OpenClawPluginToolOptions,
@@ -199,6 +200,14 @@ export type OpenClawPluginApi = {
    * automation/integration unless you need native registry integration.
    */
   runtime: PluginRuntime;
+  /** Restart-durable completion, bound to this live plugin instance. Token stays private to the plugin. */
+  asyncToolCallbacks: {
+    status: (params: { token: string }) => Promise<OpenClawPluginAsyncToolCallbackStatus>;
+    complete: (params: {
+      token: string;
+      resultText: string;
+    }) => Promise<"accepted" | "duplicate" | "expired" | "cancelled" | "unknown">;
+  };
   logger: PluginLogger;
   /**
    * Grouped facade over the existing flat session-related plugin API.

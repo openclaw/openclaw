@@ -138,6 +138,7 @@ const workerModules = new Set([
 
   "src/agents/mcp-oauth-store.kernel.ts", // MCP OAuth write dispatcher and shared-state read worker only.
   "src/agents/harness/native-hook-relay-store.kernel.ts", // native-hook-relay-store.worker.ts owns runtime SQL; clear is test-only.
+  "src/agents/plugin-async-callback.store.ts", // SQL kernels: only plugin-async-callback.worker.ts calls them at runtime; host seams import types.
 
   "src/agents/subagents/completion/subagent-completion-queue-receipt.ts", // Completion mutation kernel runs through the session-delivery worker.
 

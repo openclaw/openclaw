@@ -74,7 +74,10 @@ describe("Code Mode nested TTS delivery", () => {
         waitTool: expectDefined(harness.tools[1], "Code Mode wait tool"),
         code: 'return await tts({ text: "Synthetic speech" });',
       });
-      expect(result.status).toBe("completed");
+      expect(
+        result.status,
+        `code=${String(result.code)}; phase=${String(result.failurePhase)}`,
+      ).toBe("completed");
       expect(synthesize).toHaveBeenCalledOnce();
       await finishReply(harness, finalText);
 

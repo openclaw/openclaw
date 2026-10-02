@@ -1,4 +1,5 @@
-// Recovers queued session deliveries after process crashes.
+// Recovers durable deliveries after crashes and retries live RAM deliveries.
+import { isMemorySessionDelivery } from "../agents/plugin-async-callback-memory.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   createDeliveryRecoveryCoordinator,
@@ -60,7 +61,7 @@ async function finalizeSessionDeliverySettlement(params: {
     await params.onSettled?.(params.entry, params.outcome, params.queueContext);
   } catch (error) {
     params.log.error(
-      `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
+      `session delivery: settled callback failed for ${params.entry.id}: ${isMemorySessionDelivery(params.entry.id) ? "incognito delivery failed" : String(error)}`,
     );
     return false;
   }
@@ -73,7 +74,7 @@ async function finalizeSessionDeliverySettlement(params: {
     return true;
   } catch (error) {
     params.log.error(
-      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${String(error)}`,
+      `session delivery: ${params.outcome} finalization failed for ${params.entry.id}: ${isMemorySessionDelivery(params.entry.id) ? "incognito delivery failed" : String(error)}`,
     );
     return false;
   }
@@ -178,7 +179,9 @@ async function processPendingSessionDelivery(opts: {
     ) {
       return { status: "deferred" };
     } else {
-      const errMsg = formatErrorMessage(err);
+      const errMsg = isMemorySessionDelivery(entry.id)
+        ? "Incognito callback delivery failed"
+        : formatErrorMessage(err);
       opts.onFailed?.(entry, errMsg);
       if (err instanceof SessionDeliveryRetryChargedError) {
         return { status: "failed" };

@@ -331,6 +331,7 @@ export function resolveOpenClawPluginToolsForOptions(params: {
   const assertRequestCurrent = params.options?.assertInvocationCurrent;
   const pluginTools = resolvePluginTools({
     ...pluginToolInputs,
+    runId: params.options?.runId,
     context: {
       ...pluginToolInputs.context,
       ...(delivery ? { delivery } : {}),

@@ -89,6 +89,51 @@ it("drains a dispatched enable before compensating failed verification", async (
   expect(actions).toEqual(["enable", "disable"]);
 });
 
+it.each([false, true])(
+  "retains compensation after forward cancellation but refuses a revoked owner (%s)",
+  async (revokeDuringInspection) => {
+    const forwardCancelled = new Error("Forward update was cancelled");
+    const recoveryRevoked = new Error("Original compensation executor was revoked");
+    const actions: string[] = [];
+    let current = true;
+    vi.mocked(resumeScheduledTaskAutoStartAfterUpdate).mockImplementationOnce(
+      async (_env, options) => {
+        await options?.beforeMutation?.();
+        actions.push("enable");
+        return true;
+      },
+    );
+    const recovery = createWindowsTaskAutoStartRecovery({
+      serviceEnv: {},
+      alreadySuspended: true,
+      assertCurrent: (phase) => {
+        if (phase !== "restore") {
+          throw forwardCancelled;
+        }
+        if (!current) {
+          throw recoveryRevoked;
+        }
+      },
+      assertCurrentService: async () => {
+        await Promise.resolve();
+        current = !revokeDuringInspection;
+      },
+    });
+    try {
+      expect(() => recovery.beginMutation()).toThrow(forwardCancelled);
+      if (revokeDuringInspection) {
+        await expect(recovery.restore(true)).rejects.toThrow(recoveryRevoked);
+        expect(actions).toEqual([]);
+      } else {
+        await recovery.restore(true);
+        expect(actions).toEqual(["enable"]);
+      }
+    } finally {
+      await recovery.complete(true);
+    }
+  },
+);
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 

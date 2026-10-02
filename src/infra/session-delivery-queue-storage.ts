@@ -1,4 +1,12 @@
 import path from "node:path";
+import {
+  isMemorySessionDelivery,
+  loadMemorySessionDelivery,
+  listMemorySessionDeliveries,
+  updateMemorySessionDelivery,
+  failMemorySessionDelivery,
+  removeMemorySessionDelivery,
+} from "../agents/plugin-async-callback-memory.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -15,7 +23,7 @@ import { bindDeliveryQueueEntry } from "./delivery-queue-sqlite-bound.js";
 import {
   prepareClaimedSessionDelivery,
   prepareSessionDelivery,
-  SESSION_DELIVERY_QUEUE_NAME,
+  resolveSessionDeliveryQueueName,
   SessionDeliveryAcknowledgementFinalizeError,
   SessionDeliveryAttemptStartError,
   SessionDeliveryDeadLetteredError,
@@ -142,7 +150,7 @@ function prepareEntry(
 ): ReturnType<typeof bindDeliveryQueueEntry> {
   // Preserve the JSON persistence boundary before the transport serializes its input.
   return bindDeliveryQueueEntry({
-    queueName: SESSION_DELIVERY_QUEUE_NAME,
+    queueName: resolveSessionDeliveryQueueName(entry.id),
     entry,
     ...(mode === "insert" ? { insertOnly: true } : { updatePendingOnly: true }),
   });
@@ -202,6 +210,9 @@ export async function deferSessionDelivery(
   delayMs: number,
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
+  if (isMemorySessionDelivery(id)) {
+    return updateMemorySessionDelivery(id, { availableAt: Date.now() + delayMs });
+  }
   return executeSessionDelivery(context, { type: "sessionDelivery.defer", input: { id, delayMs } });
 }
 
@@ -233,6 +244,11 @@ export async function markSessionDeliveryAttemptStarted(
   entry: QueuedSessionDelivery,
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
+  if (isMemorySessionDelivery(entry.id)) {
+    return updateMemorySessionDelivery(entry.id, {
+      deliveryStartedAt: entry.deliveryStartedAt ?? Date.now(),
+    });
+  }
   try {
     await executeSessionDelivery(context, {
       type: "sessionDelivery.markAttemptStarted",
@@ -254,6 +270,12 @@ export async function markSessionDeliverySettlement(
   outcome: SessionDeliverySettledOutcome,
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
+  if (isMemorySessionDelivery(entry.id)) {
+    return updateMemorySessionDelivery(entry.id, {
+      settlementOutcome: outcome,
+      ...(outcome === "recovered" ? { acknowledgedAt: entry.acknowledgedAt ?? Date.now() } : {}),
+    });
+  }
   try {
     await executeSessionDelivery(context, {
       type: "sessionDelivery.markSettlement",
@@ -277,6 +299,9 @@ export async function completeSessionDelivery(
   id: string,
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
+  if (isMemorySessionDelivery(id)) {
+    return removeMemorySessionDelivery(id);
+  }
   try {
     await executeSessionDelivery(context, { type: "sessionDelivery.complete", input: { id } });
   } catch (error) {
@@ -290,6 +315,9 @@ export async function failSessionDelivery(
   context: OpenClawStateWorkerContext,
   options?: { releaseAttemptOwnership?: boolean },
 ): Promise<void> {
+  if (isMemorySessionDelivery(id)) {
+    return failMemorySessionDelivery(id);
+  }
   return executeSessionDelivery(context, {
     type: "sessionDelivery.fail",
     input: { id, error, ...options },
@@ -300,6 +328,9 @@ export async function loadPendingSessionDelivery(
   id: string,
   context: OpenClawStateWorkerContext,
 ): Promise<QueuedSessionDelivery | null> {
+  if (isMemorySessionDelivery(id)) {
+    return loadMemorySessionDelivery(id);
+  }
   const entry = await executeSessionDelivery(context, {
     type: "sessionDelivery.load",
     input: { id },
@@ -316,12 +347,17 @@ export async function loadPendingSessionDeliveries(
     input: undefined,
   });
   context.admission.assertCurrent();
-  return entries;
+  return [...entries, ...listMemorySessionDeliveries()].toSorted(
+    (a, b) => a.enqueuedAt - b.enqueuedAt,
+  );
 }
 
 export async function moveSessionDeliveryToFailed(
   id: string,
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
+  if (isMemorySessionDelivery(id)) {
+    return removeMemorySessionDelivery(id);
+  }
   return executeSessionDelivery(context, { type: "sessionDelivery.moveToFailed", input: { id } });
 }

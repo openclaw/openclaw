@@ -9,6 +9,17 @@ import { generateSecureUuid } from "./secure-random.js";
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
 export const SESSION_DELIVERY_QUEUE_NAME = "session";
+// Old runtimes must not interpret child callbacks as ordinary restart wakes.
+export const NATIVE_CHILD_DELIVERY_QUEUE_NAME = "session-native-child";
+const NATIVE_CHILD_DELIVERY_ID_PREFIX = "native-child:";
+export function resolveSessionDeliveryQueueName(id: string): string {
+  if (id.startsWith("memory:")) {
+    throw new Error("RAM delivery cannot enter a persistent queue");
+  }
+  return id.startsWith(NATIVE_CHILD_DELIVERY_ID_PREFIX)
+    ? NATIVE_CHILD_DELIVERY_QUEUE_NAME
+    : SESSION_DELIVERY_QUEUE_NAME;
+}
 
 type SessionDeliveryOwnerReference = {
   kind: "subagent_completion";
@@ -79,6 +90,23 @@ export type QueuedSessionDeliveryPayload =
       suppressTextDelivery?: true;
       idempotencyKey?: string;
       owner?: SessionDeliveryOwnerReference;
+    } & SessionDeliveryRetryPolicy)
+  | ({
+      kind: "nativeChildFollowup";
+      sessionKey: string;
+      expectedSessionId: string;
+      pausedRunId: string;
+      pausedGeneration?: number;
+      pausedCreatedAt: number;
+      /** Immutable bound, independent of retry/claim availability leases. */
+      yieldDeadline?: number;
+      message: string;
+      idempotencyKey: string;
+      /** Host-only digest of the pending claim to terminalize at its deadline. */
+      callbackExpiryKey?: string;
+      /** Host-only receipt ownership; never a bearer secret or plugin-selected route. */
+      callbackKey?: string;
+      callbackSlot?: string;
     } & SessionDeliveryRetryPolicy);
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
@@ -104,7 +132,9 @@ export function prepareClaimedSessionDelivery(
   return {
     ...params,
     retainOnFailure: true,
-    id: buildEntryId(params.idempotencyKey),
+    id:
+      (params.kind === "nativeChildFollowup" ? NATIVE_CHILD_DELIVERY_ID_PREFIX : "") +
+      buildEntryId(params.idempotencyKey),
     enqueuedAt: now,
     retryCount: 0,
     availableAt: now + Math.max(0, initialAttemptLeaseMs),
@@ -148,7 +178,9 @@ export function prepareSessionDelivery(
   return {
     ...params,
     ...(params.completionRetention === "permanent" ? { retainOnFailure: true as const } : {}),
-    id: buildEntryId(params.idempotencyKey),
+    id:
+      (params.kind === "nativeChildFollowup" ? NATIVE_CHILD_DELIVERY_ID_PREFIX : "") +
+      buildEntryId(params.idempotencyKey),
     enqueuedAt: Date.now(),
     retryCount: 0,
   };

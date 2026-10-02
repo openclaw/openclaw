@@ -138,6 +138,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/harness/agent-end-side-effects.no-verbatim-capture.test.ts",
   "src/agents/mcp-oauth-provider.read.test.ts",
   "src/agents/mcp-oauth-store.test.ts",
+  "src/agents/plugin-async-callback.worker.test.ts",
   "src/worker/worker-fault-injection.cleanup.test.ts",
   "src/worker/worker.chat-abort.test.ts",
   "src/worker/worker.fault-injection.test.ts",

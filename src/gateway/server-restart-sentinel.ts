@@ -95,6 +95,14 @@ export const settleQueuedSessionDelivery: SettleSessionDeliveryFn = async (
   outcome,
   queueContext,
 ) => {
+  if (entry.kind === "nativeChildFollowup") {
+    const { settlePluginAsyncCallbackDelivery } =
+      await import("../agents/plugin-async-callback.js");
+    await settlePluginAsyncCallbackDelivery(entry, outcome, queueContext);
+  }
+  if (entry.id.startsWith("memory:")) {
+    return;
+  }
   await settleCorrelatedSubagentDelivery(entry, outcome, queueContext);
   await removeCronRunContinuationSessionIfIdle(entry.sessionKey, entry.id, queueContext);
 };
@@ -113,7 +121,9 @@ function enqueueRestartSentinelWake(
           ...(entry.route.accountId ? { accountId: entry.route.accountId } : {}),
           ...(entry.route.threadId ? { threadId: entry.route.threadId } : {}),
         }
-      : entry.deliveryContext;
+      : entry.kind === "nativeChildFollowup"
+        ? undefined
+        : entry.deliveryContext;
   const eventOptions = {
     sessionKey,
     // Recovered work keeps its ordinary turn budget when delivered by heartbeat.
@@ -138,6 +148,10 @@ export async function deliverQueuedSessionDelivery(params: {
 }) {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
+  if (queuedEntry.kind === "nativeChildFollowup") {
+    const { deliverNativeChildCallback } = await import("./session-plugin-callback-delivery.js");
+    return deliverNativeChildCallback({ ...params, entry: queuedEntry });
+  }
   if (queuedEntry.kind === "agentTurn" && queuedEntry.requesterBinding) {
     await deliverQueuedGeneratedMediaAgentTurn({
       ...params,

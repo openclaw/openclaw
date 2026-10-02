@@ -1,4 +1,10 @@
-// Process-local retry scheduler for the durable session delivery queue.
+// Process-local retry scheduler for session delivery queues.
+import {
+  startPluginCallbackMemory,
+  isMemorySessionDelivery,
+  loadMemorySessionDelivery,
+} from "../agents/plugin-async-callback-memory.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { computeBackoffMs } from "./delivery-recovery.shared.js";
@@ -110,7 +116,9 @@ async function runScheduledSessionDelivery(id: string, generation: number): Prom
       onSettled: activeRuntime.onSettled,
     });
   } catch (error) {
-    activeRuntime.log.error(`session delivery: runtime drain failed for ${id}: ${String(error)}`);
+    activeRuntime.log.error(
+      `session delivery: runtime drain failed for ${id}: ${isMemorySessionDelivery(id) ? "incognito delivery failed" : String(error)}`,
+    );
     if (runtime && generation === runtimeGeneration) {
       // The durable row may still be pending. Retry the exact drain so one
       // transient database error cannot orphan it until the next restart.
@@ -141,8 +149,23 @@ export function startSessionDeliveryRuntime(params: SessionDeliveryRuntime): () 
     pendingSchedules: new Set<Promise<void>>(),
   };
   runtime = activeRuntime;
+  const stopMemory = startPluginCallbackMemory((key, atMs, retire) => {
+    const job = activeRuntime.scheduler.schedule({
+      id: "callback-memory-expiry:" + key,
+      atMs,
+      run: retire,
+    });
+    return () => job.cancel();
+  });
+  const restartSignal = getGatewayRestartDrainSignal();
+  restartSignal.addEventListener("abort", stopMemory, { once: true });
+  if (restartSignal.aborted) {
+    stopMemory();
+  }
   let stopPromise: Promise<void> | undefined;
   return () => {
+    stopMemory();
+    restartSignal.removeEventListener("abort", stopMemory);
     if (runtimeGeneration === generation) {
       runtimeGeneration += 1;
       runtime = undefined;
@@ -235,4 +258,17 @@ export async function schedulePendingSessionDeliveries(): Promise<void> {
     activeRuntime.pendingSchedules.delete(settled.promise);
     settled.resolve();
   }
+}
+
+/** RAM entries reuse the bounded retry owner without a SQL scheduling read. */
+export function scheduleMemorySessionDelivery(id: string): boolean {
+  if (!isMemorySessionDelivery(id) || !runtime) {
+    return false;
+  }
+  const entry = loadMemorySessionDelivery(id);
+  if (!entry) {
+    return false;
+  }
+  armSessionDelivery(entry, runtimeGeneration);
+  return true;
 }

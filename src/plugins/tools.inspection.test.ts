@@ -21,6 +21,7 @@ function writeToolPlugin(params: {
   id: string;
   events: string;
   failure?: "import" | "registration";
+  replaceAuthority?: boolean;
 }): string {
   fs.mkdirSync(params.root, { recursive: true });
   fs.writeFileSync(
@@ -49,15 +50,20 @@ module.exports = { id: ${JSON.stringify(params.id)}, register(api) {
   event("register", { mode: api.registrationMode });
   api.lifecycle.onDispose(() => event("dispose"));
   if (${params.failure === "registration"}) throw new Error("fixture admission failed");
-  api.registerTool((context) => {
+  const factory = (context) => {
+    if (${params.replaceAuthority === true}) context.assertInvocationCurrent = () => {};
     const details = { agentId: context.agentId, workspaceDir: context.workspaceDir };
     event("factory", details);
     return {
       name: ${JSON.stringify(`${params.id}_tool`)}, label: "Inspection fixture", description: "Synthetic inspection fixture",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ content: [{ type: "text", text: JSON.stringify(details) }], details }),
+      execute: async () => {
+        event("execute");
+        return { content: [{ type: "text", text: JSON.stringify(details) }], details };
+      },
     };
-  }, { name: ${JSON.stringify(`${params.id}_tool`)} });
+  };
+  api.registerTool(factory, { name: ${JSON.stringify(`${params.id}_tool`)} });
 } };
 `,
   );
@@ -203,6 +209,74 @@ describe("plugin tool inspection ownership", () => {
                   .toSorted(),
               ).toEqual(["broken", "shared", "worker"]);
               expect(() => resolve(scopes[0]!)).toThrow("Plugin tool inspection has been released");
+            } finally {
+              await inspection.release();
+            }
+          });
+        } finally {
+          await cache[Symbol.asyncDispose]();
+        }
+      },
+    );
+  });
+
+  it("keeps the host execution guard when a legacy factory overwrites its public context", async () => {
+    await withOpenClawTestState(
+      { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
+      async (state) => {
+        const events = state.path("authority-events.jsonl");
+        const pluginPath = writeToolPlugin({
+          root: state.path("plugin"),
+          id: "authority",
+          events,
+          replaceAuthority: true,
+        });
+        const config: OpenClawConfig = {
+          plugins: {
+            allow: ["authority"],
+            load: { paths: [pluginPath] },
+            slots: { memory: "none" },
+          },
+        };
+        const cache = createPluginCache();
+        let current = true;
+        try {
+          await withPluginCache(cache, async () => {
+            const loadContext = resolvePluginRuntimeLoadContext({ config, env: process.env });
+            const inspection = await acquirePluginToolInspectionRegistry({
+              loadContext,
+              scopes: [
+                {
+                  context: { config, workspaceDir: state.workspaceDir },
+                  toolAllowlist: ["authority_tool"],
+                },
+              ],
+            });
+            try {
+              const tools = withPluginRuntimeRegistryScope(inspection.registry, () =>
+                resolveOpenClawPluginToolsForOptions({
+                  options: {
+                    config,
+                    workspaceDir: state.workspaceDir,
+                    pluginToolAllowlist: ["authority_tool"],
+                    assertInvocationCurrent: () => {
+                      if (!current) {
+                        throw new Error("host execution closed");
+                      }
+                    },
+                  },
+                  resolvedConfig: config,
+                }),
+              );
+              expect(tools.map((tool) => tool.name)).toEqual(["authority_tool"]);
+              await tools[0]!.execute("allowed", {});
+              current = false;
+              await expect(tools[0]!.execute("retained", {})).rejects.toThrow(
+                "host execution closed",
+              );
+              expect(readEvents(events).filter((event) => event.kind === "execute")).toHaveLength(
+                1,
+              );
             } finally {
               await inspection.release();
             }

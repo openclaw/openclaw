@@ -29,6 +29,7 @@ import { loadSessionEntry, resolveGatewayModelSupportsImages } from "./session-u
 import {
   installGatewayTestHooks,
   prepareGatewayReplyRuntimeForTest,
+  rpcReq,
   testState,
 } from "./test-helpers.js";
 import { getTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -148,6 +149,7 @@ export async function reach<T>(boundary: Promise<T>, request: Promise<Response>)
 
 export function installAgentAuthorityProofFixture() {
   let harness: GatewayServerHarness;
+  let publicClient: Awaited<ReturnType<GatewayServerHarness["openClient"]>> | undefined;
   let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
   installGatewayTestHooks({
     scope: "suite",
@@ -233,7 +235,7 @@ export function installAgentAuthorityProofFixture() {
   }
   type Caller = Awaited<ReturnType<typeof caller>>;
 
-  async function fixture(options?: { imageCapable?: true }) {
+  async function fixture(options?: { imageCapable?: true; publicSession?: true }) {
     // Pin current keyed roster and model through the shared fixture owner; these
     // scenarios must not depend on an implicit-main migration or catalog defaults.
     testState.agentsConfig = { entries: { main: {} } };
@@ -286,12 +288,31 @@ export function installAgentAuthorityProofFixture() {
     }
     const context = kernel.gatewayRequestContext;
     const runId = randomUUID();
-    const sessionKey = "agent:main:authority-proof:" + runId;
-    const sessionId = "proof-session-" + runId;
-    await sessionAccessor.upsertSessionEntryCore(
-      { agentId: "main", sessionKey },
-      { sessionId, updatedAt: Date.now() },
-    );
+    const sessionKey =
+      (options?.publicSession ? "agent:main:dashboard:" : "agent:main:authority-proof:") + runId;
+    let sessionId = "proof-session-" + runId;
+    if (options?.publicSession) {
+      publicClient ??= await harness.openClient({ scopes: ["operator.admin"] });
+      const created = await rpcReq<{ key: string; sessionId: string }>(
+        publicClient.ws,
+        "sessions.create",
+        { key: sessionKey, agentId: "main" },
+      );
+      expect(created).toMatchObject({ ok: true, payload: { key: sessionKey } });
+      if (!created.payload?.sessionId) {
+        throw new Error("public session creation did not return its session identity");
+      }
+      sessionId = created.payload.sessionId;
+      // Creation must publish a readable non-main row before the callback can own it.
+      await expect(
+        rpcReq(publicClient.ws, "sessions.describe", { key: sessionKey }),
+      ).resolves.toMatchObject({ ok: true, payload: { session: { key: sessionKey, sessionId } } });
+    } else {
+      await sessionAccessor.upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        { sessionId, updatedAt: Date.now() },
+      );
+    }
     const scope = {
       agentId: "main",
       sessionKey,

@@ -273,6 +273,7 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
 
 type PluginToolResolutionParams = {
   context: OpenClawPluginToolContext;
+  runId?: string;
   /** Host-owned turn fence for factories and retained tool callbacks. */
   assertInvocationCurrent?: () => void;
   ownerContinuation?: PluginToolOwnerContinuation;
@@ -598,9 +599,12 @@ function resolvePluginToolsFromRegistry(
         entry,
         registry: owner.registry,
         context: params.context,
+        runId: params.runId,
         assertInvocationCurrent: params.assertInvocationCurrent,
         ownerContinuation: params.ownerContinuation,
       });
+      // Capture host authority before plugin code can mutate the public context.
+      const assertFactoryCurrent = factoryContext.assertInvocationCurrent;
       // Catalog discovery may construct tools without an admitted run; their V2 execution stays fenced.
       params.assertInvocationCurrent?.();
       const factoryResult = factories.resolve(entry, factoryContext, declaredNames, owner.registry);
@@ -670,7 +674,7 @@ function resolvePluginToolsFromRegistry(
           clientCaps,
           entry,
           owner.registry,
-          factoryContext.assertInvocationCurrent,
+          assertFactoryCurrent,
         );
         if (!inspected) {
           continue;

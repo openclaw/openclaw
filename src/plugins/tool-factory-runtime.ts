@@ -8,6 +8,7 @@ import { runWithTrackedCancellation } from "../shared/async-work-scope.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
+import { withPluginToolCallbackInvocation } from "./tool-callback-invocation.js";
 import { copyPluginToolMeta } from "./tool-metadata.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -82,7 +83,13 @@ export function bindPluginToolCallbacks(
       invoke(() => {
         const [toolCallId, params, signal, onUpdate] = args;
         const execute = (executionSignal?: AbortSignal) =>
-          tool.execute(toolCallId, params, executionSignal, onUpdate);
+          withPluginToolCallbackInvocation(
+            entry.pluginId,
+            tool.name,
+            assertInvocationCurrent,
+            () => tool.execute(toolCallId, params, executionSignal, onUpdate),
+            executionSignal,
+          );
         return signal ? runWithTrackedCancellation(signal, execute) : execute();
       }),
     ...(prepare

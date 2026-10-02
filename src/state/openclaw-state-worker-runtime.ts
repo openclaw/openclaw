@@ -1,3 +1,5 @@
+import { isPluginAsyncCallbackCommand } from "../agents/plugin-async-callback.worker-contract.js";
+import { executePluginAsyncCallbackCommand } from "../agents/plugin-async-callback.worker.js";
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { writeSandboxRegistry } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
@@ -249,6 +251,9 @@ export function executeSharedStateCommand(
   }
   if (command.type === "sessionUpstream.current" || command.type === "sessionUpstream.settle") {
     return executeSessionUpstreamCommand(command, writeOptions);
+  }
+  if (isPluginAsyncCallbackCommand(command)) {
+    return executePluginAsyncCallbackCommand(command, writeOptions);
   }
   if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
     return executeSessionStateCommand(command, writeOptions);

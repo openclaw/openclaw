@@ -935,11 +935,17 @@ describe("Gateway admitted Discord transcript capture", () => {
             try {
               await releaseFixtureRegistry?.();
             } finally {
-              fixture?.restore();
-              socketFence.mockRestore();
-              isolated.cleanup();
-              env.restore();
-              phase("cleanup:done");
+              try {
+                // Model preparation owns real watchers even after the Gateway stops.
+                const { closeSkillsWatchers } = await import("../../src/skills/runtime/refresh.js");
+                await closeSkillsWatchers(true);
+              } finally {
+                fixture?.restore();
+                socketFence.mockRestore();
+                isolated.cleanup();
+                env.restore();
+                phase("cleanup:done");
+              }
             }
           }
         }
