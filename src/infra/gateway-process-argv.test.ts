@@ -133,7 +133,7 @@ describe("classifyOpenClawArgv", () => {
   it("recognizes Bun run after runtime flags without consuming a script named run twice", () => {
     const owned = scriptFixture("dist/index.js");
     const other = scriptFixture("run", "unrelated-service");
-    for (const flag of ["--watch", "--hot"]) {
+    for (const flag of ["--watch", "--hot", "--no-install"]) {
       expect(classifyOpenClawArgv(["bun", flag, "run", owned.script, "gateway"])).toEqual({
         kind: "openclaw",
         entryIndex: 3,

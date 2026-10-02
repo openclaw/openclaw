@@ -39,17 +39,26 @@ Bun remains usable as an optional package-script runner. The default package man
     To run onboarding under Bun and install the managed Gateway under Bun:
 
     ```sh
-    bun openclaw.mjs onboard --install-daemon --daemon-runtime bun
+    bun --no-install openclaw.mjs onboard --install-daemon --daemon-runtime bun
     ```
 
     For a managed node host, select Bun separately:
 
     ```sh
-    bun openclaw.mjs node install --runtime bun
+    bun --no-install openclaw.mjs node install --runtime bun
     ```
 
   </Step>
 </Steps>
+
+OpenClaw adds `--no-install` to its Bun service commands and owned runtime
+subprocesses, including plugin-integrated exec secret providers. Missing imports
+fail instead of fetching packages, even when the working directory's `bunfig.toml`
+sets `[install] auto = "fallback"`. Install required dependencies explicitly.
+Existing service definitions receive the flag during normal service reinstall or
+update; no state migration is needed. This does not control processes that
+third-party plugins launch themselves. Use `--no-install` when invoking stock Bun
+directly, as shown above.
 
 ## Bun-only global install
 

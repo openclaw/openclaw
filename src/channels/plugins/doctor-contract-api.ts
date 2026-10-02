@@ -1,6 +1,6 @@
 import type { LegacyConfigRule } from "../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import { loadOptionalBundledChannelPublicArtifact } from "./optional-public-artifact.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../../plugins/public-surface-loader.js";
 
 /**
  * Config returned after a bundled channel normalizes legacy compatibility state.
@@ -29,8 +29,10 @@ type BundledChannelDoctorContractApi = {
 export function loadBundledChannelDoctorContractApi(
   channelId: string,
 ): BundledChannelDoctorContractApi | undefined {
-  return loadOptionalBundledChannelPublicArtifact<BundledChannelDoctorContractApi>({
-    channelId,
-    artifactBasename: "doctor-contract-api.js",
-  });
+  return (
+    loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledChannelDoctorContractApi>({
+      dirName: channelId.trim(),
+      artifactCandidates: ["doctor-contract-api.js"],
+    }) ?? undefined
+  );
 }

@@ -40,6 +40,10 @@ import {
 } from "./session-transcript-archive-reader.js";
 import { sqliteMessageEventWithSeq } from "./session-transcript-entry-message.js";
 import type { ResolvedTranscriptReadTarget } from "./session-transcript-read-target.js";
+import {
+  prepareSessionTranscriptSummaryReader,
+  type SessionTranscriptSummaryQuery,
+} from "./session-transcript-summary.js";
 
 export type { SessionTranscriptReadScope };
 export type SessionTranscriptReadAccess = {
@@ -172,6 +176,22 @@ export type ReadSessionMessagesAroundIdResult = ReadRecentSessionMessagesResult 
   offset: number;
 };
 
+function visitProjectionMessages(
+  projection: CurrentTranscriptProjection,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  let count = 0;
+  const visible = resolveVisibleMessagePositions(projection);
+  for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
+    const message = asOptionalRecord(entry.event)?.message;
+    if (message !== undefined) {
+      visit(message, entry.seq);
+      count += 1;
+    }
+  }
+  return count;
+}
+
 /** Share pagination and archive policy while the caller owns acquisition and restoration. */
 export function createSessionTranscriptReader(access: SessionTranscriptReadAccess) {
   async function visitSessionMessagesAsync(
@@ -179,19 +199,22 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     visit: (message: unknown, seq: number) => void,
   ): Promise<number> {
     const target = await access.resolveTarget(scope);
-    return access.readSnapshot(target, (projection) => {
-      let count = 0;
-      const visible = resolveVisibleMessagePositions(projection);
-      for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
-        const message = asOptionalRecord(entry.event)?.message;
-        if (message !== undefined) {
-          visit(message, entry.seq);
-          count += 1;
-        }
-      }
-      return count;
-    });
+    return access.readSnapshot(target, (projection) => visitProjectionMessages(projection, visit));
   }
+
+  async function readSessionTranscriptSummaryAsync(
+    scope: SessionTranscriptReadScope,
+    query: SessionTranscriptSummaryQuery,
+  ) {
+    const select = await prepareSessionTranscriptSummaryReader(query);
+    const target = await access.resolveTarget(scope);
+    return access.readSnapshot(target, (projection) =>
+      select((visit) => {
+        visitProjectionMessages(projection, visit);
+      }),
+    );
+  }
+
   async function readSnapshotIfPresent<T>(
     target: ResolvedTranscriptReadTarget,
     read: (projection: CurrentTranscriptProjection) => T,
@@ -421,6 +444,7 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
 
   return {
     visitSessionMessagesAsync,
+    readSessionTranscriptSummaryAsync,
     readSessionMessageCountAsync,
     readSessionMessagesAsync,
     readSessionMessagesWithSourceAsync,
@@ -431,6 +455,9 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     readSessionMessagesAroundIdWithStatsAsync,
   };
 }
-export type SessionTranscriptReader = ReturnType<typeof createSessionTranscriptReader> & {
+export type SessionTranscriptReader = Omit<
+  ReturnType<typeof createSessionTranscriptReader>,
+  "visitSessionMessagesAsync" | "readSessionTranscriptSummaryAsync"
+> & {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
 };

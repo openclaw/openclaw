@@ -81,7 +81,7 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
       }),
     ).toEqual({
       command: "/usr/local/bin/bun",
-      args: [repoSourceEntry, ...commandArgs],
+      args: ["--no-install", repoSourceEntry, ...commandArgs],
       cwd: repoRoot,
     });
   });
@@ -118,24 +118,34 @@ describe("resolveCurrentOpenClawCliInvocation", () => {
     });
   });
 
-  it("uses the installed wrapper and canonical package cwd", async () => {
-    await withTempDir("openclaw-cli-invocation-", async (packageRoot) => {
-      await writeFile(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
-      const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "tui", "index.js")).href;
-      expect(
-        resolveCurrentOpenClawCliInvocation(commandArgs, {
-          argv1: path.join(packageRoot, "bin", "host.mjs"),
-          cwd: path.join(packageRoot, "state"),
-          execPath: "/usr/bin/node",
-          moduleUrl,
-        }),
-      ).toEqual({
-        command: "/usr/bin/node",
-        args: [path.join(packageRoot, "openclaw.mjs"), ...commandArgs],
-        cwd: packageRoot,
+  it.each(["/usr/bin/node", "/usr/bin/bun"])(
+    "uses the installed wrapper under %s and canonical package cwd",
+    async (execPath) => {
+      await withTempDir("openclaw-cli-invocation-", async (packageRoot) => {
+        await writeFile(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw" }),
+        );
+        const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "tui", "index.js")).href;
+        expect(
+          resolveCurrentOpenClawCliInvocation(commandArgs, {
+            argv1: path.join(packageRoot, "bin", "host.mjs"),
+            cwd: path.join(packageRoot, "state"),
+            execPath,
+            moduleUrl,
+          }),
+        ).toEqual({
+          command: execPath,
+          args: [
+            ...(execPath.endsWith("/bun") ? ["--no-install"] : []),
+            path.join(packageRoot, "openclaw.mjs"),
+            ...commandArgs,
+          ],
+          cwd: packageRoot,
+        });
       });
-    });
-  });
+    },
+  );
 
   it("does not preserve a foreign package entry", () => {
     expect(

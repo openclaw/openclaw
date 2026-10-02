@@ -346,7 +346,7 @@ export function createCodexAppServerConfig({
         defaultPolicy?.approvalsReviewer ??
         (policyMode === "guardian" ? "auto_review" : "user"),
       ...(serviceTier ? { serviceTier } : {}),
-      enableUltrafast: config.enableUltrafast === true,
+      enableUltrafast: config.enableUltrafast !== false,
       ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
     };
   }

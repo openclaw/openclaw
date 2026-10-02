@@ -238,6 +238,7 @@ export async function prepareAgentRunDispatch(
     if (params.resolvedSessionKey) {
       claimAgentRunContext(params.runId, {
         ...(params.suppressVisibleSessionEffects ? {} : { sessionKey: params.resolvedSessionKey }),
+        agentId: activeRunAbort.entry.agentId,
         isControlUiVisible: controlUiVisible,
         ...(coordination ? { projectSessionMessages: false, projectSessionActive: false } : {}),
         lifecycleGeneration: params.lifecycleGeneration,

@@ -28,6 +28,10 @@ import {
   resolveTranscriptReadTarget,
   toTranscriptReadScope,
 } from "./session-transcript-read-target.js";
+import type {
+  SessionTranscriptSummaryQuery,
+  SessionTranscriptSummaryResult,
+} from "./session-transcript-summary.js";
 
 export type { SessionTranscriptReadScope } from "./session-transcript-read-kernel.js";
 export { capArrayByJsonBytes } from "./session-utils.fs.js";
@@ -45,8 +49,6 @@ const sessionTranscriptReader = createSessionTranscriptReader({
     );
   },
 });
-// Callback consumers retain their native snapshot; artifact selection uses the typed worker below.
-export const { visitSessionMessagesAsync } = sessionTranscriptReader;
 
 function usesProcessHeldTranscript(scope: SessionTranscriptReadScope): boolean {
   // Incognito SQLite belongs to this process and cannot be reopened in a worker.
@@ -149,6 +151,24 @@ export const readSessionMessagesAroundIdWithStatsAsync = createHistoryPageReader
   sessionTranscriptReader.readSessionMessagesAroundIdWithStatsAsync,
   (read, target, options) => read({ kind: "around-id", params: { target, options } }),
 );
+
+export function readSessionTranscriptSummaryAsync<Query extends SessionTranscriptSummaryQuery>(
+  scope: SessionTranscriptReadScope,
+  query: Query,
+): Promise<Extract<SessionTranscriptSummaryResult, { kind: Query["kind"] }>>;
+export async function readSessionTranscriptSummaryAsync(
+  scope: SessionTranscriptReadScope,
+  inputQuery: SessionTranscriptSummaryQuery,
+): Promise<SessionTranscriptSummaryResult> {
+  const target = captureHistoryReadScope(scope);
+  const query = structuredClone(inputQuery);
+  if (usesProcessHeldTranscript(target)) {
+    return sessionTranscriptReader.readSessionTranscriptSummaryAsync(target, query);
+  }
+  const { readSessionHistoryPageInWorker } =
+    await import("../config/sessions/session-history-worker-runtime.js");
+  return readSessionHistoryPageInWorker({ kind: "summary", params: { target, query } });
+}
 
 export function readSessionArtifacts<Query extends SessionArtifactReadQuery>(
   scope: SessionTranscriptReadScope,
