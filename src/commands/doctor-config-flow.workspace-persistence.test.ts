@@ -37,6 +37,8 @@ describe("Doctor workspace persistence", () => {
               systemPromptOverride: "custom prompt",
               silentReplyRewrite: true,
               silentReply: { direct: true },
+              model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+              subagents: { model: { primary: "openai/gpt-5.6-sol", timeoutMs: 10_000 } },
             },
             entries: {
               ops: {
@@ -45,6 +47,8 @@ describe("Doctor workspace persistence", () => {
                 agentRuntime: {},
                 sandbox: { perSession: true },
                 memorySearch: { store: { path: "old.sqlite" } },
+                model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+                subagents: { model: { primary: "openai/gpt-5.6-sol", timeoutMs: 10_000 } },
               },
             },
           },
@@ -75,6 +79,10 @@ describe("Doctor workspace persistence", () => {
           "agentRuntime",
           "sandbox.perSession",
           "memorySearch.store.path",
+          "agents.defaults.model.timeoutMs",
+          "agents.defaults.subagents.model.timeoutMs",
+          "agents.entries.ops.model.timeoutMs",
+          "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
           "allowPrivateNetwork",
@@ -164,7 +172,7 @@ describe("Doctor workspace persistence", () => {
                 memorySearch: { enabled: false, extraPaths: [path.join(home, "notes")] },
                 sandbox: { scope: "agent", browser: { enableNoVnc: true } },
                 embeddedAgent: { executionContract: "default" },
-                model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+                model: { primary: "openai/gpt-5.6-sol" },
               },
               research: { memory: { search: { provider: "auto" } } },
             };

@@ -46,11 +46,8 @@ describe("sessions_yield orchestration", () => {
       const gateway = await import("../../gateway/call.js");
       const requesterSettlement =
         await import("../subagents/announce/subagent-announce.requester-settle-wake.js");
-      const { subagentRuns } = await import("../subagents/registry/subagent-registry-memory.js");
       const { subscribeSubagentRunChanges } =
         await import("../subagents/registry/subagent-registry-publication.js");
-      const { persistSubagentRunsToDiskOrThrow } =
-        await import("../subagents/registry/subagent-registry-state.js");
       const { loadSubagentRegistryFromSqlite } =
         await import("../subagents/registry/subagent-registry.store.sqlite.js");
       const {
@@ -90,7 +87,7 @@ describe("sessions_yield orchestration", () => {
           settlementEntered.resolve();
           return pending;
         });
-      registry.resetSubagentRegistryForTests({ persist: false });
+      await registry.resetSubagentRegistryForTests({ persist: false });
       await registry.initSubagentRegistry();
       const child = createSubagentRunRecord({
         runId: `cleanup-child-${owner}`,
@@ -114,8 +111,7 @@ describe("sessions_yield orchestration", () => {
         agentId: params.agentId,
         defaultSessionId: params.sessionId,
       });
-      registry.addSubagentRunForTests(child);
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
+      await registry.addSubagentRunForTests(child);
       const persisted = vi.fn(() => loadSubagentRegistryFromSqlite().get(child.runId));
       const unsubscribe = subscribeSubagentRunChanges("persistence", persisted);
       const createTranscript = transcriptOwner.createAssistantErrorTranscript;
@@ -212,7 +208,7 @@ describe("sessions_yield orchestration", () => {
           factorySpy.mockRestore();
           admission.close();
           replacement.close();
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
           settlementSpy.mockRestore();
           gatewaySpy.mockRestore();
           deliveryTesting.setDepsForTest();
@@ -420,9 +416,9 @@ describe("sessions_yield orchestration", () => {
           sessionKey: "agent:main:subagent:message-wait",
           runId: "message-wait-run",
         };
-        registry.resetSubagentRegistryForTests({ persist: false });
+        await registry.resetSubagentRegistryForTests({ persist: false });
         if (registration !== "unregistered") {
-          registry.addSubagentRunForTests(
+          await registry.addSubagentRunForTests(
             createSubagentRunRecord({
               runId: params.runId,
               childSessionKey: params.sessionKey,
@@ -480,7 +476,7 @@ describe("sessions_yield orchestration", () => {
                 ],
           );
         } finally {
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
         }
       },
     );

@@ -113,8 +113,13 @@ export function createCollectorLaunchCallbacks(params: {
       params.recordParticipant();
       try {
         const started = gatewayContextResolver
-          ? startQueuedSubagentRun(childRunId, gatewayRunId, undefined, gatewayContextResolver)
-          : startQueuedSubagentRun(childRunId, gatewayRunId);
+          ? await startQueuedSubagentRun(
+              childRunId,
+              gatewayRunId,
+              undefined,
+              gatewayContextResolver,
+            )
+          : await startQueuedSubagentRun(childRunId, gatewayRunId);
         if (!started) {
           throw new Error("collector registry row could not transition from queued to running");
         }
@@ -141,7 +146,7 @@ export function createCollectorLaunchCallbacks(params: {
       ),
     ]);
   let cleanupAttempt: ReturnType<typeof cleanupOnce> | undefined;
-  const publishCleanupCompletion = ([contextRollback, sessionCleanup]: Awaited<
+  const publishCleanupCompletion = async ([contextRollback, sessionCleanup]: Awaited<
     ReturnType<typeof cleanupOnce>
   >) => {
     const cleanupComplete =
@@ -156,7 +161,7 @@ export function createCollectorLaunchCallbacks(params: {
         reason: "delete",
         parentSessionKey: params.requesterSessionKey,
       });
-      completeCollectorLaunchCleanup(childRunId);
+      await completeCollectorLaunchCleanup(childRunId);
     }
   };
   const settleLaunchFailure = async (error: unknown) => {
@@ -202,7 +207,7 @@ export function createCollectorLaunchCallbacks(params: {
           return;
         }
         await retrySubagentCleanup(async () => {
-          settleFailedQueuedSubagentLaunch(childRunId, launchError);
+          await settleFailedQueuedSubagentLaunch(childRunId, launchError);
           return true;
         });
       };
@@ -215,7 +220,7 @@ export function createCollectorLaunchCallbacks(params: {
           await settleFailure();
         }
         if (cleanupAttempt) {
-          publishCleanupCompletion(await cleanupAttempt);
+          await publishCleanupCompletion(await cleanupAttempt);
         }
         releaseAuthority();
         return true;
@@ -224,7 +229,7 @@ export function createCollectorLaunchCallbacks(params: {
       if (dispatchAttempted || !registrationScope) {
         await settleFailure();
       }
-      publishCleanupCompletion(cleanup);
+      await publishCleanupCompletion(cleanup);
       releaseAuthority();
       return true;
     }, "subagents:spawn-cleanup");

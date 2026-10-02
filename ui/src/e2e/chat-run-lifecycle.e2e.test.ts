@@ -91,10 +91,15 @@ suite.define(() => {
     const failedAlert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
     await failedAlert.waitFor();
     await failedAlert
-      .locator(".chat-error__content > strong")
-      .getByText(renderedDiagnostic)
+      .locator("summary strong")
+      .getByText("Couldn't finish this reply. Check the conversation before trying again.")
       .waitFor();
-    expect(await failedAlert.locator("details").count()).toBe(0);
+    expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
+    await failedAlert.locator("summary").click();
+    await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
+    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
+      renderedDiagnostic,
+    );
     expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 

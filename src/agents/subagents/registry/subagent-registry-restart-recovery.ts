@@ -11,6 +11,7 @@ import {
   getSubagentRunsForRequesterSession,
   getSubagentRunsForChildSession,
 } from "./subagent-registry-memory.js";
+import { SubagentRegistryMutationRejectedError } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunByChildSessionKeyFromRuns } from "./subagent-registry-queries.js";
 import {
   getRestartRecoveryReplayError,
@@ -24,6 +25,7 @@ import type {
 } from "./subagent-registry-restart-recovery-types.js";
 import type { SubagentSessionEffects } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
 
 export type { RestartRecoveryParams, RestartRecoveryResult };
@@ -32,6 +34,7 @@ export async function recoverInterruptedSubagentRow(
   params: RestartRecoveryParams,
 ): Promise<RestartRecoveryResult> {
   const { entry, runId } = params;
+  let expectedObservation = entry;
   const childSessionKey = entry.childSessionKey.trim();
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
   const isGatewayCurrent = () =>
@@ -39,12 +42,12 @@ export async function recoverInterruptedSubagentRow(
     params.isGatewayCurrent?.() !== false;
   const isCurrent = () =>
     isGatewayCurrent() &&
-    params.isCurrent(runId, entry) &&
-    entry.pauseReason !== "sessions_yield" &&
-    entry.suppressAnnounceReason !== "steer-restart" &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
-    entry.execution.status !== "queued";
+    params.isCurrent(runId, expectedObservation) &&
+    expectedObservation.pauseReason !== "sessions_yield" &&
+    expectedObservation.suppressAnnounceReason !== "steer-restart" &&
+    !expectedObservation.killIntent &&
+    !expectedObservation.killReconciliation &&
+    expectedObservation.execution.status !== "queued";
   if (!childSessionKey || !isCurrent()) {
     return { status: "ignored" };
   }
@@ -267,6 +270,17 @@ export async function recoverInterruptedSubagentRow(
           isRecoveryHostCurrent() &&
           (replayTerminal || (await sessionEffects.isCurrent())) &&
           isRecoveryHostCurrent(),
+        onPublished: (published) => {
+          if (
+            !isSameSubagentRunOwner(published, entry) ||
+            published.execution.status !== "terminal"
+          ) {
+            throw new SubagentRegistryMutationRejectedError(
+              "Subagent recovery publication changed its execution owner",
+            );
+          }
+          expectedObservation = published;
+        },
       },
       sessionEffects,
       error:

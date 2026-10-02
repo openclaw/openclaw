@@ -2,7 +2,10 @@ import type {
   SandboxRegistryInsert,
   SandboxRegistryWrite,
 } from "../agents/sandbox/registry.kernel.js";
-import type { SubagentRegistryWrite } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
@@ -25,7 +28,6 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
-import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -149,7 +151,10 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       input: SecretStoreConfigRefWrite;
       output: { name: string };
     };
-    "subagents.persistChanges": { input: SubagentRegistryWrite; output: { writeId: string } };
+    "subagents.persistChanges": {
+      input: SubagentRegistryWrite;
+      output: SubagentRegistryWriteReceipt;
+    };
     "sessionUpstream.listWatched": { input: undefined; output: SessionUpstreamLink[] };
     "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
     "sessionGroups.mutate": {
@@ -172,14 +177,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         expected: ConfigHealthEntryBasis | null | undefined;
         updatedAtMs: number;
       };
-      output: boolean;
-    };
-    "diagnostic.register": {
-      input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
-      output: void;
-    };
-    "config.snapshot.upsert": {
-      input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null };
       output: boolean;
     };
   };

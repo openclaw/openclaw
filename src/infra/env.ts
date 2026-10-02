@@ -17,7 +17,6 @@ const ENV_NORMALIZATION_KEY_GROUPS = [["ZAI_API_KEY", "Z_AI_API_KEY"]] as const;
 type AcceptedEnvOption = {
   key: string;
   description: string;
-  value?: string;
   redact?: boolean;
 };
 
@@ -40,7 +39,7 @@ export function logAcceptedEnvOption(option: AcceptedEnvOption): void {
   if (loggedEnv.has(option.key)) {
     return;
   }
-  const rawValue = option.value ?? process.env[option.key];
+  const rawValue = process.env[option.key];
   if (!rawValue || !rawValue.trim()) {
     return;
   }

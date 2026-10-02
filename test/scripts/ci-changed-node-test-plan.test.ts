@@ -527,6 +527,31 @@ describe("CI changed Node test plan", () => {
     }
   });
 
+  it.each([
+    "src/agents/model-fallback.reply-entry.e2e.test.ts",
+    "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts",
+    "src/agents/bash-tools.process.e2e.test.ts",
+  ])("prepares the runtime for the executed E2E route of %s", (target) => {
+    const shards = expectDefined(
+      createChangedNodeTestShardsWithSmoke([target], { selectedTestTargets: [target] }),
+      "changed E2E plan",
+    );
+    expect(selectedFiles(shards)).toEqual([target]);
+    const row = expectDefined(
+      shards.find((shard) => shard.targets?.includes(target)),
+      "target row",
+    );
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(row.targets),
+    });
+    expect(plans).toHaveLength(1);
+    expect(plans[0]).toMatchObject({ kind: "target", target });
+    expect(buildVitestRunPlans([target]).map((plan) => plan.config)).toContain(
+      "test/vitest/vitest.e2e.config.ts",
+    );
+    expect(row.pretestBuildMode).toBe("private-qa");
+  });
+
   it("retains selected compact coverage when time splitting exceeds the non-dist matrix cap", async () => {
     const targets = [
       "test/scripts/ci-node-test-plan.test.ts",

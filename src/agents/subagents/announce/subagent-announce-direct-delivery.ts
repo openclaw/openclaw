@@ -2,6 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import {
@@ -378,7 +379,7 @@ export async function sendSubagentAnnounceDirectly(
         : undefined;
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
-    const directAgentParams: Record<string, unknown> = {
+    let directAgentParams: Record<string, unknown> = {
       ...(requesterSessionBound
         ? {
             expectedExistingSessionId: params.completionRequesterSessionId,
@@ -406,6 +407,14 @@ export async function sendSubagentAnnounceDirectly(
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
+    if (requesterSessionBound && params.completionRequesterSessionId) {
+      directAgentParams = bindInProcessSessionRun(directAgentParams, {
+        sessionKey: canonicalRequesterSessionKey,
+        sessionId: params.completionRequesterSessionId,
+        lifecycleRevision: params.completionRequesterLifecycleRevision ?? null,
+        runId: params.directIdempotencyKey,
+      });
+    }
     const classifyResponse = createDirectAnnounceResponseClassifier({
       params,
       parentOnly,

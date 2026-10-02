@@ -377,7 +377,7 @@ describe("visible session placement and authority", () => {
       }
       return { runId: "cloud-run" };
     });
-    const registerRun = vi.fn(() => {
+    const registerRun = vi.fn(async () => {
       if (failure === "registration-failed") {
         throw new Error("registration unavailable");
       }

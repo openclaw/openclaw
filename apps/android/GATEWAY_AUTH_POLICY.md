@@ -70,6 +70,14 @@ selects fresh bootstrap before a stored device token. The wire regression is
 `connect_prefersFreshBootstrapTokenOverStoredDeviceToken` in
 [`GatewaySessionInvokeTest.kt`](app/src/test/java/ai/openclaw/app/gateway/GatewaySessionInvokeTest.kt).
 
+Stored-device-token retry requires `canRetryWithDeviceToken: true` from the
+Gateway, plus the existing endpoint trust, token-presence, and retry-budget
+checks. All supported July 2026 and newer Gateways supply this decision.
+Missing or false permission cannot be overridden by a mismatch code or retry
+advice, including after a manual reconnect. The two-connect wire regression is
+`connect_requiresExplicitDeviceTokenRetryPermission`; its allowed fixture uses
+the `v2026.7.1-beta.1` rejection shape.
+
 [`DeviceAuthStore.kt`](app/src/main/java/ai/openclaw/app/gateway/DeviceAuthStore.kt)
 commits each role token and its metadata together and returns the actual durable
 write result. The session records the final write result for each role in this
@@ -130,7 +138,7 @@ would change other Android authentication paths, outside this fix's scope:
   Swift preserves explicitly requested scopes and suppresses stored-token retry
   for scope upgrades beyond a nonempty stored grant.
 - Android's retry trust includes local cleartext hosts and existing TLS pins,
-  and accepts the legacy `retry_with_device_token` advice. Swift uses strict
+  and requires the boolean retry permission. Swift uses strict
   loopback or a trusted WSS session, plus the boolean hint or mismatch code.
 - Android keeps retrying a bootstrap node request with no scopes when the
   Gateway reports `not-paired` and explicitly advises waiting. Swift's channel

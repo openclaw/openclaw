@@ -13,19 +13,20 @@ import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
-import { normalizeSubagentRunState } from "../agents/subagents/registry/subagent-delivery-state.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "../agents/subagents/registry/subagent-registry-queued-registration.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
   executeOpenClawStateWorker,
   inspectOpenClawStateDatabase,
@@ -747,25 +748,65 @@ it("commits captured registry rows without host SQL", async () => {
       resultText: "captured result 🦞\n".repeat(256),
       terminalReply,
     };
-    const expected = [queued, terminal].map((entry) =>
-      bindSubagentRunRecord(normalizeSubagentRunState(structuredClone(entry))),
-    );
+    const expected = [queued, terminal].map(bindSubagentRunRecord);
     const capturedContext = captureOpenClawStateWorkerContext();
-    const sql = observeMainThreadSql();
-    try {
-      const write = persistSubagentRunsToDiskAsyncOrThrow(
-        new Map([queued, terminal].map((entry) => [entry.runId, entry])),
-        [queued.runId, terminal.runId, removed.runId],
-        { context: capturedContext },
+    const runs = new Map([[removed.runId, removed]]);
+    const captured = createDeferredCore();
+    const release = createDeferredCore();
+    const runWorker = stateWorker.runOpenClawStateWorkerOperation;
+    const transport = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((writeContext, operation, options) =>
+        runWorker(
+          writeContext,
+          (scope) =>
+            operation({
+              ...scope,
+              execute: async (command) => {
+                if (command.type === "subagents.persistChanges") {
+                  captured.resolve();
+                  await release.promise;
+                }
+                return scope.execute(command);
+              },
+            }),
+          options,
+        ),
       );
+    const sql = observeMainThreadSql();
+    const write = mutateSubagentRuns(
+      [queued.runId, terminal.runId, removed.runId],
+      () => ({
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord | null>([
+          [queued.runId, queued],
+          [terminal.runId, terminal],
+          [removed.runId, null],
+        ]),
+      }),
+      { runs, context: capturedContext },
+    );
+    void write.catch(() => {});
+    try {
+      expect(
+        await Promise.race([captured.promise.then(() => "captured"), write.then(() => "settled")]),
+      ).toBe("captured");
       queued.task = "mutated after capture";
       queued.queuedLaunch.request.task = "mutated descriptor";
       terminal.completion.resultText = "mutated result";
       terminalReply.text = "mutated reply";
+      expect(runs.has(queued.runId)).toBe(false);
+      expect(runs.has(removed.runId)).toBe(true);
+      release.resolve();
       await write;
       sql.expectIdle();
+      expect(runs.get(queued.runId)?.task).toBe(capturedTask);
+      expect(runs.has(removed.runId)).toBe(false);
     } finally {
+      release.resolve();
+      await write.catch(() => {});
       sql.restore();
+      transport.mockRestore();
       await closeOpenClawStateDatabaseAsync();
     }
     const stored = loadSubagentRegistryFromSqlite();
@@ -800,19 +841,26 @@ it("awaits the queued registration caller's two writes without host SQL", async 
     const entry = createRun("queued-caller");
     entry.requesterStorePath = "synthetic-requester-store";
     entry.controllerStorePath = "synthetic-controller-store";
-    entry.queuedLaunch = {
+    const descriptor = {
       request: { sessionKey: entry.childSessionKey },
       timeoutMs: 100,
       schedulerGroupKey: "synthetic-group",
       maxConcurrent: 1,
     };
-    const descriptor = structuredClone(entry.queuedLaunch);
     const capturedContext = captureOpenClawStateWorkerContext();
-    const runs = new Map([[entry.runId, entry]]);
+    const runs = new Map<string, SubagentRunRecord>();
     saveSubagentRegistryToSqlite(new Map());
     const activate = vi.fn();
     const sql = observeMainThreadSql();
     try {
+      await mutateSubagentRuns(
+        [entry.runId],
+        () => ({
+          value: undefined,
+          postimages: new Map([[entry.runId, entry]]),
+        }),
+        { runs, context: capturedContext },
+      );
       const registration = registerRequiredQueuedSubagent({
         context: capturedContext,
         entry,
@@ -820,22 +868,16 @@ it("awaits the queued registration caller's two writes without host SQL", async 
           runs,
           getRunsForChildSession: () => runs.values(),
           getRuntimeConfig: () => ({}),
-          persistAsyncOrThrow: (writeContext, publication, ...runIds) =>
-            persistSubagentRunsToDiskAsyncOrThrow(runs, runIds, {
-              context: writeContext,
-              ...publication,
-            }),
         },
-        originals: new Map(),
-        bindReservation: () => {},
+        queuedLaunch: descriptor,
         activate,
       });
-      expect(entry.queuedLaunch).toBeUndefined();
+      expect(runs.get(entry.runId)?.queuedLaunch).toBeUndefined();
       expect(activate).not.toHaveBeenCalled();
       await registration;
       sql.expectIdle();
       expect(activate).toHaveBeenCalledOnce();
-      expect(entry.queuedLaunch).toEqual(descriptor);
+      expect(runs.get(entry.runId)?.queuedLaunch).toEqual(descriptor);
     } finally {
       sql.restore();
       await closeOpenClawStateDatabaseAsync();

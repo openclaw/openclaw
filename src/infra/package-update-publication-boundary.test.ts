@@ -83,6 +83,23 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
     fixtures.lifetime.run(async () => {
       const f = await createPackageSwapFixture(root);
       await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      fs.writeFileSync(path.join(f.packageRoot, "previous.payload"), "previous bytes");
+      fs.writeFileSync(
+        path.join(f.params.stage.packageRoot, "candidate.payload"),
+        "candidate bytes",
+      );
+      const reads = { previous: 0, candidate: 0 };
+      const open = fsp.open.bind(fsp);
+      vi.spyOn(fsp, "open").mockImplementation((...args) => {
+        const name = path.basename(String(args[0]));
+        if (name === "previous.payload") {
+          reads.previous++;
+        }
+        if (name === "candidate.payload") {
+          reads.candidate++;
+        }
+        return open(...args);
+      });
       await withUpdateCommandExecutor(randomUUID(), async (executor) => {
         const fence = await executor.enter(f.packageRoot);
         let transaction: PackageUpdateTransaction | undefined;
@@ -105,6 +122,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           { name: "openclaw", identity: packageActivationIdentity(f.launcher, "launcher") },
         ]);
         expect(transaction).toBeDefined();
+        expect(reads).toEqual({ previous: 2, candidate: 4 });
         if (retirement === "replacement") {
           const obsolete = path.join(anchor, "previous");
           const retained = path.join(root, "retained-previous");
@@ -133,7 +151,10 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
             name: "previous",
           });
         } else {
+          // Once the candidate is verified, obsolete backup bytes are not rollback input.
+          fs.writeFileSync(path.join(anchor, "previous", "previous.payload"), "obsolete bytes");
           await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+          expect(reads).toEqual({ previous: 2, candidate: 5 });
           expect(fs.existsSync(anchor)).toBe(false);
           // A completed transaction stays cached even after its one-slot receipt
           // is reused by another publication under the same executor.
@@ -164,6 +185,91 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           ).toBe("3.0.0");
         }
         expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+      });
+    }),
+);
+
+it.skipIf(process.platform === "win32").each(["activation", "publication", "retirement"] as const)(
+  "refuses metadata-preserving candidate byte changes at %s",
+  (boundary) =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const previousIdentity = packageActivationIdentity(f.packageRoot, true);
+      const name = "mapped.payload";
+      const staged = path.join(f.params.stage.packageRoot, name);
+      fs.writeFileSync(staged, "previous bytes");
+      const unchanged = fs.lstatSync(staged, { bigint: true });
+      // A Linux writable mmap can change bytes without changing any stat field.
+      // Reproduce those filesystem observations without a native mmap dependency.
+      const lstat = fsp.lstat.bind(fsp);
+      vi.spyOn(fsp, "lstat").mockImplementation((...args) =>
+        path.basename(String(args[0])) === name && args[1]?.bigint
+          ? Promise.resolve(unchanged)
+          : lstat(...args),
+      );
+      const open = fsp.open.bind(fsp);
+      vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        if (path.basename(String(args[0])) === name) {
+          vi.spyOn(handle, "stat").mockResolvedValue(unchanged);
+        }
+        return handle;
+      });
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const change = (directory: string) =>
+        fs.writeFileSync(path.join(directory, name), "modified bytes");
+      const rename = fsp.rename.bind(fsp);
+      vi.spyOn(fsp, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (
+          boundary === "publication" &&
+          from === path.join(anchor, "candidate") &&
+          to === f.packageRoot
+        ) {
+          change(f.packageRoot);
+        }
+      });
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+          beforeActivate: async () => {
+            if (boundary === "activation") {
+              change(path.join(anchor, "candidate"));
+            }
+          },
+          onTransaction: (issued) => {
+            transaction = issued;
+          },
+        });
+        if (boundary === "retirement") {
+          expect(result.status).toBe("committed");
+          change(f.packageRoot);
+          await expect(
+            transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+          ).rejects.toThrow("Package publication object changed");
+        } else {
+          expect(result.status).toBe("failed");
+          expect(result.step.stderrTail).toContain("Package publication object changed");
+        }
+        if (boundary === "activation") {
+          expect(packageActivationIdentity(f.packageRoot, true)).toBe(previousIdentity);
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          expect(fs.existsSync(path.join(anchor, "previous"))).toBe(false);
+        }
+        const previous = fs.existsSync(path.join(anchor, "previous"))
+          ? path.join(anchor, "previous")
+          : f.packageRoot;
+        expect(fs.readFileSync(path.join(previous, "package.json"), "utf8")).toContain(
+          '"version":"1.0.0"',
+        );
+        const candidate =
+          boundary === "activation" ? path.join(anchor, "candidate") : f.packageRoot;
+        expect(fs.readFileSync(path.join(candidate, name), "utf8")).toBe("modified bytes");
+        expect(await fsp.lstat(path.join(candidate, name), { bigint: true })).toEqual(unchanged);
       });
     }),
 );

@@ -1,22 +1,54 @@
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  compareSubagentRunGeneration,
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "./subagent-run-generation.js";
 
 export async function retireSupersededSubagentRun(params: {
   runId: string;
   entry: SubagentRunRecord;
   runs: Map<string, SubagentRunRecord>;
   clearPendingLifecycleError: (runId: string) => void;
-  persistOrThrow: (...runIds: string[]) => void;
+  isCurrent?: (current: SubagentRunRecord) => boolean;
 }): Promise<void> {
-  if (params.runs.get(params.runId) !== params.entry) {
+  const transcriptTarget = params.entry.execution.transcriptTarget;
+  const canRetire = (current: SubagentRunRecord | undefined) =>
+    current !== undefined &&
+    isSameSubagentRunOwner(current, params.entry) &&
+    current.attachmentId === params.entry.attachmentId &&
+    current.cleanup === params.entry.cleanup &&
+    current.retainAttachmentsOnKeep === params.entry.retainAttachmentsOnKeep &&
+    current.execution.transcriptTarget?.agentId === transcriptTarget?.agentId &&
+    current.execution.transcriptTarget?.sessionId === transcriptTarget?.sessionId &&
+    current.execution.transcriptTarget?.sessionKey === transcriptTarget?.sessionKey &&
+    current.execution.transcriptTarget?.storePath === transcriptTarget?.storePath &&
+    current.execution.transcriptTarget?.threadId === transcriptTarget?.threadId &&
+    current.execution.transcriptTarget?.expectedLifecycleRevision ===
+      transcriptTarget?.expectedLifecycleRevision &&
+    current.execution.transcriptTarget?.expectedWriterRunId ===
+      transcriptTarget?.expectedWriterRunId &&
+    params.isCurrent?.(current) !== false;
+  const admitted = params.runs.get(params.runId);
+  // Supersession survives retirement of the successor while external cleanup awaits.
+  const superseded =
+    admitted &&
+    (admitted.killReconciliation?.supersededAt !== undefined ||
+      [...params.runs.values()].some(
+        (candidate) =>
+          candidate.childSessionKey === admitted.childSessionKey &&
+          compareSubagentRunGeneration(candidate, admitted) > 0,
+      ));
+  const isCurrent = () => canRetire(params.runs.get(params.runId));
+  if (!superseded || !isCurrent()) {
     return;
   }
-  const transcriptTarget = params.entry.execution.transcriptTarget;
-  const isCurrent = () => params.runs.get(params.runId) === params.entry;
   const transcriptStillOwned = Array.from(params.runs.values()).some((candidate) => {
-    if (candidate === params.entry) {
+    if (isSameSubagentRun(candidate, params.entry)) {
       return false;
     }
     const candidateTarget = candidate.execution.transcriptTarget;
@@ -26,10 +58,12 @@ export async function retireSupersededSubagentRun(params: {
       candidateTarget?.storePath === transcriptTarget?.storePath
     );
   });
+  const cleanupEntry = params.runs.get(params.runId);
   if (
+    cleanupEntry &&
     transcriptTarget &&
     !transcriptStillOwned &&
-    !shouldSuppressSubagentRecoverySessionEffects(params.entry)
+    !shouldSuppressSubagentRecoverySessionEffects(cleanupEntry)
   ) {
     await removeInternalSessionEffectsSession(transcriptTarget);
     if (!isCurrent()) {
@@ -37,17 +71,23 @@ export async function retireSupersededSubagentRun(params: {
     }
   }
   if (params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(params.entry);
+    await safeRemoveAttachmentsDir(params.entry, isCurrent);
   }
   if (!isCurrent()) {
     return;
   }
-  params.runs.delete(params.runId);
-  try {
-    params.persistOrThrow(params.runId);
-  } catch (error) {
-    params.runs.set(params.runId, params.entry);
-    throw error;
+  const deleted = await mutateSubagentRuns(
+    [params.runId],
+    (rows) => {
+      const current = rows.get(params.runId);
+      if (!canRetire(current)) {
+        return { value: false };
+      }
+      return { value: true, postimages: new Map([[params.runId, null]]) };
+    },
+    { runs: params.runs },
+  );
+  if (deleted) {
+    params.clearPendingLifecycleError(params.runId);
   }
-  params.clearPendingLifecycleError(params.runId);
 }

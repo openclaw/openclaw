@@ -47,6 +47,7 @@ import {
 } from "./session-accessor.sqlite-visible-cursor.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
+import type { SessionArchiveInventoryScope } from "./session-transcript-inventory.types.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { SessionEntry } from "./types.js";
@@ -207,13 +208,7 @@ export function listTranscriptInstancesFromDatabase(params: {
 }
 
 /** Read retained archive identities through the same physical and logical session owner. */
-export function listSessionTranscriptArchivesReadOnly(
-  scope: Pick<SessionAccessScope, "agentId" | "env" | "storePath"> & {
-    archiveNames?: readonly string[];
-    sessionIds?: readonly string[];
-    includeAllAgents?: boolean;
-  },
-) {
+export function listSessionTranscriptArchivesReadOnly(scope: SessionArchiveInventoryScope) {
   const selectors = [...new Set(scope.sessionIds ?? [])];
   const archiveNames = [...new Set(scope.archiveNames ?? [])];
   if (selectors.length === 0 && archiveNames.length === 0) {

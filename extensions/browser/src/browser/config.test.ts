@@ -764,12 +764,12 @@ describe("browser config", () => {
       name: "resolves browser SSRF policy when configured",
       config: {
         ssrfPolicy: {
-          allowPrivateNetwork: true,
+          dangerouslyAllowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
           allowIpv6UniqueLocalRange: true,
           allowedHostnames: [" localhost ", " *.trusted.example ", ""],
         },
-      } as unknown as BrowserConfig,
+      },
       expected: {
         dangerouslyAllowPrivateNetwork: true,
         allowRfc2544BenchmarkRange: true,
@@ -785,11 +785,6 @@ describe("browser config", () => {
     {
       name: "supports explicit strict mode by disabling private network access",
       config: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: false } },
-      expected: { dangerouslyAllowPrivateNetwork: false },
-    },
-    {
-      name: "preserves legacy explicit strict mode from allowPrivateNetwork=false",
-      config: { ssrfPolicy: { allowPrivateNetwork: false } } as unknown as BrowserConfig,
       expected: { dangerouslyAllowPrivateNetwork: false },
     },
     {

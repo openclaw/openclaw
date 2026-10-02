@@ -173,7 +173,8 @@ public enum ChatSessionSidebarModel {
         observedOrder: ObservedOrder = .init(),
         owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
         selfOwnerID: String? = nil,
-        sectionOrder: [String] = []) -> [Section]
+        sectionOrder: [String] = [],
+        now: Date = .now) -> [Section]
     {
         let entries = self.visibleSessions(
             sessions: sessions,
@@ -182,7 +183,7 @@ public enum ChatSessionSidebarModel {
             activeAgentID: activeAgentID,
             excludesMainSession: excludesMainSession,
             sessionRoutingContract: sessionRoutingContract,
-            viewOptions: viewOptions)
+            visibility: (viewOptions, now))
         if rankedSearch {
             // Apply sidebar visibility before the palette's ten-result cap, preserving incoming relevance order.
             // ui/src/components/command-palette-session-search.ts:63.
@@ -667,8 +668,9 @@ public enum ChatSessionSidebarModel {
         activeAgentID: String?,
         excludesMainSession: Bool,
         sessionRoutingContract: String?,
-        viewOptions: ViewOptions?) -> [OpenClawChatSessionEntry]
+        visibility: (options: ViewOptions?, now: Date)) -> [OpenClawChatSessionEntry]
     {
+        let (viewOptions, now) = visibility
         let scopedSessions = sessions.filter {
             self.isSessionInActiveAgentScope(key: $0.key, agentID: $0.agentId, activeAgentID: activeAgentID)
         }
@@ -701,13 +703,18 @@ public enum ChatSessionSidebarModel {
                 return false
             }
             let status = viewOptions?.status ?? .active
-            return (entry.key == selectedSessionKey && (status != .archived || entry.isArchived)) ||
+            return (entry.key == selectedSessionKey &&
+                (viewOptions == nil || status.includes(entry, now: now))) ||
                 (!self
                     .isHiddenInternalSession(entry.key) &&
-                    (status == .all || entry.isArchived == (status == .archived)) &&
+                    status.includes(entry, now: now) &&
                     (viewOptions?.includes(entry) ?? true))
         }
-        if viewOptions?.status != .archived, viewOptions?.ownerFilter.isEmpty != false,
+        let selected = scopedSessions.first { $0.key == selectedSessionKey }
+        let selectedMatchesStatus = selected.map { (viewOptions?.status ?? .active).includes($0, now: now) } ?? true
+        if viewOptions?.status != .archived, viewOptions?.status != .snoozed,
+           viewOptions == nil || selectedMatchesStatus,
+           viewOptions?.ownerFilter.isEmpty != false,
            !(excludesMainSession && selectedIsMain),
            !entries.contains(where: { $0.key == selectedSessionKey }),
            self.isSessionInActiveAgentScope(key: selectedSessionKey, activeAgentID: activeAgentID),

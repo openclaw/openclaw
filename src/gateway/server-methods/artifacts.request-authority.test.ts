@@ -28,7 +28,10 @@ import { assistantFileMessage } from "./artifacts.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const boundaries = vi.hoisted(() => ({
-  visit: vi.fn<typeof import("../session-transcript-readers.js").visitSessionMessagesAsync>(),
+  visit:
+    vi.fn<
+      typeof import("../session-transcript-native.test-support.js").visitSessionMessagesAsync
+    >(),
   managed:
     vi.fn<
       typeof import("../managed-image-attachments.js").resolveManagedOutgoingMediaArtifactDownload
@@ -327,9 +330,7 @@ describe("registered artifact request authority after session preparation", () =
         agents: { list: [{ id: "main", default: true }, { id: "work" }] },
       };
       await state.writeConfig(config);
-      const readers = await vi.importActual<typeof import("../session-transcript-readers.js")>(
-        "../session-transcript-readers.js",
-      );
+      const readers = await import("../session-transcript-native.test-support.js");
       boundaries.visit.mockImplementation(readers.visitSessionMessagesAsync);
       const client: GatewayClient = {
         connId: "artifact-default-agent",

@@ -90,12 +90,13 @@ export async function registerPluginSubagentRunFromGateway(params: {
   // a requester and therefore owns a separate delivery.
   if (
     !params.requester &&
-    adoptPausedSubagentRunForFollowUp({
+    (await adoptPausedSubagentRunForFollowUp({
       childSessionKey,
       runId: params.runId,
       task: params.task,
       gatewayContextResolver: params.gatewayContextResolver,
-    })
+      assertCurrent: params.assertCurrent,
+    }))
   ) {
     return;
   }

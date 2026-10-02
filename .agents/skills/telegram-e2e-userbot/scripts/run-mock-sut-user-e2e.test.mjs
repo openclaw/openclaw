@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import nodeTest from "node:test";
@@ -19,16 +21,31 @@ import {
 } from "./run-mock-sut-user-e2e.mjs";
 import { currentTelegramRun, withTelegramRun } from "./telegram-run-scope.mjs";
 
+// Bounds a stalled host. Each case takes well under a second on a loaded host.
+const TEST_TIMEOUT_MS = 60_000;
+
 // Cancellation cases return their expected terminal error after checking cleanup.
 const test = (name, run) =>
-  nodeTest(name, async (context) => {
+  nodeTest(name, { timeout: TEST_TIMEOUT_MS }, async (context) => {
+    let scope;
+    // node:test never unwinds a timed-out body: cancel its run and join every
+    // owned child before the case's other cleanup runs.
+    context.after(
+      async () => {
+        scope?.cancel(context.signal.reason);
+        await outcome;
+      },
+      { timeout: TEST_TIMEOUT_MS },
+    );
     let expectedFailure;
-    const result = await withTelegramRun(async () => {
+    const outcome = withTelegramRun(async (runScope) => {
+      scope = runScope;
       expectedFailure = await run(context);
     }).then(
       () => ({}),
       (error) => ({ error }),
     );
+    const result = await outcome;
     if (expectedFailure) {
       assert.equal(result.error, expectedFailure);
     } else if (result.error) {
@@ -54,7 +71,63 @@ function exited(child) {
   });
 }
 
-test("forwardBurst rejects a non-DM scenario before acquiring credentials", (context) => {
+function withinTest(work, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) {
+      abort();
+    }
+    work.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+  });
+}
+
+// A wrapper reports the PID of the child it spawned over loopback; file polling can
+// stall on a loaded host. The child acts only once its wrapper is gone, so the
+// side effect proves an orphan outlived cleanup instead of racing a timer.
+const wrapperScript =
+  'const {spawn}=require("node:child_process"); const child=spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:["pipe","ignore","ignore"]}); require("node:net").connect(Number(process.env.READY_PORT),"127.0.0.1",function(){this.end(String(child.pid))}); setInterval(()=>{},1000);';
+const orphanSideEffectScript =
+  'process.stdin.on("end",()=>require("node:fs").writeFileSync(process.env.SIDE_EFFECT,"sent")); process.stdin.resume();';
+
+async function wrapperFixture(context, prefix) {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const wrapper = path.join(temp, "wrapper.cjs");
+  const child = path.join(temp, "child.cjs");
+  fs.writeFileSync(wrapper, wrapperScript);
+  fs.writeFileSync(child, orphanSideEffectScript);
+  const spawned = Promise.withResolvers();
+  const server = net.createServer((socket) => {
+    let pid = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => {
+      pid += chunk;
+    });
+    socket.on("end", () => spawned.resolve(Number(pid)));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  context.after(() => server.close());
+  const sideEffect = path.join(temp, "sent");
+  return {
+    wrapper,
+    sideEffect,
+    spawned: spawned.promise,
+    env: {
+      ...process.env,
+      CHILD_SCRIPT: child,
+      SIDE_EFFECT: sideEffect,
+      READY_PORT: String(server.address().port),
+    },
+  };
+}
+
+function assertStopped(pid) {
+  assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+}
+
+test("forwardBurst rejects a non-DM scenario before acquiring credentials", async (context) => {
   // openclaw-temp-dir: allow the CLI reads its scenario and loader from disk.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-forward-burst-dm-"));
   context.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -75,7 +148,7 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", (con
       return next(url, context);
     }});`,
   );
-  const result = spawnSync(
+  const result = await runCommand(
     process.execPath,
     [
       "--import",
@@ -90,7 +163,7 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", (con
       "--record",
       path.join(root, "events.ndjson"),
     ],
-    { cwd: root, env: {}, encoding: "utf8" },
+    { cwd: root, env: {} },
   );
   assert.equal(result.status, 1);
   assert.match(result.stderr, /forwardBurst actions require --dm/);
@@ -341,67 +414,40 @@ test("lease loss signals active Telegram process groups before waiting", async (
 });
 
 test("lease loss during blocked readiness stops the gateway before polling", async (context) => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-gateway-lease-fence-"));
-  const pollMarker = path.join(temp, "poll-started");
-  const gatewayReady = path.join(temp, "gateway-ready");
-  const childScript = path.join(temp, "fixture.cjs");
-  const gatewayScript = path.join(temp, "gateway.cjs");
-  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  fs.writeFileSync(
-    childScript,
-    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.POLL_MARKER,"polled"),200); setInterval(()=>{},1000);',
-  );
-  fs.writeFileSync(
-    gatewayScript,
-    'const fs=require("node:fs"); const {spawn}=require("node:child_process"); spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); fs.writeFileSync(process.env.GATEWAY_READY,"ready"); setInterval(()=>{},1000);',
-  );
+  const fixture = await wrapperFixture(context, "telegram-gateway-lease-fence-");
   const gatewayEnv = createGatewayEnvironment({
     baseEnv: {
       PATH: "/safe/bin",
       OPENCLAW_QA_CONVEX_SECRET_CI: "broker-secret",
       TELEGRAM_E2E_STATE_DIR: "/private/lease",
     },
-    configPath: path.join(temp, "openclaw.json"),
-    stateDir: path.join(temp, "state"),
+    configPath: path.join(path.dirname(fixture.wrapper), "openclaw.json"),
+    stateDir: path.join(path.dirname(fixture.wrapper), "state"),
   });
   ownChild(
-    spawn(process.execPath, [gatewayScript], {
+    spawn(process.execPath, [fixture.wrapper], {
       detached: true,
-      env: {
-        ...process.env,
-        ...gatewayEnv,
-        CHILD_SCRIPT: childScript,
-        GATEWAY_READY: gatewayReady,
-        POLL_MARKER: pollMarker,
-      },
+      env: { ...fixture.env, ...gatewayEnv },
       stdio: "ignore",
     }),
   );
   const leaseError = new Error("lease heartbeat failed during gateway readiness");
-  const leaseFailure = new Promise((resolve) => {
-    const poll = setInterval(() => {
-      if (!fs.existsSync(gatewayReady)) {
-        return;
-      }
-      clearInterval(poll);
-      resolve({ type: "lease-failure", error: leaseError });
-    }, 5);
+  let poller;
+  // Lose the lease only once the gateway has spawned its poller.
+  void fixture.spawned.then((pid) => {
+    poller = pid;
+    currentTelegramRun().cancel(leaseError);
   });
-
-  leaseFailure.then(({ error }) => currentTelegramRun().cancel(error));
   await assert.rejects(
     currentTelegramRun().wait(new Promise(() => {})),
     (error) => error === leaseError,
   );
   await currentTelegramRun().close();
-  await new Promise((resolve) => {
-    setTimeout(resolve, 250);
-  });
   assert.equal(gatewayEnv.PATH, "/safe/bin");
   assert.equal(gatewayEnv.OPENCLAW_QA_CONVEX_SECRET_CI, undefined);
   assert.equal(gatewayEnv.TELEGRAM_E2E_STATE_DIR, undefined);
-  assert.equal(fs.existsSync(gatewayReady), true);
-  assert.equal(fs.existsSync(pollMarker), false);
+  assertStopped(poller);
+  assert.equal(fs.existsSync(fixture.sideEffect), false);
   return leaseError;
 });
 
@@ -444,82 +490,38 @@ test("lease revocation between startup Bot API calls prevents update polling", a
 });
 
 test("lease loss during a credential command stops every owned child before its side effect", async (context) => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-lease-fence-"));
-  const sideEffect = path.join(temp, "sent");
-  const wrapperReady = path.join(temp, "wrapper-ready");
-  const childScript = path.join(temp, "child.cjs");
-  const wrapperScript = path.join(temp, "wrapper.cjs");
-  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  fs.writeFileSync(
-    childScript,
-    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),200); setInterval(()=>{},1000);',
-  );
-  fs.writeFileSync(
-    wrapperScript,
-    'const fs=require("node:fs"); const {spawn}=require("node:child_process"); spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); fs.writeFileSync(process.env.WRAPPER_READY,"ready"); setInterval(()=>{},1000);',
-  );
+  const fixture = await wrapperFixture(context, "telegram-command-lease-fence-");
   const gateway = startOwnedChild();
   const leaseError = new Error("lease revoked during credential command");
-  const leaseFailure = new Promise((resolve) => {
-    const deadline = Date.now() + 1_000;
-    const poll = setInterval(() => {
-      if (fs.existsSync(wrapperReady) || Date.now() >= deadline) {
-        clearInterval(poll);
-        resolve({ type: "lease-failure", error: leaseError });
-      }
-    }, 5);
+  let child;
+  // Revoke only once the command has spawned its child, so both must be stopped.
+  void fixture.spawned.then((pid) => {
+    child = pid;
+    currentTelegramRun().cancel(leaseError);
   });
-
-  leaseFailure.then(({ error }) => currentTelegramRun().cancel(error));
   await assert.rejects(
-    runCommand(process.execPath, [wrapperScript], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        CHILD_SCRIPT: childScript,
-        SIDE_EFFECT: sideEffect,
-        WRAPPER_READY: wrapperReady,
-      },
-      timeoutMs: 1_000,
-    }),
+    runCommand(process.execPath, [fixture.wrapper], { cwd: process.cwd(), env: fixture.env }),
     (error) => error === leaseError,
   );
   await exited(gateway);
-  await new Promise((resolve) => {
-    setTimeout(resolve, 250);
-  });
-  assert.equal(fs.existsSync(wrapperReady), true);
-  assert.equal(fs.existsSync(sideEffect), false);
+  assertStopped(child);
+  assert.equal(fs.existsSync(fixture.sideEffect), false);
   return leaseError;
 });
 
-test("successful command parents keep descendants lease-owned until cleanup", async (context) => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-cleanup-fence-"));
-  const sideEffect = path.join(temp, "sent");
-  const childScript = path.join(temp, "child.cjs");
-  const wrapperScript = path.join(temp, "wrapper.cjs");
-  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  fs.writeFileSync(
-    childScript,
-    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),200); setInterval(()=>{},1000);',
+test("successful command parents keep descendants lease-owned until cleanup", async () => {
+  const result = await runCommand(
+    process.execPath,
+    [
+      "-e",
+      'const child=require("node:child_process").spawn(process.execPath,["-e","setInterval(()=>{},1000)"],{stdio:"ignore"}); child.unref(); process.stdout.write(String(child.pid));',
+    ],
+    { cwd: process.cwd(), env: process.env },
   );
-  fs.writeFileSync(
-    wrapperScript,
-    'const {spawn}=require("node:child_process"); const child=spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); child.unref();',
-  );
-
-  const result = await runCommand(process.execPath, [wrapperScript], {
-    cwd: process.cwd(),
-    env: { ...process.env, CHILD_SCRIPT: childScript, SIDE_EFFECT: sideEffect },
-    timeoutMs: 1_000,
-  });
   assert.equal(result.status, 0);
-  assert.equal(result.timedOut, false);
   await currentTelegramRun().close();
-  await new Promise((resolve) => {
-    setTimeout(resolve, 300);
-  });
-  assert.equal(fs.existsSync(sideEffect), false);
+  // The descendant never exits on its own; only lease cleanup can have stopped it.
+  assertStopped(Number(result.stdout));
 });
 
 test("failed executable launches settle before credential release", async () => {
@@ -550,7 +552,7 @@ test("command completion drains readiness stderr from an inherited pipe after pa
       "-e",
       `require('node:child_process').spawn(process.execPath, ['-e', 'process.stderr.write("late readiness diagnostic")'], {stdio: ['ignore', 'ignore', 'inherit']}).unref();`,
     ],
-    { cwd: process.cwd(), env: {}, timeoutMs: 1_000 },
+    { cwd: process.cwd(), env: {} },
   );
   assert.equal(result.status, 0);
   assert.equal(result.stderr, "late readiness diagnostic");
@@ -579,37 +581,27 @@ test("failed direct probe launches settle before credential release", async () =
 });
 
 test("credential command timeout stops a nested wrapper before its side effect", async (context) => {
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-command-timeout-fence-"));
-  const sideEffect = path.join(temp, "sent");
-  const wrapperReady = path.join(temp, "wrapper-ready");
-  const childScript = path.join(temp, "child.cjs");
-  const wrapperScript = path.join(temp, "wrapper.cjs");
-  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
-  fs.writeFileSync(
-    childScript,
-    'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.SIDE_EFFECT,"sent"),1000); setInterval(()=>{},1000);',
-  );
-  fs.writeFileSync(
-    wrapperScript,
-    'const fs=require("node:fs"); const {spawn}=require("node:child_process"); spawn(process.execPath,[process.env.CHILD_SCRIPT],{env:process.env,stdio:"ignore"}); fs.writeFileSync(process.env.WRAPPER_READY,"ready"); setInterval(()=>{},1000);',
-  );
-
-  const result = await runCommand(process.execPath, [wrapperScript], {
-    cwd: process.cwd(),
-    env: {
-      ...process.env,
-      CHILD_SCRIPT: childScript,
-      SIDE_EFFECT: sideEffect,
-      WRAPPER_READY: wrapperReady,
-    },
-    timeoutMs: 500,
-  });
-  await new Promise((resolve) => {
-    setTimeout(resolve, 600);
-  });
+  const fixture = await wrapperFixture(context, "telegram-command-timeout-fence-");
+  // The command deadline is under test: fire it on a mock clock once the wrapper has
+  // spawned its child. Cleanup after the deadline waits on real timers.
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  let pending;
+  let child;
+  try {
+    pending = runCommand(process.execPath, [fixture.wrapper], {
+      cwd: process.cwd(),
+      env: fixture.env,
+      timeoutMs: 500,
+    });
+    child = await withinTest(fixture.spawned, context.signal);
+    context.mock.timers.tick(500);
+  } finally {
+    context.mock.timers.reset();
+  }
+  const result = await pending;
   assert.equal(result.timedOut, true);
-  assert.equal(fs.existsSync(wrapperReady), true);
-  assert.equal(fs.existsSync(sideEffect), false);
+  assertStopped(child);
+  assert.equal(fs.existsSync(fixture.sideEffect), false);
 });
 
 test("clears a leased bot webhook before polling updates", async () => {

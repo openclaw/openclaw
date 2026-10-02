@@ -1030,7 +1030,7 @@ describe("createTelegramBot", () => {
         "forwarded source participant",
       );
       sourceWork.push(forwardedParticipant.task);
-      await vi.advanceTimersByTimeAsync(80);
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(replySpy.mock.calls.map(([ctx]) => ctx.MessageSid)).toEqual(["440"]);
 
       resolveMedia.mockResolvedValueOnce({
@@ -1420,7 +1420,7 @@ describe("createTelegramBot", () => {
           },
         });
         sourceWork.push(requireValue(replay.deferredWork, "forwarded source participant").task);
-        flushForward = takeLatestTimerCallback(80);
+        flushForward = takeLatestTimerCallback(1_000);
       }
 
       requireValue(flushForward, "forwarded debounce callback")();
@@ -1473,7 +1473,7 @@ describe("createTelegramBot", () => {
       });
       sourceWork.push(requireValue(replay.deferredWork, "forwarded source participant").task);
 
-      flushForward = takeLatestTimerCallback(80);
+      flushForward = takeLatestTimerCallback(1_000);
       flushForward();
 
       await Promise.all(sourceWork);

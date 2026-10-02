@@ -140,7 +140,14 @@ export function renderPanelErrorState({
       <div class="lazy-view-error__title">${title}</div>
       <div class="lazy-view-error__subtitle">${subtitle}</div>
       ${actions ? html`<div class="lazy-view-error__actions">${actions}</div>` : nothing}
-      ${detail ? html`<code class="lazy-view-error__detail">${detail}</code>` : nothing}
+      ${
+        detail
+          ? html`<details class="lazy-view-error__details">
+              <summary>${t("chat.details")}</summary>
+              <code class="lazy-view-error__detail">${detail}</code>
+            </details>`
+          : nothing
+      }
     </div>
   `;
 }

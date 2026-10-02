@@ -33,6 +33,7 @@ import {
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
   SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
 } from "../completion/subagent-completion-instructions.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
@@ -195,11 +196,11 @@ async function runSubagentAnnounceFlowBound(
     childSessionEffectsAllowed() &&
     (await params.prepareChildSessionEffects?.()) !== false &&
     childSessionEffectsAllowed();
-  let isOwnResultCurrent = () => true;
+  let isOwnResultCurrent: (() => boolean) | undefined;
   let isChildResultsCurrent = () => true;
   const completionDeliveryAllowed = () =>
     params.isCompletionDeliveryAllowed?.() !== false &&
-    isOwnResultCurrent() &&
+    (isOwnResultCurrent?.() ?? true) &&
     isChildResultsCurrent();
   let childSessionId: string | undefined;
   let childSessionLifecycleRevision: string | undefined;
@@ -361,12 +362,8 @@ async function runSubagentAnnounceFlowBound(
       ? (stripAndClassifyReply(fallbackReply ?? "") ?? undefined)
       : undefined;
 
-    const childRun = getLatestSubagentRunByChildSessionKey(params.childSessionKey);
-    if (
-      childRun?.runId === params.childRunId &&
-      (await prepareChildSessionEffects()) &&
-      childSessionEffectsAllowed()
-    ) {
+    const childRun = subagentRuns.get(params.childRunId);
+    if (childRun?.childSessionKey === params.childSessionKey && completionDeliveryAllowed()) {
       const prepared = await readSubagentRunAnnounceResult(childRun);
       reply = prepared.text;
       isOwnResultCurrent = prepared.isCurrent;
@@ -440,7 +437,7 @@ async function runSubagentAnnounceFlowBound(
     }
 
     const childSessionCurrent = await prepareChildSessionEffects();
-    if (!childSessionCurrent || !childSessionEffectsAllowed()) {
+    if (!isOwnResultCurrent && (!childSessionCurrent || !childSessionEffectsAllowed())) {
       reply = params.roundOneReply ?? params.fallbackReply;
       if (
         expectsCompletionMessage &&

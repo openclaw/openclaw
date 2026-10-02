@@ -18,8 +18,8 @@ import {
 } from "../session-row-projection.js";
 import { buildHealthAgentSummaries, resolveHealthAgentOrder } from "./collector.js";
 
-// Periodic WAL maintenance is independent of the request SQL budget.
-beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }));
+// Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();

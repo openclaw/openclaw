@@ -210,7 +210,7 @@ export async function dispatchSessionsSendFollowup(
             {
               assertCurrent: assertCompletionCurrent,
               assertPublicationCurrent: () => request?.custody.assertCurrent(),
-              persistence: "worker",
+              acceptedRunReplay: true,
             },
           );
           accepted = { runId: start.runId, childSessionKey, expectsCompletionMessage: true };

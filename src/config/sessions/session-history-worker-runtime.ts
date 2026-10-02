@@ -131,6 +131,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       sessionEntry: target.sessionEntry ? { sessionId: target.sessionEntry.sessionId } : undefined,
       ...(target.env ? { env: captureSessionTranscriptStorageEnvironment(target.env) } : {}),
     };
+    if (request.kind === "summary") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, query: structuredClone(request.params.query) },
+      };
+    }
     if (request.kind === "artifacts") {
       return {
         kind: request.kind,
