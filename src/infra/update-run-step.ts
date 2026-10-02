@@ -134,6 +134,13 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
+/** The operator's restart command; bounded warning lists always lead with it. */
+export function updateRunServiceWarning(steps: readonly UpdateRunStep[]): string | undefined {
+  return steps.findLast(
+    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
+  )?.detail;
+}
+
 export function updateRunWarningMessages(
   steps: readonly UpdateRunStep[],
   maxMessages?: number,
@@ -149,9 +156,7 @@ export function updateRunWarningMessages(
     return messages;
   }
   // The operator's restart command must survive later advisory Doctor warnings.
-  const serviceWarning = steps.findLast(
-    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
-  )?.detail;
+  const serviceWarning = updateRunServiceWarning(steps);
   return (
     serviceWarning
       ? [

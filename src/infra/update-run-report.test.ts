@@ -538,6 +538,134 @@ describe("update run report", () => {
     expect(report.lines.join("\n").length).toBeGreaterThan(1500);
   });
 
+  it("drops trailing warnings before recovery facts when warnings fill the chat budget", () => {
+    const advisory = (label: string) => `${label}: ${"advisory detail ".repeat(40)}`;
+    const nextAction =
+      "The gateway is serving 2026.9.7 and passed recovery verification, but restarting it is not verified safe (runtime-verification-failed).";
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: "runtime-verification-failed",
+        steps: [
+          {
+            step: "candidate-gateway-startup",
+            status: "failed",
+            exitCode: 1,
+            detail: "Exit code: 1",
+          },
+          ...["A", "B", "C"].map((label) => ({
+            step: `warning:${label}`,
+            status: "completed" as const,
+            detail: advisory(`Warning ${label}`),
+          })),
+          { step: "gateway recovery verification", status: "completed", exitCode: 0 },
+        ],
+        verification: {
+          runningVersion: "2026.9.7",
+          versionMatch: true,
+          readyz: true,
+          settled: true,
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        },
+      }),
+      { nextAction },
+    );
+    const markdownLines = report.markdown.split("\n");
+    expect(markdownLines.map((line) => line.split(":")[0])).toEqual([
+      "⚠️ OpenClaw update failed",
+      "Failed",
+      "Warning",
+      "Warning",
+      "Warning",
+      "Recorded recovery",
+      "Recorded verification",
+      "The gateway is serving 2026.9.7 and passed recovery verification, but restarting it is not verified safe (runtime-verification-failed).",
+    ]);
+    expect(markdownLines[2]).toMatch(/^Warning: Warning A: advisory detail/u);
+    expect(markdownLines[3]).toMatch(/^Warning: Warning B: advisory detail/u);
+    expect(markdownLines[4]).toBe(
+      "Warning: 1 more warning omitted; run openclaw update status for the full report.",
+    );
+    expect(markdownLines[5]).toBe(
+      "Recorded recovery: verified serving 2026.9.7; restart remains unsafe (runtime-verification-failed).",
+    );
+    expect(markdownLines[6]).toBe("Recorded verification: version verified; HTTP ready.");
+    expect(report.markdown.length).toBeLessThanOrEqual(1500);
+    expect(report.lines.filter((line) => line.startsWith("Warning:"))).toHaveLength(3);
+  });
+
+  it.each([
+    { paddingLength: 0, unitLength: 27, structured: true },
+    { paddingLength: 243, unitLength: 60, structured: true },
+    { paddingLength: 472, unitLength: 196, structured: true },
+    { paddingLength: 993, unitLength: 27, structured: false },
+  ])(
+    "keeps protected facts and an omission signal when the lines before warnings fill the chat budget ($paddingLength/$unitLength chars, structured=$structured)",
+    ({ paddingLength, unitLength, structured }) => {
+      const unit = `openclaw-${"x".repeat(unitLength - "openclaw-.service".length)}.service`;
+      const restartCommand = `sudo systemctl restart ${unit}`;
+      const restartWarning = structured
+        ? `System-scope Gateway service ${unit} requires an operator restart. ${"r".repeat(paddingLength)} Package updates do not stop or restart this service. After the update, run: ${restartCommand}`
+        : `Service reconciliation detail: ${"r".repeat(paddingLength)}`;
+      expect(restartWarning.length).toBeLessThanOrEqual(1024);
+      const nextAction = "N".repeat(1024);
+      const report = renderUpdateRunReport(
+        run({
+          status: "failed",
+          reason: "runtime-verification-failed",
+          steps: [
+            {
+              step: "doctor",
+              status: "completed",
+              configChange: {
+                kind: "migration",
+                message: `Moved legacy entries: ${"k".repeat(190)}`,
+              },
+            },
+            ...[1, 2, 3].map((index) => ({
+              step: `candidate-check-${index}`,
+              status: "failed" as const,
+              detail: `check ${index} failed: ${"x".repeat(270)}`,
+            })),
+            {
+              step: "warning:managed-service-reconciliation",
+              status: "completed",
+              detail: restartWarning,
+            },
+            ...["A", "B"].map((label) => ({
+              step: `warning:${label}`,
+              status: "completed" as const,
+              detail: `Warning ${label}: ${"advisory detail ".repeat(40)}`,
+            })),
+            { step: "gateway recovery verification", status: "completed", exitCode: 0 },
+          ],
+          verification: {
+            runningVersion: "2026.9.7",
+            versionMatch: true,
+            readyz: true,
+            settled: true,
+            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          },
+        }),
+        { nextAction },
+      );
+      const markdownLines = report.markdown.split("\n");
+      const serviceWarningLine = markdownLines.find((line) =>
+        line.startsWith(structured ? "Restart: " : "Warning: "),
+      );
+      expect(serviceWarningLine).toBeDefined();
+      if (structured) {
+        expect(serviceWarningLine).toContain(restartCommand);
+      }
+      expect(markdownLines[0]).toBe("⚠️ Failed.");
+      expect(markdownLines.some((line) => line.startsWith("Recovery:"))).toBe(true);
+      expect(markdownLines.some((line) => line.startsWith("Verification:"))).toBe(true);
+      expect(markdownLines.some((line) => line.includes("openclaw update status"))).toBe(true);
+      expect(report.markdown.length).toBeLessThanOrEqual(1500);
+      expect(report.markdown.endsWith(`\n${nextAction}`)).toBe(true);
+    },
+  );
+
   it.each([
     ["preflight-insufficient-space", "Free space on the preflight staging"],
     ["pnpm-corepack-missing", "corepack is missing"],

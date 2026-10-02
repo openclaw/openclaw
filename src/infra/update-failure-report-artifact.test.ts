@@ -3,7 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeUpdateRunReportArtifact } from "./update-failure-report-artifact.js";
+import {
+  refreshUpdateRunReportArtifact,
+  writeUpdateRunReportArtifact,
+} from "./update-failure-report-artifact.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
+import { renderUpdateRunReport } from "./update-run-report.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -29,6 +34,29 @@ function updateResult(status: "ok" | "error"): UpdateRunResult {
           ]
         : [],
     durationMs: 0,
+  };
+}
+
+function updateRun(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
+  return {
+    runId: "a4396fd1-6a2b-42fc-84d5-1c0abbdc3e5c",
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    trigger: "cli",
+    phase: "validating",
+    status: "running",
+    reason: null,
+    origin: {},
+    target: { kind: "package" },
+    before: { version: "2026.9.6" },
+    after: {},
+    steps: [],
+    verification: {},
+    repair: [],
+    confirmedAtMs: null,
+    finishedAtMs: null,
+    downtimeMs: null,
+    ...patch,
   };
 }
 
@@ -116,5 +144,48 @@ describe("update report artifact ownership", () => {
     });
     expect(reportPath).toBe(path.join(stateDir, "update-reports", `${runId}.md`));
     expect(await fs.readFile(reportPath, "utf8")).toContain("Admitted update");
+  });
+
+  it("refreshes a compact pending report once and preserves its terminal replacement", async () => {
+    const stateDir = tempDirs.make("update-report-pending-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    let currentRun = updateRun({
+      steps: [
+        { label: "snapshot", fill: "s" },
+        { label: "migration writes", fill: "m" },
+        { label: "rollback", fill: "r" },
+      ].map(({ label, fill }) => ({
+        step: `diagnostic:database ${label}`,
+        status: "completed" as const,
+        detail: `${label}: ${fill.repeat(600)}`,
+      })),
+    });
+    const reportPath = await writeUpdateRunReportArtifact({
+      result: { ...updateResult("ok"), runId: currentRun.runId },
+      report: (run) => renderUpdateRunReport(run ?? currentRun),
+      readRun: () => currentRun,
+      env,
+    });
+    const pending = await fs.readFile(reportPath, "utf8");
+    expect(pending).toContain("… run openclaw update status");
+    expect(pending.startsWith("⬆️ OpenClaw update in progress: ")).toBe(true);
+
+    currentRun = {
+      ...currentRun,
+      status: "succeeded",
+      phase: "finished",
+      after: { version: "2026.9.7" },
+      finishedAtMs: 3,
+    };
+    await refreshUpdateRunReportArtifact(currentRun, { env });
+    const terminal = await fs.readFile(reportPath, "utf8");
+    expect(terminal).not.toBe(pending);
+    expect(terminal.startsWith("✅ Updated.")).toBe(true);
+
+    await refreshUpdateRunReportArtifact(
+      { ...currentRun, status: "failed", reason: "runtime-verification-failed" },
+      { env },
+    );
+    expect(await fs.readFile(reportPath, "utf8")).toBe(terminal);
   });
 });

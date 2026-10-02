@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { runStep } from "./update-runner-command.js";
 
 const context = { env: { HOME: "/home/example" }, stateDir: "/npm-report-state" };
+const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("npm install failure reports", () => {
   it.each(["EACCES", undefined])(
@@ -24,7 +26,7 @@ describe("npm install failure reports", () => {
       const step = await runStep({
         name: "package-install",
         argv: [
-          process.execPath,
+          testNodeExecPath,
           "-e",
           "process.stderr.write(process.argv[1]); process.exitCode = 1",
           stderr,
