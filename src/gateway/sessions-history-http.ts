@@ -550,16 +550,21 @@ export async function handleSessionHistoryHttpRequest(
     // repair this append even if an earlier refresh already contains its row.
     pendingRefresh = undefined;
     queueStreamWork(async () => {
-      let refresh = sseState.shouldRefreshForTranscriptPath(updatePath);
-      const nextEvent = refresh
+      let refresh = false;
+      const append = sseState.shouldRefreshForTranscriptPath(updatePath)
         ? undefined
-        : await sseState.appendInlineMessage({
+        : await sseState.prepareInlineMessage({
             message: update.message,
             messageId: update.messageId,
             messageSeq: update.messageSeq,
           });
-      refresh ||= nextEvent?.shouldRefresh === true;
       await publishStream((presentation) => {
+        if (!append) {
+          refresh = true;
+          return;
+        }
+        const nextEvent = append();
+        refresh = nextEvent?.shouldRefresh === true;
         if (refresh || nextEvent?.message === undefined) {
           return;
         }

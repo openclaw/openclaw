@@ -8,23 +8,26 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   nextGeneration,
   normalizeIdentity,
   normalizeWorkerPlacementExecutionMode,
-  type WorkerPlacementDispatchStoreOperations,
+  type WorkerSessionPlacementDispatchIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import { ensureLocal, getRequired, query } from "./placement-row-codec.js";
-import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
+import { assertSessionWorkspaceUnreserved } from "./placement-workspace-reservation.kernel.js";
 import { hasWorkerWorkspacePendingResult } from "./placement-workspace-result.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { findWorkerEnvironment } from "./store-row-codec.js";
 
-export function startWorkerPlacementDispatchInWorker(
-  input: WorkerPlacementDispatchStoreOperations["workerPlacements.startDispatch"]["input"],
+function startWorkerPlacementDispatchInWorker(
+  input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number },
   database: OpenClawStateDatabase,
 ): WorkerSessionPlacementRecord {
   const identity = normalizeIdentity(input.placement);
@@ -125,3 +128,10 @@ export function startWorkerPlacementDispatchInWorker(
     { operationLabel: "workerPlacements.startDispatch" },
   );
 }
+
+export const workerPlacementOperations = {
+  "workerPlacements.startDispatch": (
+    input: Parameters<typeof startWorkerPlacementDispatchInWorker>[0],
+    { open },
+  ) => startWorkerPlacementDispatchInWorker(input, open()),
+} satisfies WorkerOperationHandlers;

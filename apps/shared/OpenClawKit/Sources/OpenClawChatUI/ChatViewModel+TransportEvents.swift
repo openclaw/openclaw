@@ -84,7 +84,7 @@ extension OpenClawChatViewModel {
         case let .questionResolved(resolved):
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
-        case .routeChanged, .seqGap:
+        case .routeChanged, .reconnected, .seqGap:
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
             self.syncSessionReactions(refreshMetadata: true)
@@ -93,9 +93,11 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.invalidateAgentCatalog(clear: true)
             self.refreshAgentsIfRequested()
-            if case .routeChanged = evt {
+            switch evt {
+            case .routeChanged, .reconnected:
                 self.questionAttentionOwnerID = UUID()
                 self.applyProgressCard(nil)
+            default: break
             }
             // Apple transports publish replacement sockets through either event.
             // Old known-absent state must not authorize legacy plans on the new Gateway.

@@ -183,11 +183,11 @@ it("refreshes SSE history after an appended failure recovers", async () => {
     },
   });
   expect(
-    (await state.appendInlineMessage({ message: failed, messageSeq: 2 }))?.message,
+    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
   ).toMatchObject({
     stopReason: "error",
   });
-  expect(await state.appendInlineMessage({ message: answer, messageSeq: 3 })).toEqual({
+  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
     shouldRefresh: true,
   });
 });

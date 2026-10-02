@@ -508,8 +508,8 @@ Windows host-wide legacy capture cleanup remains report-only.
   generated report's `Rollback outcome` line and `openclaw update status`
   record whether the previous install was restored and is safe to restart.
   `openclaw gateway status --deep` shows what is serving; confirm both before
-  assuming the previous version runs. The generated failure report redacts
-  the package manager's own error line; the failing step's bounded stderr tail
+  assuming the previous version runs. Current failure reports retain sanitized
+  npm error lines and codes while redacting commands and private paths. The failing step's bounded stderr tail
   is kept in the durable run record and in the update-failure context saved
   under `logs/support/` in the state directory. Two causes belong to the
   published 2026.9.3 and 2026.9.4 updaters, and a later release cannot rescue
@@ -529,6 +529,17 @@ changed` when the updater's umask differs from the installed launcher's
   not writable by the invoking user; fix ownership and permissions, then retry.
   Re-run the [installer](/install/installer) if the package install is
   incomplete.
+- `ETARGET`, `E404`, or `EINTEGRITY` during `package-install`: the report names
+  the npm error code and the dependency when npm supplies a registry spec.
+  Current updaters retry named dependency failures once with npm's `--prefer-online`
+  or Bun's `--no-cache` (pnpm has no equivalent forced metadata refresh);
+  a successful retry records a stale-cache repair warning. An unavailable
+  OpenClaw target is left to target resolution. If `ETARGET` or `E404` persists,
+  run `npm cache verify`, check the configured registry or mirror, and run
+  `npm view <spec> version` with the reported spec before retrying. A candidate
+  cannot repair this behavior in an older installed updater; use the
+  [manual install procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+  once to obtain the repaired updater.
 - `runtime-verification-failed` near 300 seconds at `candidate gateway canary`
   when updating from 2026.9.4: the installed updater shares that deadline across
   the snapshot and candidate checks, even with a larger `--timeout`. The elapsed

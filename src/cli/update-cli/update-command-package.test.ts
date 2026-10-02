@@ -163,7 +163,12 @@ it.each(["guidance", "staging"])(
           "npm error syscall rename",
           "npm error path [redacted-path]",
           "npm error EACCES: permission denied, rename [redacted-path]",
-        ].map((message) => ({ check: "npm", code: "EACCES", message })),
+        ].map((message, index) =>
+          Object.assign(
+            { check: "npm", code: "EACCES", message },
+            index === 0 ? { npmErrorCode: "EACCES" as const } : {},
+          ),
+        ),
       ];
       if (consumer === "staging") {
         const error = await stagePackageInstallUpdate(params).then(

@@ -626,22 +626,28 @@ the bounded delta. The main thread retains display/profile projection, byte
 budgets, and fresh sharing checks against the originally admitted sources. A
 failed visibility lookup joins worker retirement before its partial facts return;
 the host observes that failure only if projection reaches the lookup before a
-history reset. SSE inline appends and CLI-import history projections prepare their
-bounded subagent source/run visibility questions through the same worker before
-projecting messages. Prepared facts retain the original database and source
-authority; SSE checks current sharing again before publishing after the await.
-Pending inputs and receipts, retained transcript-session keys, and process-held
-incognito databases remain migration debt. Incognito's native reader is not a
-fallback for failed durable worker reads. Schemas, stored bytes, retention, and
-update behavior are unchanged.
+history reset. SSE inline appends prepare source/run visibility in the same worker,
+retaining their numeric message sequence and rechecking source custody and stream
+authority before publication. Pending inputs and receipts and retained
+transcript-session keys remain migration debt. Process-held incognito databases and the existing
+CLI-import history path still need their owner/lifetime migration; they are not
+new synchronous exceptions or fallbacks for a failed durable worker read.
 
-After readiness, the Gateway prewarms the foreground history worker's modules and
-read-only admission for existing configured session databases. An admitted operator
-connection also starts detached prewarming when that lane is cold. Prewarming reads
+After readiness, the Gateway prioritizes the foreground history worker before other
+handler preparation, warming its readers, response encoder, and read-only admission
+for existing configured session databases. This worker preparation can overlap
+foreground browser loading; main-thread handler and optional discovery preparation
+still wait for idle time. An admitted operator connection also starts detached
+prewarming when that lane is cold. Prewarming reads
 no transcripts, writes no data, and uses normal database custody and cleanup. Warm
 calls coalesce without extending the 30-minute idle retirement deadline; failures
 are debug-only and never block startup or connection admission. Schemas, retention,
 and update behavior are unchanged.
+
+History source discovery shares candidate selection with host lookups without
+loading their session runtime. Branch workers load the snapshot and watermark
+cache owner independently of host-side list coordination and archive restoration.
+Both paths retain their existing database admission and result validation.
 
 Artifact lists, image pages, and exact transcript-image selection use that same
 history worker. The worker scans and decodes transcript payloads and returns
@@ -657,8 +663,11 @@ concurrent agent registration invalidates them. Retries retain the captured
 state admission and source paths; changed lifetimes, physical sources, or
 discovered topology still reject stale reads.
 
-Exact message membership reads for managed attachments also use the history
-worker. The worker validates the entire visible JSON range on every lookup,
+Managed attachment retrieval prepares durable store ownership and exact session
+entries in the history worker before matching messages. Requests retain the
+selected source through response publication and recheck caller authority after
+awaited reads. Scheduled cleanup and process-held incognito keep their existing
+owners. The worker validates the entire visible JSON range on every lookup,
 including unchanged projection revisions, and returns only matching messages.
 Cold archive decoding and restoration retain the existing archive worker and
 host generation/commit authorization; transcript read fences still bind the

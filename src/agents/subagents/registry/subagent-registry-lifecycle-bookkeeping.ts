@@ -1,6 +1,7 @@
 import { clearGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../../agent-bundle-mcp-tools.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
@@ -148,9 +149,11 @@ export async function completeCleanupBookkeeping(
     return;
   }
   const isDeleteCleanup = cleanupParams.cleanup === "delete";
+  // A cron run reads its children's results from these rows after they settle;
+  // its delete rows leave through the archive sweep instead.
   const retireAfterSettle =
     !cleanupParams.entry.collect &&
-    (isDeleteCleanup ||
+    ((isDeleteCleanup && !isCronRunSessionKey(cleanupParams.entry.requesterSessionKey)) ||
       (cleanupParams.entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
         cleanupParams.entry.suppressAnnounceReason !== "killed"));
   const retireImmediately = retireAfterSettle && cleanupParams.skipRequesterSettleWake === true;

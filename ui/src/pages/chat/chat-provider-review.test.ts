@@ -1,7 +1,8 @@
-// @vitest-environment node
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+// @vitest-environment node
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -110,7 +111,11 @@ it("holds composer and queued inputs across the provider pause and only retries 
     expect(
       admitQueuedMessageForSession(
         host,
-        { scope: outbox, awaitingDefaults: false },
+        {
+          ...captureChatOutboxAdmission(host, outbox.sessionKey, outbox.agentId),
+          scope: outbox,
+          awaitingDefaults: false,
+        },
         {
           id,
           text: `Retained ${id} input`,
@@ -232,11 +237,7 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
     sendState: "waiting-idle" as const,
   };
   expect(
-    admitQueuedMessageForSession(
-      host,
-      { scope: { sessionKey: paused.key, agentId: "main" }, awaitingDefaults: false },
-      item,
-    ),
+    admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, paused.key, "main"), item),
   ).toBe(true);
   host.requestUpdate = () => {
     if (host.chatQueue[0]?.sendState === "waiting-model") {

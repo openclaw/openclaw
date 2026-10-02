@@ -40,17 +40,12 @@ import {
   persistCompactionBoundaryWithSessionEntrySync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import {
-  prepareSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
-  SessionTranscriptReadFenceError,
-  resolveSessionTranscriptReadFence,
-  runWithSessionTranscriptReadFence,
-} from "../../config/sessions/session-transcript-read-fence.js";
-import { captureSessionTranscriptStorageEnvironment } from "../../config/sessions/transcript-target-binding.js";
+  SQLITE_USAGE_TAIL_MAX_EVENTS,
+  type SessionTranscriptUsageSnapshot,
+} from "../../config/sessions/session-transcript-accounting.types.js";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
@@ -67,12 +62,9 @@ import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
-  SQLITE_USAGE_TAIL_MAX_EVENTS,
-  type SessionLogSnapshot,
-  type SessionLogSnapshotOptions,
-  type SessionTranscriptUsageSnapshot,
-} from "./agent-runner-memory-snapshot.types.js";
-import { readPreflightTranscriptContextMessages } from "./agent-runner-memory-transcript-context.js";
+  readPreflightTranscriptContextMessages,
+  readSessionLogSnapshot,
+} from "./agent-runner-memory-transcript-context.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -264,67 +256,8 @@ function hasUsableProviderPromptUsage(
   );
 }
 
-// Keep a generous near-threshold window so large outputs trigger a fresh usage read.
+// Leave room for large assistant outputs when checking near-threshold usage.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
-
-async function readSessionLogSnapshot(
-  params: SessionLogSnapshotOptions & {
-    agentId?: string;
-    sessionId?: string;
-    sessionKey?: string;
-    storePath?: string;
-    abortSignal?: AbortSignal;
-  },
-): Promise<SessionLogSnapshot> {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (!params.sessionId || !params.storePath || !agentId) {
-    return params.includeTurnTaint ? { turnTainted: true } : {};
-  }
-  const scope = {
-    agentId,
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    storePath: params.storePath,
-    env: captureSessionTranscriptStorageEnvironment(process.env),
-  };
-  const options: SessionLogSnapshotOptions = {
-    includeByteSize: params.includeByteSize,
-    includeUsage: params.includeUsage,
-    includeTurnTaint: params.includeTurnTaint,
-    usageEventLimit: params.usageEventLimit,
-  };
-  const admission = resolveSessionTranscriptReadFence(scope);
-  try {
-    params.abortSignal?.throwIfAborted();
-    const resolvedScope = await prepareSqliteTranscriptReadScope(scope, params.abortSignal);
-    params.abortSignal?.throwIfAborted();
-    if (isIncognitoSessionKey(scope.sessionKey)) {
-      const { readSessionLogSnapshotInDatabase } =
-        await import("./agent-runner-memory-snapshot.worker.js");
-      return runWithSessionTranscriptReadFence(admission, () =>
-        readSessionLogSnapshotInDatabase(scope, options, { readOnly: true, resolvedScope }),
-      );
-    }
-    const { withSessionHistoryWorkerDatabase } =
-      await import("../../config/sessions/session-transcript-worker-runtime.js");
-    const snapshot = await withSessionHistoryWorkerDatabase(
-      toDatabaseOptions(resolvedScope),
-      async (owner) => {
-        const result = await owner.readAccountingSnapshot(
-          { scope, resolvedScope, options, admission },
-          params.abortSignal,
-        );
-        owner.assertCurrent();
-        return result;
-      },
-    );
-    params.abortSignal?.throwIfAborted();
-    return snapshot;
-  } catch {
-    params.abortSignal?.throwIfAborted();
-    return params.includeTurnTaint ? { turnTainted: true } : {};
-  }
-}
 
 type TranscriptTokenEstimate = {
   promptTokens: number;
@@ -362,12 +295,11 @@ async function estimateProviderPromptTokens(
     : undefined;
 }
 
-async function estimatePromptTokensFromSessionTranscript(params: {
-  agentId?: string;
+async function estimatePromptTokensFromSessionTranscript({
+  abortSignal,
+  ...params
+}: Parameters<typeof readPreflightTranscriptContextMessages>[0] & {
   abortSignal?: AbortSignal;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
   contextWindowTokens: number;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -382,7 +314,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       storePath: params.storePath,
       includeByteSize: true,
       includeUsage: true,
-      abortSignal: params.abortSignal,
+      abortSignal,
     });
     let usage = snapshot.usage;
     if (
@@ -399,7 +331,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
           includeByteSize: false,
           includeUsage: true,
           usageEventLimit: snapshot.eventCount,
-          abortSignal: params.abortSignal,
+          abortSignal,
         })
       ).usage;
     }
@@ -427,10 +359,9 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const messages = await readPreflightTranscriptContextMessages(
       {
         ...params,
-        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
         sessionId,
       },
-      params.abortSignal,
+      abortSignal,
     );
     const estimatedTokens = await estimateProviderPromptTokens(
       messages,
@@ -449,7 +380,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       transcriptByteSize: snapshot.byteSize,
     };
   } catch (error) {
-    params.abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     return error instanceof SessionTranscriptReadFenceError ? Promise.reject(error) : undefined;
   }
 }
@@ -1013,6 +944,10 @@ export async function runMemoryFlushIfNeeded(params: {
     abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
     operatorAuthority: params.followupRun.operatorAuthority,
   });
+  const assertMemoryFlushCurrent = () => {
+    abortSignal?.throwIfAborted();
+    params.followupRun.operatorAuthority?.assertCurrent();
+  };
   const memoryFlushWritable = (() => {
     if (!params.sessionKey) {
       return true;
@@ -1115,8 +1050,7 @@ export async function runMemoryFlushIfNeeded(params: {
         abortSignal,
       })
     : undefined;
-  abortSignal?.throwIfAborted();
-  params.followupRun.operatorAuthority?.assertCurrent();
+  assertMemoryFlushCurrent();
   const transcriptByteSize = sessionLogSnapshot?.byteSize;
   const shouldForceFlushByTranscriptSize =
     typeof transcriptByteSize === "number" && transcriptByteSize >= forceFlushTranscriptBytes;
@@ -1136,8 +1070,7 @@ export async function runMemoryFlushIfNeeded(params: {
     (!hasFreshPersistedPromptTokens ||
       (transcriptPromptTokens ?? 0) > (persistedPromptTokens ?? 0));
 
-  abortSignal?.throwIfAborted();
-  params.followupRun.operatorAuthority?.assertCurrent();
+  assertMemoryFlushCurrent();
   if (entry && shouldPersistTranscriptPromptTokens) {
     const usageUpdate = {
       totalTokens: transcriptPromptTokens,
@@ -1226,10 +1159,6 @@ export async function runMemoryFlushIfNeeded(params: {
         ? params.sessionStore?.[params.sessionKey]?.systemPromptReport
         : undefined),
   );
-  const assertMemoryFlushCurrent = () => {
-    abortSignal?.throwIfAborted();
-    params.followupRun.operatorAuthority?.assertCurrent();
-  };
   const prepareMemoryFlushAttempt = async () => {
     assertMemoryFlushCurrent();
     const plan = resolveMemoryFlushPlan({

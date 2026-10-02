@@ -1,5 +1,5 @@
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-lifecycle.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "../../state/openclaw-agent-db-terminal.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";

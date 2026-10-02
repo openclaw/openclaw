@@ -1,4 +1,9 @@
+import {
+  DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
@@ -8,9 +13,9 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { subscribeToSharedRequest } from "../../lib/shared-request-subscription.ts";
 import {
-  isRetryableStartupUnavailable,
-  resolveStartupRetryDelayMs,
-  sleep,
+  CHAT_HISTORY_RETRY_WINDOW_MS,
+  isRetryableChatReadError,
+  resolveChatReadRetryDelayMs,
 } from "./chat-history-retry.ts";
 import {
   type ChatHistoryResult,
@@ -39,8 +44,6 @@ const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
-
-const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
 
 export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
   if (isHistoryCursor(result) && result.kind === "reset") {
@@ -88,6 +91,7 @@ type SharedChatHistoryConsumer = {
   isCurrent: () => boolean;
   captureRun?: () => ChatHistoryRunObservation | undefined;
   retryDeadlineMs: number;
+  onRetry?: () => void;
 };
 
 // The capability owns roster observations; a shared socket alone cannot transfer them.
@@ -123,16 +127,20 @@ async function requestChatHistory<T extends ChatHistoryResponse>(
   attempt: () => Promise<T>,
   shouldContinue: () => boolean,
   shouldRetry: () => boolean,
+  signal: AbortSignal,
+  onRetry: () => void,
 ): Promise<T> {
+  let attemptNumber = 0;
   for (;;) {
     try {
       return await attempt();
     } catch (err) {
-      if (!shouldContinue() || !shouldRetry() || !isRetryableStartupUnavailable(err, method)) {
+      if (!shouldContinue() || !shouldRetry() || !isRetryableChatReadError(err, method)) {
         throw err;
       }
-      await sleep(resolveStartupRetryDelayMs(err));
-      if (!shouldContinue()) {
+      onRetry();
+      await sleepWithAbort(resolveChatReadRetryDelayMs(err, attemptNumber++), signal);
+      if (!shouldContinue() || !shouldRetry()) {
         throw err;
       }
     }
@@ -146,7 +154,7 @@ type SharedChatHistoryArgs = [
   sessionKey: string,
   requestAgentId: string | undefined,
   consumerOwner: object,
-  consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun">,
+  consumerObservation: Pick<SharedChatHistoryConsumer, "isCurrent" | "captureRun" | "onRetry">,
   cursor?: string,
   inputRunIds?: string[],
   budget?: { limit: number; maxBytes: number },
@@ -195,7 +203,7 @@ export function requestSharedHistory(
   const existingOwner = (registry.ownerRequestCounts.get(consumerOwner)?.get(requestKey) ?? 0) > 0;
   const consumer: SharedChatHistoryConsumer = {
     ...consumerObservation,
-    retryDeadlineMs: Date.now() + CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS,
+    retryDeadlineMs: Date.now() + CHAT_HISTORY_RETRY_WINDOW_MS,
   };
   if (!shared || existingOwner) {
     const params = {
@@ -224,12 +232,23 @@ export function requestSharedHistory(
           ? { owner: sessions, reconcile: sessions.captureReconcile() }
           : undefined;
         const response = attachHistoryActivity(
-          await client.request<ChatHistoryResponse>(method, params, { signal: controller.signal }),
+          await client.request<ChatHistoryResponse>(method, params, {
+            signal: controller.signal,
+            timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+          }),
         );
         return { ...response, observation, consumersAtIssue };
       },
       shouldContinue,
       shouldRetry,
+      controller.signal,
+      () => {
+        for (const entry of consumers) {
+          if (entry.isCurrent()) {
+            entry.onRetry?.();
+          }
+        }
+      },
     ).finally(() => {
       if (requests?.get(requestKey)?.promise === promise) {
         requests.delete(requestKey);
@@ -247,7 +266,12 @@ export function requestSharedHistory(
   const deadline = new AbortController();
   const timeout = setTimeout(
     () => {
-      deadline.abort(new Error(t("chat.historyRequestTimedOut")));
+      deadline.abort(
+        new GatewayProtocolRequestTimeoutError(
+          { method, timeoutMs: CHAT_HISTORY_RETRY_WINDOW_MS, requestSent: true },
+          t("chat.historyRequestTimedOut"),
+        ),
+      );
     },
     Math.max(0, consumer.retryDeadlineMs - Date.now()),
   );

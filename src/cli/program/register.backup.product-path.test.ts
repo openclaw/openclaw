@@ -178,6 +178,20 @@ describe("backup create CLI", () => {
             const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
+            if (process.versions.bun) {
+              const workerThreads = require("node:worker_threads");
+              const OriginalWorker = workerThreads.Worker;
+              const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
+              // The CLI's nested Workers do not inherit the Vitest parent's preload spy.
+              workerThreads.Worker = class Worker extends OriginalWorker {
+                constructor(filename, options = {}) {
+                  super(filename, {
+                    ...options,
+                    execArgv: [...(options.execArgv ?? process.execArgv), "--preload", preload],
+                  });
+                }
+              };
+            }
             const markerPath = process.env.PROOF_SNAPSHOT_MARKER;
             const realNow = Date.now.bind(Date);
             // Acquisition runs in a worker; every isolate must observe the same elapsed time.

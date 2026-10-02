@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import { createBoundSessionHistorySubagentProjection } from "../../gateway/session-history-readonly-reader.js";
+import { createSessionHistorySubagentProjection } from "../../gateway/session-history-subagent-projection.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -8,7 +8,6 @@ import {
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "./session-accessor.js";
-import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 
 it.each([false, true])(
   "bounds legacy coordination lookups and reuses scanned inputs (compacted=%s)",
@@ -102,11 +101,7 @@ it.each([false, true])(
         return extractJson.get(value, jsonPath)?.value ?? null;
       });
       try {
-        const resolver = createBoundSessionHistorySubagentProjection(
-          (read) => withCurrentProjectionSnapshot(scope, read, { readOnly: true }),
-          undefined,
-          () => undefined,
-        );
+        const resolver = createSessionHistorySubagentProjection(scope);
         const boundaryOffset = Number(compacted);
         expect(resolver.isSubagentRunMessage("quiet-run", 2 + boundaryOffset)).toBe(true);
         expect(laterInputInspections).toBe(0);

@@ -92,7 +92,6 @@ async function readNewerChatHistoryMessages(params: {
     allowResetArchiveFallback: true,
     readOnly: params.readOnly,
   });
-  await params.readers.subagentCoordination?.prepare?.(page.messages);
   if (page.windowReset || !page.found || page.displaySource !== params.displaySource) {
     throw new SessionTranscriptProjectionUnavailableError(
       params.readScope.sessionId,
@@ -232,7 +231,6 @@ async function readIncrementalChatHistoryTailAttempt(params: {
           captureReadWindow: true,
           readOnly: params.readOnly,
         });
-  await params.readers.subagentCoordination?.prepare?.(readPage.messages);
   const readWindow = readPage.readWindow;
   const availableMessages = resolveTranscriptPageEnd(readPage.totalMessages, {
     beforeSeq: requestedBeforeSeq,
@@ -386,7 +384,6 @@ async function readIncrementalChatHistoryTailAttempt(params: {
       allowResetArchiveFallback: true,
       readOnly: params.readOnly,
     });
-    await params.readers.subagentCoordination?.prepare?.(page.messages);
     // Separate awaits may cross a destructive rewrite, even when a page is empty.
     // Restart assembly instead of mixing records from different windows.
     if (page.windowReset || page.displaySource !== readPage.displaySource) {

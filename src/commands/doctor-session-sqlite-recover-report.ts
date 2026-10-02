@@ -20,12 +20,12 @@ import {
   moveSqliteFilesAside,
 } from "../infra/sqlite-recovery-files.js";
 import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
-  migrateOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";

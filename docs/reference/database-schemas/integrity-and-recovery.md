@@ -451,6 +451,7 @@ free space of at least twice the uncompressed store directory size. It takes
 verified WAL-aware SQLite backups, streams copies into a fresh NOCOW sibling,
 preserves ownership, modes, and access/default ACLs, checks copy size and
 `PRAGMA quick_check`, then atomically exchanges directories.
+Symbolic links retain their exact link text and ownership without following targets (including dangling links), and empty regular files are preserved.
 The report names the retained original directory and the standalone backups.
 Keep them until the updated Gateway has been verified; do not overwrite newer
 runtime state with an old copy.

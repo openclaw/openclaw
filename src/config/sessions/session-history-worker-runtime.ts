@@ -53,10 +53,6 @@ type QueuedHistoryRead = {
   remainingReaders: number;
 };
 type AdmittedSessionHistoryDelta = SessionHistoryDelta & { assertCurrent: () => void };
-type AdmittedSessionHistorySubagentFacts = {
-  facts: SessionHistorySubagentFacts;
-  assertCurrent: () => void;
-};
 const queuedHistoryReads = new Map<string, QueuedHistoryRead>();
 let pendingHistoryReaders = 0;
 let pendingHistoryBytes = 0;
@@ -141,16 +137,22 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
         params: { target: capturedTarget, query: structuredClone(request.params.query) },
       };
     }
-    if (request.kind === "subagent-visibility") {
+    if (request.kind === "inline-visibility") {
       return {
         kind: request.kind,
-        params: { target: capturedTarget, lookups: structuredClone(request.params.lookups) },
+        params: { target: capturedTarget, lookup: { ...request.params.lookup } },
       };
     }
     const captureOptions = <T>(options: T) => ({
       target: capturedTarget,
       options: structuredClone(options),
     });
+    if (request.kind === "active-accounting") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
+    if (request.kind === "bounded-tail") {
+      return { kind: request.kind, params: captureOptions(request.params.options) };
+    }
     if (request.kind === "message-page") {
       return { kind: request.kind, params: captureOptions(request.params.options) };
     }
@@ -263,22 +265,22 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
   };
 }
 
-type SessionHistoryPageValue<Result> = Result extends { kind: "subagent-visibility" }
-  ? AdmittedSessionHistorySubagentFacts
-  : Result extends { result: infer Value }
+type SessionHistoryPageValue<Result> = Result extends { result: infer Value }
+  ? Value
+  : Result extends { binding: infer Value }
     ? Value
-    : Result extends { binding: infer Value }
+    : Result extends { page: infer Value }
       ? Value
-      : Result extends { page: infer Value }
+      : Result extends { snapshot: infer Value }
         ? Value
-        : Result extends { snapshot: infer Value }
+        : Result extends { count: infer Value }
           ? Value
-          : Result extends { count: infer Value }
+          : Result extends { messages: infer Value }
             ? Value
-            : Result extends { messages: infer Value }
-              ? Value
-              : Result extends { kind: "delta" }
-                ? AdmittedSessionHistoryDelta
+            : Result extends { kind: "delta" }
+              ? AdmittedSessionHistoryDelta
+              : Result extends { kind: "inline-visibility" }
+                ? { subagentCoordination: SessionHistorySubagentFacts; assertCurrent: () => void }
                 : never;
 
 type SessionHistoryPageValues = {
@@ -355,8 +357,8 @@ export async function readSessionHistoryPageInWorker(
       const sourceReads =
         capturedRequest.kind === "rpc" ||
         capturedRequest.kind === "http" ||
-        capturedRequest.kind === "subagent-visibility" ||
-        capturedRequest.kind === "delta"
+        capturedRequest.kind === "delta" ||
+        capturedRequest.kind === "inline-visibility"
           ? await prepareGatewaySessionStoreReadSourcesAsync({
               cfg,
               currentSource,
@@ -423,7 +425,7 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "recent-page" &&
         capturedRequest.params.exactArchivePath !== undefined;
       const readOnly =
-        capturedRequest.kind === "subagent-visibility"
+        capturedRequest.kind === "active-accounting" || capturedRequest.kind === "bounded-tail"
           ? true
           : capturedRequest.kind === "artifacts"
             ? capturedRequest.params.query.kind === "image-page"
@@ -453,6 +455,18 @@ export async function readSessionHistoryPageInWorker(
               try {
                 page = await readPage();
               } catch (error) {
+                if (
+                  (capturedRequest.kind === "active-accounting" ||
+                    (capturedRequest.kind === "bounded-tail" &&
+                      !capturedRequest.params.options.readOnly)) &&
+                  isSessionTranscriptProjectionUnavailableError(error)
+                ) {
+                  assertCurrent();
+                  startSessionTranscriptIndexReconcile({
+                    ...databaseOptions,
+                    preferredSessionId: preparedTarget.sessionId,
+                  });
+                }
                 if (
                   readOnly ||
                   retriedProjection ||
@@ -562,15 +576,15 @@ export async function readSessionHistoryPageInWorker(
     if (result.kind === "transcript-binding") {
       return result.binding;
     }
-    if (result.kind === "subagent-visibility") {
-      return { facts: result.facts, assertCurrent };
-    }
     if ("result" in result) {
       return result.result;
     }
     if (result.kind === "delta") {
       const delta: AdmittedSessionHistoryDelta = { ...result, assertCurrent };
       return delta;
+    }
+    if (result.kind === "inline-visibility") {
+      return { subagentCoordination: result.subagentCoordination, assertCurrent };
     }
     return result.kind === "rpc"
       ? result.page

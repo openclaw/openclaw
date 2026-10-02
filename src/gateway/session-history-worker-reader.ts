@@ -1,5 +1,4 @@
 import type {
-  SessionHistorySubagentFacts,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "../config/sessions/session-history-types.js";
@@ -24,26 +23,17 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
-  if (request.kind === "subagent-visibility") {
-    const facts: SessionHistorySubagentFacts = { sessions: [], runMessages: [] };
-    for (const lookup of request.params.lookups) {
-      if (lookup.kind === "session") {
-        facts.sessions.push([
-          lookup.sessionKey,
-          options.readers.subagentCoordination.isSubagentSession(lookup.sessionKey),
-        ]);
-      } else {
-        facts.runMessages.push([
-          lookup.runId,
-          lookup.messageSeq,
-          options.readers.subagentCoordination.isSubagentRunMessage(
-            lookup.runId,
-            lookup.messageSeq,
-          ),
-        ]);
-      }
-    }
-    return { kind: "subagent-visibility", facts };
+  if (request.kind === "active-accounting") {
+    return {
+      kind: "active-accounting",
+      result: options.readers.readTranscriptAccounting(request.params.options),
+    };
+  }
+  if (request.kind === "bounded-tail") {
+    return {
+      kind: "bounded-tail",
+      result: options.readers.readBoundedMessageTail(request.params.options),
+    };
   }
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
@@ -154,6 +144,21 @@ export async function readSessionHistoryRequest(
       ...prepareSessionHistoryDelta(
         options.readers.readTranscriptDisplayDelta(request.params.limits),
         options.readers.subagentCoordination,
+      ),
+    };
+  }
+  if (request.kind === "inline-visibility") {
+    const { prepareSessionHistorySubagentFacts } =
+      await import("./session-history-delta-visibility.js");
+    const { lookup } = request.params;
+    return {
+      kind: "inline-visibility",
+      subagentCoordination: prepareSessionHistorySubagentFacts(
+        options.readers.subagentCoordination,
+        (recording) =>
+          lookup.kind === "session"
+            ? recording.isSubagentSession(lookup.sessionKey)
+            : recording.isSubagentRunMessage(lookup.runId, lookup.messageSeq),
       ),
     };
   }

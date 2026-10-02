@@ -25,7 +25,6 @@ import {
   prepareSessionHistoryDelta,
 } from "../session-history-delta-visibility.js";
 import { createSessionHistorySubagentProjection } from "../session-history-subagent-projection.js";
-import { projectTranscriptEntryMessage } from "../session-transcript-entry-message.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import type { RespondFn } from "./types.js";
@@ -179,21 +178,14 @@ it.each(["native", "acp"])(
           .spyOn(deltaReader, "readSessionHistoryPageInWorker")
           .mockImplementationOnce(async (request) => {
             const resolver = createSessionHistorySubagentProjection(request.params.target);
-            const delta = deltaEvents.readTranscriptDisplayDelta(
-              request.params.target,
-              request.params.limits,
-            );
-            if (delta.kind === "page") {
-              await resolver.prepare?.(
-                delta.events.flatMap(({ event, messageSeq, displayPosition }) =>
-                  messageSeq === undefined
-                    ? []
-                    : [projectTranscriptEntryMessage(event, messageSeq, displayPosition)],
-                ),
-              );
-            }
             return {
-              ...prepareSessionHistoryDelta(delta, resolver),
+              ...prepareSessionHistoryDelta(
+                deltaEvents.readTranscriptDisplayDelta(
+                  request.params.target,
+                  request.params.limits,
+                ),
+                resolver,
+              ),
               assertCurrent: expectDefined(resolver.assertCurrent, "native source admission"),
             };
           });

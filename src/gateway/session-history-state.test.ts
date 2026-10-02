@@ -54,13 +54,15 @@ async function appendAssistantText(
   text: string,
   messageSeq?: number,
 ) {
-  return await state.appendInlineMessage({
-    message: {
-      role: "assistant",
-      content: textContent(text),
-    },
-    ...(messageSeq === undefined ? {} : { messageSeq }),
-  });
+  return (
+    await state.prepareInlineMessage({
+      message: {
+        role: "assistant",
+        content: textContent(text),
+      },
+      ...(messageSeq === undefined ? {} : { messageSeq }),
+    })
+  )();
 }
 
 describe("SessionHistorySseState", () => {
@@ -75,15 +77,17 @@ describe("SessionHistorySseState", () => {
   test("carries inline user idempotency keys into history metadata", async () => {
     const state = newState([]);
 
-    const appended = await state.appendInlineMessage({
-      message: {
-        role: "user",
-        content: [{ type: "text", text: "optimistic turn" }],
-        idempotencyKey: "client-turn-2",
-      },
-      messageId: "message-user-2",
-      messageSeq: 2,
-    });
+    const appended = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "optimistic turn" }],
+          idempotencyKey: "client-turn-2",
+        },
+        messageId: "message-user-2",
+        messageSeq: 2,
+      })
+    )();
 
     expect(appended).toBeDefined();
     expect(appended?.messageSeq).toBe(2);
@@ -157,25 +161,27 @@ describe("SessionHistorySseState", () => {
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
     const state = newState([assistantTextMessage(visibleText, 2)]);
 
-    const appended = await state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: "Audio reply" },
-          {
-            type: "attachment",
-            attachment: {
-              url: "/tmp/tts.mp3",
-              kind: "audio",
-              label: "tts.mp3",
-              mimeType: "audio/mpeg",
+    const appended = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "/tmp/tts.mp3",
+                kind: "audio",
+                label: "tts.mp3",
+                mimeType: "audio/mpeg",
+              },
             },
-          },
-        ],
-        openclawTtsSupplement: { textSha256, spokenText: visibleText },
-      },
-      messageSeq: 3,
-    });
+          ],
+          openclawTtsSupplement: { textSha256, spokenText: visibleText },
+        },
+        messageSeq: 3,
+      })
+    )();
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toEqual([
@@ -210,15 +216,17 @@ describe("SessionHistorySseState", () => {
   test("requests refresh when later assistant content repairs an inline stream error", async () => {
     const state = newState([userTextMessage("hello", 1)]);
 
-    const sentinel = await state.appendInlineMessage({
-      message: {
-        role: "assistant",
-        content: textContent(STREAM_ERROR_FALLBACK_TEXT),
-        stopReason: "error",
-        errorMessage: "provider failed before content",
-      },
-      messageSeq: 2,
-    });
+    const sentinel = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "assistant",
+          content: textContent(STREAM_ERROR_FALLBACK_TEXT),
+          stopReason: "error",
+          errorMessage: "provider failed before content",
+        },
+        messageSeq: 2,
+      })
+    )();
 
     expect(sentinel?.message).toMatchObject({
       role: "assistant",
@@ -243,18 +251,20 @@ describe("SessionHistorySseState", () => {
       { assistantErrorPending: true },
     );
 
-    const forwarded = await state.appendInlineMessage({
-      message: {
-        role: "user",
-        content: textContent("forwarded update"),
-        provenance: {
-          kind: "inter_session",
-          sourceSessionKey: "agent:main:webchat:source",
-          sourceTool: "sessions_send",
+    const forwarded = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "user",
+          content: textContent("forwarded update"),
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:webchat:source",
+            sourceTool: "sessions_send",
+          },
         },
-      },
-      messageSeq: 2,
-    });
+        messageSeq: 2,
+      })
+    )();
 
     expect(forwarded?.message).toMatchObject({
       role: "assistant",
@@ -360,13 +370,15 @@ describe("SessionHistorySseState", () => {
 
     expect(await appendAssistantText(state, "HEARTBEAT_OK", 3)).toBeNull();
 
-    const compaction = await state.appendInlineMessage({
-      message: {
-        role: "system",
-        content: textContent("Compaction summary"),
-      },
-      messageSeq: 4,
-    });
+    const compaction = (
+      await state.prepareInlineMessage({
+        message: {
+          role: "system",
+          content: textContent("Compaction summary"),
+        },
+        messageSeq: 4,
+      })
+    )();
     expect(compaction?.message?.["__openclaw"]?.turnBoundary).toBeUndefined();
 
     const appended = await appendAssistantText(state, "Disk usage crossed 95 percent.", 5);
@@ -380,40 +392,46 @@ describe("SessionHistorySseState", () => {
     const state = newState([assistantTextMessage("already visible", 1)]);
 
     expect(
-      await state.appendInlineMessage({
-        message: {
-          role: "user",
-          content: HEARTBEAT_PROMPT,
-        },
-      }),
+      (
+        await state.prepareInlineMessage({
+          message: {
+            role: "user",
+            content: HEARTBEAT_PROMPT,
+          },
+        })
+      )(),
     ).toBeNull();
     expect(await appendAssistantText(state, "HEARTBEAT_OK")).toBeNull();
     expect(
-      await state.appendInlineMessage({
-        message: {
-          role: "custom",
-          customType: "openclaw.runtime-context",
-          content: "secret runtime context",
-          display: false,
-        },
-      }),
+      (
+        await state.prepareInlineMessage({
+          message: {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content: "secret runtime context",
+            display: false,
+          },
+        })
+      )(),
     ).toBeNull();
     expect(
-      await state.appendInlineMessage({
-        message: {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: [
-                "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-                "runtime details",
-                "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-              ].join("\n"),
-            },
-          ],
-        },
-      }),
+      (
+        await state.prepareInlineMessage({
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: [
+                  "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+                  "runtime details",
+                  "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                ].join("\n"),
+              },
+            ],
+          },
+        })
+      )(),
     ).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
   });

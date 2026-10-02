@@ -86,7 +86,7 @@ function finalizeError(
   error: string,
   options?: Parameters<typeof finalizeCompletedCronRunOutcomes>[2],
 ) {
-  const outcome = authorCronRunCompletion(state, job, {
+  const outcome = authorCronRunCompletion(job, {
     jobId: job.id,
     job: structuredClone(job),
     activeJobMarker: markCronJobActive(job.id),

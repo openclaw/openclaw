@@ -143,7 +143,7 @@ describe("multimodal display privacy", () => {
     });
     for (const message of [
       projectChatDisplayMessages([rawMessage])[0],
-      (await state.appendInlineMessage({ message: rawMessage, messageId: "media-message" }))
+      (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
         ?.message,
     ]) {
       expect(message?.role).toBe("user");

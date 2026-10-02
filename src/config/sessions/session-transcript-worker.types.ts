@@ -4,10 +4,6 @@ import type {
   SessionFileEntry,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
-import type {
-  SessionLogSnapshot,
-  SessionLogSnapshotOptions,
-} from "../../auto-reply/reply/agent-runner-memory-snapshot.types.js";
 import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
 import type {
   SessionRowTranscriptFields,
@@ -30,6 +26,10 @@ import type {
   ArchivedSessionEvictionBatch,
   ArchivedSessionEvictionQuery,
 } from "./disk-budget.types.js";
+import type {
+  SessionGoalOperationLookup,
+  SessionGoalOperationLookupResult,
+} from "./goals-operations.types.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import type { SessionTranscriptBoundedActiveContext } from "./session-accessor.sqlite-active-context.js";
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-active-events.js";
@@ -229,15 +229,6 @@ type SessionRowBackfillWorkerInput = {
   params: SessionRowTranscriptReadParams;
 };
 
-type SessionTranscriptAccountingWorkerInput = {
-  kind: "transcript-accounting";
-  database: { agentId: string; path: string };
-  scope: SessionTranscriptReadScope;
-  resolvedScope: ResolvedTranscriptReadScope;
-  options: SessionLogSnapshotOptions;
-  admission?: UserTurnTranscriptAdmissionReceipt;
-};
-
 export type SessionColdMetadataWorkerInput = {
   kind: "cold-metadata";
   database: { agentId: string; path: string };
@@ -248,6 +239,12 @@ export type SessionColdMetadataWorkerInput = {
 export type SessionColdMetadataWorkerResult = {
   kind: "cold-metadata";
   archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
+};
+
+type SessionColdStorageInventoryWorkerInput = {
+  kind: "cold-storage-inventory";
+  database: { agentId: string; path: string };
+  env: NodeJS.ProcessEnv;
 };
 
 export type SessionRowPresenceWorkerInput = {
@@ -292,6 +289,12 @@ type SessionPendingInputReceiptsWorkerInput = {
   sessionKey: string;
   sessionId: string;
   runIds: readonly string[];
+  env: NodeJS.ProcessEnv;
+};
+
+type SessionGoalOperationReceiptWorkerInput = SessionGoalOperationLookup & {
+  kind: "goal-operation-receipt";
+  database: { agentId: string; path: string };
   env: NodeJS.ProcessEnv;
 };
 
@@ -493,8 +496,8 @@ export type SessionHistoryWorkerInput =
   | SessionPendingArchivesWorkerInput
   | SessionArchivePresenceWorkerInput
   | SessionColdMetadataWorkerInput
+  | SessionColdStorageInventoryWorkerInput
   | SessionTranscriptHydrationWorkerInput
-  | SessionTranscriptAccountingWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput
   | SessionTranscriptRecentActiveEventsWorkerInput
   | SessionTranscriptLatestActiveMessageWorkerInput
@@ -510,6 +513,7 @@ export type SessionHistoryWorkerInput =
   | SessionMembershipFactsWorkerInput
   | SessionProgressCardWorkerInput
   | SessionPendingInputReceiptsWorkerInput
+  | SessionGoalOperationReceiptWorkerInput
   | SessionEntryListWorkerInput
   | SessionEntryReadWorkerInput
   | SessionEntryCurrentWorkerInput
@@ -553,9 +557,14 @@ export type SessionTranscriptWorkerValues = {
   "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
+  "cold-storage-inventory": {
+    kind: "cold-storage-inventory";
+    hotTranscripts: number;
+    coldTranscripts: number;
+    embeddedArchiveBytes: number;
+  };
   "transcript-hydration": SessionTranscriptHydrationWorkerResult;
   "current-turn-entry": SessionTranscriptCurrentTurnEntryRead;
-  "transcript-accounting": { kind: "transcript-accounting"; snapshot: SessionLogSnapshot };
   "recent-active-events": { kind: "recent-active-events"; events: TranscriptEvent[] };
   "latest-active-message": {
     kind: "latest-active-message";
@@ -577,6 +586,10 @@ export type SessionTranscriptWorkerValues = {
   "session-members": SessionMember[];
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };
+  "goal-operation-receipt": {
+    kind: "goal-operation-receipt";
+    result: SessionGoalOperationLookupResult;
+  };
   "session-pending-input-receipts": {
     kind: "session-pending-input-receipts";
     receipts: ReturnType<typeof listSessionPendingInputReceipts>;
@@ -666,6 +679,7 @@ export type SessionHistoryWorkerDatabase = {
     PublishedSessionTranscriptArchive | null
   >;
   readColdMetadata: SessionHistoryReader<SessionColdMetadataWorkerInput>;
+  readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
   ) => Promise<SessionTranscriptSearchResult>;
@@ -697,10 +711,6 @@ export type SessionHistoryWorkerDatabase = {
   readTranscript: CancellableSessionHistoryReader<
     SessionTranscriptHydrationWorkerInput,
     PreparedSessionTranscriptHydration
-  >;
-  readAccountingSnapshot: CancellableSessionHistoryReader<
-    SessionTranscriptAccountingWorkerInput,
-    SessionLogSnapshot
   >;
   readCurrentTurnEntry: CancellableSessionHistoryReader<SessionTranscriptCurrentTurnEntryWorkerInput>;
   readRecentActiveEvents: CancellableSessionHistoryReader<
@@ -739,6 +749,10 @@ export type SessionHistoryWorkerDatabase = {
   readMembers: SessionHistoryReader<SessionMembersWorkerInput>;
   readMembershipFacts: SessionHistoryReader<SessionMembershipFactsWorkerInput>;
   readProgressCard: SessionHistoryReader<SessionProgressCardWorkerInput, ProgressCard | null>;
+  readGoalOperationReceipt: SessionHistoryReader<
+    SessionGoalOperationReceiptWorkerInput,
+    SessionGoalOperationLookupResult
+  >;
   readPendingInputReceipts: SessionHistoryReader<
     SessionPendingInputReceiptsWorkerInput,
     ReturnType<typeof listSessionPendingInputReceipts>

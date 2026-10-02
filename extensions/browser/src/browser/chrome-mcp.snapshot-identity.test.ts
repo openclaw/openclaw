@@ -1,13 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+// Route tests mock the public facade in shared workers; exercise the real owners here.
 import {
-  ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
   evaluateChromeMcpScript,
-  listChromeMcpTabs,
-  setChromeMcpSessionFactoryForTest,
   takeChromeMcpSnapshot,
   withChromeMcpDocument,
-} from "./chrome-mcp.js";
+} from "./chrome-mcp-actions.js";
+import { ChromeMcpDocumentUnavailableError } from "./chrome-mcp-contracts.js";
+import { setChromeMcpSessionFactoryForTest } from "./chrome-mcp-session.js";
+import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import {
   createPageSession,

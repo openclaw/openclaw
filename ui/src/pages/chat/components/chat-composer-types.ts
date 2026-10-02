@@ -22,6 +22,7 @@ import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts"
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
+import type { PresentationBinding } from "../../../lit/presentation-binding.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
@@ -96,6 +97,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
   progressCardLifetime?: object;
+  progressCardVisibility?: PresentationBinding;
   progressCardInitialLoading?: boolean;
   progressCardRefresh?: SessionProgressCardRefreshAction;
   gatewayScope?: object;

@@ -20,8 +20,8 @@ class FixtureState {
   sessionStartedAt = 1;
   beforeRead?: () => Promise<void>;
   beforeRefresh?: () => Promise<void>;
-  beforeAppend?: () => Promise<void>;
   beforeAuth?: () => Promise<void>;
+  beforeInline?: () => Promise<void>;
 }
 let fixture = new FixtureState();
 
@@ -149,15 +149,15 @@ vi.mock("./session-history-state.js", () => ({
     fromSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
       retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
-      appendInlineMessage: async ({
+      prepareInlineMessage: async ({
         message,
         messageId,
       }: {
         message: unknown;
         messageId?: string;
       }) => {
-        await fixture.beforeAppend?.();
-        return { message, messageSeq: 1, messageId };
+        await fixture.beforeInline?.();
+        return () => ({ message, messageSeq: 1, messageId });
       },
       shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => {
@@ -217,6 +217,7 @@ class MockRes extends EventEmitter {
 
   write(chunk: string) {
     this.writes.push(chunk);
+    this.emit("write", chunk);
     const written = this.writes.join("");
     if (this.closeOnRetry && written.includes("retry:") && written.endsWith("\n\n")) {
       this.closeOnRetry = false;
@@ -263,14 +264,28 @@ async function openStream(params: { closeOnRetry?: boolean; expectSubscribed?: b
   const req = new MockReq();
   const res = new MockRes();
   res.closeOnRetry = params.closeOnRetry;
+  const initial =
+    params.expectSubscribed === false ? undefined : waitForFrame(res, "event: history");
   expect(await handle(req, res)).toBe(true);
   if (params.expectSubscribed === false) {
     expect(fixture.onUpdate).toBeUndefined();
   } else {
-    await vi.waitFor(() => expect(res.writes.join("")).toContain("event: history"));
+    await initial;
     expect(fixture.onUpdate).toBeTypeOf("function");
   }
   return { req, res };
+}
+
+function waitForFrame(res: MockRes, text: string): Promise<void> {
+  return new Promise((resolve) => {
+    const onWrite = (chunk: string) => {
+      if (chunk.includes(text)) {
+        res.off("write", onWrite);
+        resolve();
+      }
+    };
+    res.on("write", onWrite);
+  });
 }
 
 async function withRealStream(
@@ -420,37 +435,26 @@ describe("session history SSE auth revocation", () => {
     },
   );
 
-  it.each(["refresh", "inline append"] as const)(
-    "withholds an SSE %s after profile revocation while its read is pending",
-    async (kind) => {
-      fixture.profile = guestProfile;
-      const { res } = await openStream();
-      const barrier = readBarrier();
-      if (kind === "refresh") {
-        fixture.beforeRefresh = barrier.wait;
-        fixture.onUpdate?.({ sessionFile: SESSION_FILE });
-      } else {
-        fixture.beforeAppend = barrier.wait;
-        emitTranscriptTextUpdate("private inline history");
-      }
-      const finished = once(res, "finish");
-      try {
-        await barrier.entered.promise;
-        fixture.visible = false;
-      } finally {
-        barrier.release.resolve();
-      }
-      try {
-        await finished;
-        expect(res.writes.join("")).not.toContain("event: message");
-        expect(res.writes.join("")).not.toContain("private");
-        expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
-        expect(fixture.onUpdate).toBeUndefined();
-      } finally {
-        res.end();
-      }
-    },
-  );
+  it("withholds an SSE refresh after profile revocation while its read is pending", async () => {
+    fixture.profile = guestProfile;
+    const { res } = await openStream();
+    const barrier = readBarrier();
+    fixture.beforeRefresh = barrier.wait;
+    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+    try {
+      await barrier.entered.promise;
+      fixture.visible = false;
+    } finally {
+      barrier.release.resolve();
+    }
+    try {
+      await expectStreamClosedWithoutMessage(res, "private refreshed history");
+      expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
+      expect(fixture.onUpdate).toBeUndefined();
+    } finally {
+      res.end();
+    }
+  });
 
   it("closes an existing stream before disclosure when profile access is revoked", async () => {
     fixture.profile = guestProfile;
@@ -491,6 +495,65 @@ describe("session history SSE auth revocation", () => {
       expect(res.writes.join("")).toContain("inline between refreshes");
     } finally {
       release.resolve();
+      res.end();
+    }
+  });
+
+  it.each(["sharing", "replacement", "reset", "close", "failure"] as const)(
+    "withholds a delayed inline message after %s",
+    async (change) => {
+      fixture.profile = guestProfile;
+      const { res } = await openStream();
+      const barrier = readBarrier();
+      fixture.beforeInline = async () => {
+        await barrier.wait();
+        if (change === "failure") {
+          throw new Error("inline visibility worker failed");
+        }
+      };
+      const closed = once(res, "close");
+      emitTranscriptTextUpdate("pending inline content");
+      await barrier.entered.promise;
+      if (change === "sharing") {
+        fixture.visible = false;
+      } else if (change === "replacement") {
+        fixture.sessionId = "successor";
+      } else if (change === "reset") {
+        fixture.lifecycleRevision = "after-reset";
+      } else if (change === "close") {
+        res.end();
+      }
+      barrier.release.resolve();
+      await closed;
+      expect(res.writes.join("")).not.toContain("pending inline content");
+      expect(fixture.onUpdate).toBeUndefined();
+    },
+  );
+
+  it("serializes appends and trailing refreshes behind pending inline visibility", async () => {
+    const { res } = await openStream();
+    const barrier = readBarrier();
+    fixture.beforeInline = barrier.wait;
+    const refreshed = waitForFrame(res, "private refreshed history");
+    try {
+      emitTranscriptTextUpdate("first queued append");
+      await barrier.entered.promise;
+      emitTranscriptTextUpdate("second queued append");
+      fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+      expect(res.writes.filter((frame) => frame.startsWith("event:"))).toHaveLength(1);
+      barrier.release.resolve();
+      await refreshed;
+      const frames = res.writes.filter((frame) => frame.startsWith("event:"));
+      expect(frames.map((frame) => frame.split("\n")[0])).toEqual([
+        "event: history",
+        "event: message",
+        "event: message",
+        "event: history",
+      ]);
+      expect(frames[1]).toContain("first queued append");
+      expect(frames[2]).toContain("second queued append");
+    } finally {
+      barrier.release.resolve();
       res.end();
     }
   });

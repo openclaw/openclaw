@@ -86,6 +86,8 @@ suite.define(() => {
             expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           }
 
+          const attemptsBeforeRetry = method === "chat.startup" ? 2 : 1;
+          expect(await gateway.getRequests(method)).toHaveLength(attemptsBeforeRetry);
           await gateway.resolveDeferred(method);
           await page.clock.runFor(1);
           if (method === "chat.startup") {
@@ -107,7 +109,9 @@ suite.define(() => {
             await page.clock.resume();
             await page.locator('[data-chat-model-select="true"]').click();
           }
-          await expect.poll(async () => (await gateway.getRequests(method)).length).toBe(2);
+          await expect
+            .poll(async () => (await gateway.getRequests(method)).length)
+            .toBe(attemptsBeforeRetry + 1);
           // The native details toggle may send the retry after the click resolves.
           // Advance its mock response timer only after that request is observed.
           await page.clock.runFor(100);

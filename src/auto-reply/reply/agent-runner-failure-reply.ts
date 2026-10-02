@@ -243,6 +243,8 @@ export function buildExternalRunFailureReply(
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
     isHeartbeat?: boolean;
+    /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+    useHeartbeatFailureCopy?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -250,6 +252,7 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
   // A preflight refusal is host-authored and names the next step. Heartbeats run
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
@@ -263,7 +266,7 @@ export function buildExternalRunFailureReply(
     }
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: options?.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
         : options?.includeDetails
           ? formatForwardedExternalRunFailureText(sanitizedMessage)
@@ -355,12 +358,19 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(
-          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
-        )
+      ? resolveExternalRunFailureDetail(sanitizedMessage)
       : undefined;
-    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(detail)
+        : options.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Heartbeat-backed event turns must remain visible even when they use generic wording.
+      isGenericRunnerFailure: false,
+    };
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
@@ -435,15 +445,18 @@ export function resolveAgentRunFailureText(params: {
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  useHeartbeatFailureCopy?: boolean;
   replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
 }): ReplyPayload {
+  const useHeartbeatFailureCopy = params.useHeartbeatFailureCopy ?? params.isHeartbeat === true;
   return markAgentRunFailureReplyPayload({
     text: resolveAgentRunFailureText({
       ...params,
-      text: params.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Visibility follows the execution surface, not which sentence we render.
       isGenericRunnerFailure: !params.isHeartbeat,
     }),
   });

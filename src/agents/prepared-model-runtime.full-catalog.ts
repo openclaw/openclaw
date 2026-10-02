@@ -629,7 +629,7 @@ export function createPreparedModelRuntimeSnapshot(
   prepareModelCatalogThinkingPolicies({
     catalog: modelCatalog,
     metadataSnapshot: pluginMetadataSnapshot,
-    providers: pluginRegistry?.providers,
+    pluginRegistry,
   });
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the

@@ -214,6 +214,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
     },
+    useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
     suppressUnmarkedSourceReplies:
       resolveSourceReplyDeliveryMode({

@@ -15,8 +15,8 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { expandUpdateFirstHopCompatLanes } from "../../scripts/lib/update-first-hop-lanes.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyNativeCompilerPackage } from "./native-boundary-fixture.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const repo = resolve(".");
@@ -114,14 +114,12 @@ function fixture(
     const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
     const nativeName = `@typescript/typescript-${process.platform}-${process.arch}`;
     const installedNative = createRequire(installedParser).resolve(`${nativeName}/package.json`);
-    copyNativeCompilerPackage(
-      dirname(installedParser),
-      join(toolingRoot, "node_modules/typescript"),
-    );
-    copyNativeCompilerPackage(
-      dirname(installedNative),
-      join(toolingRoot, "node_modules", nativeName),
-    );
+    copyTreeCloseOnExec(dirname(installedParser), join(toolingRoot, "node_modules/typescript"), {
+      dereference: true,
+    });
+    copyTreeCloseOnExec(dirname(installedNative), join(toolingRoot, "node_modules", nativeName), {
+      dereference: true,
+    });
   }
   const log = join(root, "forbidden-commands");
   const bin = join(root, "bin");

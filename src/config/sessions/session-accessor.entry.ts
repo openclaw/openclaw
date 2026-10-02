@@ -9,7 +9,7 @@ import {
 } from "../../routing/session-key.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveAgentMainSessionKey } from "./main-session.js";
+import { collectCanonicalSessionLookupKeys } from "./main-session-key.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import "./plugin-host-cleanup.js";
 import "./session-accessor.sqlite-canonical-repair.js";
@@ -111,32 +111,6 @@ function resolveLogicalSessionStoreCandidates(params: {
     }
   }
   return [...targets.values()];
-}
-
-function buildLogicalSessionEntryCandidateKeys(params: {
-  agentId: string;
-  canonicalKey: string;
-  cfg: OpenClawConfig;
-  requestedKey: string;
-}): string[] {
-  const targets = new Set<string>();
-  if (params.canonicalKey) {
-    targets.add(params.canonicalKey);
-  }
-  if (params.requestedKey && params.requestedKey !== params.canonicalKey) {
-    targets.add(params.requestedKey);
-  }
-  if (params.canonicalKey === "global" || params.canonicalKey === "unknown") {
-    return [...targets];
-  }
-  const agentMainKey = resolveAgentMainSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
-  if (params.canonicalKey === agentMainKey) {
-    targets.add(`agent:${params.agentId}:main`);
-  }
-  return [...targets];
 }
 
 function findCanonicalSessionEntryMatch(
@@ -255,10 +229,10 @@ function resolveSessionEntryStoreTarget(
     sessionKey: requestedKey,
     agentId: scope.agentId,
   });
-  const scanTargets = buildLogicalSessionEntryCandidateKeys({
+  const scanTargets = collectCanonicalSessionLookupKeys({
     agentId,
     canonicalKey,
-    cfg: scope.cfg,
+    mainKey: scope.cfg.session?.mainKey,
     requestedKey,
   });
   if (isIncognitoSessionKey(canonicalKey)) {
