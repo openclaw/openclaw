@@ -133,8 +133,6 @@ export async function monitorLineProvider(
   }
 
   const bot = createLineBot({
-    channelAccessToken: token,
-    channelSecret: secret,
     accountId,
     runtime,
     buildContext,
