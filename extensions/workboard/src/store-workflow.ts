@@ -418,18 +418,24 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     scope?: WorkboardMutationScope | null,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(async () => {
-      const existing = await this.requireCard(id);
-      assertCanMutateClaimedCard(existing, scope === null ? undefined : scope);
       const boardId = normalizeBoardId(input.boardId);
       if (!boardId) {
         throw new Error("board id is required.");
       }
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "board move reason");
-      const metadata = {
-        ...existing.metadata,
-        comments: appendComment(existing.metadata?.comments, reason),
-      };
-      return await this.updateCard(id, { boardId, metadata }, { enforceStatusHolds: true });
+      const result = await this.updateLatestCard(
+        id,
+        (current) => {
+          assertCanMutateClaimedCard(current, scope === null ? undefined : scope);
+          const metadata = {
+            ...current.metadata,
+            comments: appendComment(current.metadata?.comments, reason),
+          };
+          return { boardId, metadata };
+        },
+        { enforceStatusHolds: true },
+      );
+      return result.card;
     });
   }
 

@@ -3139,6 +3139,29 @@ describe("WorkboardStore", () => {
     );
   });
 
+  it("rejects board move when a claim is reassigned concurrently and prevents stale ownership restore", async () => {
+    const store = createWorkboardSqliteTestStore({ createStores: createKernelStores });
+    const card = await store.create({
+      title: "Race card",
+      status: "running",
+      boardId: "default",
+    });
+    await store.claim(card.id, { ownerId: "worker-1", token: "token-1" });
+
+    // Concurrent ownership reassignment
+    await store.releaseClaim(card.id, { ownerId: "worker-1", token: "token-1", status: "ready" });
+    await store.claim(card.id, { ownerId: "worker-2", token: "token-2" });
+
+    // Former owner's stale call must fail and must not restore worker-1 or overwrite worker-2
+    await expect(
+      store.boardMove(card.id, { boardId: "people" }, { ownerId: "worker-1", token: "token-1" }),
+    ).rejects.toThrow("card is claimed by worker-2");
+
+    const latest = await store.get(card.id);
+    expect(latest?.metadata?.claim?.ownerId).toBe("worker-2");
+    expect(latest?.metadata?.automation?.boardId).toBe("default");
+  });
+
   it("excludes archived cards from notification replay without discarding their history", async () => {
     const {
       store,
