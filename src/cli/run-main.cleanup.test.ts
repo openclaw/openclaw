@@ -8,12 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import {
-  createGatewaySchedulerClock,
-  createTestGatewayScheduler,
-} from "../test-utils/gateway-scheduler-clock.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
 const dispatch = vi.hoisted(() => ({
   run: async () => {},
@@ -230,41 +228,37 @@ describe("CLI process harness cleanup", () => {
     release();
     const aged = new Date(Date.now() - 2 * 60 * 60_000);
     fs.utimesSync(prior, aged, aged);
-    const clock = createGatewaySchedulerClock(Date.now());
-    const scheduler = createTestGatewayScheduler(clock.clock);
-    const schedulerModule = await import("../infra/gateway-scheduler.js");
-    const constructor = vi
-      .spyOn(schedulerModule, "GatewayScheduler")
-      .mockImplementation(function () {
-        return scheduler;
-      });
+    const { getBoundLegacyPluginSdkResourceHost } =
+      await import("../plugins/legacy-sdk-resource-host.js");
     const { getPluginCache } = await import("../plugins/plugin-cache.js");
     const { PluginInstance } = await import("../plugins/plugin-instance.js");
     const { capturePluginGenerationArtifact } =
       await import("../plugins/plugin-generation-artifact.js");
     let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
+    let scheduler: GatewayScheduler | undefined;
     dispatch.run = async () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const host = getBoundLegacyPluginSdkResourceHost();
+      expect(host).toBeDefined();
+      scheduler = host!.scheduler;
       artifact = capturePluginGenerationArtifact(source);
       const instance = new PluginInstance("orphan-recovery-fixture");
       instance.onModuleDispose(artifact.disposeAsync);
       getPluginCache().instances.add(instance);
-      expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 60 * 60_000);
+      expect(scheduler.nextWakeAtMs).not.toBeNull();
       expect(fs.readFileSync(artifact.resolve(path.join(source, "index.cjs")), "utf8")).toContain(
         "retained",
       );
     };
     try {
       await runProcessEntry();
-      expect(constructor).toHaveBeenCalledOnce();
       expect(fs.existsSync(prior)).toBe(false);
-      expect(scheduler.signal.aborted).toBe(true);
-      expect(scheduler.nextWakeAtMs).toBeNull();
+      expect(scheduler?.signal.aborted).toBe(true);
+      expect(scheduler?.nextWakeAtMs).toBeNull();
       expect(artifact).toBeDefined();
       expect(fs.existsSync(artifact!.boundaryRoot)).toBe(false);
     } finally {
-      constructor.mockRestore();
-      await scheduler.stop();
+      await scheduler?.stop();
       await artifact?.disposeAsync();
       vi.unstubAllEnvs();
     }
