@@ -14,7 +14,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { SkillCommandSpec } from "../skills/types.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
-import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
+import { resolveTextCommand } from "./commands-registry-normalize.js";
 import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
@@ -25,33 +25,24 @@ import type {
   NativeCommandSpec,
 } from "./commands-registry.types.js";
 
-export {
-  isCommandEnabled,
-  listChatCommands,
-  listChatCommandsForConfig,
-} from "./commands-registry-list.js";
+export { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 
 export {
-  getCommandDetection,
   maybeResolveTextAlias,
   normalizeCommandBody,
   resolveTextCommand,
 } from "./commands-registry-normalize.js";
 
-export { isNativeCommandSurface, shouldHandleTextCommands } from "./commands-text-routing.js";
+export { shouldHandleTextCommands } from "./commands-text-routing.js";
 
 export type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
   CommandArgDefinition,
-  CommandArgMenuSpec,
   CommandArgValues,
   CommandArgs,
-  CommandDetection,
   CommandNormalizeOptions,
-  CommandScope,
   NativeCommandSpec,
-  ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
 
 type NativeCommandProviderLookupOptions = {
@@ -82,7 +73,7 @@ function createNativeCommandNameMapper(
   };
 }
 
-function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
+export function supportsNativeProvider(command: ChatCommandDefinition, provider?: string): boolean {
   if (!command.nativeProviders?.length) {
     return true;
   }
@@ -239,7 +230,7 @@ export function isActiveRunSafeCommandTurn(params: {
 }
 
 /** Formats a command and optional raw argument string as slash-command text. */
-export function buildCommandText(commandName: string, args?: string): string {
+function buildCommandText(commandName: string, args?: string): string {
   const trimmedArgs = args?.trim();
   return trimmedArgs ? `/${commandName} ${trimmedArgs}` : `/${commandName}`;
 }
@@ -486,10 +477,4 @@ export function formatCommandArgMenuTitle(params: {
     return `Choose ${menu.arg.name} for /${commandLabel}.`;
   }
   return `Choose ${menu.arg.description || menu.arg.name} for /${commandLabel}.`;
-}
-
-/** Returns true for normalized slash-command text. */
-export function isCommandMessage(raw: string): boolean {
-  const trimmed = normalizeCommandBody(raw);
-  return trimmed.startsWith("/");
 }

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createCodexNativeTestState } from "./native-app-server.test-support.js";
 import { isJsonObject, type JsonObject } from "./protocol.js";
@@ -231,7 +232,7 @@ describe("native Codex skill delivery", () => {
     }
   }, 45_000);
 
-  it("delivers and refreshes persona through an external WebSocket Harness", async () => {
+  it("delivers and refreshes persona through an external WebSocket Harness", async ({ signal }) => {
     const root = await fs.realpath(tempDir);
     const native = await createCodexNativeTestState(root);
     for (const [name, value] of Object.entries(native.env)) {
@@ -256,14 +257,9 @@ describe("native Codex skill delivery", () => {
       stdio: ["ignore", "ignore", "pipe"],
     });
     let client: Awaited<ReturnType<typeof createIsolatedCodexAppServerClient>> | undefined;
-    let startupTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const url = await new Promise<string>((resolve, reject) => {
+      const listening = new Promise<string>((resolve, reject) => {
         let stderr = "";
-        startupTimer = setTimeout(
-          () => reject(new Error("Native WebSocket startup timed out")),
-          15_000,
-        );
         harness.once("error", reject);
         harness.once("exit", (code) =>
           reject(new Error(`Native WebSocket exited: ${code} ${stderr}`)),
@@ -272,11 +268,11 @@ describe("native Codex skill delivery", () => {
           stderr += chunk.toString();
           const match = stderr.match(/listening on:\s*(ws:\/\/127\.0\.0\.1:\d+)/);
           if (match?.[1]) {
-            clearTimeout(startupTimer);
             resolve(match[1]);
           }
         });
       });
+      const url = await withinTest(listening, signal);
       const soulPath = path.join(native.cwd, "SOUL.md");
       const firstSoul = "SYNTHETIC_REMOTE_PERSONA_FIRST";
       const editedSoul = "SYNTHETIC_REMOTE_PERSONA_EDITED";
@@ -378,7 +374,6 @@ describe("native Codex skill delivery", () => {
       }
       expect(threadIds.size).toBe(1);
     } finally {
-      clearTimeout(startupTimer);
       if (client) {
         await client.closeAndWait();
       }

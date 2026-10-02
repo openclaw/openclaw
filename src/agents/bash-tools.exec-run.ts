@@ -24,18 +24,18 @@ import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../routing/s
 import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
 import { processGatewayAllowlist } from "./bash-tools.exec-host-gateway.js";
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
+import { EXEC_MANUAL_COLLECTION_FOLLOW_UP } from "./bash-tools.exec-output.js";
 import {
   assertSupportedExecParams,
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
-  resolveNotifyOnExitEmptySuccess,
+  resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
 import {
@@ -110,7 +110,7 @@ export function createExecTool(
     10,
     120_000,
   );
-  const allowBackground =
+  const backgroundAvailable =
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
   const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
@@ -138,20 +138,16 @@ export function createExecTool(
       `exec: interpreter/runtime binaries in safeBins (${unprofiledInterpreterSafeBins.join(", ")}) are unsafe without explicit hardened profiles; prefer allowlist entries`,
     );
   }
-  const notifyOnExit = defaults?.notifyOnExit !== false;
+  const {
+    notifyOnExit,
+    notifyOnExitEmptySuccess,
+    notifySessionKey,
+    resolveSubagentSession,
+    notifyDeliveryContext,
+  } = resolveExecNotificationDefaults(defaults);
   const backgroundFollowUp = notifyOnExit
     ? BACKGROUND_EXEC_FOLLOW_UP
-    : `${BACKGROUND_EXEC_FOLLOW_UP} Automatic completion wake is disabled (tools.exec.notifyOnExit=false). If the task needs this result, use poll with a timeout to collect it before ending the turn, unless another continuation is already arranged.`;
-  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
-  const notifySessionKey = normalizeOptionalString(
-    defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
-  );
-  const notifyDeliveryContext = normalizeDeliveryContext({
-    channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
-    accountId: defaults?.accountId,
-    threadId: defaults?.currentThreadTs,
-  });
+    : `${BACKGROUND_EXEC_FOLLOW_UP} ${EXEC_MANUAL_COLLECTION_FOLLOW_UP}`;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
   const parsedAgentSession = parseAgentSessionKey(defaults?.sessionKey);
@@ -216,6 +212,9 @@ export function createExecTool(
         return reviewCommand(transcript ? { ...input, transcript } : input);
       };
       let params = requestPreparation.normalizeParams(args);
+      // A required command remains an owned tool call until its terminal result is collected.
+      // Explicit detached services retain their existing independent process lifetime.
+      const allowBackground = backgroundAvailable && params.required !== true;
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
         args as ExecToolArgs,
       );
@@ -233,7 +232,7 @@ export function createExecTool(
       let gatewayApproval: GatewayApprovalResult | undefined;
       let approvalReview: ExecToolApprovalReview | undefined;
       const foregroundFallbackWarning =
-        !allowBackground && (params.background === true || typeof params.yieldMs === "number")
+        !backgroundAvailable && (params.background === true || typeof params.yieldMs === "number")
           ? "Warning: continuation options are unavailable; running synchronously."
           : undefined;
       const yieldWindow = allowBackground
@@ -573,6 +572,9 @@ export function createExecTool(
           });
         }
 
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
+        assertSourceActive();
         run = await runExecProcess({
           command: params.command,
           execCommand: execCommandOverride,
@@ -589,6 +591,7 @@ export function createExecTool(
           pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
           cleanupMs,
           notifyOnExit,
+          subagentSession,
           notifyOnExitEmptySuccess,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,

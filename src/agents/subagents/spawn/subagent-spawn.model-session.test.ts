@@ -26,8 +26,8 @@ describe("spawnSubagentDirect runtime model persistence", () => {
       workspaceDir: os.tmpdir(),
     }));
   });
-  beforeEach(() => {
-    resetSubagentRegistryForTests();
+  beforeEach(async () => {
+    await resetSubagentRegistryForTests();
     config = createSubagentSpawnTestConfig(os.tmpdir());
     callGatewayMock.mockReset();
     loadSessionStoreMock.mockReset().mockReturnValue({});

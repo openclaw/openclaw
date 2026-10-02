@@ -602,6 +602,13 @@
       "name": "description",
       "path": "ui/src/pages/skills/view.test-support.ts",
       "text": "Skill description"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/pages/systems/systems-backups.ts",
+      "text": "openclaw backup enable --to &lt;location&gt;"
     }
   ]
 }

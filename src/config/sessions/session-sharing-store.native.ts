@@ -13,12 +13,11 @@ import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-iden
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { getSessionMemberKysely, type SessionMember } from "./session-sharing-store.kernel.js";
-import type { SessionEntry } from "./types.js";
-
-export type SessionSharingExpectedEntry = Pick<
-  SessionEntry,
-  "sessionId" | "createdActor" | "visibility" | "incognito"
->;
+import type {
+  SessionMemberAdd,
+  SessionSharingExpectedEntry,
+} from "./session-sharing-store.types.js";
+export type { SessionSharingExpectedEntry } from "./session-sharing-store.types.js";
 
 // Membership is bound to a live session entry, never a transcript placeholder.
 // Authorization is rechecked before these transactions, but a reset/recreate
@@ -75,13 +74,7 @@ function publishCommittedSessionMembership(
 
 export function addSessionMember(
   scope: SessionAccessScope,
-  params: {
-    identityId: string;
-    addedBy: string;
-    addedAt?: number;
-    expectedSessionId?: string;
-    expectedEntry?: SessionSharingExpectedEntry;
-  },
+  params: SessionMemberAdd,
 ): { member: SessionMember; inserted: boolean } {
   const identityId = params.identityId.trim();
   const addedBy = params.addedBy.trim();

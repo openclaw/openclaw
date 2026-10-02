@@ -200,6 +200,8 @@ public struct GatewayConnectAuthError: LocalizedError, Sendable {
 
     public var isNonRecoverable: Bool {
         switch self.detail {
+        case .authTokenMismatch:
+            !self.canRetryWithDeviceToken
         case .authTokenMissing,
              .authBootstrapTokenInvalid,
              .authTokenNotConfigured,

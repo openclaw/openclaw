@@ -35,7 +35,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await import("../../config/sessions/session-accessor.transcript-target.js");
   const { waitForSessionTranscriptIndexReconcile } =
     await import("../../config/sessions/session-transcript-reconcile.js");
-  const { closeOpenClawAgentDatabaseByPath } = await import("../../state/openclaw-agent-db.js");
+  const { closeOpenClawAgentDatabaseByPathAsync } =
+    await import("../../state/openclaw-agent-db.js");
   const { SessionManager } = await import("../sessions/session-manager.js");
   const { makeAgentAssistantMessage, makeAgentUserMessage } =
     await import("../test-helpers/agent-message-fixtures.js");
@@ -103,27 +104,29 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
   }
   if (options.historicalTurns) {
-    const history = memoryManager ?? SessionManager.open(target, state.workspaceDir);
+    const history = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
     for (let index = 0; index < options.historicalTurns; index += 1) {
-      history.appendMessage(makeAgentUserMessage({ content: `Archived request ${index}` }));
-      history.appendMessage(
+      await history.appendMessageAsync(
+        makeAgentUserMessage({ content: `Archived request ${index}` }),
+      );
+      await history.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "toolCall", id: `archived-${index}`, name: "read", arguments: {} }],
           stopReason: "toolUse",
         }),
       );
-      history.appendMessage({
+      await history.appendMessageAsync({
         ...toolResult,
         toolCallId: `archived-${index}`,
         content: [{ type: "text", text: "archived output ".repeat(12_000) }],
       });
-      history.appendResetBoundary("new");
+      await history.appendResetBoundaryAsync("new");
     }
   }
   let recentUserId: string | undefined;
   for (const message of messages) {
     const messageId = memoryManager
-      ? memoryManager.appendMessage(message)
+      ? await memoryManager.appendMessageAsync(message)
       : (await appendTranscriptMessage(target, { cwd: state.workspaceDir, message })).messageId;
     if (message === recentUser) {
       recentUserId = messageId;
@@ -168,7 +171,7 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
       unsubscribe();
       forgetActiveSessionForShutdown(target.sessionId);
       forgetCommittedSuccessor();
-      closeOpenClawAgentDatabaseByPath(target.storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
     }
   };
   try {
@@ -216,10 +219,13 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
         forgetActiveSessionForShutdown(accepted.sessionId);
       }
     };
-    const openWriter = () =>
-      memoryManager ?? SessionManager.open({ ...target, ...writerFence }, state.workspaceDir);
-    const commitCompaction = () => {
-      openWriter().appendCompaction("Summary of earlier topic", firstKeptEntryId, 4_097);
+    const openWriter = async () =>
+      memoryManager ??
+      (await SessionManager.openAsync({ ...target, ...writerFence }, state.workspaceDir));
+    const commitCompaction = async () => {
+      await (
+        await openWriter()
+      ).appendCompactionAsync("Summary of earlier topic", firstKeptEntryId, 4_097);
       return {
         ok: true,
         compacted: true,
@@ -359,8 +365,8 @@ async function createRecoveryFixture(state: OpenClawTestState, options: FixtureO
     const snapshot = async () => {
       await drain();
       // Reopen independently: a cached manager can hide a durable append or leaf change.
-      closeOpenClawAgentDatabaseByPath(target.storePath);
-      const manager = memoryManager ?? SessionManager.open(target, state.workspaceDir);
+      await closeOpenClawAgentDatabaseByPathAsync(target.storePath, target.agentId);
+      const manager = memoryManager ?? (await SessionManager.openAsync(target, state.workspaceDir));
       const events = memoryManager
         ? memoryManager.getEntries()
         : await loadTranscriptEvents(target);

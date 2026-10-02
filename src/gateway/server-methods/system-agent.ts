@@ -28,10 +28,13 @@ import {
 import { isSystemAgentInferenceUnavailableError } from "../../system-agent/inference-error.js";
 import { buildNewAgentWelcome } from "../../system-agent/new-agent-welcome.js";
 import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js";
-import { appendTranscriptReset, readTranscriptTail } from "../../system-agent/transcript-store.js";
+import {
+  appendTranscriptReset,
+  readTranscriptTail,
+  readTranscriptTailAsync,
+} from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
-import { listVisiblePendingApprovalRequests } from "./approval-shared.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -124,29 +127,18 @@ async function evictOldestSession(
 }
 
 export const systemAgentHandlers: GatewayRequestHandlers = {
-  "openclaw.approval.list": async ({ respond, client, context }) => {
-    const manager = context.systemAgentApprovalManager;
-    respond(
-      true,
-      manager
-        ? await listVisiblePendingApprovalRequests({
-            manager,
-            client,
-            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
-          })
-        : [],
-      undefined,
-    );
-  },
   "openclaw.chat.history": defineValidatedGatewayHandler(
     "openclaw.chat.history",
     validateSystemAgentChatHistoryParams,
-    ({ params, respond }) => {
-      respond(
-        true,
-        { turns: readTranscriptTail(params.limit ?? DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT) },
-        undefined,
+    async (options) => {
+      const { params, respond } = options;
+      const authority = readGatewayRequestMutationAuthority(options);
+      authority.assertCurrent();
+      const turns = await readTranscriptTailAsync(
+        params.limit ?? DEFAULT_SYSTEM_AGENT_HISTORY_LIMIT,
       );
+      authority.assertCurrent();
+      respond(true, { turns }, undefined);
     },
   ),
   /** Structured onboarding: list reusable AI access on this host. */
@@ -450,7 +442,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         let welcomeQuestion: SystemAgentChatQuestion | undefined;
         try {
           if (params.welcomeVariant === "onboarding") {
-            const onboardingWelcome = await buildOnboardingWelcome({ engine });
+            const onboardingWelcome = await buildOnboardingWelcome({
+              engine,
+              locale: client?.connect.locale,
+            });
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {

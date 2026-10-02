@@ -39,7 +39,6 @@ type SyncArchiveParams = { needsFullReindex: boolean; targetArchiveFiles?: strin
 
 type ReindexHarness = {
   sync: (params: { reason?: string; force?: boolean }) => Promise<void>;
-  runInPlaceReindex: (params: { reason?: string; force?: boolean }) => Promise<void>;
   syncArchiveFiles: (params: SyncArchiveParams) => Promise<unknown>;
   db: DatabaseSync;
   cache: { enabled: boolean; maxEntries?: number };
@@ -327,6 +326,7 @@ describe("memory manager reindex recovery", () => {
         createCfg({ sources: ["memory"], cacheEnabled: true }),
       );
       const harness = memoryManager as unknown as ReindexHarness;
+      const publishedDb = harness.db;
       const cached = createDeferred<void>();
       const allProvidersEntered = createDeferred<void>();
       const releaseConflict = createDeferred<void>();
@@ -340,15 +340,15 @@ describe("memory manager reindex recovery", () => {
       let conflictReturned = false;
       let admissionRefused = false;
       const cacheRows = () =>
-        harness.db.prepare("SELECT hash, dims FROM memory_embedding_cache ORDER BY hash").all();
+        publishedDb.prepare("SELECT hash, dims FROM memory_embedding_cache ORDER BY hash").all();
       const fullCacheRows = () =>
-        harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
+        publishedDb.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all();
       const open = sqliteRuntime.openOpenClawAgentSqliteWorkerStore;
       vi.spyOn(sqliteRuntime, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
         async (...args) => {
           const [options, source, workerInput] = args;
           if (
-            source !== harness.db ||
+            source !== publishedDb ||
             workerInput.moduleUrl.href !==
               resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication).href
           ) {
@@ -748,18 +748,16 @@ describe("memory manager reindex recovery", () => {
     const { memoryManager, harness, newest } = await createOversizedPublishedCache();
     embeddingCalls = [];
     const observed = observePublishedSql(harness.db);
-    const counts = () =>
-      observed
-        .calls()
-        .filter(({ sql }) =>
-          /^\s*SELECT\s+COUNT\s*\(\s*\*\s*\)[\s\S]*?\bFROM\s+["`]?memory_embedding_cache\b/i.test(
-            sql,
-          ),
-        );
     const deletes = () =>
       observed
         .calls()
         .filter(({ sql }) => /^\s*DELETE\s+FROM\s+["`]?memory_embedding_cache\b/i.test(sql));
+    const reads = () =>
+      observed
+        .calls()
+        .filter(({ sql }) =>
+          /^\s*SELECT\b[\s\S]*?\bFROM\s+["`]?memory_embedding_cache\b/i.test(sql),
+        );
     try {
       expect(
         harness.db.prepare("SELECT COUNT(*) AS c FROM memory_embedding_cache WHERE 0").get(),
@@ -767,19 +765,19 @@ describe("memory manager reindex recovery", () => {
       expect(harness.db.prepare("DELETE FROM memory_embedding_cache WHERE 0").run().changes).toBe(
         0,
       );
-      expect([counts().length, deletes().length]).toEqual([1, 1]);
+      expect([reads().length, deletes().length]).toEqual([1, 1]);
       observed.clear();
 
       await memoryManager.sync({ reason: "cli", force: true });
 
       expect(embeddingCalls).toEqual([]);
+      expect({ reads: reads(), deletes: deletes() }).toEqual({ reads: [], deletes: [] });
       expect(
         harness.db.prepare("SELECT * FROM memory_embedding_cache ORDER BY hash").all(),
       ).toEqual(newest);
       expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
         { text: "published alpha" },
       ]);
-      expect({ counts: counts(), deletes: deletes() }).toEqual({ counts: [], deletes: [] });
     } finally {
       observed.restore();
     }
@@ -1012,7 +1010,6 @@ describe("memory manager reindex recovery", () => {
     await memoryManager.sync({ reason: "test", force: true });
 
     const harness = memoryManager as unknown as ReindexHarness;
-    const reindexCalls: Array<{ reason?: string; force?: boolean }> = [];
 
     harness.db
       .prepare(
@@ -1041,13 +1038,12 @@ describe("memory manager reindex recovery", () => {
     });
     harness.sessionsDirty = true;
     harness.sessionsFullRetryDirty = true;
-    harness.runInPlaceReindex = async (params) => {
-      reindexCalls.push(params);
-    };
 
     await harness.sync({ reason: "test" });
 
-    expect(reindexCalls).toHaveLength(1);
-    expect(reindexCalls[0]).toMatchObject({ reason: "test" });
+    expect(harness.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([]);
+    expect(memoryManager.status().custom?.indexIdentity).toMatchObject({ status: "valid" });
+    expect(harness.sessionsDirty).toBe(false);
+    expect(harness.sessionsFullRetryDirty).toBe(false);
   });
 });

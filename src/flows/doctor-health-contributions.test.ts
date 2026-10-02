@@ -1551,7 +1551,6 @@ describe("doctor health contributions", () => {
     const cfg = { plugins: { entries: { codex: { enabled: true } } } };
 
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
-      target: "2026.6.1",
       version: null,
       nodeEngine: null,
       error: "HTTP 404",
@@ -1958,7 +1957,6 @@ describe("doctor health contributions", () => {
       detected,
       config: cfg,
       legacySessionSurfaces,
-      recoverCorruptTargetStore: false,
     });
   });
 
@@ -2067,7 +2065,6 @@ describe("doctor health contributions", () => {
       config: cfg,
       doctorOnlyStateMigrations: true,
       legacySessionSurfaces,
-      recoverCorruptTargetStore: true,
     });
   });
 

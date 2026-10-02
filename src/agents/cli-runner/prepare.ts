@@ -104,7 +104,6 @@ import { buildCurrentInboundPrompt } from "../embedded-agent-runner/run/runtime-
 import { remapSkillReferencePaths } from "../embedded-agent-runner/sandbox-skills.js";
 import { selectContextEngineForTranscriptHost } from "../harness/context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "../harness/context-engine-turn-attempt.js";
-import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
 import type { ResolvedProviderAuth } from "../model-auth-runtime-shared.js";
 import { loadManifestModelCatalog, overlayConfiguredModelCatalog } from "../model-catalog.js";
 import { resolveModelContextWindowProfile } from "../model-context-window.js";
@@ -118,7 +117,7 @@ import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
 import { appendModelIdentitySystemPrompt, buildModelIdentityPromptLine } from "../system-prompt.js";
-import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 import { assertNativeCronCreatorCapabilities } from "../tools/cron-tool-creator-cap.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import {
@@ -152,6 +151,7 @@ import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "./mcp-grant-contex
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
 import { prepareCliMcpToolProjection } from "./prepare-mcp.js";
+import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   buildCliTurnAppendContext,
   composeCliPromptContext,
@@ -167,7 +167,7 @@ import {
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
 import { resolveCliSkillsPrompt } from "./skills-prompt.js";
-import { prepareCliReplyToolAuthority } from "./tool-authority.js";
+import { bindCliQuestionAnswerAuthority, prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -402,53 +402,19 @@ async function prepareCliRunContextWithinReadFence(
         workspaceDir,
         cwd,
       });
-  let runtimeToolsAllowPolicy: string[] | undefined;
   const rootedToolsAllow = params.rootedExecution
     ? params.cliToolAvailability?.openClaw
     : undefined;
-  if (params.toolsAllow !== undefined) {
-    if (params.cliToolAvailability !== undefined) {
-      throw new Error(
-        `CLI backend ${backendResolved.id} received conflicting runtime tool policies`,
-      );
-    }
-    if (params.toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")) {
-      params = { ...params, toolsAllow: undefined };
-    } else {
-      runtimeToolsAllowPolicy = [...params.toolsAllow];
-      const fallbackOpenClawTools = uniqueStrings(
-        expandToolGroups(params.toolsAllow)
-          .map((toolName) => normalizeToolPolicyName(toolName))
-          .filter(Boolean),
-      );
-      if (
-        fallbackOpenClawTools.includes("write") &&
-        !fallbackOpenClawTools.includes("apply_patch")
-      ) {
-        fallbackOpenClawTools.push("apply_patch");
-      }
-      params = {
-        ...params,
-        toolsAllow: undefined,
-        cliToolAvailability: {
-          native: [],
-          // Preserve the prior normalized fallback for modes without a catalog;
-          // catalog-backed paths replace it with exact names below.
-          openClaw: fallbackOpenClawTools,
-        },
-      };
-    }
-  }
-  if (params.disableTools === true && !isSideQuestion && canEnforceExactToolAvailability) {
-    // Selectable backends need the exact empty cap as well as the generic flag;
-    // otherwise their native tools remain selectable and the run must fail closed.
-    runtimeToolsAllowPolicy = undefined;
-    params = {
-      ...params,
-      toolsAllow: undefined,
-      cliToolAvailability: { native: [], openClaw: [] },
-    };
-  }
+  const toolPolicy = resolveCliRuntimeToolPolicy({
+    params,
+    backendId: backendResolved.id,
+    bundleMcp: backendResolved.bundleMcp,
+    canEnforceExactToolAvailability,
+    isSideQuestion,
+    skipsTurnPreparation,
+  });
+  params = toolPolicy.params;
+  const { runtimeToolsAllowPolicy } = toolPolicy;
   const internalParams = params as RunCliAgentPrepareParams;
   const nodeClaudePlacement = detectNodeClaudePlacement({
     backendId: backendResolved.id,
@@ -737,30 +703,15 @@ async function prepareCliRunContextWithinReadFence(
   if (questionOperation) {
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
-  const bindQuestionAnswerAuthorityForSession = (sessionKey: string, assertActive: () => void) =>
-    createAgentQuestionAnswerAuthority({
-      sessionKey,
-      fingerprint: questionFingerprint,
-      project: (caller) =>
-        questionOperation
-          ? questionOperation.projectToolAuthorityFingerprint(caller)
-          : questionSnapshot?.project(caller, questionRoute),
-      assertActive: () => {
-        assertActive();
-        assertQuestionSourceCurrent?.();
-        questionAbortSignal?.throwIfAborted();
-        if (
-          questionOperation &&
-          (questionOperation.result ||
-            questionOperation.toolAuthorityRoute?.provider !== questionRoute.provider ||
-            questionOperation.toolAuthorityRoute.model !== questionRoute.model ||
-            questionOperation.toolAuthorityFingerprint !== questionFingerprint)
-        ) {
-          throw new Error("question creator reply authority is no longer active");
-        }
-        assertActive();
-      },
-    });
+  const bindQuestionAnswerAuthorityForSession = bindCliQuestionAnswerAuthority({
+    operation: questionOperation,
+    snapshot: questionSnapshot,
+    route: questionRoute,
+    fingerprint: questionFingerprint,
+    readSource: () => readRunOperatorAuthority(params),
+    assertSourceCurrent: assertQuestionSourceCurrent,
+    signal: questionAbortSignal,
+  });
   const bindQuestionAnswerAuthority: NonNullable<
     PreparedCliRunContext["bindQuestionAnswerAuthority"]
   > = (assertActive) => bindQuestionAnswerAuthorityForSession(questionSessionKey, assertActive);
@@ -1346,6 +1297,7 @@ async function prepareCliRunContextWithinReadFence(
       runtimeToolAllowlist: runtimeToolsAllowPolicy,
       inheritRuntimeToolAllowlist: true,
       inputProvenance: params.inputProvenance,
+      trustedInternalHandoff: params.trustedInternalHandoff,
       scheduledToolPolicy: params.scheduledToolPolicy,
     });
     const preparedBackend = await prepareCliBundleMcpConfig({
@@ -1543,10 +1495,7 @@ async function prepareCliRunContextWithinReadFence(
       ...(preparedBackend.backend.clearEnv ?? []),
       ...(preparedExecution?.clearEnv ?? []),
     ];
-    const processPerTurnBackend = (() => {
-      const { liveSession: _liveSession, ...backend } = preparedBackend.backend;
-      return backend;
-    })();
+    const { liveSession: _liveSession, ...processPerTurnBackend } = preparedBackend.backend;
     const preparedBackendFinal = {
       ...preparedBackend,
       backend: {
@@ -1691,9 +1640,9 @@ async function prepareCliRunContextWithinReadFence(
         ? { prompt: "" }
         : await resolveCliSkillsPrompt({
             assertCurrent: assertSkillsCurrent,
-            skillsSnapshot: params.skillsSnapshot,
+            run: params,
             workspaceDir,
-            executionWorkspaceDir: params.sessionEntry?.worktree?.canonicalWorkspaceDir ?? cwd,
+            executionWorkspaceDir: cwd,
             config: params.config,
             agentId: sessionAgentId,
             sessionKey: params.sessionKey?.trim() || params.sessionId,

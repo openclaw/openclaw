@@ -171,10 +171,9 @@ function createLegacyStateMigrationDetectionResult(params?: {
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
+      preview: "",
     },
     sessions: {
-      legacyDir: "/tmp/state/sessions",
-      legacyStorePath: "/tmp/state/sessions/sessions.json",
       targetDir: "/tmp/state/agents/main/sessions",
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: params?.hasLegacySessions ?? false,

@@ -1,6 +1,37 @@
 import Foundation
 
 public enum GatewayPluginSurfaceURL {
+    /// Callers validate their relative target namespace before attaching its encoded path.
+    public static func appendingTarget(_ target: URLComponents, toCapabilitySurface rawSurfaceURL: String?) -> URL? {
+        let raw = rawSurfaceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !raw.isEmpty,
+              var surface = URLComponents(string: raw),
+              let scheme = surface.scheme?.lowercased(), scheme == "http" || scheme == "https",
+              surface.host?.isEmpty == false,
+              surface.user == nil,
+              surface.password == nil,
+              surface.percentEncodedQuery == nil,
+              surface.fragment == nil
+        else { return nil }
+
+        let segments = surface.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
+        guard segments.count >= 3,
+              segments[segments.count - 3] == "__openclaw__",
+              segments[segments.count - 2] == "cap",
+              let capability = String(segments[segments.count - 1]).removingPercentEncoding,
+              !capability.isEmpty
+        else { return nil }
+
+        var surfacePath = surface.percentEncodedPath
+        while surfacePath.hasSuffix("/") {
+            surfacePath.removeLast()
+        }
+        surface.percentEncodedPath = surfacePath + target.percentEncodedPath
+        surface.percentEncodedQuery = target.percentEncodedQuery
+        surface.fragment = target.fragment
+        return surface.url
+    }
+
     static func resolveHTTPURL(
         raw: String,
         against activeGatewayURL: URL?,

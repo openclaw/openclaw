@@ -313,7 +313,7 @@ extension OpenClawChatViewModel {
         let existingIndex = self.sessionIndexForModelState(sessionKey: sessionKey)
         var updated = existingIndex.map { self.sessions[$0] }
             ?? self.sidebarData?.row(key: sessionKey, agentID: self.currentSessionSnapshot().deliveryAgentID)
-            ?? OpenClawChatSessionEntry.placeholder(key: sessionKey)
+            ?? OpenClawChatSessionEntry(key: sessionKey)
         // Thinking metadata follows model identity; stale options must not survive a model change.
         let preservesThinkingMetadata =
             ChatPayloadDecoding.trimmedNonEmptyString(updated.model) ==
@@ -354,7 +354,7 @@ extension OpenClawChatViewModel {
         var included = Set<String>()
 
         // Always show the resolved main session first, even if it hasn't been updated recently.
-        result.append(sorted.first(where: { $0.key == mainSessionKey }) ?? .placeholder(key: mainSessionKey))
+        result.append(sorted.first(where: { $0.key == mainSessionKey }) ?? .init(key: mainSessionKey))
         included.insert(mainSessionKey)
 
         for entry in sorted {
@@ -368,7 +368,7 @@ extension OpenClawChatViewModel {
         }
 
         if !included.contains(sessionKey) {
-            result.append(sorted.first(where: { $0.key == self.sessionKey }) ?? .placeholder(key: sessionKey))
+            result.append(sorted.first(where: { $0.key == self.sessionKey }) ?? .init(key: sessionKey))
         }
 
         return result
@@ -401,12 +401,10 @@ extension OpenClawChatViewModel {
         -> Bool
     {
         let routing = OpenClawChatSessionRoutingContract.parse(sessionRoutingContract)
-        let incomingNormalized = ChatSessionNavigation.comparisonKey(
-            incoming, agentID: agentId, scope: routing?.scope, mainKey: routing?.mainKey)
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let currentNormalized = ChatSessionNavigation.comparisonKey(
-            current, agentID: activeAgentId, scope: routing?.scope, mainKey: routing?.mainKey)
-            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let incomingNormalized = OpenClawChatSessionKey.comparisonKey(ChatSessionNavigation.comparisonKey(
+            incoming, agentID: agentId, scope: routing?.scope, mainKey: routing?.mainKey))
+        let currentNormalized = OpenClawChatSessionKey.comparisonKey(ChatSessionNavigation.comparisonKey(
+            current, agentID: activeAgentId, scope: routing?.scope, mainKey: routing?.mainKey))
         if incomingNormalized == currentNormalized {
             if OpenClawChatSessionKey.agentID(from: currentNormalized) == nil {
                 // `global` is always agent-ambiguous. Ordinary exact keys can
@@ -426,7 +424,7 @@ extension OpenClawChatViewModel {
             return true
         }
 
-        let mainNormalized = mainSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let mainNormalized = OpenClawChatSessionKey.comparisonKey(mainSessionKey)
         if Self.matchesMainAlias(
             incoming: incomingNormalized,
             current: currentNormalized,

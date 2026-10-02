@@ -1,3 +1,4 @@
+import "../../src/test-utils/prepare-compiled-subprocesses.js";
 import { randomUUID } from "node:crypto";
 import { writeSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -6,7 +7,7 @@ import { Socket } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, inject, it, vi } from "vitest";
+import { afterEach, describe, expect, inject, it, vi } from "vitest";
 import type {
   TranscriptsGetResult,
   TranscriptsListResult,
@@ -84,6 +85,12 @@ function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
 }
 
 describe("Gateway admitted Discord transcript capture", () => {
+  afterEach(async () => {
+    // Minimal Gateway startup omits cleanup for watchers created by real agent turns.
+    const { closeSkillsWatchers } = await import("../../src/skills/runtime/refresh.js");
+    await closeSkillsWatchers(true);
+  });
+
   it("fences late STT and preserves the admitted owner's history after a room route changes", async () => {
     const proofStartedAt = Date.now();
     const phase = (name: string) => {
@@ -473,14 +480,18 @@ describe("Gateway admitted Discord transcript capture", () => {
       resetConfigOverrides();
       const token = "synthetic-gateway-capture-token";
       const cfg: OpenClawConfig = {
+        skills: { load: { watch: false } },
         agents: {
-          list: [
-            { id: "main", default: true, workspace },
-            { id: "agent-b", workspace },
-          ],
+          ownership: "explicit",
+          entries: {
+            main: { workspace },
+            "agent-b": { workspace },
+          },
           defaults: {
             workspace,
             skipBootstrap: true,
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "main" },
             heartbeat: { every: "0m" },
             model: { primary: provider.modelRef, fallbacks: [] },
             models: {
@@ -491,6 +502,7 @@ describe("Gateway admitted Discord transcript capture", () => {
             },
           },
         },
+        talk: { agentId: "main" },
         bindings: [
           {
             agentId: "main",
@@ -500,6 +512,7 @@ describe("Gateway admitted Discord transcript capture", () => {
               peer: { kind: "channel", id: captureTarget.channelId },
             },
           },
+          { agentId: "main", match: { channel: "discord", accountId: "*" } },
         ],
         channels: {
           discord: {

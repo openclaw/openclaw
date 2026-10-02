@@ -12,7 +12,8 @@ import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.j
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -50,7 +51,11 @@ function createPersonalMetadataFixture(
     sessions: { others: "none" },
   };
   const config = {
-    agents: { entries: { main: { default: true }, other: {} } },
+    agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, other: {} },
+    },
     gateway: {
       roles: {
         default: "reader",
@@ -132,7 +137,7 @@ describe("chat metadata ownership", () => {
   it("creates and reuses a legacy requester profile through chat.metadata without host SQL", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async () => {
       ensureProfileForEmail("admitted@example.test");
-      const config: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
       const metadata = { models: [], swarmEnabled: false };
       const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(
         async () => metadata,

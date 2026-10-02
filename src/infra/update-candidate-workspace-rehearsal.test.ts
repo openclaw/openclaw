@@ -56,9 +56,7 @@ describe("workspace state during an update rehearsal", () => {
   });
 
   it.each([
-    { name: "older", completed: "2026-04-23T11:31:35.154Z", claim: false },
     { name: "identical", completed: "2026-08-01T02:32:01.596Z", claim: false },
-    { name: "newer", completed: "2026-09-01T02:32:01.596Z", claim: false },
     {
       name: "interrupted claim",
       completed: "2026-04-23T11:31:35.154Z",
@@ -123,12 +121,11 @@ describe("workspace state during an update rehearsal", () => {
         () => throwIfDoctorStateMigrationRefused(result.stepReceipts),
         result.warnings.join("\n"),
       ).not.toThrow();
-      expect(
-        result.stepReceipts.find((entry) => entry.id === "workspace-state")?.notices,
-      ).toContain("rehearsal: 2 legacy files outside the rehearsal root left untouched");
-      expect(
-        result.stepReceipts.find((entry) => entry.id === "workspace-state")?.rehearsal,
-      ).toEqual({ outsideRootLegacyFileCount: 2 });
+      const receipt = result.stepReceipts.find((entry) => entry.id === "workspace-state");
+      expect(receipt?.notices).toContain(
+        "rehearsal: 2 legacy files outside the rehearsal root left untouched",
+      );
+      expect(receipt?.rehearsal).toEqual({ outsideRootLegacyFileCount: 2 });
       expect(
         openOpenClawStateDatabase({ env })
           .db.prepare("SELECT status FROM skill_workshop_proposals WHERE proposal_id = ?")

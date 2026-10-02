@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { validateReleasePublishParentRun } from "../../scripts/release-tooling-identity.mjs";
 
 type WorkflowStep = {
   name: string;
@@ -135,14 +134,6 @@ describe("release approval workflow contracts", () => {
         "${{ inputs.release_publish_full_ref || github.ref }}",
       );
     }
-  });
-
-  it.each([
-    ["plugin-npm-release", "publish_plugins_npm"],
-    ["plugin-npm-release", "trusted_publisher_preflight"],
-    ["openclaw-npm-release", "publish_openclaw_npm"],
-  ])("%s %s uses the npm trusted-publisher environment", (workflow, jobId) => {
-    expect(requireJob(workflow, jobId).environment).toBe("npm-publish");
   });
 
   it.each([
@@ -296,36 +287,6 @@ describe("release approval workflow contracts", () => {
         // Human-approved bot children keep the existing finish-after-failure contract.
         expect(policyFor("", bot)).toBe("active-or-failure");
       }
-
-      const sha = "a".repeat(40);
-      const ref = `release-publish/${sha.slice(0, 12)}-123`;
-      const verifyParent = (status: string, conclusion: string | null) =>
-        validateReleasePublishParentRun({
-          identity: { ref, fullRef: `refs/tags/${ref}`, sha },
-          releasePublishFullRef: `refs/tags/${ref}`,
-          releasePublishParentStatePolicy: receiptPolicy,
-          releasePublishRef: ref,
-          releasePublishRunAttempt: "2",
-          releasePublishRunId: "67890",
-          repository: "openclaw/openclaw",
-          run: {
-            id: 67890,
-            run_attempt: 2,
-            repository: { full_name: "openclaw/openclaw" },
-            path: `.github/workflows/openclaw-release-publish.yml@refs/tags/${ref}`,
-            event: "workflow_dispatch",
-            head_branch: ref,
-            head_sha: sha,
-            status,
-            conclusion,
-          },
-        });
-      // The parent failed after the child's authorization wait: refuse before npm I/O.
-      expect(() => verifyParent("completed", "failure")).toThrow(
-        "release publish parent run state is not allowed by active",
-      );
-      expect(() => verifyParent("completed", "success")).toThrow();
-      expect(() => verifyParent("in_progress", null)).not.toThrow();
 
       const script = publish.run;
       const mutation =

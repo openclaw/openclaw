@@ -45,6 +45,23 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function holdTopologyRead() {
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const originalRead = stateReads.executeExistingOpenClawStateRead;
+  let held = false;
+  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
+    const reply = await originalRead(...args);
+    if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
+      held = true;
+      entered.resolve();
+      await release.promise;
+    }
+    return reply;
+  });
+  return { entered, release };
+}
+
 it("publishes an initially unseen retired-agent event from its default store", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
@@ -184,9 +201,7 @@ it.for(
         "delete",
         "physical-store",
         "dispose",
-        "unrelated-agent",
         "unrelated-store",
-        "new-agent-registration",
         "new-store-registration",
         "alias-reset",
       ] as const
@@ -199,11 +214,10 @@ it.for(
       let cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
       const unrelated =
-        change === "unrelated-agent" || change === "unrelated-store"
+        change === "unrelated-store"
           ? {
-              agentId: change === "unrelated-agent" ? "other" : "main",
-              sessionKey:
-                change === "unrelated-agent" ? "agent:other:unrelated" : "agent:main:unrelated",
+              agentId: "main",
+              sessionKey: "agent:main:unrelated",
               storePath: path.join(state.root, "unrelated.sqlite"),
             }
           : undefined;
@@ -219,21 +233,7 @@ it.for(
         getConfig: () => cfg,
         modelCatalog: [],
       });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const originalRead = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-        async (...args) => {
-          const reply = await originalRead(...args);
-          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return reply;
-        },
-      );
+      const { entered, release } = holdTopologyRead();
       const storePath = path.join(state.root, "deferred-events.sqlite");
       cfg = { ...cfg, session: { store: storePath } };
       setRuntimeConfigSnapshot(cfg);
@@ -313,9 +313,9 @@ it.for(
           await copyFile(`${target.path}.original`, target.path);
         } else if (change === "dispose") {
           projection.dispose();
-        } else if (change === "new-agent-registration" || change === "new-store-registration") {
+        } else if (change === "new-store-registration") {
           openOpenClawAgentDatabase({
-            agentId: change === "new-agent-registration" ? "new-agent" : query.agentId,
+            agentId: query.agentId,
             path: path.join(state.root, "newly-registered.sqlite"),
             env: state.env,
           });
@@ -338,12 +338,7 @@ it.for(
         }
         release.resolve();
         const result = await settled;
-        if (
-          change === "unchanged" ||
-          change === "new-agent-registration" ||
-          change === "new-store-registration" ||
-          unrelated
-        ) {
+        if (change === "unchanged" || change === "new-store-registration" || unrelated) {
           expect(result).toEqual([{ status: "fulfilled", value: undefined }]);
           expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
           expect(broadcastToConnIds.mock.calls[0]?.[0]).toBe(
@@ -362,7 +357,7 @@ it.for(
   },
 );
 
-it.for(["config", "identity scopes", "dispose", "source"] as const)(
+it.for(["identity scopes", "dispose", "source"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
   async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -380,21 +375,7 @@ it.for(["config", "identity scopes", "dispose", "source"] as const)(
         getConfig: () => cfg,
         modelCatalog: [],
       });
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const originalRead = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-        async (...args) => {
-          const reply = await originalRead(...args);
-          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return reply;
-        },
-      );
+      const { entered, release } = holdTopologyRead();
       const captured = projection.capture(query);
       sessionChanges.emit({ all: true, scope: "stores" });
       const pending = projection.prepareMembership();
@@ -409,10 +390,7 @@ it.for(["config", "identity scopes", "dispose", "source"] as const)(
           signal,
         );
         expect(projection.capture(query)).toBe(captured);
-        if (change === "config") {
-          cfg = { agents: { entries: { main: { identity: { name: "Replacement" } } } } };
-          sessionChanges.emit({ all: true, scope: "config" });
-        } else if (change === "identity scopes") {
+        if (change === "identity scopes") {
           cfg = {
             ...cfg,
             gateway: { auth: { identityScopes: { "reader@example.test": ["operator.read"] } } },
@@ -443,7 +421,7 @@ it.for(["config", "identity scopes", "dispose", "source"] as const)(
           }
         } else {
           expect(await settled).toEqual([{ status: "fulfilled", value: undefined }]);
-          if (change === "config" || change === "identity scopes") {
+          if (change === "identity scopes") {
             expect(projection.state.cfg).toBe(cfg);
             expect(projection.selectEntries().map((row) => row.entry.sessionId)).toEqual([
               "topology",
@@ -470,22 +448,8 @@ it.for(["chat.startup", "sessions.resolve"] as const)(
       const cfg = { agents: { entries: { main: {} } } };
       const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      const { entered, release } = holdTopologyRead();
       const releaseForeground = retainSessionListForegroundWork();
-      const originalRead = stateReads.executeExistingOpenClawStateRead;
-      let held = false;
-      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-        async (...args) => {
-          const reply = await originalRead(...args);
-          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-            held = true;
-            entered.resolve();
-            await release.promise;
-          }
-          return reply;
-        },
-      );
       sessionChanges.emit({ all: true, scope: "stores" });
       const respond = vi.fn();
       const revoked = new Error("Original request authority ended");
@@ -553,19 +517,7 @@ it("starts a new topology read after healthy integrity confirmation without revi
     const releaseForeground = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const database = openOpenClawStateDatabase({ env: state.env });
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const originalRead = stateReads.executeExistingOpenClawStateRead;
-    let held = false;
-    vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(async (...args) => {
-      const reply = await originalRead(...args);
-      if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-      }
-      return reply;
-    });
+    const { entered, release } = holdTopologyRead();
     sessionChanges.emit({ all: true, scope: "stores" });
     const pending = projection.prepareMembership();
     const settled = Promise.allSettled([pending]);

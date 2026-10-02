@@ -17,7 +17,6 @@ import {
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
   createCodexSessionCatalogListOperation,
-  listCodexSessionCatalog,
   runCatalogListInline,
 } from "./session-catalog-list-operation.js";
 import { readCodexSessionTranscript } from "./session-catalog-listing.js";
@@ -250,7 +249,7 @@ function mapCatalogListOperation(
   };
 }
 
-function registerCodexSessionCatalog(params: {
+export function registerCodexSessionCatalog(params: {
   api: OpenClawPluginApi;
   bindingStore: CodexAppServerBindingStore;
   control: CodexSessionCatalogControlFactory;
@@ -483,15 +482,6 @@ function registerCodexSessionCatalog(params: {
   };
   params.api.registerSessionCatalog(provider);
 }
-
-export const codexSessionCatalogRuntime = {
-  register: registerCodexSessionCatalog,
-  list: listCodexSessionCatalog,
-  readTranscript: readCodexSessionTranscript,
-  continueLocal: continueLocalCodexSession,
-  continueNode: continueNodeCodexSession,
-  archiveLocal: archiveLocalCodexSession,
-};
 
 async function continueLocalCodexSession(
   ...args: Parameters<typeof import("./session-catalog-adoption.js").continueLocalCodexSession>

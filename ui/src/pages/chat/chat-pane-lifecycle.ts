@@ -14,10 +14,6 @@ import {
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
-import {
-  WIDGET_PROMPT_EVENT,
-  type WidgetPromptEventDetail,
-} from "../../components/mcp-app-security.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
@@ -38,6 +34,7 @@ import {
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
+import { ChatPaneMcpAppController } from "./chat-pane-mcp-app.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { openPreferredSidebarPanel, releaseAttachmentWorkspaceOwner } from "./chat-pane-rails.ts";
 import { ChatPaneSessionObservation } from "./chat-pane-session-observation.ts";
@@ -67,6 +64,7 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
+import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import { CHAT_COMPOSER_DRAFT_STORAGE_ERROR } from "./composer-persistence.ts";
 import { exportChatMarkdown } from "./export.ts";
 import { admitChatSubmission } from "./history-merge.ts";
@@ -90,6 +88,23 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     pending: this.pendingPanelToggleRequests,
     requestUpdate: () => this.requestUpdate(),
     updateSidebarLayout: (layout) => this.commitSidebarLayout(layout),
+  });
+
+  private readonly mcpApps = new ChatPaneMcpAppController({
+    element: this,
+    current: () => {
+      const state = this.state;
+      return state
+        ? {
+            context: this.context,
+            state,
+            presented: this.presented,
+            agentId: this.agentId,
+            launch: this.mcpAppLaunch,
+            openFile: (path) => openSessionWorkspaceFile(state, { path }),
+          }
+        : null;
+    },
   });
 
   private chatRouteReadyReported = false;
@@ -379,18 +394,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, handleBrowserAnnotation),
     );
     chatState.addCleanup(this.sessionPanelToggles.subscribe());
-    // Interactive widget prompts bubble from the widget iframe; a listener on
-    // the pane element keeps split-view routing correct — the prompt reaches
-    // only the pane that owns the frame.
-    const handleWidgetPrompt = (event: Event) => {
-      const detail = (event as CustomEvent<Partial<WidgetPromptEventDetail>>).detail;
-      const text = typeof detail?.text === "string" ? detail.text.trim() : "";
-      if (text) {
-        void this.state?.handleSendChat(text);
-      }
-    };
-    this.addEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt);
-    chatState.addCleanup(() => this.removeEventListener(WIDGET_PROMPT_EVENT, handleWidgetPrompt));
+    chatState.addCleanup(this.mcpApps.subscribe());
     chatState.addCleanup(
       this.context.gateway.subscribe((next) => {
         this.applyGatewaySnapshot(next);
@@ -497,6 +501,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const composerPresentation = new ChatPaneComposerHandoff(this.context, {
       state: () => this.state,
       owner: () => this.stagedAttachmentGatewayOwner,
+      presentationOwner: () => this.chatState.composerPersistence.presentationOwner,
       region: () => this.inputRegion,
       presented: () => this.selected && this.presented,
       pause: () => this.chatState.composerPersistence.stop(),
@@ -516,13 +521,6 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
     this.captureArchivePresentationFocus();
-    if (
-      this.state &&
-      ((changedProperties.has("selected") && !this.selected) ||
-        (changedProperties.has("presented") && !this.presented))
-    ) {
-      cancelChatModelRecovery(this.state);
-    }
     if (changedProperties.has("sessionKey") && this.state) {
       const catalogKey = parseCatalogSessionKey(this.sessionKey);
       const nextSessionKey = catalogKey
@@ -585,7 +583,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
   }
 
   override updated(changedProperties: Map<PropertyKey, unknown> = new Map()) {
-    this.syncQueuedEditRetention();
+    this.mcpApps.syncLaunch();
     void chatAvatars.refreshSenderAgentAvatars(this.state);
     if (!this.chatRouteReadyReported && this.querySelector(CHAT_COMPOSER_TEXTAREA_SELECTOR)) {
       // The outer router commit is not a meaningful chat paint. Keep the
@@ -659,6 +657,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
           this.state,
           this.stagedAttachmentGatewayOwner,
           this.chatState.composerPersistence.draftRevision,
+          this.chatState.composerPersistence.presentationOwner,
         );
       }
     }

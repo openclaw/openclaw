@@ -41,10 +41,8 @@ import {
   parseConfiguredModelVisibilityEntries,
 } from "./model-selection-shared.js";
 import { prepareImplicitProviderStaticCatalog } from "./models-config.providers.implicit.js";
-import {
-  loadPersistedPluginModelCatalogsReadOnly,
-  resolvePluginModelCatalogOwnerPluginId,
-} from "./plugin-model-catalog.js";
+import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
+import { resolvePluginModelCatalogOwnerPluginId } from "./plugin-model-catalog.js";
 import { prepareAgentFacts } from "./prepared-model-runtime.agent-facts.js";
 import type {
   PreparedModelRuntimeAgentBaseFacts,
@@ -621,10 +619,12 @@ export async function prepareConfiguredRuntimeFactsBatch(params: {
     const modelsJsonContents = captureModelsJsonContents(facts.input.agentDir);
     const oauthProviders = facts.templateAuthStorage.getOAuthProviders();
     // Root files remain authored inventory even when static preparation returned an empty result.
-    const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(
+    const pluginCatalogs = await loadPersistedPluginModelCatalogs(
       facts.input.agentDir,
       facts.configuredGeneratedCatalogPluginIds,
+      facts.env,
     );
+    params.assertCurrent?.(facts.input);
     const key = fingerprintPreparedRuntimeFacts({
       config: hashRuntimeConfigValue(facts.input.config),
       sourceModels: projectConfigOntoRuntimeSourceSnapshot(facts.input.config).models,

@@ -8,7 +8,7 @@ import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import { createStoredChatOutboxReader } from "./outbox-store-projection.ts";
 import {
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
 } from "./outbox-store.ts";
@@ -42,7 +42,7 @@ function subscribe(reader: ReturnType<typeof createStoredChatOutboxReader>) {
 }
 
 function seedTab(rows: Record<string, StoredComposerSession>) {
-  writeStoredOutboxStore(sessionStorage, storageTargetForGateway(gatewayUrl), {
+  writeStoredOutboxStore(sessionStorage, storageTargetForComposer(state()), {
     version: 4,
     gatewayOwner: gatewayUrl,
     recovery: {},
@@ -80,6 +80,23 @@ afterEach(async () => {
 });
 
 describe("stored draft projection", () => {
+  it("retires a cached tab summary when the same offline client loses local admission", () => {
+    seedTab({ a: { draft: "offline input", draftRevision: 10, updatedAt: 1 } });
+    const host = {
+      ...state(),
+      connected: false,
+      client: {
+        recoveryScope: "",
+        recoveryScopeReady: false,
+        offlineRecoveryScope: owner.recoveryScope,
+      },
+    };
+    const reader = createStoredChatOutboxReader();
+    expect(reader.read(host).hasSessionDraft(key("a"))).toBe(true);
+    host.client.offlineRecoveryScope = "";
+    expect(reader.read(host).hasSessionDraft(key("a"))).toBe(false);
+  });
+
   it.each(["read", "sweep"])(
     "clears a cached attachment-only draft badge after expiry through %s",
     async (path) => {
@@ -152,6 +169,9 @@ describe("stored draft projection", () => {
     expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
     await changes.changed;
     expect(reader.read(host).hasSessionDraft(key("b"))).toBe(true);
+    expect(reader.read(host).sessions).toEqual([
+      { agentId: "main", sessionKey: key("b"), hasComposerDraft: true, outboxAttentionCount: 0 },
+    ]);
     expect(globalListener).not.toHaveBeenCalled();
 
     const written = changes.next();
@@ -166,6 +186,7 @@ describe("stored draft projection", () => {
     await list.mock.results[2]?.value;
     expect(changes.listener).not.toHaveBeenCalled();
     expect(reader.read(host).hasSessionDraft(key("c"))).toBe(false);
+    expect(reader.read(host).sessions).toEqual([]);
   });
 
   it("merges revision fences and all tab input kinds while excluding Incognito keys", async () => {
@@ -196,6 +217,14 @@ describe("stored draft projection", () => {
     ]) {
       expect(summary.hasSessionDraft(key(name)), name).toBe(false);
     }
+    expect(summary.sessions).toEqual(
+      ["goal", "reply"].map((name) => ({
+        agentId: "main",
+        sessionKey: key(name),
+        hasComposerDraft: true,
+        outboxAttentionCount: 0,
+      })),
+    );
   });
 
   it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {

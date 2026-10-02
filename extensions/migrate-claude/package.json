@@ -22,6 +22,6 @@
     ]
   },
   "dependencies": {
-    "@openclaw/fs-safe": "0.21.3"
+    "@openclaw/fs-safe": "0.23.0"
   }
 }

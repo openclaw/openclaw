@@ -100,33 +100,13 @@ it.each([true, false])(
     const notes = join(root, "helper-notes.md");
     const proof = join(root, "proof.md");
     writeFileSync(proof, `### Release verification\n\n- Source: ${targetSha}\n`);
-    const advisory = {
-      class: "windows-node-ci",
-      child: "normalCi",
-      job: "checks-windows-node-test-2",
-      conclusion: "failure",
-      runId: "456",
-      url: "https://github.com/openclaw/openclaw/actions/runs/456/job/459",
-    };
     if (hasManifest) {
       writeFileSync(
         join(root, "full-release-validation-manifest.json"),
         JSON.stringify({
-          childRuns: { normalCi: "456" },
-          childEvidence: {
-            normalCi: {
-              runId: "456",
-              jobs: [
-                {
-                  name: advisory.job,
-                  status: "completed",
-                  conclusion: "failure",
-                  url: advisory.url,
-                },
-              ],
-            },
-          },
-          advisoryJobs: [advisory],
+          childRuns: {},
+          childEvidence: {},
+          advisoryJobs: [],
         }),
       );
     }
@@ -165,10 +145,7 @@ canonical_release_body_matches "$NOTES_FILE"
     const prepared = readFileSync(join(root, "release-notes.md"), "utf8");
     const verified = readFileSync(notes, "utf8");
     expect(prepared).toContain("Frozen release fix.");
-    const advisoryLine = hasManifest
-      ? `\n- Advisory job (windows-node-ci): normalCi / checks-windows-node-test-2 (failure): ${advisory.url}`
-      : "";
-    expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}${advisoryLine}`);
+    expect(verified).toBe(`${prepared}\n\n${readFileSync(proof, "utf8").trimEnd()}`);
   },
 );
 
@@ -208,7 +185,7 @@ it("renders the extended-stable context through the real publication entry point
       "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
         "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
         "reliability and performance fixes, and features like new model support. " +
-        "The current latest version of OpenClaw is " +
+        "The latest version of OpenClaw at the time of this release is " +
         "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
     ),
   ).toBe(true);

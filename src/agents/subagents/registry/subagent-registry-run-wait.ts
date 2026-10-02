@@ -1,4 +1,3 @@
-/** Owns subagent run completion waits and session reconciliation. */
 import { getRuntimeConfig } from "../../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -27,15 +26,24 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import type { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
+import type { CleanupBookkeepingParams } from "./subagent-registry-lifecycle-context.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
-  type SubagentRegistryWriteOptions,
+  mutateSubagentRuns,
 } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import {
+  compareSubagentRunGeneration,
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+} from "./subagent-run-generation.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
-import type { SubagentSessionCompletion } from "./subagent-session-reconciliation.js";
+import type {
+  resolveSubagentSessionCompletion,
+  resolveSubagentSessionStartedAt,
+} from "./subagent-session-reconciliation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry");
 const RECOVERABLE_WAIT_RETRY_DELAY_MS = isFastTestRuntimeEnv() ? 25 : 5_000;
@@ -83,68 +91,84 @@ function resolveWaitTimeoutMsForRun(
   return Math.max(1, Math.min(normalizedWaitTimeoutMs, deadlineMs - now));
 }
 
-/** A restart ends execution, not the task; lifecycle and wait observations share this owner. */
-export function preserveSubagentRunForRestart(params: {
+/** Return the admitted observation so delayed lifecycle classification retains its attempt. */
+export async function preserveSubagentRunForRestart(params: {
   entry: SubagentRunRecord;
   terminal: AgentRunTerminalOutcome;
-  persist: (...runIds: string[]) => void;
-}): boolean {
-  const { entry } = params;
-  // A failed wait has no terminal timestamp. It cannot replace a recorded
-  // interruption with an invented run failure or timeout.
-  if (
-    entry.execution.status === "interrupted" &&
-    entry.execution.interruptionReason === "gateway-restart" &&
-    params.terminal.endedAt === undefined &&
-    (params.terminal.reason === "failed" || params.terminal.reason === "timed_out")
-  ) {
-    return true;
-  }
-  if (params.terminal.reason !== "cancelled" || params.terminal.stopReason !== "restart") {
-    return false;
-  }
-  if (
-    entry.execution.status === "terminal" ||
-    typeof entry.execution.endedAt === "number" ||
-    shouldSuppressSubagentRecoverySessionEffects(entry)
-  ) {
-    return true;
-  }
-  if (
-    entry.killIntent ||
-    entry.killReconciliation ||
-    resolveCompletionAfterHardRunDeadline({
-      entry,
-      observedStartedAt: params.terminal.startedAt,
-      observedEndedAt: params.terminal.endedAt,
-      now: Date.now(),
-    }) !== undefined
-  ) {
-    return false;
-  }
-  if (entry.execution.status !== "interrupted") {
-    entry.execution = {
-      ...entry.execution,
-      status: "interrupted",
-      interruptedAt: params.terminal.endedAt ?? Date.now(),
-      interruptionReason: "gateway-restart",
-    };
-    params.persist(entry.runId);
-  }
-  return true;
+  runs: Map<string, SubagentRunRecord>;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}): Promise<{ preserved: boolean; observedEntry: SubagentRunRecord }> {
+  return mutateSubagentRuns(
+    [params.entry.runId],
+    (rows) => {
+      const entry = rows.get(params.entry.runId);
+      if (!entry || !isSameSubagentRunOwner(entry, params.entry)) {
+        throw new Error("Subagent restart preservation lost its original run");
+      }
+      // A failed wait cannot replace a recorded interruption with an invented terminal.
+      if (
+        entry.execution.status === "interrupted" &&
+        entry.execution.interruptionReason === "gateway-restart" &&
+        params.terminal.endedAt === undefined &&
+        (params.terminal.reason === "failed" || params.terminal.reason === "timed_out")
+      ) {
+        return { value: { preserved: true, observedEntry: entry } };
+      }
+      if (params.terminal.reason !== "cancelled" || params.terminal.stopReason !== "restart") {
+        return { value: { preserved: false, observedEntry: entry } };
+      }
+      if (
+        entry.execution.status === "terminal" ||
+        typeof entry.execution.endedAt === "number" ||
+        shouldSuppressSubagentRecoverySessionEffects(entry)
+      ) {
+        return { value: { preserved: true, observedEntry: entry } };
+      }
+      if (
+        entry.killIntent ||
+        entry.killReconciliation ||
+        resolveCompletionAfterHardRunDeadline({
+          entry,
+          observedStartedAt: params.terminal.startedAt,
+          observedEndedAt: params.terminal.endedAt,
+          now: Date.now(),
+        }) !== undefined
+      ) {
+        return { value: { preserved: false, observedEntry: entry } };
+      }
+      if (entry.execution.status === "interrupted") {
+        return { value: { preserved: true, observedEntry: entry } };
+      }
+      return {
+        value: { preserved: true, observedEntry: entry },
+        postimages: new Map([
+          [
+            entry.runId,
+            {
+              ...entry,
+              execution: {
+                ...entry.execution,
+                status: "interrupted" as const,
+                interruptedAt: params.terminal.endedAt ?? Date.now(),
+                interruptionReason: "gateway-restart" as const,
+              },
+            },
+          ],
+        ]),
+      };
+    },
+    { runs: params.runs, context: params.context, assertCurrent: params.assertCurrent },
+  );
 }
 
 export type SubagentManagerOptions = {
   runs: Map<string, SubagentRunRecord>;
-  getRunsForChildSession: (childSessionKey: string) => Iterable<SubagentRunRecord>;
-  resumedRuns: Set<string>;
-  persist(...runIds: string[]): void;
-  persistOrThrow(...runIds: string[]): void;
-  persistAsyncOrThrow: (
-    context: OpenClawStateWorkerContext,
-    callbacks: Omit<SubagentRegistryWriteOptions, "context"> & { assertCurrent: () => void },
-    ...runIds: string[]
-  ) => Promise<void>;
+  getRunsForChildSession: (
+    childSessionKey: string,
+    childAgentId?: string,
+  ) => Iterable<SubagentRunRecord>;
+  resumedRuns: Set<object>;
   acquireTerminalCompletionLock: (runId: string) => Promise<() => void>;
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
@@ -156,36 +180,12 @@ export type SubagentManagerOptions = {
   clearPendingLifecycleTimeout(runId: string): void;
   resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number): number;
   scheduleSweep(args?: { delayMs?: number }): void;
-  resolveSubagentSessionCompletion(args: {
-    childSessionKey: string;
-    fallbackEndedAt: number;
-    notBeforeMs?: number;
-    assertCurrent?: () => void;
-  }): SubagentSessionCompletion | null | Promise<SubagentSessionCompletion | null>;
-  resolveSubagentSessionStartedAt(args: {
-    childSessionKey: string;
-    notBeforeMs?: number;
-    assertCurrent?: () => void;
-  }): number | undefined | Promise<number | undefined>;
-  notifyContextEngineSubagentEnded(
-    args: {
-      childSessionKey: string;
-      reason: "completed" | "deleted" | "released";
-      agentDir?: string;
-      workspaceDir?: string;
-    },
-    options?: { isCurrent?: () => boolean },
-  ): Promise<void>;
-  completeCleanupBookkeeping(args: {
-    runId: string;
-    entry: SubagentRunRecord;
-    cleanup: "delete" | "keep";
-    completedAt: number;
-    preserveTranscript?: boolean;
-    provisionalKill?: boolean;
-    stateContext?: OpenClawStateWorkerContext;
-    isCurrent?: () => boolean;
-  }): void | Promise<void>;
+  resolveSubagentSessionCompletion: typeof resolveSubagentSessionCompletion;
+  resolveSubagentSessionStartedAt: typeof resolveSubagentSessionStartedAt;
+  notifyContextEngineSubagentEnded: ReturnType<
+    typeof createSubagentRegistryContextCleanup
+  >["notifyContextEngineSubagentEnded"];
+  completeCleanupBookkeeping(args: CleanupBookkeepingParams): Promise<void>;
   completeSubagentRun(args: SubagentCompletionRequest): Promise<void>;
 };
 
@@ -196,41 +196,16 @@ export class SubagentWaitManager {
     return entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
   }
 
-  protected markOlderKillReconciliationsSuperseded(next: SubagentRunRecord) {
-    const snapshots = new Map<SubagentRunRecord, SubagentRunRecord["killReconciliation"]>();
-    for (const candidate of this.options.getRunsForChildSession(next.childSessionKey)) {
-      if (
-        candidate.runId === next.runId ||
-        compareSubagentRunGeneration(candidate, next) >= 0 ||
-        !candidate.killReconciliation
-      ) {
-        continue;
-      }
-      snapshots.set(candidate, structuredClone(candidate.killReconciliation));
-      candidate.killReconciliation.supersededAt = Math.min(
-        candidate.killReconciliation.supersededAt ?? next.createdAt,
-        next.createdAt,
-      );
-    }
-    return snapshots;
-  }
-
   protected currentRunOwnsSession(entry: SubagentRunRecord): boolean {
+    const current = this.options.runs.get(entry.runId);
     return (
-      this.options.runs.get(entry.runId) === entry &&
-      entry.killReconciliation?.supersededAt === undefined &&
-      !Array.from(this.options.getRunsForChildSession(entry.childSessionKey)).some(
-        (candidate) => compareSubagentRunGeneration(candidate, entry) > 0,
-      )
+      current !== undefined &&
+      isSameSubagentRunOwner(current, entry) &&
+      current.killReconciliation?.supersededAt === undefined &&
+      !Array.from(
+        this.options.getRunsForChildSession(current.childSessionKey, current.childAgentId),
+      ).some((candidate) => compareSubagentRunGeneration(candidate, current) > 0)
     );
-  }
-
-  protected restoreKillReconciliationSnapshots(
-    snapshots: Map<SubagentRunRecord, SubagentRunRecord["killReconciliation"]>,
-  ): void {
-    for (const [entry, snapshot] of snapshots) {
-      entry.killReconciliation = snapshot;
-    }
   }
 
   private runSubagentCompletionWait = async (
@@ -243,16 +218,22 @@ export class SubagentWaitManager {
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const stateContext = captureOpenClawStateWorkerContext();
     let waitedEntry: SubagentRunRecord | undefined;
-    let completionForRetry: Parameters<typeof this.options.completeSubagentRun>[0] | undefined;
+    let completionAttempted = false;
     let releaseCompletionWork: (() => void) | null = null;
-    const assertCurrent = () => {
+    const currentEntry = () => {
       assertSubagentRegistryWriteSourceCurrent(stateContext);
+      const current = this.options.runs.get(runId);
       if (
         !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        this.options.runs.get(runId) !== waitedEntry
+        !current ||
+        !isSameSubagentRunOwner(current, waitedEntry)
       ) {
         throw new Error("Subagent completion wait lost its original owner");
       }
+      return current;
+    };
+    const assertCurrent = () => {
+      currentEntry();
     };
     const scheduleWaitRetry = (entry: SubagentRunRecord, reason: string, error?: string) => {
       this.options.scheduleSweep({ delayMs: 1_000 });
@@ -262,7 +243,7 @@ export class SubagentWaitManager {
         if (
           !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
           !current ||
-          current !== scheduledEntry ||
+          !isSameSubagentRunOwner(current, scheduledEntry) ||
           typeof current.execution.endedAt === "number"
         ) {
           return;
@@ -277,7 +258,10 @@ export class SubagentWaitManager {
     };
     try {
       const entryBeforeWait = this.options.runs.get(runId);
-      if (!entryBeforeWait || (expectedEntry && entryBeforeWait !== expectedEntry)) {
+      if (
+        !entryBeforeWait ||
+        (expectedEntry && !isSameSubagentRunOwner(entryBeforeWait, expectedEntry))
+      ) {
         return;
       }
       waitedEntry = entryBeforeWait;
@@ -290,14 +274,15 @@ export class SubagentWaitManager {
         timeoutMs,
         callGateway: this.options.callGateway,
       });
-      // In-process restart may retain the row object, but never the old wait owner's authority.
+      // In-process restart never retains the old wait owner's authority.
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      const entry = this.options.runs.get(runId);
-      if (!entry || entry !== waitedEntry) {
+      const observedEntry = this.options.runs.get(runId);
+      if (!observedEntry || !isSameSubagentRunOwner(observedEntry, waitedEntry)) {
         return;
       }
+      let entry: SubagentRunRecord = observedEntry;
       if (wait.status === "pending") {
         return;
       }
@@ -315,35 +300,56 @@ export class SubagentWaitManager {
           "runId" | "expectedEntry" | "sendFarewell" | "accountId" | "triggerCleanup"
         >,
       ) => {
-        completionForRetry = {
+        completionAttempted = true;
+        return this.options.completeSubagentRun({
           runId,
           expectedEntry: entry,
           sendFarewell: true,
           accountId: entry.requesterOrigin?.accountId,
           triggerCleanup: true,
           ...completion,
-        };
-        return this.options.completeSubagentRun(completionForRetry);
+        });
       };
       if (wait.yielded === true && waitStatus !== "timeout" && !waitBlocked) {
-        this.options.clearPendingLifecycleError(runId);
-        this.options.clearPendingLifecycleTimeout(runId);
         if (entry.collect !== true) {
-          if (
-            markSubagentRunPausedAfterYield({
-              entry,
-              startedAt: wait.startedAt,
-              endedAt: wait.endedAt,
-            })
-          ) {
-            this.options.persist(entry.runId);
-          }
-          if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
-            this.options.resumedRuns.delete(runId);
-            this.options.resumeSubagentRun(runId);
+          await mutateSubagentRuns(
+            [runId],
+            (rows) => {
+              const current = rows.get(runId);
+              if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
+                throw new Error("Subagent yield lost its original run");
+              }
+              if (current.collect || current.killIntent || current.killReconciliation) {
+                return { value: undefined };
+              }
+              const draft = structuredClone(current);
+              return {
+                value: undefined,
+                ...(markSubagentRunPausedAfterYield({
+                  entry: draft,
+                  startedAt: wait.startedAt,
+                  endedAt: wait.endedAt,
+                })
+                  ? { postimages: new Map([[runId, draft]]) }
+                  : {}),
+              };
+            },
+            { runs: this.options.runs, context: stateContext, assertCurrent },
+          );
+          assertCurrent();
+          const paused = this.options.runs.get(runId);
+          if (paused?.pauseReason === "sessions_yield") {
+            this.options.clearPendingLifecycleError(runId);
+            this.options.clearPendingLifecycleTimeout(runId);
+            if (paused.requesterSettleWake?.pauseNotice) {
+              this.options.resumedRuns.delete(getSubagentRunRuntimeKey(paused));
+              this.options.resumeSubagentRun(runId);
+            }
           }
           return;
         }
+        this.options.clearPendingLifecycleError(runId);
+        this.options.clearPendingLifecycleTimeout(runId);
         // A collector result is read by an explicit wait and never delivered by a
         // requester continuation, so nothing can resume a parked collector and its
         // waiter blocks for good. The attempt's own terminal is the only result
@@ -362,16 +368,21 @@ export class SubagentWaitManager {
       }
       if (
         waitTerminalOutcome &&
-        preserveSubagentRunForRestart({
-          entry,
-          terminal: waitTerminalOutcome,
-          persist: this.options.persist.bind(this.options),
-        })
+        (
+          await preserveSubagentRunForRestart({
+            entry,
+            terminal: waitTerminalOutcome,
+            runs: this.options.runs,
+            context: stateContext,
+            assertCurrent,
+          })
+        ).preserved
       ) {
         this.options.clearPendingLifecycleError(runId);
         this.options.clearPendingLifecycleTimeout(runId);
         return;
       }
+      entry = currentEntry();
       if (waitStatus === "error" && !waitAborted && wait.retryableTransportError) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
@@ -384,7 +395,7 @@ export class SubagentWaitManager {
               notBeforeMs: entry.execution.startedAt ?? entry.createdAt,
               assertCurrent,
             });
-      assertCurrent();
+      entry = currentEntry();
       const completeAsRunTimeout = (endedAt?: number, startedAt?: number) =>
         complete({
           outcome: { status: "timeout" },
@@ -410,7 +421,7 @@ export class SubagentWaitManager {
           notBeforeMs: observedStartedAt ?? entry.execution.startedAt ?? entry.createdAt,
           assertCurrent,
         });
-        assertCurrent();
+        entry = currentEntry();
         if (completion) {
           const completionStartedAt = observedStartedAt ?? completion.startedAt;
           const completionAfterDeadline = resolveCompletionAfterHardRunDeadline({
@@ -446,12 +457,39 @@ export class SubagentWaitManager {
           await completeAsRunTimeout(timeoutEndedAt, observedStartedAt);
           return;
         }
-        if (observedStartedAt !== undefined && entry.execution.startedAt !== observedStartedAt) {
-          entry.execution = { ...entry.execution, startedAt: observedStartedAt };
-          if (typeof entry.sessionStartedAt !== "number") {
-            entry.sessionStartedAt = observedStartedAt;
-          }
-          this.options.persist(entry.runId);
+        if (observedStartedAt !== undefined) {
+          await mutateSubagentRuns(
+            [runId],
+            (rows) => {
+              const current = rows.get(runId);
+              if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
+                throw new Error("Subagent wait reconciliation lost its original run");
+              }
+              if (
+                typeof current.execution.endedAt === "number" ||
+                current.killIntent ||
+                current.killReconciliation ||
+                current.execution.startedAt === observedStartedAt
+              ) {
+                return { value: undefined };
+              }
+              return {
+                value: undefined,
+                postimages: new Map([
+                  [
+                    runId,
+                    {
+                      ...current,
+                      execution: { ...current.execution, startedAt: observedStartedAt },
+                      sessionStartedAt: current.sessionStartedAt ?? observedStartedAt,
+                    },
+                  ],
+                ]),
+              };
+            },
+            { runs: this.options.runs, context: stateContext, assertCurrent },
+          );
+          assertCurrent();
         }
         scheduleWaitRetry(
           entry,
@@ -498,43 +536,59 @@ export class SubagentWaitManager {
       if (!isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
         return;
       }
-      const current = this.options.runs.get(runId);
-      if (!current || current !== waitedEntry) {
+      let current = this.options.runs.get(runId);
+      if (!current || !isSameSubagentRunOwner(current, waitedEntry)) {
         return;
       }
       assertCurrent();
-      log.warn("failed to complete subagent run; retrying completion", {
+      log.warn("subagent completion wait failed; recovering ended cleanup", {
         runId,
         childSessionKey: current.childSessionKey,
         error,
       });
-      if (completionForRetry) {
-        try {
-          await this.options.completeSubagentRun(completionForRetry);
-          return;
-        } catch (retryError) {
-          log.warn("failed to complete subagent run after retry; retrying ended cleanup", {
-            runId,
-            childSessionKey: current.childSessionKey,
-            error: retryError,
-          });
-        }
-      }
       if (
         !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
-        this.options.runs.get(runId) !== current
+        !isSameSubagentRunOwner(this.options.runs.get(runId), current)
       ) {
         return;
       }
+      current = currentEntry();
       if (
         typeof current.execution.endedAt === "number" &&
         !current.cleanupCompletedAt &&
         current.pauseReason !== "sessions_yield"
       ) {
-        current.cleanupHandled = false;
-        this.options.resumedRuns.delete(runId);
-        this.options.resumeSubagentRun(runId);
-      } else if (completionForRetry && typeof current.execution.endedAt !== "number") {
+        const resume = await mutateSubagentRuns(
+          [runId],
+          (rows) => {
+            const latest = rows.get(runId);
+            if (!latest || !isSameSubagentRunOwner(latest, waitedEntry)) {
+              throw new Error("Subagent cleanup retry lost its original run", { cause: error });
+            }
+            if (
+              typeof latest.execution.endedAt !== "number" ||
+              latest.cleanupCompletedAt ||
+              latest.pauseReason === "sessions_yield"
+            ) {
+              return { value: false };
+            }
+            return {
+              value: true,
+              ...(latest.cleanupHandled === false
+                ? {}
+                : {
+                    postimages: new Map([[runId, { ...latest, cleanupHandled: false }]]),
+                  }),
+            };
+          },
+          { runs: this.options.runs, context: stateContext, assertCurrent },
+        );
+        if (resume) {
+          assertCurrent();
+          this.options.resumedRuns.delete(getSubagentRunRuntimeKey(current));
+          this.options.resumeSubagentRun(runId);
+        }
+      } else if (completionAttempted && typeof current.execution.endedAt !== "number") {
         this.options.scheduleSweep({ delayMs: 1_000 });
       }
     } finally {

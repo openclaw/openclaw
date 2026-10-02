@@ -2,11 +2,18 @@
 
 import { render, type LitElement, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
-import "../components/app-sidebar.ts";
+import { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
+import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
+import {
+  admitStoredChatComposerQueueItem,
+  persistChatComposerState,
+} from "../pages/chat/composer-persistence.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
+import "../components/app-sidebar.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -187,6 +194,57 @@ afterEach(async () => {
 });
 
 describe("application shell pairing access", () => {
+  it("projects current-account draft and outbox through the real shell, then fences offline retirement", () => {
+    vi.stubGlobal("sessionStorage", createStorageMock());
+    const { shell, context, snapshot, renderSidebar } = createPairingShell({
+      auth: null,
+      connected: false,
+    });
+    const client = new GatewayBrowserClient({
+      url: context.gateway.connection.gatewayUrl,
+      offlineRecoveryScope: "account-a",
+    });
+    snapshot.client = client;
+    const host = {
+      settings: context.gateway.connection,
+      client,
+      connected: false,
+      sessionKey: "agent:main:main",
+      chatMessage: "private draft",
+      chatQueue: [],
+    };
+    expect(persistChatComposerState(host)).toBe(true);
+    expect(
+      admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
+        id: "failed",
+        text: "private queued input",
+        createdAt: 1,
+        sendState: "failed",
+      }),
+    ).toBe(true);
+    shell.outboxStoreRuntime = createStoredChatOutboxReader();
+    const first = renderSidebar().storedOutboxes!;
+    expect(first.total).toBe(1);
+    expect(first.attentionCountForSession(host.sessionKey)).toBe(1);
+    expect(first.hasSessionDraft(host.sessionKey)).toBe(true);
+    // Same client and unchanged live recovery fields: only retained admission retired.
+    client.retireOfflineRecoveryScope();
+    const retired = renderSidebar().storedOutboxes!;
+    expect(retired.total).toBe(0);
+    expect(retired.hasSessionDraft(host.sessionKey)).toBe(false);
+    expect(retired).not.toBe(first);
+    snapshot.client = new GatewayBrowserClient({
+      url: context.gateway.connection.gatewayUrl,
+      offlineRecoveryScope: "account-b",
+    });
+    expect(renderSidebar().storedOutboxes!.total).toBe(0);
+    snapshot.client = new GatewayBrowserClient({
+      url: context.gateway.connection.gatewayUrl,
+      offlineRecoveryScope: "account-a",
+    });
+    expect(renderSidebar().storedOutboxes!.total).toBe(1);
+  });
+
   it.each([false, true])(
     "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
@@ -196,6 +254,14 @@ describe("application shell pairing access", () => {
       });
       let storedOutboxes = {
         total: 1,
+        sessions: [
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            hasComposerDraft: true,
+            outboxAttentionCount: 1,
+          },
+        ],
         attentionCountForSession: () => 1,
         hasSessionDraft: () => true,
       };
@@ -237,6 +303,14 @@ describe("application shell pairing access", () => {
       if (withOutboxes) {
         storedOutboxes = {
           total: 2,
+          sessions: [
+            {
+              agentId: "main",
+              sessionKey: "agent:main:main",
+              hasComposerDraft: false,
+              outboxAttentionCount: 2,
+            },
+          ],
           attentionCountForSession: () => 2,
           hasSessionDraft: () => false,
         };
@@ -313,6 +387,7 @@ describe("application shell pairing access", () => {
     shell.outboxStoreRuntime = {
       read: () => ({
         total: 0,
+        sessions: [],
         attentionCountForSession: () => 0,
         hasSessionDraft: () => false,
       }),

@@ -23,6 +23,7 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
@@ -32,11 +33,11 @@ import {
 } from "./openclaw-agent-db-lifecycle.js";
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
-import {
-  captureOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
-} from "./openclaw-agent-execution.js";
+import type {
+  AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
+} from "./openclaw-agent-execution-contract.js";
+import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -119,6 +120,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
   );
   let revoked = false;
   let closing: Promise<void> | undefined;
+  let drainExecution: OpenClawAgentDatabaseExecution | undefined;
   let releaseBorrow: (() => void) | undefined;
   let unregisterAgent: (() => void) | undefined;
   let unregisterState: (() => void) | undefined;
@@ -155,6 +157,10 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
     revoked = true;
     closing ??= (async () => {
       await Promise.allSettled(pending);
+      if (drainExecution) {
+        await drainExecution.release();
+        drainExecution = undefined;
+      }
       releaseBorrow?.();
       releaseBorrow = undefined;
       unregisterAgent?.();
@@ -256,8 +262,15 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
       } catch (error) {
         completed = { ok: false, error };
       }
+      let releasing: OpenClawAgentDatabaseExecution | undefined = execution;
+      if (completed.ok && !revoked && getGatewayRestartDrainSignal().aborted) {
+        // Keep the accepted publication sequence on one native lease until its store closes.
+        const previous = drainExecution;
+        drainExecution = execution;
+        releasing = previous;
+      }
       try {
-        await execution.release();
+        await releasing?.release();
       } catch (releaseError) {
         if (!completed.ok) {
           throw createSqliteLifecycleAggregateError(

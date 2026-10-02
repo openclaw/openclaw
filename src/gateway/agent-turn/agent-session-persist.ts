@@ -11,7 +11,6 @@ import { getGeneratedMediaTaskIdsForSessionKey } from "../../agents/media-genera
 import {
   mergeSessionEntry,
   resolveSessionLifecycleTimestamps,
-  resolveSessionWorkStartError,
   type SessionEntry,
   type InternalSessionEntry,
 } from "../../config/sessions.js";
@@ -47,6 +46,7 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import {
   cronContinuationHasReusableRuntime,
   emitAgentSendSessionLifecycleTransition,
+  resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
 
@@ -206,7 +206,7 @@ export async function persistAgentSessionPhase(params: {
               deletedDuringStoreUpdateError = `Session "${params.canonicalSessionKey}" was deleted while starting work. Retry.`;
               throw new Error(deletedDuringStoreUpdateError);
             }
-            const archivedError = resolveSessionWorkStartError(
+            const archivedError = resolveAgentSessionWorkStartError(
               params.canonicalSessionKey,
               freshEntry,
             );

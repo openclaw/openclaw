@@ -21,6 +21,13 @@ export function photoUpdate(params: { updateId: number; messageId: number; capti
   };
 }
 
+// forward_origin puts the entry on the forward debounce lane (1 s window).
+const forwardOrigin = {
+  type: "user" as const,
+  date: 1_736_300_000,
+  sender_user: { id: 555, is_bot: false, first_name: "Origin" },
+};
+
 export function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
   return {
     update_id: params.updateId,
@@ -29,13 +36,22 @@ export function forwardedTextUpdate(params: { updateId: number; messageId: numbe
       date: 1_736_380_800 + params.messageId,
       chat: { id: 111, type: "private" as const, first_name: "Ada" },
       from: { id: 111, is_bot: false, first_name: "Ada" },
-      // forward_origin puts the entry on the forward debounce lane (80ms window).
-      forward_origin: {
-        type: "user" as const,
-        date: 1_736_300_000,
-        sender_user: { id: 555, is_bot: false, first_name: "Origin" },
-      },
+      forward_origin: forwardOrigin,
       text: params.text,
+    },
+  };
+}
+
+export function forwardedPhotoUpdate(params: { updateId: number; messageId: number }) {
+  return {
+    update_id: params.updateId,
+    message: {
+      message_id: params.messageId,
+      date: 1_736_380_800 + params.messageId,
+      chat: { id: 111, type: "private" as const, first_name: "Ada" },
+      from: { id: 111, is_bot: false, first_name: "Ada" },
+      forward_origin: forwardOrigin,
+      photo: photoUpdate(params).message.photo,
     },
   };
 }

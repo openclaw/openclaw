@@ -13,6 +13,7 @@ import {
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createProvisionOwnerFixture,
@@ -90,7 +91,7 @@ describePosix("repository-owned PR provisioning state", () => {
     // The parent still has a valid binding: its witness cannot qualify this PID.
     writeFileSync(
       join(f.isolation.bin, "node"),
-      `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
+      `#!/bin/sh\nexec ${quote(requireNodeTool("node"))} ${quote(f.isolation.nodeArgs[1]!)} "$@"\n`,
     );
     const result = f.run();
     expect(result.status).not.toBe(0);

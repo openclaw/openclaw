@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { watchPrCiDependencyOptions } from "../../scripts/lib/watch-pr-ci-dependencies.mjs";
+import { toolingDependencyOptions } from "../../scripts/lib/tooling-dependencies.mjs";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -103,7 +104,7 @@ it.each([
       } else {
         vi.stubEnv("PNPM_CONFIG_MODULES_DIR", join(tooling, "node_modules"));
       }
-      expect(watchPrCiDependencyOptions(checkout)).toEqual({});
+      expect(toolingDependencyOptions(checkout, "watch-pr-ci")).toEqual({});
       expect(notice).not.toHaveBeenCalled();
     } else if (["missing", "different", "subdirectory", "sparse"].includes(source)) {
       const reasons: Record<string, string> = {
@@ -112,10 +113,10 @@ it.each([
         subdirectory: "Not a repository top level",
         sparse: "Sparse checkout",
       };
-      expect(() => watchPrCiDependencyOptions(checkout)).toThrow(reasons[source]);
+      expect(() => toolingDependencyOptions(checkout, "watch-pr-ci")).toThrow(reasons[source]);
       expect(notice).not.toHaveBeenCalled();
     } else {
-      watchPrCiDependencyOptions(checkout);
+      toolingDependencyOptions(checkout, "watch-pr-ci");
       expect(notice.mock.calls).toEqual([
         [
           `[watch-pr-ci] resolving missing packages from scripts/pr tooling root ${source === "config" ? tooling : canonical}`,
@@ -152,11 +153,7 @@ it("checks fallback versions before loading through the watcher child and preser
       optionalDependencies: { "@fixture/scoped": "1.0.0" },
     }),
   );
-  for (const file of [
-    "tsx-cli-shim.mjs",
-    "local-check-runtime.mts",
-    "watch-pr-ci-dependencies.mjs",
-  ]) {
+  for (const file of ["tsx-cli-shim.mjs", "local-check-runtime.mts", "tooling-dependencies.mjs"]) {
     copyFileSync(resolve("scripts/lib", file), join(lib, file));
   }
   copyFileSync(resolve("scripts/watch-pr-ci.mjs"), join(checkout, "scripts/watch-pr-ci.mjs"));
@@ -165,7 +162,12 @@ it("checks fallback versions before loading through the watcher child and preser
   writePackage(tooling, "@fixture/scoped", "scoped");
   writeFileSync(
     join(tooling, "node_modules/@fixture/scoped/package.json"),
-    JSON.stringify({ version: "1.0.0", type: "module", exports: { "./subpath": "./index.mjs" } }),
+    JSON.stringify({
+      name: "@fixture/scoped",
+      version: "1.0.0",
+      type: "module",
+      exports: { "./subpath": "./index.mjs" },
+    }),
   );
   writePackage(tooling, "local-pkg", "fallback");
   writeFileSync(
@@ -207,7 +209,7 @@ console.log("fallback and local resolution OK");
     delete env[name];
   }
   const run = () =>
-    spawnSync(process.execPath, [join(checkout, "scripts/watch-pr-ci.mjs")], {
+    spawnSync(requireNodeTool("node"), [join(checkout, "scripts/watch-pr-ci.mjs")], {
       cwd: root,
       encoding: "utf8",
       timeout: 10_000,

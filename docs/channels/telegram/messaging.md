@@ -49,7 +49,7 @@ Telegram batches rapid text messages from the same sender into one agent turn by
 - Batches stay isolated by bot account, sender, chat, and topic. Reply metadata and source message IDs are preserved.
 - `messages.inbound.byChannel.telegram` overrides `messages.inbound.debounceMs`, which overrides the 300ms ordinary-text default. An explicit `0` disables ordinary burst batching but keeps automatic long-paste assembly.
 - Control commands bypass batching and dispatch immediately. Stop/abort commands cancel pending text for their target conversation.
-- Forwarded messages use a separate 80ms collection window, but share the sender's dispatch queue so they cannot overtake earlier text.
+- Forwarded messages use a separate 1-second collection window, but share the sender's dispatch queue so they cannot overtake earlier text. Telegram delivers each message of a multi-message forward as its own update, often in a later poll, so the window waits long enough for the rest of the burst to arrive. A single forward therefore starts its turn about one second after it arrives.
 
 Ordinary text batches are bounded to 12 messages and 50,000 characters. Their collection deadline is 7.5 seconds from the first message, or the configured quiet window if longer. Messages arriving after a batch flushes cannot join it. This heuristic does not guarantee that Telegram delivers every paste fragment together. See [Inbound debouncing](/concepts/messages#inbound-debouncing) for hot-reload behavior.
 
@@ -127,7 +127,7 @@ Ordinary text batches are bounded to 12 messages and 50,000 characters. Their co
 
     For text-only replies: short previews get the final edit in place; long finals that split into multiple messages reuse the preview as the first chunk, then send only the remainder; progress-mode finals clear the status draft and use normal final delivery; if the final edit fails before completion is confirmed, OpenClaw falls back to normal final delivery and cleans up the stale preview. For complex replies (media payloads), OpenClaw always falls back to normal final delivery and cleans up the preview.
 
-    Preview streaming and block streaming are mutually exclusive. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
+    Preview streaming and block streaming are mutually exclusive. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. For ordinary single-agent turns, when a reply-modifying plugin hook prevents previews, completed answer blocks use normal hooked delivery instead, unless block streaming is explicitly disabled globally with `agents.defaults.blockStreamingDefault: "off"` or for Telegram with `streaming.block.enabled: false`. Configured multi-agent group-thread turns do not use this forced fallback; like other turns that cannot use previews, they retain the configured block delivery policy.
 
     Reasoning: `/reasoning stream` streams reasoning into the live preview while generating, then deletes the reasoning preview after final delivery (use `/reasoning on` to keep it visible). The final answer is sent without reasoning text.
 

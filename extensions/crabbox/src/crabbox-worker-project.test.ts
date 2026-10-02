@@ -7,6 +7,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
 import {
@@ -201,7 +202,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
           env: {
             HOME: home,
             PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-            CRABBOX_TEST_NODE: process.execPath,
+            CRABBOX_TEST_NODE: resolveTestNodeExecPath(),
             ...(call.argv.includes("CRABBOX_WORKER_BOOTSTRAP_TOKEN")
               ? {
                   CRABBOX_WORKER_BOOTSTRAP_TOKEN: JSON.stringify({

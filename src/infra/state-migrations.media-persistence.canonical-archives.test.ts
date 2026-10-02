@@ -14,10 +14,10 @@ import {
   resolveRegisteredSqliteTranscriptArchiveName,
 } from "../config/sessions/session-accessor.sqlite-archive-artifact.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { requireNodeSqlite } from "./node-sqlite.js";

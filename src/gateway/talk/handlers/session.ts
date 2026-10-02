@@ -22,7 +22,7 @@ import { projectInternalRealtimeVoicePublicConfig } from "../../../talk/provider
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
 import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
-import { ADMIN_SCOPE } from "../../operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
@@ -46,7 +46,6 @@ import {
   buildRealtimeVoiceLaunchOptions,
   buildTalkRealtimeConfig,
   buildTalkTranscriptionConfig,
-  canUseTalkDirectTools,
   normalizeTalkSessionBrain,
   normalizeTalkSessionMode,
   normalizeTalkSessionTransport,
@@ -181,7 +180,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         if (transport === "managed-room") {
-          if (brain === "direct-tools" && !canUseTalkDirectTools(client)) {
+          if (brain === "direct-tools" && !hasGatewayAdminScope(client)) {
             respondInvalidRequest(
               respond,
               `talk.session.create brain="direct-tools" requires gateway scope: ${ADMIN_SCOPE}`,

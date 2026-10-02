@@ -14,8 +14,10 @@ const suite = createControlUiE2eSuite({
 
 async function choose(page: Page, kind: string) {
   await page.getByRole("button", { name: "Add attachment", exact: true }).press("Enter");
+  const item = page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`);
+  await item.waitFor({ state: "visible" });
   const pending = page.waitForEvent("filechooser");
-  await page.locator(`.agent-chat__attach-menu-option[value="${kind}"]`).press("Enter");
+  await item.press("Enter");
   return pending;
 }
 
@@ -152,6 +154,9 @@ suite.define(() => {
                 );
               }
               await page.keyboard.press("Escape");
+              await page
+                .locator('.agent-chat__attach-menu-option[value="file"]')
+                .waitFor({ state: "hidden" });
             }
             for (const kind of fixture.single ? ["file"] : ["file", "photo"]) {
               const chooser = await choose(page, kind);

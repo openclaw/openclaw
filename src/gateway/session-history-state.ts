@@ -18,13 +18,17 @@ import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.h
 import {
   createSubagentCoordinationHistoryProjection,
   projectForwardedMessages,
+  type SubagentCoordinationDisplayResolver,
 } from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
+import {
+  createPreparedSessionHistorySubagentProjection,
+  readSessionHistorySubagentLookup,
+} from "./session-history-delta-visibility.js";
 import {
   buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
 } from "./session-history-snapshot.js";
-import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
@@ -128,38 +132,58 @@ export class SessionHistorySseState {
     return this.snapshot();
   }
 
-  appendInlineMessage(update: {
+  async prepareInlineMessage(update: {
     message: unknown;
     messageId?: string;
     messageSeq?: number;
-  }): InlineSessionHistoryAppend | null {
+  }): Promise<() => InlineSessionHistoryAppend | null> {
     if (this.limit !== undefined || this.cursor !== undefined) {
-      return null;
+      return () => null;
     }
     const carriedSeq = asPositiveSafeInteger(update.messageSeq);
-    if (carriedSeq !== undefined) {
-      if (carriedSeq <= this.rawTranscriptSeq) {
-        return { shouldRefresh: true };
-      }
-      this.rawTranscriptSeq = carriedSeq;
-    } else {
-      this.rawTranscriptSeq += 1;
+    if (carriedSeq !== undefined && carriedSeq <= this.rawTranscriptSeq) {
+      return () => ({ shouldRefresh: true });
     }
+    const messageSeq = carriedSeq ?? this.rawTranscriptSeq + 1;
     const idempotencyKey = readTranscriptMessageIdempotencyKey(update.message);
-    let nextMessage = attachOpenClawTranscriptMeta(update.message, {
+    const message = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
-      seq: this.rawTranscriptSeq,
+      seq: messageSeq,
     });
-    const hadPendingTurnBoundary = this.turnBoundaryPending;
-    const subagentCoordination =
+    let subagentCoordination: SubagentCoordinationDisplayResolver | undefined;
+    const lookup = readSessionHistorySubagentLookup(message);
+    if (
+      lookup &&
       this.target.storePath &&
       !this.target.sessionEntry?.incognito &&
       !isIncognitoSessionKey(this.target.sessionKey)
-        ? createSessionHistorySubagentProjection(this.target, { deferSources: true })
-        : undefined;
-    nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
-      nextMessage,
+    ) {
+      const { readSessionHistoryPageInWorker } =
+        await import("../config/sessions/session-history-worker-runtime.js");
+      const prepared = await readSessionHistoryPageInWorker({
+        kind: "inline-visibility",
+        params: { target: this.target, lookup },
+      });
+      subagentCoordination = createPreparedSessionHistorySubagentProjection(
+        prepared.subagentCoordination,
+        prepared.assertCurrent,
+      );
+    }
+    // The stream queue retains ordering; its publisher reauthorizes before applying this transition.
+    return () => this.appendInlineMessage(message, messageSeq, subagentCoordination);
+  }
+
+  private appendInlineMessage(
+    message: unknown,
+    messageSeq: number,
+    subagentCoordination: SubagentCoordinationDisplayResolver | undefined,
+  ): InlineSessionHistoryAppend | null {
+    subagentCoordination?.assertCurrent?.();
+    this.rawTranscriptSeq = messageSeq;
+    const hadPendingTurnBoundary = this.turnBoundaryPending;
+    const nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
+      message,
     ])[0];
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       includeCommentaryFallbacks: true,

@@ -18,6 +18,11 @@ import ai.openclaw.app.gateway.QuestionGetResult
 import ai.openclaw.app.gateway.QuestionListResult
 import ai.openclaw.app.gateway.QuestionRecord
 import ai.openclaw.app.gateway.SessionObserverDigest
+import ai.openclaw.app.gateway.SessionReactionEvent
+import ai.openclaw.app.gateway.SessionReactionsListParams
+import ai.openclaw.app.gateway.SessionReactionsListResult
+import ai.openclaw.app.gateway.SessionReactionsSetParams
+import ai.openclaw.app.gateway.SessionReactionsSetResult
 import ai.openclaw.app.gateway.parseChatSendAck
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
@@ -52,6 +57,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -425,6 +431,20 @@ class ChatController internal constructor(
   private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
   val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
 
+  private val reactionState = ChatReactions()
+  val messageReactions: StateFlow<Map<String, List<ChatReactionSummary>>> = reactionState.reactions
+  private val _canReact = MutableStateFlow(false)
+  val canReact: StateFlow<Boolean> = _canReact.asStateFlow()
+  private val _reactionViewerId = MutableStateFlow<String?>(null)
+  val reactionViewerId: StateFlow<String?> = _reactionViewerId.asStateFlow()
+  private var reactionAccess = ChatReactionAccess()
+  private var reactionTarget: ReactionTarget? = null
+
+  private data class ReactionTarget(
+    val selection: SessionActionSnapshot,
+    val sessionId: String,
+  )
+
   private val _transcriptAnchor = MutableStateFlow<ChatTranscriptAnchorState?>(null)
   val transcriptAnchor: StateFlow<ChatTranscriptAnchorState?> = _transcriptAnchor.asStateFlow()
 
@@ -567,6 +587,7 @@ class ChatController internal constructor(
       _sessions.value = entries
       val binding = currentCacheScope()?.let { desiredMainSessions[it.gatewayId] }
       presentedSessions.value = projectLocalSessionTitles(entries, binding)
+      publishReactionAccess()
     }
   }
 
@@ -878,6 +899,7 @@ class ChatController internal constructor(
 
   /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
+    setReactionAccess(ChatReactionAccess())
     chatMetadataRequestSequence.incrementAndGet()
     retireMainSessionReadiness()
     reconciledOutboxBranchScopes.clear()
@@ -996,6 +1018,7 @@ class ChatController internal constructor(
 
   /** Invalidates and clears gateway-bound UI state before a target switch can race old responses. */
   fun onGatewayScopeChanging(retireRunState: Boolean = false) {
+    setReactionAccess(ChatReactionAccess())
     val retiredSettings =
       synchronized(gatewayScopeApplyLock) { retireSessionSettingsLanes { _, _ -> true } }
     retiredSettings.forEach { it.complete(false) }
@@ -1212,6 +1235,7 @@ class ChatController internal constructor(
 
   /** Refreshes chat history, sessions, and model choices without clearing optimistic messages first. */
   fun refresh() {
+    syncSessionReactions(force = true)
     synchronized(gatewayScopeApplyLock) {
       if (_errorText.value != chatMetadataRefreshError) updateErrorText(null)
     }
@@ -1358,26 +1382,47 @@ class ChatController internal constructor(
   suspend fun renameSessionGroup(
     from: String,
     to: String,
+    expectedGatewayId: String?,
   ) {
     val fromName = from.trim().takeIf { it.isNotEmpty() } ?: return
     val toName = to.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = fromName, category = toName)
+    patchSessionGroupMembers(group = fromName, category = toName, expectedGatewayId = expectedGatewayId)
   }
 
   /** Deletes a session group: member sessions are kept and move back to Ungrouped. */
-  suspend fun dissolveSessionGroup(group: String) {
+  suspend fun dissolveSessionGroup(
+    group: String,
+    expectedGatewayId: String?,
+  ) {
     val groupName = group.trim().takeIf { it.isNotEmpty() } ?: return
-    patchSessionGroupMembers(group = groupName, category = null)
+    patchSessionGroupMembers(group = groupName, category = null, expectedGatewayId = expectedGatewayId)
   }
 
   private suspend fun patchSessionGroupMembers(
     group: String,
     category: String?,
+    expectedGatewayId: String?,
   ) {
+    val gatewayScope = currentCacheScope()
+    if (gatewayScope?.gatewayId != expectedGatewayId) return
+    val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+    val lease = captureRequestLease(gatewayScope)
+
+    fun ownsCurrentAgent(): Boolean = gatewayScope == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
+
+    fun reportError(error: Throwable) {
+      val publish = {
+        synchronized(gatewayScopeApplyLock) {
+          if (ownsCurrentAgent()) updateErrorText(error.message)
+        }
+      }
+      if (lease == null) publish() else lease.commitIfCurrent(publish)
+    }
+
     try {
-      val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+      val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
       var firstError: Throwable? = null
-      for (member in listSessionGroupMembers(group, ownerAgentId)) {
+      for (member in listSessionGroupMembers(group, ownerAgentId, connection)) {
         try {
           val params =
             buildJsonObject {
@@ -1385,7 +1430,7 @@ class ChatController internal constructor(
               put("agentId", JsonPrimitive(ownerAgentId))
               put("category", category?.let(::JsonPrimitive) ?: JsonNull)
             }
-          requestGateway("sessions.patch", params.toString())
+          connection.request("sessions.patch", params.toString())
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
@@ -1393,12 +1438,14 @@ class ChatController internal constructor(
           if (firstError == null) firstError = err
         }
       }
-      firstError?.let { updateErrorText(it.message) }
-      fetchSessionsForCurrentWindow()
+      firstError?.let(::reportError)
+      if (connection.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsCurrentAgent() }) {
+        fetchSessionsForCurrentWindow()
+      }
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      updateErrorText(err.message)
+      reportError(err)
     }
   }
 
@@ -1411,11 +1458,12 @@ class ChatController internal constructor(
   private suspend fun listSessionGroupMembers(
     group: String,
     ownerAgentId: String,
+    lease: GatewaySession.RequestLease,
   ): List<ChatSessionEntry> {
     val members = LinkedHashMap<String, ChatSessionEntry>()
     for (archived in listOf(false, true)) {
       val params = sessionListParams(ownerAgentId, GROUP_MEMBER_FETCH_LIMIT, archived)
-      val rows = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+      val rows = parseSessions(lease.request("sessions.list", params.toString())).sessions
       for (row in rows) {
         if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row
       }
@@ -3084,6 +3132,7 @@ class ChatController internal constructor(
         }
         _messages.value = emptyList()
         _messagesFromCache.value = false
+        clearSessionReactions()
         if (changed) {
           resetSwarmProgress(key)
           sessionBranchesRefreshGeneration.incrementAndGet()
@@ -3809,6 +3858,7 @@ class ChatController internal constructor(
       }
 
       "seqGap" -> {
+        syncSessionReactions(force = true)
         // Metadata notifications can be dropped too, even when history and health remain current.
         refreshCommands()
         // Missed events can hide terminal state or usage for any active run.
@@ -3848,6 +3898,10 @@ class ChatController internal constructor(
       else -> {
         if (payloadJson.isNullOrBlank()) return
         when (event) {
+          "session.reaction" -> {
+            handleSessionReactionEvent(payloadJson)
+          }
+
           "progressCard.changed" -> {
             handleProgressCardChanged(payloadJson)
           }
@@ -4652,6 +4706,7 @@ class ChatController internal constructor(
           continue
         }
         if (applied !is HistoryRefreshResult.Applied) return applied
+        syncSessionReactions()
         // Canonical history retires delivered rows before further RPCs can delay that proof.
         // Resuming their queued successors still waits for branch reconciliation and health.
         val outboxChanged =
@@ -6887,6 +6942,165 @@ class ChatController internal constructor(
     }
   }
 
+  fun setReactionAccess(access: ChatReactionAccess) {
+    synchronized(gatewayScopeApplyLock) {
+      if (reactionAccess.copy(viewerId = access.viewerId) != access) clearSessionReactions()
+      reactionAccess = access
+      _reactionViewerId.value = access.viewerId
+      publishReactionAccess()
+    }
+    syncSessionReactions()
+  }
+
+  fun setReactionViewerId(viewerId: String?) {
+    synchronized(gatewayScopeApplyLock) {
+      reactionAccess = reactionAccess.copy(viewerId = viewerId)
+      _reactionViewerId.value = viewerId
+    }
+  }
+
+  private fun publishReactionAccess() {
+    _canReact.value =
+      canReactToSession(
+        access = reactionAccess,
+        session = _sessions.value.firstOrNull { it.key == _sessionKey.value },
+        connected = reactionAccess.role != null,
+        methodAdvertised = gatewayAdvertisesMethod("session.reactions.set") == true,
+        catalog = isReactionCatalogSession(_sessionKey.value),
+      )
+  }
+
+  private fun clearSessionReactions() {
+    reactionTarget = null
+    reactionState.reset()
+    _canReact.value = false
+  }
+
+  private fun isCurrentReactionTarget(target: ReactionTarget): Boolean = target == reactionTarget && isCurrentSessionAction(target.selection) && target.sessionId == _sessionId.value
+
+  private fun syncSessionReactions(force: Boolean = false) {
+    val (target, generation) =
+      synchronized(gatewayScopeApplyLock) {
+        publishReactionAccess()
+        val selection = currentSessionActionSnapshot(_sessionKey.value)
+        val sessionId = _sessionId.value
+        val target =
+          if (
+            reactionAccess.role != null && selection != null && !sessionId.isNullOrBlank() &&
+            !isReactionCatalogSession(selection.sessionKey) && gatewayAdvertisesMethod("session.reactions.list") == true
+          ) {
+            ReactionTarget(selection, sessionId)
+          } else {
+            null
+          }
+        if (target == reactionTarget && !force) return
+        if (target != reactionTarget) clearSessionReactions()
+        reactionTarget = target
+        publishReactionAccess()
+        if (target == null) return
+        target to reactionState.beginRead()
+      }
+    scope.launch {
+      val lease = captureRequestLease(target.selection.gatewayScope) ?: return@launch
+
+      fun publishIfCurrent(block: () -> Unit) {
+        lease.commitIfCurrent {
+          synchronized(gatewayScopeApplyLock) {
+            if (isCurrentReactionTarget(target) && reactionState.isCurrentRead(generation)) block()
+          }
+        }
+      }
+      try {
+        val params = SessionReactionsListParams(sessionKey = target.selection.sessionKey, agentId = target.selection.ownerAgentId)
+        val response =
+          lease.request("session.reactions.list", json.encodeToString(params)) { enqueue ->
+            synchronized(gatewayScopeApplyLock) {
+              if (!isCurrentReactionTarget(target) || !reactionState.isCurrentRead(generation)) throw CancellationException("Reaction reader changed")
+              enqueue()
+            }
+          }
+        val result = json.decodeFromString<SessionReactionsListResult>(response)
+        if (result.sessionId != target.sessionId) return@launch
+        val reactions = result.reactions.mapValues { (_, values) -> values.map { it.toChatReactionSummary() } }
+        publishIfCurrent { reactionState.applyRead(generation, reactions) }
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        publishIfCurrent { updateErrorText(err.message) }
+      } finally {
+        publishIfCurrent { reactionState.finishRead(generation) }
+      }
+    }
+  }
+
+  fun setMessageReaction(
+    messageId: String,
+    emoji: String,
+    remove: Boolean,
+  ) {
+    if (!isReactionEmoji(emoji)) return
+    syncSessionReactions()
+    val (target, write) =
+      synchronized(gatewayScopeApplyLock) {
+        if (!_canReact.value || _messages.value.none { it.entryId == messageId && it.role in setOf("user", "assistant") }) return
+        val target = reactionTarget ?: return
+        target to reactionState.beginWrite(messageId, emoji)
+      }
+    scope
+      .launch {
+        write.awaitTurn()
+        val lease = captureRequestLease(target.selection.gatewayScope) ?: return@launch
+
+        fun isCurrent(): Boolean = isCurrentReactionTarget(target) && reactionState.isCurrent(write)
+
+        fun publishIfCurrent(block: () -> Unit) {
+          lease.commitIfCurrent { synchronized(gatewayScopeApplyLock) { if (isCurrent()) block() } }
+        }
+        try {
+          val params =
+            SessionReactionsSetParams(
+              sessionKey = target.selection.sessionKey,
+              agentId = target.selection.ownerAgentId,
+              messageId = messageId,
+              emoji = emoji,
+              remove = remove,
+            )
+          val response =
+            lease.request("session.reactions.set", json.encodeToString(params)) { enqueue ->
+              synchronized(gatewayScopeApplyLock) {
+                publishReactionAccess()
+                if (!isCurrentReactionTarget(target) || !_canReact.value || !reactionState.prepareWrite(write)) throw CancellationException("Reaction authority changed")
+                enqueue()
+              }
+            }
+          val result = json.decodeFromString<SessionReactionsSetResult>(response)
+          check(result.messageId == messageId) { "Reaction response belongs to another message" }
+          val reactions = result.reactions.map { it.toChatReactionSummary() }
+          publishIfCurrent { reactionState.applyWrite(write, reactions) }
+        } catch (err: CancellationException) {
+          throw err
+        } catch (err: Throwable) {
+          publishIfCurrent { updateErrorText(err.message) }
+        }
+      }.invokeOnCompletion {
+        synchronized(gatewayScopeApplyLock) { reactionState.finishWrite(write) }
+      }
+  }
+
+  private fun handleSessionReactionEvent(payloadJson: String) {
+    val event = runCatching { json.decodeFromString<SessionReactionEvent>(payloadJson) }.getOrNull() ?: return
+    synchronized(gatewayScopeApplyLock) {
+      val owner = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+      if (
+        reactionAccess.role == null || event.sessionId != _sessionId.value ||
+        !reactionEventMatchesSession(_sessionKey.value, owner, event.sessionKey, event.agentId, sessionRouting())
+      ) {
+        return
+      }
+      reactionState.applyEvent(event.messageId, event.reactions.map { it.toChatReactionSummary() })
+    }
+  }
+
   private fun clearProgressCard(clearScopeKey: Boolean = true) {
     progressCardFetchGeneration.incrementAndGet()
     if (clearScopeKey) progressCardScopeKey = null
@@ -7574,6 +7788,10 @@ class ChatController internal constructor(
       hasColorMetadata = "color" in obj,
       pinned = obj["pinned"].asBooleanOrNull(),
       archived = obj["archived"].asBooleanOrNull(),
+      sharingRole = obj.nonBlankString("sharingRole"),
+      visibility = obj.nonBlankString("visibility"),
+      hasSharingRoleMetadata = "sharingRole" in obj,
+      hasVisibilityMetadata = "visibility" in obj,
       unread = obj["unread"].asBooleanOrNull(),
       lastReadAt = obj["lastReadAt"].asLongOrNull(),
       markedUnreadAt = obj["markedUnreadAt"].asLongOrNull(),
@@ -8863,6 +9081,10 @@ internal fun mergeChatSessionEntry(
     hasColorMetadata = existing.hasColorMetadata || next.hasColorMetadata,
     pinned = next.pinned ?: existing.pinned,
     archived = next.archived ?: existing.archived,
+    sharingRole = if (next.hasSharingRoleMetadata) next.sharingRole else existing.sharingRole,
+    visibility = if (next.hasVisibilityMetadata) next.visibility else existing.visibility,
+    hasSharingRoleMetadata = existing.hasSharingRoleMetadata || next.hasSharingRoleMetadata,
+    hasVisibilityMetadata = existing.hasVisibilityMetadata || next.hasVisibilityMetadata,
     unread = next.unread ?: existing.unread,
     lastReadAt = next.lastReadAt ?: existing.lastReadAt,
     markedUnreadAt =

@@ -10,10 +10,16 @@ import {
   isDoctorUpdateRepairMode,
   resolveDoctorRepairMode,
 } from "../commands/doctor-repair-mode.js";
-import { isUpdateDoctorLintPass } from "../commands/doctor/shared/update-phase.js";
+import {
+  DOCTOR_SQLITE_NOCOW_REPAIR_ENV,
+  isUpdateDoctorLintPass,
+} from "../commands/doctor/shared/update-phase.js";
 import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { formatUpdateDoctorConfigChange } from "../infra/update-doctor-config.js";
+import { retainUpdateDoctorProcesses } from "../infra/update-doctor-process-custody.js";
 import {
   captureUpdateDoctorConfigWrites,
   DoctorMaintenanceRefusalError,
@@ -31,6 +37,7 @@ import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginLoadDiagnostics } from "../plugins/load-diagnostics.js";
 import type { PluginDiagnostic } from "../plugins/manifest-types.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
@@ -58,50 +65,48 @@ export async function runDoctorHealthFlow(
   writeAuthority?: UpdateDoctorWriteAuthority,
   databasePreflight?: DoctorDatabasePreflight,
 ) {
-  return withDeferredDebugProxyCapture(async (resumeCapture) => {
-    let preparedPreflight = databasePreflight;
-    if (process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" && !writeAuthority?.postCoreSchemaRepair) {
-      const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
-        await import("../commands/doctor-update-schema-guard.js");
-      preparedPreflight =
-        (await guardUpdateDoctorSchemaUpgrade({
-          schemas: preparedPreflight,
-          runtime,
-          json: options.json,
-        })) ?? preparedPreflight;
-      if (preparedPreflight?.updateSchemaRehearsal) {
-        await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
-        return;
+  using custody = await retainUpdateDoctorProcesses(
+    writeAuthority?.assertCurrent,
+    writeAuthority?.commandAuthority,
+  );
+  const run = () =>
+    withDeferredDebugProxyCapture(async (resumeCapture) => {
+      let preparedPreflight = databasePreflight;
+      if (
+        process.env.OPENCLAW_UPDATE_IN_PROGRESS === "1" &&
+        !writeAuthority?.postCoreSchemaRepair
+      ) {
+        const { guardUpdateDoctorSchemaUpgrade, rehearseDeferredUpdateDoctorSchema } =
+          await import("../commands/doctor-update-schema-guard.js");
+        preparedPreflight =
+          (await guardUpdateDoctorSchemaUpgrade({
+            schemas: preparedPreflight,
+            runtime,
+            json: options.json,
+          })) ?? preparedPreflight;
+        if (preparedPreflight?.updateSchemaRehearsal) {
+          await rehearseDeferredUpdateDoctorSchema(preparedPreflight, runtime);
+          return;
+        }
       }
-    }
-    const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
-    return withPluginLoadDiagnostics((diagnostics) =>
-      resultPath
-        ? captureUpdateDoctorConfigWrites(
-            resolveConfigPath(),
-            (capture) =>
-              runDoctorHealthFlowWithResult(
-                runtime,
-                options,
-                preparedPreflight,
-                diagnostics,
-                { resultPath, capture },
-                writeAuthority,
-                resumeCapture,
-              ),
-            writeAuthority,
-          )
-        : runDoctorHealthFlowWithResult(
+      const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+      return withPluginLoadDiagnostics((diagnostics) => {
+        const runDoctor = (capture?: DoctorConfigCapture) =>
+          runDoctorHealthFlowWithResult(
             runtime,
             options,
             preparedPreflight,
             diagnostics,
-            undefined,
+            resultPath && capture ? { resultPath, capture } : undefined,
             writeAuthority,
             resumeCapture,
-          ),
-    );
-  });
+          );
+        return resultPath
+          ? captureUpdateDoctorConfigWrites(resolveConfigPath(), runDoctor, writeAuthority)
+          : runDoctor();
+      });
+    });
+  return await (custody ? withCommandProcessScope(run, undefined, custody) : run());
 }
 
 async function runDoctorHealthFlowWithResult(
@@ -139,6 +144,7 @@ async function runDoctorHealthFlowWithResult(
     ReturnType<typeof import("../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
   let sqliteNoCowPaths: string[] = [];
+  let sqliteReclamationAgents: readonly AgentDatabaseMigrationTarget[] | undefined;
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
   let preparedArchiveDiscovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
@@ -344,6 +350,9 @@ async function runDoctorHealthFlowWithResult(
         for (const change of backups.changes) {
           effectiveRuntime.log(change);
         }
+        for (const warning of backups.warnings) {
+          effectiveRuntime.log(warning);
+        }
       }
 
       const { repairDoctorAgentDeletionJournal } =
@@ -375,11 +384,13 @@ async function runDoctorHealthFlowWithResult(
       // Keep side-effect-heavy legacy checks before structured contributions until fully migrated.
       const { maybeRepairUiProtocolFreshness } = await import("../commands/doctor-ui.js");
       const { noteSourceInstallIssues } = await import("../commands/doctor-install.js");
+      const { noteBunCliLauncherIssues } = await import("../commands/doctor-bun-cli-launcher.js");
       const { noteStalePluginRuntimeSymlinks } =
         await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
       const { noteStartupOptimizationHints } = await import("../commands/doctor-platform-notes.js");
       await maybeRepairUiProtocolFreshness(doctorRuntime, prompter);
       await noteSourceInstallIssues(root);
+      await noteBunCliLauncherIssues({ root, prompter });
       await noteStalePluginRuntimeSymlinks(root);
       noteStartupOptimizationHints();
 
@@ -454,11 +465,17 @@ async function runDoctorHealthFlowWithResult(
         const { assertDoctorMaintenanceReady } =
           await import("../commands/doctor-maintenance-inspection.js");
         const readiness = await measureGatewayBootstrapStep("doctor.maintenance-ready", () =>
-          assertDoctorMaintenanceReady(ctx.cfg, process.env, effectiveRuntime.log),
+          assertDoctorMaintenanceReady(
+            ctx.cfg,
+            process.env,
+            effectiveRuntime.log,
+            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [],
+          ),
         );
         if (!readiness.schemaPublicationDeferred) {
+          sqliteReclamationAgents =
+            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [];
           resumeCapture?.();
-          const { isTruthyEnvValue } = await import("../infra/env.js");
           if (isTruthyEnvValue(process.env.OPENCLAW_DEBUG_PROXY_ENABLED)) {
             const { initializeDebugProxyCaptureAsync } =
               await import("../proxy-capture/runtime.js");
@@ -476,7 +493,22 @@ async function runDoctorHealthFlowWithResult(
     try {
       ctx = await (maintenance ? maintenance.run(runChecks) : runChecks());
       if (ctx && maintenance && options.repair === true && sqliteNoCowPaths.length > 0) {
-        await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
+        if (
+          resolveDoctorRepairMode(options).updateInProgress &&
+          !isTruthyEnvValue(process.env[DOCTOR_SQLITE_NOCOW_REPAIR_ENV])
+        ) {
+          effectiveRuntime.log(
+            "SQLite NOCOW repair deferred: the managed updater did not request the store rewrite in this run.",
+          );
+        } else {
+          await maintenance.repairSqliteNoCow(sqliteNoCowPaths);
+        }
+      }
+      if (ctx && maintenance && ctx.prompter.shouldRepair) {
+        if (isDoctorUpdateRepairMode(ctx.prompter.repairMode) && sqliteReclamationAgents) {
+          await maintenance.enableSqliteReclamation(sqliteReclamationAgents);
+        }
+        await maintenance.cleanupRetainedRuntimes();
       }
     } catch (error) {
       failure = error;
@@ -603,11 +635,7 @@ async function runDoctorHealthFlowWithResult(
     const causes = collectNestedErrorCandidates(error);
     const { classifyDoctorMaintenanceRefusal } =
       await import("../commands/doctor-maintenance-inspection.js");
-    const maintenanceRefusal =
-      causes.find(
-        (cause): cause is DoctorMaintenanceRefusalError =>
-          cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
-      )?.refusal ?? classifyDoctorMaintenanceRefusal(error);
+    const maintenanceRefusal = classifyDoctorMaintenanceRefusal(error);
     const unsafeConfigWrite = causes.find(
       (cause): cause is ConfigWritePostCommitError =>
         cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored",
@@ -644,12 +672,10 @@ async function runDoctorHealthFlowWithResult(
               }),
             ],
     };
-    if (maintenance) {
-      if (!(error instanceof DoctorStateMigrationRefusalError)) {
-        effectiveRuntime.error(
-          "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
-        );
-      }
+    if (maintenance && !(error instanceof DoctorStateMigrationRefusalError)) {
+      effectiveRuntime.error(
+        "Doctor could not complete maintenance. Check the reported service state and resolve the failure.",
+      );
     }
     throw error;
   } finally {

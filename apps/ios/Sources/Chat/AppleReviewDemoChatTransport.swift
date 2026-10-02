@@ -384,19 +384,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             key: "agent:main:subagent:\(key)",
             kind: "direct",
             displayName: label,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
             updatedAt: 1,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
             modelProvider: self.fixture.modelProvider,
             model: self.fixture.modelID,
             contextTokens: 128_000,
@@ -577,16 +565,12 @@ private actor LocalFixtureChatStore {
             displayName: self.fixture.displayName,
             surface: "ios",
             subject: self.fixture.subject,
-            room: nil,
-            space: nil,
             updatedAt: Date().timeIntervalSince1970 * 1000,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(self.fixture.sessionKey)",
             systemSent: true,
             abortedLastRun: false,
             thinkingLevel: self.thinkingLevel,
             verboseLevel: self.verboseLevel,
-            inputTokens: nil,
-            outputTokens: nil,
             totalTokens: 24000,
             totalTokensFresh: true,
             modelProvider: self.fixture.modelProvider,
@@ -807,24 +791,19 @@ private actor LocalFixtureChatStore {
         text: String,
         timestamp: Double,
         transcriptMessageID: String,
-        idempotencyKey: String? = nil,
-        details: AnyCodable? = nil) -> OpenClawChatMessage
+        idempotencyKey: String? = nil) -> OpenClawChatMessage
     {
         OpenClawChatMessage(
             role: role,
             content: [
                 OpenClawChatMessageContent(
                     type: "text",
-                    text: text,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil),
+                    text: text),
             ],
             timestamp: timestamp,
             transcriptMessageID: transcriptMessageID,
             idempotencyKey: idempotencyKey,
-            stopReason: role == "assistant" ? "stop" : nil,
-            details: details)
+            stopReason: role == "assistant" ? "stop" : nil)
     }
 
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {

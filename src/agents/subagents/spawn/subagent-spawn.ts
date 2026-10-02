@@ -29,7 +29,7 @@ import {
   bindSubagentSpawnCleanup,
   cleanupFailedSpawnBeforeAgentStart,
   cleanupProvisionalSession,
-  terminateAcceptedCollectorRun,
+  terminateFailedRegistrationRun,
 } from "./subagent-spawn-cleanup.js";
 import { createCollectorLaunchCallbacks } from "./subagent-spawn-collector.js";
 import {
@@ -68,7 +68,6 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const requesterSessionKey = ctx.agentSessionKey;
   const gatewayCaller = getGatewayToolCallerIdentity();
   const gatewayScope = getPluginRuntimeGatewayRequestScope();
   const gatewayContextResolver =
@@ -124,6 +123,7 @@ export async function spawnSubagentDirect(
   let childRunId: string = childIdem;
   let swarmReservationPending = reservationPending;
   let canCleanupCreatedSession: (() => boolean) | undefined;
+  let canAbortRegisteredRun: (() => boolean) | undefined;
   let canRetireReservation: (() => boolean) | undefined;
   let releaseOperatorAuthority: (() => void) | undefined;
   let provisionalCleanupOpen = true;
@@ -173,6 +173,7 @@ export async function spawnSubagentDirect(
     const initialSession = await createInitialSubagentSession({
       assertActive,
       cfg,
+      requesterAgentId,
       targetAgentId,
       childSessionKey,
       label: label || undefined,
@@ -183,6 +184,7 @@ export async function spawnSubagentDirect(
       spawnedWorkspaceDir,
       spawnedCwd,
       sessionPermissionPolicy: ctx.sessionPermissionPolicy,
+      worktree: params.worktree ? params : undefined,
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
@@ -203,16 +205,23 @@ export async function spawnSubagentDirect(
       expectedLifecycleRevision: initialSession.entry?.lifecycleRevision,
     };
     const ownsCleanup = () => canCleanupCreatedSession?.() ?? provisionalCleanupOpen;
+    const ownsAcceptedRun = () =>
+      ownsCleanup() || (!params.collect && canAbortRegisteredRun?.() === true);
+    const cleanupContext = gatewayContextResolver?.();
     const cleanupOwner =
-      operatorAuthority && gatewayContextResolver
+      gatewayContextResolver &&
+      (operatorAuthority ||
+        (!params.collect && cleanupContext && cleanupContext.localEmbedded !== true))
         ? bindSubagentSpawnCleanup({
             childSessionKey,
             resolveGatewayContext: gatewayContextResolver,
             isCurrent: ownsCleanup,
+            canAbortAcceptedRun: ownsAcceptedRun,
             getSessionIdentity: () => provisionalSessionIdentity,
           })
         : undefined;
     const isCleanupCurrent = cleanupOwner?.isCurrent ?? ownsCleanup;
+    const isAbortCurrent = () => cleanupOwner?.isCurrent("chat.abort") ?? ownsAcceptedRun();
     const cleanupCreatedSession = (emitLifecycleHooks = false) =>
       cleanupProvisionalSession(childSessionKey, {
         emitLifecycleHooks,
@@ -291,7 +300,7 @@ export async function spawnSubagentDirect(
       soleCollectorChild: soleImplicitMember,
       spawnMode,
       task,
-      requesterSessionKey,
+      requesterSessionKey: ctx.agentSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
@@ -344,7 +353,7 @@ export async function spawnSubagentDirect(
         message: envelope.message,
         spawnedByKey: requesterInternalKey,
         toolSpawnMetadata,
-        spawnedWorkspaceDir,
+        spawnedWorkspaceDir: params.worktree ? undefined : spawnedWorkspaceDir,
         childSessionKey,
         childSessionOrigin,
         childIdem,
@@ -411,15 +420,24 @@ export async function spawnSubagentDirect(
         ),
         childLaunch.authorization,
         gatewayContextResolver,
+        childEntry?.sessionId && childEntry.lifecycleRevision
+          ? {
+              sessionKey: childSessionKey,
+              sessionId: childEntry.sessionId,
+              lifecycleRevision: childEntry.lifecycleRevision,
+              runId: childIdem,
+            }
+          : undefined,
       );
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
       cleanupOwner?.bindAcceptedRun(acceptedChildRunId);
       return launch;
     };
 
-    const emitSpawnLifecycleHooks = createSubagentSpawnLifecycleEmitter({
+    const spawnLifecycle = createSubagentSpawnLifecycleEmitter({
       hookRunner,
       childSessionKey,
+      childSessionOrigin,
       requesterInternalKey,
       progressOrigin,
       targetAgentId,
@@ -442,6 +460,7 @@ export async function spawnSubagentDirect(
       });
     type SubagentBackendState = { contextEnginePreparation?: PreparedContextEngineSubagentSpawn };
     let registrationRequired = true;
+    let acceptedRunCleanupError: string | undefined;
     const adapter: SpawnBackendAdapter<SubagentBackendState> = {
       async initialize() {
         const result =
@@ -472,27 +491,26 @@ export async function spawnSubagentDirect(
       },
       async cleanupOnFailure({ phase, state, registrationScope }) {
         canCleanupCreatedSession = registrationScope?.canCleanupSession;
+        canAbortRegisteredRun = registrationScope?.canAbortAcceptedRun;
         canRetireReservation = registrationScope?.canRetireReservation;
         if (phase === "initialize") {
           await cleanupFailedSpawn();
           return;
         }
-        // The gateway skips its fallback CLI task row because this launch claims
-        // the run's row, and registration is what delivers it. A register failure
-        // means no owner ever recorded the run, so abort the run the gateway
-        // already accepted instead of leaving it executing unrecorded.
         if (
           phase === "register" &&
           acceptedChildRunId &&
           registrationRequired &&
-          isCleanupCurrent()
+          isAbortCurrent()
         ) {
-          await terminateAcceptedCollectorRun({
+          acceptedRunCleanupError = await terminateFailedRegistrationRun({
             childSessionKey,
             gatewayRunId: acceptedChildRunId,
             ...provisionalSessionIdentity,
-            isCurrent: isCleanupCurrent,
-            ...(cleanupOwner ? { callGateway: cleanupOwner.callGateway } : {}),
+            isCleanupCurrent,
+            isAbortCurrent,
+            cleanupOwner,
+            retainAdmission: params.collect ? undefined : admissionReservation?.retain,
           });
         }
         if (!isCleanupCurrent()) {
@@ -501,44 +519,15 @@ export async function spawnSubagentDirect(
           await rollbackPreparedContextEngine(state?.contextEnginePreparation);
         }
         if (attachmentId && isCleanupCurrent()) {
-          try {
-            await cleanupMaterializedSubagentAttachments({
-              childSessionKey,
-              attachmentId,
-              isCurrent: isCleanupCurrent,
-            });
-          } catch {
-            // Best-effort cleanup only.
-          }
+          await cleanupMaterializedSubagentAttachments({
+            childSessionKey,
+            attachmentId,
+            isCurrent: isCleanupCurrent,
+          }).catch(() => {});
         }
         let emitLifecycleHooks = threadBindingReady;
         if (phase === "dispatch" && threadBindingReady) {
-          let endedHookEmitted = false;
-          if (hookRunner?.hasHooks("subagent_ended")) {
-            try {
-              await hookRunner.runSubagentEnded(
-                {
-                  targetSessionKey: childSessionKey,
-                  targetKind: "subagent",
-                  reason: "spawn-failed",
-                  sendFarewell: true,
-                  accountId: childSessionOrigin?.accountId,
-                  runId: childIdem,
-                  outcome: "error",
-                  error: "Session failed to start",
-                },
-                {
-                  runId: childIdem,
-                  childSessionKey,
-                  requesterSessionKey: requesterInternalKey,
-                },
-              );
-              endedHookEmitted = true;
-            } catch {
-              // Spawn cleanup continues even when presentation hooks fail.
-            }
-          }
-          emitLifecycleHooks = !endedHookEmitted;
+          emitLifecycleHooks = !(await spawnLifecycle.failed(childIdem));
         }
         await cleanupCreatedSession(emitLifecycleHooks);
       },
@@ -608,16 +597,21 @@ export async function spawnSubagentDirect(
           : undefined;
       return {
         status: spawnStatus === "forbidden" ? "forbidden" : "error",
-        error:
+        error: [
           pipelineResult.phase === "register" && spawnStatus !== "forbidden"
             ? `Failed to register subagent run: ${summarizeSpawnError(pipelineResult.error)}`
             : summarizeSpawnError(pipelineResult.error),
+          acceptedRunCleanupError,
+        ]
+          .filter(Boolean)
+          .join(" "),
         childSessionKey,
         ...(pipelineResult.phase === "initialize" ? {} : { runId }),
       };
     }
     childRunId = pipelineResult.runId;
     canCleanupCreatedSession = pipelineResult.registrationScope?.canCleanupSession;
+    canAbortRegisteredRun = pipelineResult.registrationScope?.canAbortAcceptedRun;
     canRetireReservation = pipelineResult.registrationScope?.canRetireReservation;
     let collectorSessionKey: string | undefined;
     if (params.collect && swarmGroupId && swarmSchedulerGroupKey) {
@@ -651,7 +645,7 @@ export async function spawnSubagentDirect(
               provisionalSessionIdentity,
               launchChildRun,
               recordParticipant: recordRequesterParticipation,
-              emitSpawnLifecycleHooks,
+              emitSpawnLifecycleHooks: spawnLifecycle.spawned,
               cleanupFailedSpawn,
             }),
           }),
@@ -671,7 +665,7 @@ export async function spawnSubagentDirect(
       swarmReservationPending = false;
       collectorSessionKey = childSessionKey;
     } else {
-      await emitSpawnLifecycleHooks(childRunId);
+      await spawnLifecycle.spawned(childRunId);
     }
 
     // Publish only after preparation releases its hold and exposes the scheduler's capacity state.

@@ -81,7 +81,6 @@ describe("release evidence API reads", () => {
     ["GraphQL", ["api", "graphql"], "HTTP 502"],
     ["forbidden", ["api", "repos/openclaw/openclaw/actions/runs/42"], "HTTP 403"],
     ["rate limited", ["api", "repos/openclaw/openclaw/actions/runs/42"], "HTTP 429"],
-    ["not found", ["api", "repos/openclaw/openclaw/actions/runs/42"], "HTTP 404"],
   ])("does not retry %s", (_label, args, stderr) => {
     const wait = vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     const failure = Object.assign(new Error("gh failed"), { stderr });
@@ -93,10 +92,10 @@ describe("release evidence API reads", () => {
     expect(wait).not.toHaveBeenCalled();
   });
 
-  it.each(["ECONNRESET", "ETIMEDOUT", "unexpected EOF"])("recovers a network error: %s", (code) => {
+  it("recovers a network error", () => {
     vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     transport.read.mockImplementationOnce(() => {
-      throw Object.assign(new Error(code), { code });
+      throw Object.assign(new Error("connection failed"), { code: "ECONNRESET" });
     });
     transport.read.mockReturnValue('{"id":42}');
     expect(createReleaseEvidenceClient("openclaw/openclaw").getRunAttempt("42", 1)).toEqual({

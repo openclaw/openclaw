@@ -310,6 +310,7 @@ export function projectChatTranscript(
       messageReactions: props.messageReactions,
       onReact: props.onReact,
       transcriptVisible: props.transcriptVisible,
+      transcriptPresentation: props.transcriptPresentation,
       latestBrowserTabs,
       showReasoning,
       showToolCalls: props.showToolCalls,

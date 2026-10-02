@@ -97,7 +97,6 @@ async function startBrowserControlServerUnlocked(): Promise<BrowserServerState |
       port,
       resolved,
       owner: "server",
-      onWarn: (message) => logServer.warn(message),
     });
   } catch (err) {
     await new Promise<void>((resolve) => {

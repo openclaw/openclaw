@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -229,6 +230,13 @@ describe("CLI process harness cleanup", () => {
     release();
     const aged = new Date(Date.now() - 2 * 60 * 60_000);
     fs.utimesSync(prior, aged, aged);
+    const { getBoundLegacyPluginSdkResourceHost } =
+      await import("../plugins/legacy-sdk-resource-host.js");
+    const { getPluginCache } = await import("../plugins/plugin-cache.js");
+    const { PluginInstance } = await import("../plugins/plugin-instance.js");
+    const { capturePluginGenerationArtifact } =
+      await import("../plugins/plugin-generation-artifact.js");
+    // Fixture imports initialize WAL maintenance before we observe the command scheduler.
     const clock = createGatewaySchedulerClock(Date.now());
     const scheduler = createTestGatewayScheduler(clock.clock);
     const schedulerModule = await import("../infra/gateway-scheduler.js");
@@ -237,13 +245,12 @@ describe("CLI process harness cleanup", () => {
       .mockImplementation(function () {
         return scheduler;
       });
-    const { getPluginCache } = await import("../plugins/plugin-cache.js");
-    const { PluginInstance } = await import("../plugins/plugin-instance.js");
-    const { capturePluginGenerationArtifact } =
-      await import("../plugins/plugin-generation-artifact.js");
     let artifact: ReturnType<typeof capturePluginGenerationArtifact> | undefined;
     dispatch.run = async () => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const host = getBoundLegacyPluginSdkResourceHost();
+      expect(host).toBeDefined();
+      expect(host?.scheduler).toBe(scheduler);
       artifact = capturePluginGenerationArtifact(source);
       const instance = new PluginInstance("orphan-recovery-fixture");
       instance.onModuleDispose(artifact.disposeAsync);

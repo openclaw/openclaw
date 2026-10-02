@@ -1,7 +1,11 @@
 import fsSync from "node:fs";
 import path from "node:path";
-import { resolveAgentDir, resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
-import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentDir,
+  resolveConfiguredAgentId,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
@@ -199,6 +203,8 @@ export function resolveAllAgentSessionStoreTargetsSync(
   params: {
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+    readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   } = {},
 ): SessionStoreTarget[] {
@@ -228,6 +234,8 @@ function resolveAllAgentSessionStoreTargets(
   params: {
     env?: NodeJS.ProcessEnv;
     registeredDatabases?: SessionStoreRegistryRead;
+    readCandidates?: readonly SessionStoreReadCandidate[];
+    readPaths?: CapturedSessionStorePaths;
     onResolvedTarget?: (selected: SessionStoreTarget, physical: SessionStoreTarget) => void;
   },
   recoveryCandidates: boolean,
@@ -237,6 +245,8 @@ function resolveAllAgentSessionStoreTargets(
     cfg,
     env,
     params.registeredDatabases,
+    params.readCandidates,
+    params.readPaths,
   );
   const getRealAgentsRoot = createRealAgentsRootResolver();
   const validatedConfiguredTargets = configuredTargets.flatMap((target) => {
@@ -301,6 +311,7 @@ function resolveAllAgentSessionStoreTargets(
       env,
       onResolvedTarget: params.onResolvedTarget,
       registeredDatabases: params.registeredDatabases,
+      readCandidates: params.readCandidates,
     },
   );
 }

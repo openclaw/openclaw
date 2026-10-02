@@ -122,10 +122,8 @@ export async function initiateCall(
   ctx: InitiateContext,
   to: string,
   sessionKey?: string,
-  options?: OutboundCallOptions | string,
+  opts: OutboundCallOptions = {},
 ): Promise<{ callId: CallId; success: boolean; error?: string }> {
-  const opts: OutboundCallOptions =
-    typeof options === "string" ? { message: options } : (options ?? {});
   const initialMessage = opts.message;
   const mode = opts.mode ?? ctx.config.outbound.defaultMode;
   const dtmfSequence = opts.dtmfSequence;

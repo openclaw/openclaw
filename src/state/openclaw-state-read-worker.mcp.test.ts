@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { emptyReply, queueTask, source } from "./openclaw-state-read-worker.test-harness.js";
 import { expect, it } from "vitest";
-import type { AcpSessionReadInput } from "../acp/runtime/session-meta-keys.js";
+import type { AcpSessionReadInput } from "../acp/runtime/session-meta-read.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";

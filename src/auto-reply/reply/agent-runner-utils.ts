@@ -187,15 +187,8 @@ export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 /** Formats Bun socket-close errors for user-facing reply output. */
-export const formatBunFetchSocketError = (message: string) => {
-  const trimmed = message.trim();
-  return [
-    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
-    "```",
-    trimmed || "Unknown error",
-    "```",
-  ].join("\n");
-};
+export const formatBunFetchSocketError = () =>
+  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(
@@ -236,14 +229,12 @@ export function resolveRunFastModeForFallbackCandidate(params: {
       : state.fastAutoOnSeconds,
   };
 }
-function buildEmbeddedContextFromTemplate(params: {
+function applyReplyRouteToTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = params.run.config;
-  const sessionCtx = {
+  return {
     ...params.sessionCtx,
     OriginatingChannel:
       params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
@@ -260,6 +251,32 @@ function buildEmbeddedContextFromTemplate(params: {
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
     ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
+}
+
+/**
+ * Builds message-tool threading context for the queued reply route. Embedded
+ * and CLI runtimes share it so the channel adapter decides the default thread.
+ */
+export function buildReplyRouteThreadingToolContext(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}): InternalChannelThreadingToolContext {
+  return buildThreadingToolContext({
+    sessionCtx: applyReplyRouteToTemplate(params),
+    config: params.run.config,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+}
+
+function buildEmbeddedContextFromTemplate(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}) {
+  const sessionCtx = applyReplyRouteToTemplate(params);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -281,7 +298,7 @@ function buildEmbeddedContextFromTemplate(params: {
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
-      config,
+      config: params.run.config,
       hasRepliedRef: params.hasRepliedRef,
     }),
     currentInboundAudio: hasInboundAudio(sessionCtx),
@@ -386,6 +403,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;

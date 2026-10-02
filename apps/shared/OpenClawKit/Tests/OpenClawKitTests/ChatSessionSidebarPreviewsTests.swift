@@ -162,7 +162,7 @@ struct ChatSessionSidebarPreviewsTests {
     }
 
     private func row(key: String) -> OpenClawChatSessionEntry {
-        var row = OpenClawChatSessionEntry.placeholder(key: key)
+        var row = OpenClawChatSessionEntry(key: key)
         row.agentId = "research"
         row.sessionId = "same-session"
         row.updatedAt = 1

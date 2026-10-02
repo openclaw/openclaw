@@ -2466,7 +2466,7 @@ describe("runReplyAgent transient HTTP failures", () => {
     expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toContain("provider internal error");
+    expect(payload?.text).toContain("The AI service is having trouble");
   });
 });
 
@@ -2491,7 +2491,7 @@ describe("runReplyAgent billing error classification", () => {
     }).run();
 
     const payload = Array.isArray(result) ? result[0] : result;
-    expect(payload?.text).toContain("billing error");
+    expect(payload?.text).toContain("billing problem");
     expect(payload?.text).not.toContain("Context overflow");
   });
 });
@@ -2523,7 +2523,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     const result = await createRun();
     const payload = Array.isArray(result) ? result[0] : result;
 
-    expect(payload?.text).toContain("API rate limit reached");
+    expect(payload?.text).toContain("The AI service needs a short break");
   });
 
   it("preserves successful media-only replies that use legacy mediaUrl", async () => {

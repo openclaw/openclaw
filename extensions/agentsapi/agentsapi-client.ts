@@ -15,7 +15,7 @@ import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
-import type { AgentsApiEnvironment } from "./config.js";
+import { DEFAULT_NATIVE_TOOLS, type AgentsApiConfig, type AgentsApiEnvironment } from "./config.js";
 
 const usageSchema = z.looseObject({
   input_tokens: z.number(),
@@ -205,6 +205,7 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
+      nativeTools?: AgentsApiConfig["nativeTools"];
       functions?: AgentToolParam.AgentToolConfigParamFunction[];
       mcpTools?: AgentToolParam.AgentToolConfigParamMcp[];
       files?: AgentsApiInputFile[];
@@ -213,26 +214,29 @@ export class AgentsApiClient {
     },
   ): Promise<string> {
     const environment: AgentsApiEnvironment = options?.environment ?? { type: "openai_hosted" };
-    const session = await this.sessions.create(
-      {
-        agent: {
-          model,
-          instructions,
-          reasoning: options?.reasoning,
-          multi_agent: { enabled: false },
-          tools: [
-            { type: "web_search", mode: "live" },
-            ...(options?.mcpTools ?? []),
-            ...(options?.functions ?? []),
-          ],
-        },
-        environment:
-          environment.type === "openai_hosted"
-            ? { ...environment, files: options?.files ?? [] }
-            : environment,
+    const tools = [
+      ...(options?.nativeTools ?? DEFAULT_NATIVE_TOOLS),
+      ...(options?.mcpTools ?? []),
+      ...(options?.functions ?? []),
+    ];
+    const body = {
+      agent: {
+        model,
+        instructions,
+        reasoning: options?.reasoning,
+        multi_agent: { enabled: false },
       },
-      { signal, headers: { "Idempotency-Key": randomUUID() } },
-    );
+      environment:
+        environment.type === "openai_hosted"
+          ? { ...environment, files: options?.files ?? [] }
+          : environment,
+    };
+    const session = await this.sessions.create(body, {
+      signal,
+      headers: { "Idempotency-Key": randomUUID() },
+      // The SDK body override forwards new tool types/options before its types catch up.
+      body: { ...body, agent: { ...body.agent, tools } },
+    });
     this.assertCurrent();
     return session.id;
   }
@@ -620,31 +624,6 @@ export class AgentsApiClient {
       },
     );
     this.assertCurrent();
-  }
-}
-
-/** Customer-safe native failure facts remain available to host result classification. */
-export class AgentsApiError extends Error {
-  readonly code: string | null | undefined;
-  readonly status: number | undefined;
-  readonly type: string | undefined;
-  readonly param: string | null | undefined;
-
-  constructor(
-    message: string,
-    details: {
-      code?: string | null;
-      status?: number;
-      type?: string;
-      param?: string | null;
-    } = {},
-  ) {
-    super(message);
-    this.name = "AgentsApiError";
-    this.code = details.code;
-    this.status = details.status;
-    this.type = details.type;
-    this.param = details.param;
   }
 }
 

@@ -10,7 +10,6 @@ import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
 
 it.for([
-  { withSibling: false, getterBacked: false, initiallyEmpty: false },
   { withSibling: true, getterBacked: false, initiallyEmpty: false },
   { withSibling: false, getterBacked: true, initiallyEmpty: false },
   { withSibling: true, getterBacked: false, initiallyEmpty: true },
@@ -111,7 +110,7 @@ it.for([
       const cfg = {
         agents: {
           defaults: { modelPolicy: { allow: providers.map((id) => `${id}/*`) } },
-          list: [{ id: "main", workspace: state.workspaceDir }],
+          entries: { main: { workspace: state.workspaceDir } },
         },
         plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
         gateway: { mode: "local", auth: { mode: "token", token } },

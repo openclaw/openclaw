@@ -1111,7 +1111,7 @@ function installControlUiMockGateway(
     try {
       // Same persisted preference as community-invite-state.ts, before the first sidebar render.
       window.localStorage.setItem(
-        "openclaw:control-ui:community-invite",
+        "openclaw:control-ui:community-invite:v2",
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     } catch {

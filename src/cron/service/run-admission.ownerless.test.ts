@@ -104,10 +104,19 @@ function receipts(storePath: string, jobId: string) {
 }
 
 describe("ownerless reservation and manual completion", () => {
-  it("keeps an owned sibling reserved while recording only the ownerless scheduled skip", async () => {
+  it.each([
+    {
+      name: "unresolved default",
+      ambient: undefined,
+    },
+    {
+      name: "configured current default",
+      ambient: "research",
+    },
+  ])("keeps an owned sibling reserved alongside an ownerless job ($name)", async ({ ambient }) => {
     const ownerless = commandJob("ownerless-batch");
     const owned = { ...commandJob("owned-batch"), agentId: "ops" };
-    const { state, storePath, events, execute } = await setupOwnerlessJob(ownerless);
+    const { state, storePath, events, execute } = await setupOwnerlessJob(ownerless, () => ambient);
     await saveCronStore(storePath, { version: 1, jobs: [ownerless, owned] });
     await list(state);
     const reserved = await persistQueuedCronRunReservations({
@@ -116,25 +125,43 @@ describe("ownerless reservation and manual completion", () => {
       reservedAtMs: NOW,
     });
     try {
-      expect(reserved.map(({ job }) => job.id)).toEqual([owned.id]);
+      expect(reserved.map(({ job }) => job.id)).toEqual(
+        ambient ? [ownerless.id, owned.id] : [owned.id],
+      );
+      expect(reserved.map(({ runReceipt }) => runReceipt.agentId)).toEqual(
+        ambient ? [ambient, "ops"] : ["ops"],
+      );
       const persisted = (await loadCronStore(storePath)).jobs;
-      expect(persisted.find((job) => job.id === ownerless.id)?.state).toMatchObject({
-        lastRunStatus: "skipped",
-        lastError: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-      });
+      const withheld = persisted.find((job) => job.id === ownerless.id);
+      if (ambient) {
+        expect(withheld?.enabled).toBe(ownerless.enabled);
+        expect(withheld?.state.nextRunAtMs).toBe(ownerless.state.nextRunAtMs);
+        expect(withheld?.state.queuedAtMs).toBe(NOW);
+        expect(withheld?.state.lastRunAtMs).toBeUndefined();
+        expect(withheld?.state.lastRunStatus).toBeUndefined();
+      } else {
+        expect(withheld?.state).toMatchObject({
+          lastRunStatus: "skipped",
+          lastError: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+        });
+      }
       expect(persisted.find((job) => job.id === owned.id)?.state.queuedAtMs).toBe(NOW);
-      expect(events.filter((event) => event.action === "finished")).toEqual([
-        expect.objectContaining({ jobId: ownerless.id, status: "skipped" }),
-      ]);
-      expect(history(storePath, ownerless.id)).toEqual([
-        expect.objectContaining({
-          jobId: ownerless.id,
-          status: "skipped",
-          completionStatus: "failed",
-          error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-        }),
-      ]);
-      expect(receipts(storePath, ownerless.id)).toEqual([]);
+      expect(events.filter((event) => event.action === "finished")).toEqual(
+        ambient ? [] : [expect.objectContaining({ jobId: ownerless.id, status: "skipped" })],
+      );
+      expect(history(storePath, ownerless.id)).toEqual(
+        ambient
+          ? []
+          : [
+              expect.objectContaining({
+                jobId: ownerless.id,
+                status: "skipped",
+                completionStatus: "failed",
+                error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+              }),
+            ],
+      );
+      expect(receipts(storePath, ownerless.id)).toHaveLength(ambient ? 1 : 0);
       expect(execute).not.toHaveBeenCalled();
     } finally {
       for (const reservation of reserved) {

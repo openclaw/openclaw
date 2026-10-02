@@ -152,17 +152,22 @@ const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
   /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
 const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
   /\bcodex session generation is no longer current\b/iu;
+const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
+  /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
   if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
     return "⚠️ This Codex session changed before your message could run. Please send it again.";
   }
+  if (CODEX_EXECUTION_NODE_DISCONNECTED_RE.test(normalizedMessage)) {
+    return "⚠️ Codex execution node disconnected. Start a fresh attempt.";
+  }
   if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
+    return "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
   }
   if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
-    return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
+    return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
   }
   return null;
 }
@@ -185,8 +190,8 @@ export function buildPreflightCompactionFailureText(
   const isTimeout = classifyCompactionReason(reason) === "timeout";
   const reasonSuffix = options?.includeDetails && reason && !isTimeout ? ` Reason: ${reason}.` : "";
   const summary = isTimeout
-    ? "⚠️ Context is too large and auto-compaction timed out before it could finish."
-    : "⚠️ Context is too large and auto-compaction could not recover this turn.";
+    ? "⚠️ This conversation is too long, and shortening it took too long."
+    : "⚠️ This conversation is too long, and OpenClaw couldn't shorten it.";
   return `${summary}${reasonSuffix} Try again, use /compact, or use /new to start a fresh session.`;
 }
 
@@ -198,7 +203,6 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
     reason: error.reason,
     provider: error.provider,
     allInCooldown: error.authProfileFailure.allInCooldown,
-    causeText: error.cause ? formatErrorMessage(error.cause).trim() : undefined,
     recoveryHint: buildProviderAuthRecoveryHint({ provider: error.provider }),
   });
 }
@@ -243,6 +247,8 @@ export function buildExternalRunFailureReply(
     includeAuthProfileId?: boolean;
     includeDetails?: boolean;
     isHeartbeat?: boolean;
+    /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+    useHeartbeatFailureCopy?: boolean;
     replayPrevented?: boolean;
     failoverFacts?: ReplyFailoverFacts;
   },
@@ -250,6 +256,7 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  const useHeartbeatFailureCopy = options?.useHeartbeatFailureCopy ?? options?.isHeartbeat === true;
   // A preflight refusal is host-authored and names the next step. Heartbeats run
   // unattended in the owner's session, so they disclose it without the verbose
   // opt-in; raw thrown detail further below stays verbose-gated.
@@ -263,7 +270,7 @@ export function buildExternalRunFailureReply(
     }
     const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     return {
-      text: options?.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
         : options?.includeDetails
           ? formatForwardedExternalRunFailureText(sanitizedMessage)
@@ -355,12 +362,19 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
     const detail = options.includeDetails
-      ? resolveExternalRunFailureDetail(
-          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
-        )
+      ? resolveExternalRunFailureDetail(sanitizedMessage)
       : undefined;
-    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
+    return {
+      text: useHeartbeatFailureCopy
+        ? renderHeartbeatRunFailureCopy(detail)
+        : options.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Heartbeat-backed event turns must remain visible even when they use generic wording.
+      isGenericRunnerFailure: false,
+    };
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
@@ -435,15 +449,18 @@ export function resolveAgentRunFailureText(params: {
 
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  useHeartbeatFailureCopy?: boolean;
   replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
 }): ReplyPayload {
+  const useHeartbeatFailureCopy = params.useHeartbeatFailureCopy ?? params.isHeartbeat === true;
   return markAgentRunFailureReplyPayload({
     text: resolveAgentRunFailureText({
       ...params,
-      text: params.isHeartbeat
+      text: useHeartbeatFailureCopy
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      // Visibility follows the execution surface, not which sentence we render.
       isGenericRunnerFailure: !params.isHeartbeat,
     }),
   });

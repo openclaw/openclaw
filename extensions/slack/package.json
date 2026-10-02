@@ -13,7 +13,7 @@
     "@slack/web-api": "8.1.1",
     "get-east-asian-width": "1.7.0",
     "typebox": "1.3.34",
-    "undici": "8.10.2",
+    "undici": "8.11.2",
     "zod": "4.6.5"
   },
   "devDependencies": {
@@ -150,11 +150,11 @@
       "clawhubSpec": "clawhub:@openclaw/slack",
       "npmSpec": "@openclaw/slack",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.28",
+      "minHostVersion": ">=2026.9.8",
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.9.7"
+      "pluginApi": ">=2026.9.8"
     },
     "build": {
       "openclawVersion": "2026.9.7",
@@ -163,6 +163,14 @@
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
+    },
+    "controlUi": "./browser/index.ts",
+    "assetScripts": {
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/slack",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/slack --copy",
+      "buildOutputs": [
+        "openclaw.plugin.json"
+      ]
     }
   }
 }

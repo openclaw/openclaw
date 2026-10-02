@@ -48,7 +48,7 @@ import {
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
 import { hasPosixShellStartupBeforeInlineCommand } from "../infra/exec-wrapper-resolution.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import {
   prepareSystemRunMutableFileBinding,
   revalidateSystemRunMutableFileBinding,
@@ -79,19 +79,14 @@ import type {
 } from "./bash-tools.exec-host-gateway.types.js";
 import {
   buildHeadlessExecApprovalDeniedMessage,
-  buildExecApprovalFollowupTarget,
   buildExecApprovalPendingToolResult,
   createExecApprovalRequestRoute,
   resolveExecApprovalWaitOutcome,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
-import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
-import {
-  createApprovalSlug,
-  normalizeNotifyOutput,
-  runExecProcess,
-} from "./bash-tools.exec-runtime.js";
+import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
+import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -109,7 +104,7 @@ const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
 const MAX_GATEWAY_AUTO_REVIEW_CANDIDATES = 64;
 const MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS = 3;
 const MAX_AUTO_REVIEW_SESSIONS = 256;
-const consecutiveAutoReviewDenials = new Map<string, number>();
+const consecutiveAutoReviewDenials = new LruCache<number>(MAX_AUTO_REVIEW_SESSIONS);
 
 function recordAutoReviewDenial(sessionKey: string | undefined): number {
   if (!sessionKey) {
@@ -119,9 +114,7 @@ function recordAutoReviewDenial(sessionKey: string | undefined): number {
     (consecutiveAutoReviewDenials.get(sessionKey) ?? 0) + 1,
     MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS,
   );
-  consecutiveAutoReviewDenials.delete(sessionKey);
   consecutiveAutoReviewDenials.set(sessionKey, count);
-  pruneMapToMaxSize(consecutiveAutoReviewDenials, MAX_AUTO_REVIEW_SESSIONS);
   return count;
 }
 
@@ -1342,9 +1335,9 @@ export async function processGatewayAllowlist(
 
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    const followupTarget = buildExecApprovalFollowupTarget({
+    const followupTarget = {
       approvalId,
-      agentId: params.agentId,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.notifySessionKey ?? params.sessionKey,
       expectedSessionId: params.sessionId,
       sessionStore: params.sessionStore,
@@ -1354,7 +1347,7 @@ export async function processGatewayAllowlist(
       turnSourceAccountId: params.turnSourceAccountId,
       turnSourceThreadId: params.turnSourceThreadId,
       direct: params.approvalFollowupMode === "direct",
-    });
+    };
     const denyApprovalStateWriteFailure = async () => {
       emitApprovalEvent({
         action: "exec.approval.denied",

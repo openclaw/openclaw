@@ -8,10 +8,8 @@ import { expect, it, vi } from "vitest";
 import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import { createExternalGates } from "../src/agents/subagents/announce/subagent-external-gate.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryChangesToSqlite,
-} from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryChangesToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import { resolveSessionStorePathCore } from "../src/config/sessions.js";
 import {

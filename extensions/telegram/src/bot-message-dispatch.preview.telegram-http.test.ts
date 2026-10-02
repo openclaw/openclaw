@@ -25,6 +25,92 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
   it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
+  ] as const)(
+    "delivers hooked progress before final with $hook in $mode mode",
+    async ({ hook, mode }) => {
+      const registry = createEmptyPluginRegistry();
+      addTestHook({
+        registry,
+        pluginId: "http-progress-policy",
+        hookName: hook,
+        handler:
+          hook === "reply_payload_sending"
+            ? (event: PluginHookReplyPayloadSendingEvent) => ({
+                payload: {
+                  ...event.payload,
+                  text: event.payload.text?.replace("fixture-secret", "filtered"),
+                },
+              })
+            : (event: { content: string }) => ({
+                content: event.content.replace("fixture-secret", "filtered"),
+              }),
+      });
+      initializeGlobalHookRunner(registry);
+      await dispatchProgressTurn(
+        async (options, channelOptions) => {
+          // This is the channel override consumed by the reply runner, whose
+          // default otherwise disables completed-block delivery.
+          expect(channelOptions?.disableBlockStreaming).toBe(false);
+          await options?.onPartialReply?.({ text: "Unapproved partial fixture-secret" });
+          expect(visibleMessages.size).toBe(0);
+          await options?.onBlockReply?.({ text: "Checking fixture-secret while work continues." });
+          await waitForBotApiCall(
+            (call) => call.fields.text === "Checking filtered while work continues.",
+          );
+          expect([...visibleMessages.values()]).toEqual([
+            "Checking filtered while work continues.",
+          ]);
+        },
+        { mode, toolProgress: false, finalReply: { text: "Finished fixture-secret." } },
+      );
+      expect([...visibleMessages.values()]).toEqual([
+        "Checking filtered while work continues.",
+        "Finished filtered.",
+      ]);
+      expect(JSON.stringify(calls)).not.toContain("fixture-secret");
+      expect(calls.some((call) => call.method === "editMessageText")).toBe(false);
+      const optedOutMode = hook === "reply_payload_sending" ? "off" : mode;
+      await dispatchProgressTurn(
+        async (_options, channelOptions) => {
+          expect(channelOptions?.disableBlockStreaming).toBe(true);
+        },
+        {
+          mode: optedOutMode,
+          toolProgress: false,
+          telegramCfg: {
+            streaming: { mode: optedOutMode, block: { enabled: false } },
+          },
+          finalReply: { text: "Opted-out final fixture-secret." },
+        },
+      );
+      expect([...visibleMessages.values()]).toEqual([
+        "Checking filtered while work continues.",
+        "Finished filtered.",
+        "Opted-out final filtered.",
+      ]);
+      await dispatchProgressTurn(
+        async (_options, channelOptions) => {
+          expect(channelOptions?.disableBlockStreaming).toBe(true);
+        },
+        {
+          mode,
+          toolProgress: false,
+          cfg: { agents: { defaults: { blockStreamingDefault: "off" } } },
+          finalReply: { text: "Global-off final fixture-secret." },
+        },
+      );
+      expect([...visibleMessages.values()]).toEqual([
+        "Checking filtered while work continues.",
+        "Finished filtered.",
+        "Opted-out final filtered.",
+        "Global-off final filtered.",
+      ]);
+    },
+  );
+
+  it.each([
+    { hook: "reply_payload_sending", mode: "partial" },
+    { hook: "message_sending", mode: "progress" },
   ] as const)("gates real preview writes with $hook in $mode mode", async ({ hook, mode }) => {
     const registry = createEmptyPluginRegistry();
     const modifierEntered = createDeferred<void>();
@@ -496,7 +582,7 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
     expect(visibleBeforeFailure).toEqual([partial]);
     const visible = [...visibleMessages.values()];
     expect(visible, JSON.stringify({ calls, acceptedCalls })).toHaveLength(1);
-    expect(visible[0]).toContain("Please try again");
+    expect(visible[0]).toContain("Check the conversation before trying again");
     expect(visible[0]).toContain(partial);
     expect(JSON.stringify(calls)).not.toContain("private-provider-failure");
   });

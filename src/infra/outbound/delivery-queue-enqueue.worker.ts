@@ -1,6 +1,7 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
+import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   movePendingDeliveryQueueEntryNamespaceInDatabase,
@@ -8,7 +9,6 @@ import {
 } from "../delivery-queue-sqlite-namespace.kernel.js";
 import { upsertDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
-import type { DeliveryQueueWorkerOperations } from "../delivery-queue.worker-contract.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
@@ -22,9 +22,20 @@ import {
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 
 export function executeDeliveryQueueEnqueue(
-  input: DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["input"],
+  input: { entryJson: string; mediaStageId?: string } & (
+    | { kind: "random" | "stable" }
+    | { kind: "prepared"; preparationJson: string }
+  ),
   writeOptions: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },
-): DeliveryQueueWorkerOperations["deliveryQueue.enqueue"]["output"] {
+):
+  | "created"
+  | "existing"
+  | "missing"
+  | "moved"
+  | "source-changed"
+  | "destination-exists"
+  | "staging-missing"
+  | { status: "not-published"; error: OpenClawStateWorkerErrorPayload } {
   // SAFETY: Only the host enqueue owner supplies this canonical, typed queue-entry JSON.
   const entry = JSON.parse(input.entryJson) as QueuedDelivery;
   const queueName = outboundDeliveryQueueName(entry);

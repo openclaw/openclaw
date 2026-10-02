@@ -55,6 +55,8 @@ export type SkillTelemetrySource = "bundled" | "unknown" | "workspace";
 export type SkillUsagePath = {
   /** Path visible to the tool runtime when it reads SKILL.md. */
   readPath: string;
+  /** Host-bound prompt reference before runtime materialization. */
+  sourceReadPath?: string;
   /** Canonical source SKILL.md path used as the lifecycle identity. */
   skillFile: string;
   skillName: string;
@@ -125,7 +127,7 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 6;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 8;
 
 export type SkillSnapshot = {
   librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
@@ -146,7 +148,10 @@ export type SkillSnapshot = {
   skillOverrides?: Record<string, boolean>;
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
+  /** Runtime-only skills selected for the bounded prompt projection. */
   resolvedSkills?: Skill[];
+  /** Runtime-only model-discoverable skills before prompt budgeting; excludes hidden skills. */
+  discoverySkills?: Skill[];
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {
     agentWorkspaceDir: string;

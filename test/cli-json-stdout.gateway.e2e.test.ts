@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -162,10 +163,9 @@ describe("cli json stdout contract", () => {
             },
           });
           if ("configReadFailure" in testCase && !("commander" in testCase)) {
-            expect(result.stderr).toContain(testCase.message);
-          } else {
-            expect(result.stderr).not.toContain(testCase.message);
+            expect(result.stderr).toContain("[openclaw] The CLI command failed.");
           }
+          expect(result.stderr).not.toContain(testCase.message);
         }
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
@@ -228,7 +228,8 @@ describe("cli json stdout contract", () => {
           ok: false,
           error: { type: "cli_error", message },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         if ("tty" in testCase) {
           expect(result.stderr).toContain("\u001B[?25h");
         }
@@ -322,6 +323,7 @@ describe("cli json stdout contract", () => {
         if ("human" in testCase && testCase.human) {
           expect(result.stdout).toBe("");
           expect(result.stderr).toContain(`nodes ${testCase.args[1]} failed:`);
+          expect(result.stderr).toContain(testCase.message);
         } else {
           expect(JSON.parse(result.stdout)).toEqual({
             ok: false,
@@ -330,8 +332,9 @@ describe("cli json stdout contract", () => {
               message: expect.stringContaining(testCase.message),
             },
           });
+          expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+          expect(result.stderr).not.toContain(testCase.message);
         }
-        expect(result.stderr).toContain(testCase.message);
         expect(result.stderr).not.toContain("AUTOQA_NETWORK_FORBIDDEN");
       },
       { prefix: "openclaw-nodes-json-failure-e2e-" },

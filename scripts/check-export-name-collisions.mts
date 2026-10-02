@@ -704,11 +704,13 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
     new Set([
       "src/agents/auth-profiles/inline-usage.worker.ts",
       "src/agents/harness/context-engine-turn-outbox.worker.ts",
+      "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
+      "src/gateway/worker-environments/transcript-commit.worker.ts",
       "src/infra/heartbeat-outcome-store.worker.ts",
     ]),
   ],

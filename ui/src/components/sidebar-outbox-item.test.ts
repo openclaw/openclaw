@@ -16,12 +16,6 @@ afterEach(() => {
 
 it.each([
   {
-    phase: "connected",
-    command: false,
-    unconfirmed: true,
-    title: "Your message may not have arrived",
-  },
-  {
     phase: "reconnecting",
     command: false,
     unconfirmed: true,

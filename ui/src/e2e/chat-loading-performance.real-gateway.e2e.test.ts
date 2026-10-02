@@ -6,7 +6,8 @@ import { expect, it } from "vitest";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { encodePngRgba } from "../../../src/media/png-encode.js";
-import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
+import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -116,7 +117,6 @@ const suite = createControlUiE2eSuite({
           defaults: { workspace },
           entries: {
             main: {
-              default: true,
               workspace,
               identity: { name: "Synthetic loading assistant", avatar: "avatar.png" },
             },
@@ -273,7 +273,7 @@ suite.define(() => {
             }
           }
           window.localStorage.setItem(
-            "openclaw:control-ui:community-invite",
+            "openclaw:control-ui:community-invite:v2",
             JSON.stringify({ dismissedAtMs: 1770000000000 }),
           );
           const sample: BrowserPerformanceSample = {

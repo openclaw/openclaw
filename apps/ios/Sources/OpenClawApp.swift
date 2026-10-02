@@ -124,7 +124,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 self.pendingExecApprovalResolvedPushes.removeAll()
                 Task { @MainActor in
                     for push in pending {
-                        _ = await model.handleExecApprovalResolvedRemotePush(push)
+                        await model.handleExecApprovalResolvedRemotePush(push)
                     }
                 }
             }
@@ -237,12 +237,11 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         Task { @MainActor in
             if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
-                    let handled = await appModel.handleExecApprovalResolvedRemotePush(push)
-                    completionHandler(handled ? .newData : .noData)
+                    await appModel.handleExecApprovalResolvedRemotePush(push)
                 } else {
                     self.pendingExecApprovalResolvedPushes.append(push)
-                    completionHandler(.newData)
                 }
+                completionHandler(.newData)
                 return
             }
             guard let appModel = self.resolvedAppModel() else {
@@ -626,12 +625,7 @@ enum WatchPromptNotificationBridge {
         notificationCenter: NotificationCentering) async -> Bool
     {
         guard NotificationServingPreference.isEnabled() else { return false }
-        switch await notificationCenter.authorizationStatus() {
-        case .authorized, .provisional, .ephemeral:
-            return true
-        case .denied, .notDetermined:
-            return false
-        }
+        return await notificationCenter.authorizationStatus().allowsNotifications
     }
 
     private static func upsertNotificationCategory(

@@ -16,7 +16,8 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   abortChatRunById,
@@ -273,10 +274,14 @@ it("preserves a browser URL through request, get, and list", async () => {
   ]);
 });
 
+const credentialUrl = new URL("https://example.test/connect");
+credentialUrl.username = "fixture-user";
+credentialUrl.password = "fixture-password";
+
 it.each([
   ["script", "javascript:alert(1)"],
   ["relative", "/connect"],
-  ["credentials", "https://fixture-user:fixture-password@example.test/connect"],
+  ["credentials", credentialUrl.href],
 ])("rejects a %s browser URL before publishing", async (_name, url) => {
   expect(
     await call("question.request", {
@@ -288,7 +293,7 @@ it.each([
   expect(broadcast).not.toHaveBeenCalled();
 });
 
-it("rejects duplicate ids and one-option questions at the request boundary", async () => {
+it("rejects duplicate ids and admits a bounded rich single-option question at the request boundary", async () => {
   const duplicate = await call("question.request", {
     questions: [requestParams.questions[0], requestParams.questions[0]],
   });
@@ -296,10 +301,37 @@ it("rejects duplicate ids and one-option questions at the request boundary", asy
   expect((duplicate[2] as { message: string }).message).toContain("duplicate question id");
 
   const oneOption = await call("question.request", {
-    questions: [{ ...requestParams.questions[0], options: [{ label: "Only" }] }],
+    id: "rich-question",
+    questions: [
+      {
+        ...requestParams.questions[0],
+        allowEmpty: true,
+        presentation: "form",
+        options: [{ label: "Only", thumbnail: "https://example.com/only.png" }],
+      },
+    ],
   });
-  expect(oneOption[0]).toBe(false);
-  expect((oneOption[2] as { message: string }).message).toContain("2 to 4 options");
+  expect(oneOption[0]).toBe(true);
+  expect(
+    (
+      await call("question.resolve", {
+        id: "rich-question",
+        answers: { answers: { destination: [] } },
+      })
+    )[1],
+  ).toEqual({ status: "answered", answers: { answers: { destination: [] } } });
+  expect(
+    (
+      await call("question.request", {
+        questions: [
+          {
+            ...requestParams.questions[0],
+            options: [{ label: "Unsafe", thumbnail: "javascript:alert(1)" }],
+          },
+        ],
+      })
+    )[0],
+  ).toBe(false);
 
   const clientId = "duplicate-client-id";
   expect((await call("question.request", { ...requestParams, id: clientId }))[0]).toBe(true);

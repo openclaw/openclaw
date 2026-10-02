@@ -1,6 +1,17 @@
 // Transcript mirroring turns outbound text/media notifications into compact transcript text.
 import path from "node:path";
 
+export type SessionTranscriptDeliveryMirror =
+  | {
+      kind: "channel-final";
+      sourceMessageId?: string;
+    }
+  | {
+      kind: "channel-final-suppressed";
+      reason: "stale-foreground";
+      sourceMessageId?: string;
+    };
+
 function extractFileNameFromMediaUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {

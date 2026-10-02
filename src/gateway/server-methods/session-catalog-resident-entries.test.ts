@@ -1,5 +1,9 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type {
+  SessionCatalogHost,
+  SessionCatalogSession,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -31,6 +35,24 @@ const original = {
   createdActor: { type: "system" as const, id: "original-owner" },
 };
 
+function session(overrides: Partial<SessionCatalogSession> = {}): SessionCatalogSession {
+  return {
+    threadId: "native-thread",
+    sessionKey: key,
+    status: "stored",
+    archived: false,
+    canContinue: true,
+    canArchive: false,
+    ...overrides,
+  };
+}
+
+function hosts(sessions: SessionCatalogSession[]): SessionCatalogHost[] {
+  return [
+    { hostId: "gateway:fixture", label: "Fixture", kind: "gateway", connected: true, sessions },
+  ];
+}
+
 async function withCatalog(
   run: (fixture: {
     list: () => Promise<ReturnType<typeof vi.fn>>;
@@ -42,7 +64,7 @@ async function withCatalog(
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       agents: options.agents ?? {
-        list: [{ id: "main", default: true, agentDir: state.agentDir("main") }],
+        entries: { main: { agentDir: state.agentDir("main") } },
       },
     };
     await state.writeConfig(cfg);
@@ -65,26 +87,7 @@ async function withCatalog(
         const adopted = sessionEntries
           ?.entriesForCatalog?.()
           .find((entry) => entry.sessionKey === key);
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: adopted
-              ? [
-                  {
-                    threadId: "native-thread",
-                    sessionKey: key,
-                    status: "stored",
-                    archived: false,
-                    canContinue: true,
-                    canArchive: false,
-                  },
-                ]
-              : [],
-          },
-        ];
+        return hosts(adopted ? [session()] : []);
       },
       read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
     };
@@ -230,32 +233,7 @@ it("bounds catalog result delivery to returned adoption keys", async () => {
           deliveryRowsRead += rows.length;
           return rows;
         });
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: "native-thread",
-                sessionKey: key,
-                status: "stored",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-              },
-              {
-                threadId: "blank-key-thread",
-                sessionKey: " ",
-                status: "stored",
-                archived: false,
-                canContinue: true,
-                canArchive: false,
-              },
-            ],
-          },
-        ];
+        return hosts([session(), session({ threadId: "blank-key-thread", sessionKey: " " })]);
       });
       const respond = await list();
       const sessions = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions;
@@ -303,22 +281,7 @@ it("bounds roster projections while delivering adopted sessions without an impli
       setList(async ({ sessionEntries }) => {
         expect(sessionEntries?.entriesForCatalog?.()).toHaveLength(sessionCount + 1);
         rosterEntryProjections = 0;
-        return [
-          {
-            hostId: "gateway:fixture",
-            label: "Fixture",
-            kind: "gateway",
-            connected: true,
-            sessions: keys.map((sessionKey) => ({
-              threadId: sessionKey,
-              sessionKey,
-              status: "stored",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            })),
-          },
-        ];
+        return hosts(keys.map((sessionKey) => session({ threadId: sessionKey, sessionKey })));
       });
       const respond = await list();
       const sessions = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions;
@@ -346,24 +309,7 @@ it("does not attach a replacement session identity after provider enumeration yi
       ).toBe(original.sessionId);
       started.resolve();
       await release.promise;
-      return [
-        {
-          hostId: "gateway:fixture",
-          label: "Fixture",
-          kind: "gateway",
-          connected: true,
-          sessions: [
-            {
-              threadId: "native-thread",
-              sessionKey: key,
-              status: "stored",
-              archived: false,
-              canContinue: true,
-              canArchive: false,
-            },
-          ],
-        },
-      ];
+      return hosts([session()]);
     });
     const pending = list();
     await started.promise;
@@ -378,9 +324,9 @@ it("does not attach a replacement session identity after provider enumeration yi
     );
     release.resolve();
     const respond = await pending;
-    const session = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0];
-    expect(session).toMatchObject({ threadId: "native-thread" });
-    expect(session).not.toHaveProperty("sessionKey");
-    expect(session).not.toHaveProperty("createdActor");
+    const returnedSession = respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions[0];
+    expect(returnedSession).toMatchObject({ threadId: "native-thread" });
+    expect(returnedSession).not.toHaveProperty("sessionKey");
+    expect(returnedSession).not.toHaveProperty("createdActor");
   });
 });

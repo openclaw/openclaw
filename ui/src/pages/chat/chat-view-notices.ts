@@ -118,15 +118,15 @@ function renderErrorNotice(
   action: TemplateResult | typeof nothing = nothing,
   displayError = formatWebUiIconErrorText(error),
   tone: "danger" | "warn" = "danger",
+  summary?: string,
 ) {
   const lines = displayError
     .trim()
     .split(/\r?\n/u)
     .map((line) => line.replace(/\s+/gu, " ").trim());
-  const [firstLine = ""] = lines;
-  const summary = clampText(firstLine);
-  const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Keep the bounded summary readable without opening the technical details.
+  // Local action errors already contain recovery instructions; keep those visible.
+  const title = summary ?? clampText(lines[0] ?? "");
+  const hasDetails = lines.some((line) => line !== "" && line !== title);
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} chat-error"
@@ -139,7 +139,7 @@ function renderErrorNotice(
         hasDetails
           ? html`<details class="chat-error__content">
               <summary class="chat-error__summary">
-                <strong>${summary}</strong>
+                <strong>${title}</strong>
                 <span>${t("chat.details")}</span>
                 <span class="chat-error__chevron" aria-hidden="true">${icons.chevronDown}</span>
                 ${renderCopyButton(error, t("chat.copyError"))}
@@ -148,7 +148,7 @@ function renderErrorNotice(
 ${displayError}</pre>
             </details>`
           : html`<span class="chat-error__content"
-              ><strong>${summary}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
+              ><strong>${title}</strong>${renderCopyButton(error, t("chat.copyError"))}</span
             >`
       }
       ${action}
@@ -195,7 +195,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   return html`
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger") : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", props.runError.kind === "stop" ? undefined : t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
@@ -271,5 +271,15 @@ function renderPlacementStartupError(
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, action, displayError);
+  return renderErrorNotice(
+    error,
+    action,
+    displayError,
+    "danger",
+    checking
+      ? t("chat.queue.checkDeliveryHelp")
+      : status.discardAndReload
+        ? displayError
+        : t("chat.errorStartSummary"),
+  );
 }

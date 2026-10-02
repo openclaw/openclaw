@@ -44,6 +44,8 @@ const repositoryScriptEntries = [
   "apps/android/scripts/build-release-artifacts.ts!",
   "scripts/bundle-a2ui.mts!",
   "scripts/build-discord-activity-sdk.mts!",
+  // Plugin package asset hooks invoke the browser builder by path.
+  "scripts/build-plugin-control-ui.mts!",
   // package-mac-app.sh launches the architecture scheduler by path.
   "scripts/build-mac-swift.mts!",
   // CI passes this native test launcher through the Apple command log wrapper.
@@ -134,8 +136,12 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/abandoned-update.mjs!",
   // backup-rollback.sh invokes capture and verification through this CLI.
   "scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs!",
+  // run.sh invokes the backup schedule upgrade scenario through this CLI.
+  "scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs!",
   "scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
+  // run.sh invokes this CLI and preloads it into updater/Doctor children.
+  "scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs!",
   "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs!",
   // Capture runs in the container; sanitization runs only on the trusted host.
   "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs!",
@@ -150,6 +156,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs!",
   "scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs!",
+  // published-driver-update-docker.sh launches this managed-update proof inside Docker.
+  "scripts/e2e/lib/upgrade-survivor/published-driver.mjs!",
   "scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs!",
   "scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs!",
   // The compiler below exposes the runner's inline Node imports.
@@ -417,9 +425,6 @@ const rootEntries = [
   "scripts/e2e/*.{js,mjs,ts}!",
   "scripts/e2e/lib/**/{assertions,probe,mock-server}.{js,mjs,ts}!",
   "src/agents/prepared-model-catalog.worker.ts!",
-  // Documented core-only Decision Labs foundation entry. No automatic consumers
-  // ship with the gate; remove this root when the first consumer imports it.
-  "src/agents/decision-assistance.ts!",
   // Split runtime loaded through a path assembled in subagent-registry.ts.
   "src/agents/subagents/registry/subagent-registry.runtime.ts!",
   // Loaded lazily by the sweeper only when a receipt-bearing or interrupted row is found.
@@ -431,7 +436,6 @@ const rootEntries = [
   // Human plugin listing lazily loads its formatter to keep JSON startup lean.
   "src/cli/plugins-list-format.ts!",
   "src/infra/warning-filter.ts!",
-  "src/infra/command-explainer/index.ts!",
   // Jiti exposes this SDK barrel and its type-only declaration owner.
   "src/agents/sessions/extension-sdk.ts!",
   "src/agents/sessions/extensions/types.ts!",
@@ -594,6 +598,17 @@ function workspacePackage(packageDir: string, extraEntries: readonly string[] = 
   } as const;
 }
 
+function compileNativeProtocolConsumer(source: string, filePath: string): string {
+  if (path.resolve(filePath) !== path.resolve("scripts/prepare-native-protocol.mjs")) {
+    return source;
+  }
+  // The temporary esbuild bundle exports this source module's unchanged API.
+  return source.replace(
+    "import(pathToFileURL(bundlePath).href)",
+    'import("../packages/gateway-protocol/scripts/native-codegen.ts")',
+  );
+}
+
 function bundledPluginWorkspace(extraEntries: readonly string[] = []) {
   return {
     entry: [...bundledPluginEntries, ...extraEntries],
@@ -660,7 +675,11 @@ const ignoredTestSupportFiles = [
 ] as const;
 
 const config = {
-  compilers: { yml: compileFrvWorkflowConsumers, sh: compileShellConsumers },
+  compilers: {
+    yml: compileFrvWorkflowConsumers,
+    sh: compileShellConsumers,
+    mjs: compileNativeProtocolConsumer,
+  },
   ignoreFiles: [
     // Production mode excludes dev/maintainer executables. The full-tree
     // companion config removes this exclusion and audits them as script roots.

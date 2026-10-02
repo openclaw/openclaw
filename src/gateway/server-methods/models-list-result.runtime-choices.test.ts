@@ -1,7 +1,6 @@
 import { Value } from "typebox/value";
 import { describe, expect, it, vi } from "vitest";
 import { ModelChoiceSchema } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "../../agents/harness/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
@@ -261,48 +260,30 @@ describe("models.list configured runtime choices", () => {
     {
       provider: "openai",
       runtime: "codex",
-      runtimeOverride: undefined,
-      initialReadiness: "ready",
-      acquireNative: false,
-    },
-    {
-      provider: "openai",
-      runtime: "codex",
       runtimeOverride: "codex",
       initialReadiness: "ready",
-      acquireNative: false,
     },
     {
       provider: "openai",
       runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "missing",
-      acquireNative: false,
     },
     {
       provider: "openai",
       runtime: "codex",
       runtimeOverride: undefined,
       initialReadiness: "throws",
-      acquireNative: false,
-    },
-    {
-      provider: "openai",
-      runtime: "codex",
-      runtimeOverride: undefined,
-      initialReadiness: "ready",
-      acquireNative: true,
     },
     {
       provider: "picker-fixture",
       runtime: "picker-native",
       runtimeOverride: undefined,
       initialReadiness: "ready",
-      acquireNative: false,
     },
   ])(
-    "keeps $runtime capabilities and selection availability with session runtime $runtimeOverride, readiness $initialReadiness, acquisition $acquireNative",
-    async ({ provider, runtime, runtimeOverride, initialReadiness, acquireNative }) => {
+    "keeps $runtime capabilities and selection availability with session runtime $runtimeOverride, readiness $initialReadiness",
+    async ({ provider, runtime, runtimeOverride, initialReadiness }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -351,16 +332,12 @@ describe("models.list configured runtime choices", () => {
             },
             thinkingLevelMap: { off: null, low: "low", high: "high" },
           };
-          let snapshot: ModelCatalogSnapshot = {
+          const snapshot: ModelCatalogSnapshot = {
             entries: [base],
-            routeVariants: acquireNative ? [base] : [base, native],
+            routeVariants: [base, native],
           };
           let readiness = initialReadiness;
-          let observed = !acquireNative;
-          const loadModelCatalog = vi.fn(async () => {
-            observed = true;
-            return [native];
-          });
+          const loadModelCatalog = vi.fn(async () => [native]);
           const harness: AgentHarnessV2 = {
             id: runtime,
             label: "Native fixture",
@@ -372,33 +349,11 @@ describe("models.list configured runtime choices", () => {
               if (readiness === "throws") {
                 throw new Error("Native catalog observation failed");
               }
-              return observed && readiness === "ready" ? { accountType: "chatgpt" } : undefined;
+              return readiness === "ready" ? { accountType: "chatgpt" } : undefined;
             },
           };
           const pluginRegistry = createEmptyPluginRegistry();
           pluginRegistry.agentHarnesses.push({ pluginId: runtime, source: "test", harness });
-          if (acquireNative) {
-            expect(
-              harness.readModelCatalogReadiness?.({
-                config: cfg,
-                agentId: "main",
-                agentDir: state.agentDir("main"),
-                workspaceDir: state.workspaceDir,
-                provider,
-                modelId: model,
-              }),
-            ).toBeUndefined();
-            snapshot = await augmentPreparedModelCatalogWithAgentHarness({
-              input: {
-                config: cfg,
-                agentId: "main",
-                agentDir: state.agentDir("main"),
-                workspaceDir: state.workspaceDir,
-              },
-              snapshot,
-              pluginRegistry,
-            });
-          }
           const projector = createGatewayAgentModelCatalogProjector({
             cfg,
             agentId: "main",
@@ -477,7 +432,7 @@ describe("models.list configured runtime choices", () => {
           } else {
             expect(revokedChoice?.unavailableReason).toBe("unsupported-runtime");
           }
-          expect(loadModelCatalog).toHaveBeenCalledTimes(acquireNative ? 1 : 0);
+          expect(loadModelCatalog).not.toHaveBeenCalled();
           expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
           expect(cfg.agents?.defaults?.models?.[`${provider}/${model}`]?.agentRuntime?.id).toBe(
             "openclaw",

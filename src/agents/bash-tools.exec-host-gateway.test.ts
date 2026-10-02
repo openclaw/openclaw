@@ -27,7 +27,7 @@ import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type {
   ExecAllowlistEntry,
@@ -105,9 +105,6 @@ function exactCommandMarker(command: string): string {
 }
 
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
-  vi.fn<typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget>(),
-);
 const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
   vi.fn<() => MockAllowlistResult>(),
 );
@@ -207,11 +204,9 @@ vi.mock("./tools/gateway.js", () => ({
 vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bash-tools.exec-host-shared.js")>();
   createExecApprovalRequestRouteMock.mockImplementation(actual.createExecApprovalRequestRoute);
-  buildExecApprovalFollowupTargetMock.mockImplementation(actual.buildExecApprovalFollowupTarget);
   return {
     ...actual,
     resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
-    buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
     buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
     createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
     sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
@@ -220,6 +215,7 @@ vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
 
 vi.mock("./bash-tools.exec-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bash-tools.exec-runtime.js")>()),
+  createApprovalSlug: vi.fn(() => "slug"),
   runExecProcess: runExecProcessMock,
 }));
 
@@ -257,10 +253,10 @@ function captureProcessUnhandledRejections() {
 }
 
 function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -278,7 +274,6 @@ describe("processGatewayAllowlist", () => {
     resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
-    buildExecApprovalFollowupTargetMock.mockClear();
     evaluateShellAllowlistWithAuthorizationMock.mockReset();
     mockAllowlist({
       allowlistSatisfied: true,
@@ -1235,7 +1230,6 @@ describe("processGatewayAllowlist", () => {
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
-    expect(buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0].direct).toBe(true);
 
     const followupTarget = sendExecApprovalFollowupResultMock.mock.calls[0]?.[0];
     expect(followupTarget?.direct).toBe(true);

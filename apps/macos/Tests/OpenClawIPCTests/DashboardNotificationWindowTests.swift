@@ -57,7 +57,7 @@ extension DashboardWindowOwnershipTests {
             self.completion(), target: .primary, sourceURL: sourceURL)
 
         // The failure is presented without a modal loop; read the pending alert directly.
-        #expect(manager._testPendingGatewayAlerts().map(\.messageText).contains(expectedTitle))
+        #expect(manager.alertPresenter._testPendingAlerts.map(\.messageText).contains(expectedTitle))
         print("\(probeKey)=ok")
     }
 

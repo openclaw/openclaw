@@ -3,12 +3,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
+import { setChromeMcpProcessCleanupDepsForTest } from "./chrome-mcp-process.js";
 import {
-  listChromeMcpTabs,
   resetChromeMcpSessionsForTest,
-  setChromeMcpProcessCleanupDepsForTest,
   setChromeMcpSessionFactoryForTest,
-} from "./chrome-mcp.js";
+} from "./chrome-mcp-session.js";
+import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
 import * as chromeModule from "./chrome.js";
 import { registerBrowserBasicRoutes } from "./routes/basic.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./routes/test-helpers.js";
@@ -197,7 +197,6 @@ describe("browser server-context listProfiles", () => {
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
       userDataDir: "/tmp/openclaw-profile",
       cdpPort: 18800,
-      startedAt: Date.now(),
       proc: {} as never,
     };
     const cleanup = createDeferred<void>();

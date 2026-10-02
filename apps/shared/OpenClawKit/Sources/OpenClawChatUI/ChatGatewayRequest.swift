@@ -310,21 +310,6 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: Double(requestTimeoutMs))
     }
 
-    public static func patchSessionPreferences(
-        sessionKey: String,
-        agentID: String?,
-        thinkingLevel: String?? = nil,
-        fastMode: OpenClawChatFastMode?? = nil,
-        verboseLevel: String?? = nil) -> OpenClawChatGatewayRequest
-    {
-        self.patchSessionSettings(
-            sessionKey: sessionKey,
-            agentID: agentID,
-            thinkingLevel: thinkingLevel,
-            fastMode: fastMode,
-            verboseLevel: verboseLevel)
-    }
-
     public static func patchSessionSettings(
         sessionKey: String,
         agentID: String?,
@@ -437,6 +422,7 @@ public enum OpenClawChatGatewayRequests {
         color: String?? = nil,
         pinned: Bool?,
         archived: Bool?,
+        snoozedUntil: OpenClawChatSnoozePatch? = nil,
         unreadPatch: OpenClawChatSessionUnreadPatch?) -> OpenClawChatGatewayRequest
     {
         var params = self.sessionParams(sessionKey: sessionKey, agentID: agentID)
@@ -452,6 +438,14 @@ public enum OpenClawChatGatewayRequests {
         }
         params["pinned"] = pinned.map(AnyCodable.init)
         params["archived"] = archived.map(AnyCodable.init)
+        if let snoozedUntil {
+            switch snoozedUntil {
+            case let .until(wakeAt):
+                params["snoozedUntil"] = AnyCodable(Int(wakeAt.timeIntervalSince1970 * 1000))
+            case .wake:
+                params["snoozedUntil"] = AnyCodable(NSNull())
+            }
+        }
         switch unreadPatch {
         case .markUnread:
             params["unread"] = AnyCodable(true)

@@ -23,7 +23,6 @@ import {
   type WorkboardDiagnosticKind,
   type WorkboardEvent,
   type WorkboardExecution,
-  type WorkboardExecutionMode,
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardLaunchState,
@@ -40,6 +39,10 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
+import {
+  resolveIntegerOption,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeBoundedOptionalString,
@@ -470,9 +473,7 @@ export function normalizeTemplateId(value: unknown): WorkboardTemplateId | undef
 }
 
 export function normalizeTimestamp(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : fallback;
+  return resolveOptionalIntegerOption(value, { min: 0 }) ?? fallback;
 }
 
 function normalizeEvent(value: unknown): WorkboardEvent | null {
@@ -521,16 +522,14 @@ function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   const error = normalizeBoundedString(record.error, undefined, 800, "attempt error");
   const engine = normalizeBoundedString(record.engine, undefined, 160, "attempt engine");
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
+  const mode = normalizeEnumValue(record.mode, WORKBOARD_EXECUTION_MODES, undefined);
   return {
     id,
     status: normalizeEnumValue(record.status, WORKBOARD_ATTEMPT_STATUSES, "running"),
     startedAt,
     ...(endedAt ? { endedAt } : {}),
     ...(engine ? { engine } : {}),
-    ...(typeof record.mode === "string" &&
-    WORKBOARD_EXECUTION_MODES.includes(record.mode as WorkboardExecutionMode)
-      ? { mode: record.mode as WorkboardExecutionMode }
-      : {}),
+    ...(mode ? { mode } : {}),
     ...(model ? { model } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
@@ -806,10 +805,7 @@ function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
     detail,
     firstSeenAt,
     lastSeenAt,
-    count:
-      typeof record.count === "number" && Number.isFinite(record.count)
-        ? Math.max(1, Math.trunc(record.count))
-        : 1,
+    count: resolveIntegerOption(record.count, 1, { min: 1 }),
     actions: Array.isArray(record.actions)
       ? record.actions
           .map(normalizeDiagnosticAction)
@@ -1037,9 +1033,7 @@ export function normalizeMetadata(
       ? normalizeTimestamp(record.lifecycleStatusSourceUpdatedAt, 0)
       : fallback.lifecycleStatusSourceUpdatedAt,
     failureCount:
-      typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
-        ? Math.max(0, Math.trunc(record.failureCount))
-        : fallback.failureCount,
+      resolveOptionalIntegerOption(record.failureCount, { min: 0 }) ?? fallback.failureCount,
   };
   return trimMetadataToBudget(normalized, options);
 }

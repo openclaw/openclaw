@@ -399,10 +399,7 @@ export async function runQaFlowSuiteStandard(
     });
     const failedCount = scenarios.filter((scenario) => scenario.status === "fail").length;
     const skippedCount = scenarios.filter((scenario) => scenario.status === "skip").length;
-    if (
-      scenarios.some((scenario) => scenario.status === "fail") ||
-      gatewayRuntimeOptions?.preserveDebugArtifacts === true
-    ) {
+    if (failedCount > 0 || gatewayRuntimeOptions?.preserveDebugArtifacts === true) {
       preserveGatewayRuntimeDir = path.join(outputDir, "artifacts", "gateway-runtime");
     }
     if (!isQaSuiteNestedRun(params)) {
@@ -414,14 +411,11 @@ export async function runQaFlowSuiteStandard(
       const finishedAt = new Date();
       const result = await completeQaSuiteRun(
         {
-          repoRoot,
           outputDir,
           startedAt,
           finishedAt,
           scenarios,
           metrics,
-          scenarioDefinitions: selectedScenarios,
-          evidenceMode: params?.evidenceMode,
           recordedEvidence: recording.snapshot(),
           transport,
           providerMode,
@@ -434,8 +428,6 @@ export async function runQaFlowSuiteStandard(
           transportArtifacts,
           isolatedWorkers: false,
           writeEvidenceFile: params?.writeEvidenceFile,
-          // Same "filtered → executed list, unfiltered → null" convention as
-          // the concurrent-path writeQaSuiteArtifacts call above.
           scenarioIds:
             params?.scenarioIds && params.scenarioIds.length > 0
               ? selectedScenarios.map((scenario) => scenario.id)

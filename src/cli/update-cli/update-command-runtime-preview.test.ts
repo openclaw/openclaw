@@ -5,6 +5,7 @@ import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as daemonService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import * as gatewaySupervision from "../../infra/gateway-supervision.js";
+import * as activationPaths from "../../infra/package-update-activation-paths.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateGlobal from "../../infra/update-global.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -14,6 +15,7 @@ import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
+import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
@@ -41,10 +43,18 @@ it.each([
     running = true,
     debugCapture = false,
   }) => {
+    stubNodeRuntime();
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", debugCapture ? "yes" : "0");
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", undefined);
     fixture.managedServiceNodeRunner = "/service/node";
+    const captureRuntime = activationPaths.capturePackageActivationRuntime;
+    vi.spyOn(activationPaths, "capturePackageActivationRuntime").mockImplementation(
+      (kind, executable) =>
+        executable === "/service/node" || executable === "/current/node"
+          ? { kind, path: executable, identity: `synthetic:${executable}` }
+          : captureRuntime(kind, executable),
+    );
     const provisionRuntime = vi
       .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")
       .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));

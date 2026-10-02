@@ -12,7 +12,7 @@ import {
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-protocol/src/schema.js";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   bindActiveCronCreatorAuthorityResolver,
   runWithCronCreatorAuthorityCapabilityResolver,
@@ -81,6 +81,8 @@ import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
   createChatDirectiveReplyBackend,
   createChatDirectiveSuiteResources,
+  createChatDirectiveUserMessageReader,
+  createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
   seedChatDirectiveFileTranscript,
@@ -764,16 +766,9 @@ function expectUserUpdateIdentity(update: ReturnType<typeof findUserUpdate>) {
   expect(update?.agentId).toBe("main");
 }
 
-function readPersistedUserMessages(): Array<Record<string, unknown>> {
-  return readTranscriptJsonLines(mockState.transcriptPath)
-    .map((entry) => entry.message)
-    .filter(
-      (candidate): candidate is Record<string, unknown> =>
-        typeof candidate === "object" &&
-        candidate !== null &&
-        (candidate as { role?: unknown }).role === "user",
-    );
-}
+const readPersistedUserMessages = createChatDirectiveUserMessageReader(() =>
+  readTranscriptJsonLines(mockState.transcriptPath),
+);
 
 function expectDispatchContextFields(expected: {
   OriginatingChannel?: unknown;
@@ -1186,6 +1181,7 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  await suiteResources.settleFixtures();
   // ACKs and terminal errors can precede detached transcript cleanup.
   await waitForAssertion(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -2189,62 +2185,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("never aborts or replays onto a successor after unconfirmed acceptance", async () => {
-    const { context, send } = await createSqliteChatRequest(
-      "openclaw-chat-send-steer-unconfirmed-",
-    );
-    const delivery = createDeferred<{
-      transcriptCommit: "unconfirmed";
-      errorMessage: string;
-    }>();
-    const queueMessage = vi.fn(async (_text: string, options?: ReplyBackendQueueMessageOptions) => {
-      options?.onQueueAccepted?.(true);
-      await options?.userTurnTranscriptRecorder?.persistApproved();
-      return await delivery.promise;
-    });
-    const first = beginMessageInjectionOperation({
-      originatingLeafEntryId: null,
-      runId: "active-run",
-      cancel: vi.fn(),
-      queueMessage,
-    });
-
-    await send({
-      idempotencyKey: "idem-steer-unconfirmed",
-      requestParams: { queueMode: "steer" },
-      waitFor: "none",
-    });
-    await waitForAssertion(() => expect(readPersistedUserMessages()).toHaveLength(1));
-    expect(readPersistedUserMessages()[0]).not.toHaveProperty("__openclaw.steerTargetRunId");
-    first.complete();
-    const successorCancel = vi.fn();
-    const successor = beginMessageInjectionOperation({
-      originatingLeafEntryId: null,
-      runId: "successor-run",
-      cancel: successorCancel,
-      queueMessage: vi.fn(async () => {}),
-    });
-    delivery.resolve({
-      transcriptCommit: "unconfirmed",
-      errorMessage: "receipt timed out",
-    });
-
-    await waitForAssertion(() => {
-      expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
-        runId: "idem-steer-unconfirmed",
-        status: "ok",
+  it("never aborts or replays onto a successor after unconfirmed acceptance", async ({ signal }) =>
+    suiteResources.runFixture(async () => {
+      const { context, send } = await createSqliteChatRequest(
+        "openclaw-chat-send-steer-unconfirmed-",
+      );
+      const delivery = createUnconfirmedTranscriptDelivery();
+      const first = beginMessageInjectionOperation({
+        originatingLeafEntryId: null,
+        runId: "active-run",
+        cancel: vi.fn(),
+        queueMessage: delivery.queueMessage,
       });
-    });
-    expect(successor.result).toBeNull();
-    expect(successorCancel).not.toHaveBeenCalled();
-    expect(mockState.lastDispatchCtx).toBeUndefined();
-    const persistedUsers = readPersistedUserMessages();
-    expect(persistedUsers).toHaveLength(1);
-    expect(
-      (persistedUsers[0]?.["__openclaw"] as Record<string, unknown> | undefined)?.steerTargetRunId,
-    ).toBeUndefined();
-    successor.complete();
-  });
+
+      let successor: ReturnType<typeof beginMessageInjectionOperation> | undefined;
+      try {
+        await send({
+          idempotencyKey: "idem-steer-unconfirmed",
+          requestParams: { queueMode: "steer" },
+          waitFor: "none",
+        });
+        await withinTest(delivery.persisted, signal);
+        expect(readPersistedUserMessages()).toHaveLength(1);
+        expect(readPersistedUserMessages()[0]).not.toHaveProperty("__openclaw.steerTargetRunId");
+        first.complete();
+        const successorCancel = vi.fn();
+        successor = beginMessageInjectionOperation({
+          originatingLeafEntryId: null,
+          runId: "successor-run",
+          cancel: successorCancel,
+          queueMessage: vi.fn(async () => {}),
+        });
+        delivery.resolve({
+          transcriptCommit: "unconfirmed",
+          errorMessage: "receipt timed out",
+        });
+
+        await waitForAssertion(() => {
+          expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
+            runId: "idem-steer-unconfirmed",
+            status: "ok",
+          });
+        });
+        expect(successor.result).toBeNull();
+        expect(successorCancel).not.toHaveBeenCalled();
+        expect(mockState.lastDispatchCtx).toBeUndefined();
+        const persistedUsers = readPersistedUserMessages();
+        expect(persistedUsers).toHaveLength(1);
+        expect(
+          (persistedUsers[0]?.["__openclaw"] as Record<string, unknown> | undefined)
+            ?.steerTargetRunId,
+        ).toBeUndefined();
+      } finally {
+        await suiteResources.verifyFixtureCleanup(async () => {
+          delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage: "test finished" });
+          first.complete();
+          successor?.complete();
+          await delivery.settle();
+        });
+      }
+    }));
 
   it("falls back once when captured owner evidence is stale", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
@@ -5402,19 +5402,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    await waitForAssertion(() => {
-      expect(readPersistedUserMessages()).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "hello from replayed failed dispatch",
-          idempotencyKey: "idem-user-transcript-error-replay:user",
-        }),
-      ]);
-      const userUpdates = mockState.emittedTranscriptUpdates.filter(
-        (update) => getMessage(update)?.role === "user",
-      );
-      expect(userUpdates).toHaveLength(1);
-    });
+    expect(readPersistedUserMessages()).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "hello from replayed failed dispatch",
+        idempotencyKey: "idem-user-transcript-error-replay:user",
+      }),
+    ]);
+    const userUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) => getMessage(update)?.role === "user",
+    );
+    expect(userUpdates).toHaveLength(1);
   });
 
   it("applies before_message_write redaction to gateway fallback user transcript persistence", async () => {
@@ -5430,16 +5428,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
-    await waitForAssertion(() => {
-      const userUpdate = findUserUpdate();
-      expectUserUpdateIdentity(userUpdate);
-      const message = getMessage(userUpdate);
-      expect(message?.content).toBe("[redacted by hook]");
-      expect(mockState.beforeMessageWriteCalls).toHaveLength(1);
-      const persistedUser = readPersistedUserMessages()[0];
-      expect(persistedUser?.content).toBe("[redacted by hook]");
-      expect(JSON.stringify(persistedUser)).not.toContain("raw sensitive prompt");
-    });
+    const userUpdate = findUserUpdate();
+    expectUserUpdateIdentity(userUpdate);
+    const message = getMessage(userUpdate);
+    expect(message?.content).toBe("[redacted by hook]");
+    expect(mockState.beforeMessageWriteCalls).toHaveLength(1);
+    const persistedUser = readPersistedUserMessages()[0];
+    expect(persistedUser?.content).toBe("[redacted by hook]");
+    expect(JSON.stringify(persistedUser)).not.toContain("raw sensitive prompt");
   });
 
   it("does not persist gateway fallback user transcripts blocked by before_message_write", async () => {

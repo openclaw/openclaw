@@ -140,7 +140,15 @@ function metadata(stat: BigIntStats) {
 function unchanged(left: BigIntStats, right: BigIntStats): boolean {
   return (
     left.ino !== 0n &&
-    Object.values(metadata(left)).join("/") === Object.values(metadata(right)).join("/")
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mode === right.mode &&
+    left.uid === right.uid &&
+    left.gid === right.gid &&
+    left.nlink === right.nlink &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
   );
 }
 
@@ -250,7 +258,12 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     return children.toSorted();
   }
 
-  async function hashFile(file: string, stat: BigIntStats, remainingBytes: number) {
+  async function hashFile(
+    file: string,
+    stat: BigIntStats,
+    remainingBytes: number,
+    readBuffer?: Buffer,
+  ) {
     if (!stat.isFile()) {
       throw new Error("Package rollback verification byte limit exceeded");
     }
@@ -266,7 +279,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         throw new Error("Package rollback file changed before reading");
       }
       const hash = createHash("sha256");
-      const buffer = Buffer.allocUnsafe(64 * 1024);
+      const buffer = readBuffer ?? Buffer.allocUnsafe(64 * 1024);
       const size = Number(stat.size);
       let position = 0;
       // The final stat detects growth; an extra EOF read costs one OS call per file.
@@ -297,9 +310,35 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
     let remainingEntries = MAX_TREE_ENTRIES - 1;
     let device: bigint | undefined;
     let rootIdentity = "";
+    type HashedEntry = { relative: string; fields: Map<string, string>; retained: string[] };
+    const pendingFiles: Array<Promise<{ entry: HashedEntry } | { error: unknown }>> = [];
+    const buffers: Buffer[] = [];
+    let fileFailed = false;
+    const appendEntry = ({ relative, fields, retained }: HashedEntry) => {
+      const retainedEntry = JSON.stringify([relative, retained]);
+      digest.update(retainedEntry);
+      entriesObserved.set(relative, { fields, retained: retainedEntry });
+    };
+    const drainFiles = async () => {
+      const outcomes = await Promise.all(pendingFiles);
+      pendingFiles.length = 0;
+      // Journal digests and refusal precedence follow DFS order, not IO completion order.
+      for (const outcome of outcomes) {
+        if ("error" in outcome) {
+          throw outcome.error;
+        }
+        appendEntry(outcome.entry);
+      }
+    };
 
     async function visit(file: string, relative: string): Promise<void> {
+      if (fileFailed) {
+        await drainFiles();
+      }
       const stat = await read(() => fs.lstat(file, { bigint: true }));
+      if (fileFailed) {
+        await drainFiles();
+      }
       if (stat.ino === 0n || (device !== undefined && device !== stat.dev)) {
         throw new Error("Package rollback filesystem identity is unavailable");
       }
@@ -327,6 +366,7 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         retained.push(info.size, info.mtimeNs);
       }
       if (stat.isSymbolicLink()) {
+        await drainFiles();
         const target = await read(() => fs.readlink(file));
         const resolved = path.relative(
           originalRoot,
@@ -354,11 +394,31 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         fields.set("target", target);
         retained.push("symlink", target);
       } else if (stat.isFile()) {
-        const contents = await hashFile(file, stat, MAX_TREE_BYTES - bytes);
-        bytes += contents.bytes;
-        fields.set("sha256", contents.digest);
-        retained.push("file", contents.digest);
+        const remainingBytes = MAX_TREE_BYTES - bytes;
+        if (stat.size > BigInt(remainingBytes)) {
+          throw new PackageIntegrityLimitError("byte");
+        }
+        bytes += Number(stat.size);
+        const buffer = (buffers[pendingFiles.length] ??= Buffer.allocUnsafe(64 * 1024));
+        pendingFiles.push(
+          hashFile(file, stat, remainingBytes, buffer).then(
+            (contents) => {
+              fields.set("sha256", contents.digest);
+              retained.push("file", contents.digest);
+              return { entry: { relative, fields, retained } };
+            },
+            (error: unknown) => {
+              fileFailed = true;
+              return { error };
+            },
+          ),
+        );
+        if (pendingFiles.length === 4) {
+          await drainFiles();
+        }
+        return;
       } else if (stat.isDirectory()) {
+        await drainFiles();
         const children = await entries(file, remainingEntries);
         // Reserve pending siblings before descending so wide ancestor lists
         // cannot each retain another full tree budget.
@@ -366,15 +426,20 @@ export function createPackageIntegrityReader(timeoutMs = UPDATE_RUNNER_TIMEOUT_M
         for (const child of children) {
           await visit(path.join(file, child), relative ? `${relative}/${child}` : child);
         }
+        await drainFiles();
       } else {
         throw new Error("Package rollback contains a non-file entry");
       }
-      const retainedEntry = JSON.stringify([relative, retained]);
-      digest.update(retainedEntry);
-      entriesObserved.set(relative, { fields, retained: retainedEntry });
+      appendEntry({ relative, fields, retained });
     }
 
-    await visit(root, "");
+    try {
+      await visit(root, "");
+    } catch (error) {
+      // A later resource limit must not hide an earlier admitted integrity refusal.
+      await drainFiles();
+      throw error;
+    }
     // JSON parsing buffers the manifest, unlike the streamed tree hash. Bound
     // that allocation separately, including growth after hashing.
     const version = await read(() => readPackageVersion(root, { maxBytes: MAX_MANIFEST_BYTES }));

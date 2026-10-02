@@ -9,11 +9,10 @@ import {
   type EmbeddedAgentQueueHandle,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -90,7 +89,7 @@ describe("scoped session archive tools", () => {
       }
       const client = roleClient("write");
       const runId = "collector-session-controls";
-      addSubagentRunForTests({ runId, childSessionKey: TARGET, collect: true });
+      seedSubagentRunForReadTest({ runId, childSessionKey: TARGET, collect: true });
       try {
         await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -131,7 +130,7 @@ describe("scoped session archive tools", () => {
           ),
         );
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });
@@ -153,28 +152,23 @@ describe("scoped session archive tools", () => {
             "assignment-only tool",
           );
           expect(assignment.parameters).toMatchObject({
-            properties: { action: { enum: ["assign_owner"] } },
+            properties: {
+              action: {
+                enum: caller === "session-writer" ? ["patch", "assign_owner"] : ["assign_owner"],
+              },
+            },
           });
           expect(assignment.parameters).not.toHaveProperty("properties.archived");
           await expect(
             assignment.execute("no-archive", { action: "patch", archived: true }),
-          ).rejects.toThrow(/Only assign_owner/);
+          ).rejects.toThrow(
+            caller === "session-writer" ? /current operator write grant/ : /Only assign_owner/,
+          );
           expect(
             resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools.some(
               (tool) => tool.name === "sessions",
             ),
           ).toBe(false);
-          await expect(
-            createSessionsTool({
-              config: cfg,
-              agentSessionKey: TARGET,
-              agentSessionId: TARGET_ID,
-              controlOnly: true,
-            }).execute("no-write-grant", {
-              action: "patch",
-              archived: true,
-            }),
-          ).rejects.toThrow(/current operator write grant/);
         };
         if (caller === "unbound") {
           await check();
@@ -480,7 +474,7 @@ describe("scoped session archive tools", () => {
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
       });
-      let retained: ReturnType<typeof createSessionsTool> | undefined;
+      let retained: ReturnType<typeof createOpenClawCodingTools>[number] | undefined;
       try {
         const result = await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(

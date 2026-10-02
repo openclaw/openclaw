@@ -11,9 +11,11 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { LitElement } from "lit";
 import { z } from "zod";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
+import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
@@ -52,6 +54,21 @@ const commandIdentity = envelope.pick({ documentId: true, requestId: true });
 const navigatePayload = z.object({ agentId: identifier, sessionKey: identifier }).strict();
 const presentationPayload = z.object({ visible: z.boolean(), active: z.boolean() }).strict();
 const emptyPayload = z.object({}).strict();
+const sidebarIdentifier = identifier.refine(
+  (value) => new TextEncoder().encode(value).length <= 4096,
+);
+const sessionFactsPayload = z
+  .array(
+    z
+      .object({
+        agentId: sidebarIdentifier,
+        sessionKey: sidebarIdentifier,
+        hasComposerDraft: z.boolean(),
+        outboxAttentionCount: z.number().int().nonnegative().safe(),
+      })
+      .strict(),
+  )
+  .max(64);
 
 type Conversation = {
   context: { agentId: string; sessionKey: string };
@@ -73,6 +90,11 @@ type NativeConversationMessage = Binding &
       }
     | { type: "open-dashboard"; path: string; search?: string }
     | { type: "command-result"; requestId: string; ok: boolean; error?: string }
+    | {
+        type: "session-facts";
+        revision: number;
+        sessions: z.infer<typeof sessionFactsPayload> | null;
+      }
   );
 
 type NativeConversationWindow = Window & {
@@ -103,6 +125,9 @@ export function createNativeConversationBridge(
     return null;
   }
   const binding: Binding = { contract: 1, documentId: crypto.randomUUID() };
+  const features = ["session-facts-v1", "session-actions-v1"].filter(
+    (feature) => Array.isArray(capability.features) && capability.features.includes(feature),
+  );
   host["__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__"] = binding;
   const postMessage = handler.postMessage;
   const post = postMessage.bind(handler);
@@ -112,6 +137,8 @@ export function createNativeConversationBridge(
   let reportedRoute: Conversation["context"] | undefined;
   let lastState = "";
   let revision = 0;
+  let factsRevision = 0;
+  let lastFacts = "";
   let navigating = false;
   let commands = Promise.resolve();
   let outgoing = Promise.resolve<Delivery>("accepted");
@@ -126,12 +153,13 @@ export function createNativeConversationBridge(
     host.webkit?.messageHandlers?.openclawConversation === handler &&
     handler.postMessage === postMessage;
   const bounded = <T>(
-    work: (active: () => boolean) => Promise<T>,
+    work: (active: () => boolean, signal: AbortSignal) => Promise<T>,
     timeout: T,
     deadline = Date.now() + RESPONSE_TIMEOUT_MS,
   ): Promise<T> =>
     new Promise((resolve) => {
       let settled = false;
+      const abort = new AbortController();
       const finish = (result: T) => {
         if (settled) {
           return;
@@ -139,12 +167,16 @@ export function createNativeConversationBridge(
         settled = true;
         clearTimeout(timer);
         pending.delete(expire);
+        abort.abort();
         resolve(result);
       };
       const expire = () => finish(timeout);
       const timer = setTimeout(expire, Math.max(0, deadline - Date.now()));
       pending.add(expire);
-      void work(() => !settled && current() && Date.now() < deadline).then(finish, expire);
+      void work(() => !settled && current() && Date.now() < deadline, abort.signal).then(
+        finish,
+        expire,
+      );
     });
   const postToHost = async (message: NativeConversationMessage): Promise<Delivery> => {
     if (!current()) {
@@ -208,6 +240,29 @@ export function createNativeConversationBridge(
       });
     }
     return stateDelivery;
+  };
+  const publishSessionFacts = (sessions: readonly StoredSidebarSessionFacts[] | null) => {
+    if (!current() || !features.includes("session-facts-v1")) {
+      return;
+    }
+    // These are the sidebar's stored facts, not the selected pane's input. An
+    // unresolved global owner must never be assigned to the currently selected agent.
+    const parsed = sessionFactsPayload.safeParse(sessions?.filter((row) => row.agentId));
+    const message: NativeConversationMessage = {
+      ...binding,
+      type: "session-facts",
+      revision: factsRevision + 1,
+      sessions: parsed.success ? parsed.data : null,
+    };
+    if (new TextEncoder().encode(JSON.stringify(message)).length > 64 * 1024) {
+      message.sessions = null;
+    }
+    const serialized = JSON.stringify(message.sessions);
+    if (serialized !== lastFacts) {
+      lastFacts = serialized;
+      factsRevision++;
+      void send(message);
+    }
   };
   const refreshConversation = () => {
     const route = context.router.getState();
@@ -284,6 +339,7 @@ export function createNativeConversationBridge(
     detail: unknown,
     active: () => boolean,
     deadline: number,
+    signal: AbortSignal,
   ): Promise<string | undefined> => {
     const parsed = envelope.safeParse(detail);
     if (!parsed.success) {
@@ -294,7 +350,15 @@ export function createNativeConversationBridge(
       return "stale-document";
     }
     switch (command.type) {
-      case "navigate": {
+      case "navigate":
+      case "open-session-actions": {
+        const openActions = command.type === "open-session-actions";
+        if (openActions && !features.includes("session-actions-v1")) {
+          return "unsupported";
+        }
+        if (openActions && (!presentation.visible || !presentation.active)) {
+          return "unavailable";
+        }
         const target = navigatePayload.safeParse(command.payload);
         if (!target.success) {
           return "invalid-command";
@@ -323,7 +387,7 @@ export function createNativeConversationBridge(
             route.matches[0]?.status === "success" &&
             isRecord(route.matches[0]?.data) &&
             route.matches[0].data.kind === "session" &&
-            conversation &&
+            conversation !== undefined &&
             uiConversationMatches(
               {
                 agentsList: context.agents.state.agentsList,
@@ -348,7 +412,27 @@ export function createNativeConversationBridge(
         if (!active() || published === "timeout") {
           return "navigate-timeout";
         }
-        return published === "accepted" && targetSelected() ? undefined : "navigate-rejected";
+        if (published !== "accepted" || !targetSelected()) {
+          return "navigate-rejected";
+        }
+        if (openActions) {
+          const page = document.querySelector<LitElement>("openclaw-chat-page");
+          await page?.updateComplete;
+          const pane = page?.querySelector<ChatPaneBase>(".chat-pane-cache__pane--active");
+          await pane?.updateComplete;
+          if (!active() || !targetSelected() || !pane) {
+            return "unavailable";
+          }
+          const { openNativeSessionMenu } =
+            await import("../pages/chat/components/native-session-menu.runtime.ts");
+          const opened = await openNativeSessionMenu({
+            pane,
+            signal,
+            isCurrent: () => active() && targetSelected(),
+          });
+          return opened ? undefined : "unavailable";
+        }
+        return undefined;
       }
       case "presentation": {
         const next = presentationPayload.safeParse(command.payload);
@@ -393,13 +477,13 @@ export function createNativeConversationBridge(
     // The receipt deadline includes queueing; expired continuations cannot publish
     // state or take ownership from the next command after a late loader resolves.
     commands = bounded<string | undefined>(
-      async (active) => {
+      async (active, signal) => {
         await previous;
         if (!active()) {
           return "navigate-timeout";
         }
         try {
-          return await execute(detail, active, deadline);
+          return await execute(detail, active, deadline, signal);
         } catch {
           return "command-failed";
         }
@@ -459,7 +543,7 @@ export function createNativeConversationBridge(
     ...binding,
     type: "ready",
     surface: "conversation",
-    capabilities: ["navigate", "presentation", "focus-composer"],
+    capabilities: ["navigate", "presentation", "focus-composer", ...features],
   });
   document.addEventListener(CHAT_RUN_ACTIVITY_CHANGED_EVENT, refreshConversation);
   document.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, refreshConversation);
@@ -468,6 +552,7 @@ export function createNativeConversationBridge(
   const stopSessions = context.sessions.subscribe(refreshConversation);
   refreshConversation();
   return {
+    supportsSessionActions: features.includes("session-actions-v1"),
     get presentation() {
       return presentation;
     },
@@ -476,6 +561,7 @@ export function createNativeConversationBridge(
       return () => listeners.delete(listener);
     },
     interceptNavigation,
+    publishSessionFacts,
     dispose() {
       disposed = true;
       pending.forEach((expire) => expire());

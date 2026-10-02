@@ -4,6 +4,7 @@ import { createServer } from "node:net";
  */
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { restorePrivateQaCliEnv } from "./qa-runtime.test-helpers.js";
 
 const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());

@@ -173,7 +173,7 @@ suite.define(() => {
               timestamp: Date.now(),
             }),
           );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: request.turnClaim,
             transcriptSeq: launched.length * 2,
             liveSeq: launched.length,
@@ -273,11 +273,13 @@ suite.define(() => {
             await composer.fill("Browser input held for setup");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
             await expect
-              .poll(() => listSessionPendingInputs(scope).items.length, { timeout: 15000 })
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length, {
+                timeout: 15000,
+              })
               .toBe(1);
             expect(launched).toEqual([]);
             await expect.poll(() => setupWaiters.length, { timeout: 30000 }).toBe(1);
-            expect(listSessionPendingInputs(scope).items).toHaveLength(1);
+            expect((await listSessionPendingInputs(scope)).items).toHaveLength(1);
             await page.getByText("Received · waiting for worker setup", { exact: true }).waitFor();
             await page.screenshot({
               path: path.join(suite.artifactDir, "01-held-during-setup.png"),
@@ -307,16 +309,22 @@ suite.define(() => {
               timeoutSeconds: 0,
             });
             expect(sent.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
-            await expect.poll(() => listSessionPendingInputs(scope).items.length).toBe(2);
+            await expect
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
+              .toBe(2);
             expect(launched).toEqual([]);
             expect(
-              listSessionPendingInputs(scope).items.every((input) => input.state === "queued"),
+              (await listSessionPendingInputs(scope)).items.every(
+                (input) => input.state === "queued",
+              ),
             ).toBe(true);
             release.resolve();
             await dispatchOperation;
             await expect.poll(() => launched.length, { timeout: 30_000 }).toBe(2);
             expect(new Set(launched).size).toBe(2);
-            await expect.poll(() => listSessionPendingInputs(scope).items.length).toBe(0);
+            await expect
+              .poll(async () => (await listSessionPendingInputs(scope)).items.length)
+              .toBe(0);
             await page
               .getByRole("paragraph")
               .filter({ hasText: /^Worker reply 2$/ })

@@ -16,20 +16,26 @@ import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
-import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
+import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { readSessionCreationSnapshotInDatabase } from "./session-accessor.sqlite-creation-read.js";
 import { readExactSessionEntryCandidatesInDatabase } from "./session-accessor.sqlite-entry-cache.js";
 import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-list.read.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
-import { readSessionEntryByIdInDatabase } from "./session-accessor.sqlite-exact-read.js";
+import {
+  readSessionEntryByIdInDatabase,
+  readSessionEntryRow,
+} from "./session-accessor.sqlite-entry-read.js";
 import { participantRecordsBySessionKey } from "./session-accessor.sqlite-participant-projection.js";
+import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
+import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope-helpers.js";
+import {
+  hasSessionEntriesByStatus,
+  readSessionEntriesByStatus,
+} from "./session-accessor.sqlite-status.js";
 import {
   readLatestAssistantTextFromDatabase,
   readTranscriptHeaderFromDatabase,
-} from "./session-accessor.sqlite-read.js";
-import { readSessionEntryReplacementState } from "./session-accessor.sqlite-replacement-read.js";
-import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
+} from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
 import {
   assertCanonicalSessionKeyWrite,
@@ -156,6 +162,26 @@ export function readSessionDiagnosticText(request: SessionDiagnosticTextWorkerIn
 export function readExactSessionEntriesWithLifecycle(
   request: SessionExactEntriesWorkerInput,
 ): SessionExactEntriesWorkerResult {
+  if (request.statusSelection) {
+    const { statuses, presenceOnly } = request.statusSelection;
+    const read = withOpenClawAgentDatabaseReadOnly(
+      (database) => ({
+        entries: presenceOnly ? [] : readSessionEntriesByStatus(database, statuses),
+        statusFound: presenceOnly ? hasSessionEntriesByStatus(database, statuses) : false,
+      }),
+      { ...request.database, env: request.env },
+    );
+    if (!read.found && !presenceOnly && read.reason !== "database-missing") {
+      throw new SessionMetadataUnavailableError(read.reason);
+    }
+    return {
+      kind: "session-exact-entries",
+      lifecycleTimestamps: {},
+      ...(read.found
+        ? read.value
+        : { entries: [], statusFound: read.reason !== "database-missing" }),
+    };
+  }
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       request.projection === "list"
@@ -170,7 +196,7 @@ export function readExactSessionEntriesWithLifecycle(
             runSqliteDeferredTransactionSync(database.db, () => {
               assertCanonicalSqliteSessionKeysCurrent(database);
               if (request.projection === "creation") {
-                const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
+                const { identity, canonicalPath } = readOpenClawAgentDatabaseIdentity(database);
                 const sessionKey = request.sessionKeys[0];
                 if (
                   typeof identity !== "string" ||
@@ -192,7 +218,7 @@ export function readExactSessionEntriesWithLifecycle(
                       request.creationLabel,
                     ),
                     databaseIdentity: identity,
-                    databasePath: filename,
+                    databasePath: canonicalPath,
                   },
                 };
               }
@@ -234,8 +260,9 @@ export function readExactSessionEntriesWithLifecycle(
                 throw selected.error;
               }
               if (request.projection === "sharing") {
-                const { identity } = readOpenClawAgentDatabaseIdentity(database);
-                if (typeof identity !== "string") {
+                const source = readOpenClawAgentDatabaseIdentity(database);
+                const { identity } = source;
+                if (typeof identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
                   throw new Error("Private session facts require their process-held owner");
                 }
                 const presentKeys = new Set(selected.value.map(({ sessionKey }) => sessionKey));
@@ -275,6 +302,9 @@ export function readExactSessionEntriesWithLifecycle(
                   : [];
                 return {
                   kind: "session-exact-entries" as const,
+                  ...(request.includeAuthorization
+                    ? { databaseIdentity: { ...source, identity } }
+                    : {}),
                   entries: selected.value,
                   lifecycleTimestamps: {},
                   sharing: {
@@ -329,11 +359,12 @@ export function readExactSessionEntriesWithLifecycle(
                 ...(request.projection === "lifecycle"
                   ? { pendingArchives: hasPendingSessionTranscriptArchives(database) }
                   : {}),
-                lifecycleTimestamps: resolveSessionLifecycleTimestamps({
+                lifecycleTimestamps: resolveSessionLifecycleTimestampsWithHeader({
                   entry,
                   agentId: database.agentId,
                   sessionKey: request.lifecycleSessionKey,
-                  readHeader: (sessionId) => readTranscriptHeaderFromDatabase(database, sessionId),
+                  readHeader: ({ sessionId }) =>
+                    readTranscriptHeaderFromDatabase(database, sessionId),
                 }),
               };
             }),

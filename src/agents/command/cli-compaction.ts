@@ -71,7 +71,7 @@ type SettingsManagerLike = {
   setCompactionEnabled?: (enabled: boolean) => void;
 };
 type CliCompactionDeps = {
-  openSessionManager: (target: SessionTranscriptRuntimeTarget) => SessionManagerLike;
+  openSessionManager: (target: SessionTranscriptRuntimeTarget) => Promise<SessionManagerLike>;
   ensureContextEnginesInitialized: () => Promise<void>;
   resolveContextEngine: typeof resolveContextEngineImpl;
   createPreparedEmbeddedAgentSettingsManager: (params: {
@@ -113,7 +113,7 @@ type CliTranscriptCompactionOutcome = {
 const log = createSubsystemLogger("agents/cli-compaction");
 
 const defaultCliCompactionDeps: CliCompactionDeps = {
-  openSessionManager: (target) => SessionManager.open(target),
+  openSessionManager: (target) => SessionManager.openAsync(target),
   ensureContextEnginesInitialized: ensureContextEnginesInitializedImpl,
   resolveContextEngine: resolveContextEngineImpl,
   createPreparedEmbeddedAgentSettingsManager: createPreparedEmbeddedAgentSettingsManagerImpl,
@@ -512,12 +512,13 @@ export async function runCliTurnCompactionLifecycle(
       }
       host.onCommitted?.(accepted);
     };
-    const sessionManager = cliCompactionDeps.openSessionManager({
+    const sessionManager = await cliCompactionDeps.openSessionManager({
       agentId: params.sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       storePath,
     });
+    assertActive();
     const sessionFile = params.sessionKey;
     const settingsManager = await cliCompactionDeps.createPreparedEmbeddedAgentSettingsManager({
       cwd: params.cwd ?? params.workspaceDir,

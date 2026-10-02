@@ -50,9 +50,9 @@ import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/placement-target.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";

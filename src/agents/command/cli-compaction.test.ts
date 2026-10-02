@@ -279,7 +279,7 @@ describe("runCliTurnCompactionLifecycle", () => {
         },
       }),
       deps: {
-        openSessionManager: () =>
+        openSessionManager: async () =>
           ({ getBranch: () => [], buildSessionContext: () => ({ messages: [] }) }) as never,
       },
     });
@@ -1312,7 +1312,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCalls: CompactParams[] = [];
     const recordCliCompactionInStore = vi.fn(async () => sessionEntry);
     setCliCompactionTestDeps({
-      openSessionManager: () =>
+      openSessionManager: async () =>
         SessionManager.fromEntries([
           {
             type: "session",

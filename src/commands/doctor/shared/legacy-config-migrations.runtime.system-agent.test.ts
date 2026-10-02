@@ -60,19 +60,27 @@ describe("ambient owner migration", () => {
     expect(raw.agents?.defaults).toBeUndefined();
   });
 
-  it.each<{ entries: Record<string, AgentEntryConfig>; owner: string }>([
-    { entries: { ops: {} }, owner: "ops" },
-    { entries: { main: {}, ops: { default: true } }, owner: "ops" },
-  ])("keeps resolved owners quiet: $entries", ({ entries, owner }) => {
-    const raw: OpenClawConfig = { agents: { entries } };
-    expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
-    expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
-    const migrated: OpenClawConfig = migrate(raw).next ?? raw;
-    expect(migrated.agents?.defaults?.systemAgent).toBeUndefined();
-    expect(migrated.agents?.defaults?.heartbeat).toBeUndefined();
-    expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
-    expect(migrate(migrated)).toEqual({ next: null, changes: [] });
-  });
+  it.each<{ entries: Record<string, AgentEntryConfig>; owner: string; materialized: boolean }>([
+    { entries: { ops: {} }, owner: "ops", materialized: false },
+    { entries: { main: {}, ops: { default: true } }, owner: "ops", materialized: true },
+  ])(
+    "preserves resolved owners while retiring markers: $entries",
+    ({ entries, owner, materialized }) => {
+      const raw: OpenClawConfig = { agents: { entries } };
+      expect(resolveAmbientOwnerAgentId(raw)).toBe(owner);
+      expect(findLegacySystemAgentOwnerIssue(raw)).toBeUndefined();
+      const migrated: OpenClawConfig = migrate(raw).next ?? raw;
+      expect(migrated.agents?.defaults?.systemAgent).toEqual(
+        materialized ? { agentId: owner } : undefined,
+      );
+      expect(migrated.agents?.defaults?.heartbeat).toEqual(
+        materialized ? { agentId: owner } : undefined,
+      );
+      expect(migrated.agents?.entries?.ops).not.toHaveProperty("default");
+      expect(resolveAmbientOwnerAgentId(migrated)).toBe(owner);
+      expect(migrate(migrated)).toEqual({ next: null, changes: [] });
+    },
+  );
 
   it("seeds a marked default ignored by explicit ownership", () => {
     const raw: OpenClawConfig = {

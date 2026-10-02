@@ -27,7 +27,11 @@ describe("GPT-Live socket worker", () => {
       workerData: {
         count: count.buffer,
         times: times.buffer,
-        wsUrl: pathToFileURL(createRequire(import.meta.url).resolve("ws")).href,
+        wsUrl: pathToFileURL(
+          createRequire(createRequire(import.meta.url).resolve("ws/package.json")).resolve(
+            "./index.js",
+          ),
+        ).href,
         outputPort: port2,
         outputCount: outputCount.buffer,
         outputState,

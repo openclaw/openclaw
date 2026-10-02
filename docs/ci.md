@@ -31,8 +31,9 @@ cancelling eligible same-repository work. Fork monitoring is read-only. Exact
 known hourly-main test and supported static failures can remain advisory when the PR leaves their
 subjects unchanged and all remaining checks finish. Canonical PR reruns let every
 Node matrix leg finish so inherited failures do not cancel the remaining proof
-needed for an explicit admin landing. Native matrix fail-fast applies only to PRs
-in other repositories. Main and manual runs retain complete matrices. See
+needed for an explicit admin landing. Add the `ci:no-fail-fast` label before a PR
+run to keep its complete matrix running after a failure. Native matrix fail-fast
+applies only to unlabeled PRs in other repositories. Main and manual runs retain complete matrices. See
 [failure cancellation](/ci/pipeline#fail-fast-order).
 
 First-hop compatibility uses a 3,200-second container budget and a 3,500-second lane
@@ -47,9 +48,13 @@ allows 160 minutes for the npm-serialized lanes plus setup; see
 
 For the published-upgrade regression gate, see [selection and routing](/ci/scope-and-routing#scope-and-routing), [runner budgets](/ci/capacity#runner-registration-budget), and [Package Acceptance baselines](/ci/release-validation#suite-profiles). Weekly validation is listed under [Update Migration](/ci/scheduled-workflows#update-migration).
 
+Updater, state-lease, SQLite identity, native-plugin, startup-trace, and updater-tooling PRs also require the [published-driver update cell](/ci/scope-and-routing/selection#published-driver-update-cell). One GitHub-hosted Linux job runs the latest stable npm updater against the candidate package with two synthetic agents. Its twenty-minute budget and result are included in `openclaw/ci-gate`; the broader main/release Docker survivor remains separate.
+
 Full `main` CI and cache warming are [hourly by default](/ci/scheduled-workflows#hourly-main-ci); `OPENCLAW_CI_ON_PUSH=true` restores their existing per-push admission. CodeQL, Workflow Sanity, and CI's `security-fast` keep their existing main-push scopes. Docs-only `main` pushes still skip the CI workflow and push-triggered cache warming. The cache warmer publishes dependencies independently of long builds and maintains a bounded hosted seed in hybrid mode. Every admitted canonical `main` run exercises one published-driver × candidate Docker upgrade; ordinary manual/release validation adds the other five Docker seed lanes. QA Smoke, real-Gateway browser checks, and named process proofs retain their selected `main` coverage and manual/release validation. Pull requests and exact-head PR fallback dispatches run static correctness gates, owner-bounded tests, transitive import consumers, protected regressions, and a six-file runtime smoke set. Node rows target at most 150 estimated test seconds. Single files and indivisible canonical groups can exceed that target; setup, builds, and queues are separate from test time. Node shards selecting sandbox container E2E cases prepare the Docker sandbox image when the runner does not already have it. Missing or unbounded runtime selection fails preflight instead of falling back to every test. Windows, browser, Docker, QA Smoke, packaging, contract, and extension families opt in through their existing owners; individual built-process proofs have independent owner flags. Full static fallback does not widen them. The [PR-exempt integration tier](/ci/scope-and-routing/node-test-lanes) retains measured slow tests in hourly `main` and Full Release Validation, with PR opt-in when their tests or subjects change. The existing Plugin Prerelease workflow owns complete extension runtime coverage hourly and in Full Release Validation; normal CI selects affected extension owners on PRs. Windows retains its complete inventory across five measured file shards on hourly main and ordinary manual/release validation; Windows-owner PRs retain that complete inventory.
 
 Hourly iOS retains `ios-build (tests)` with Rust, voice, native Access, and focused lifecycle coverage. Debug builds select their simulator before compiling, overlap its boot and SimSlim preparation with compilation, and join preparation before either focused simulator test group. Preparation failures or a timed-out join fail the job with its log; test selection and build settings stay unchanged. Current smoke builds prepare testing products once with `build-for-testing`; the voice cleanup and lifecycle groups separately reuse those products with `test-without-building`. Historical targets and other phases retain their existing build actions. Managed attachment UI/export, Watch operation, and Watch delivery UI suites retain every assertion in full manual/release validation. Main-tier simulator builds use the native architecture without indexing or verbose test diagnostics; logs and xcresult bundles remain available. A coalesced scheduled iOS cancellation can leave `openclaw/ci-gate` green with a notice delegating iOS proof to a later scheduled job; it does not validate the canceled revision, and the workflow can still be canceled. Genuine failures remain red. Screenshot capture runs for its own changed inputs and full manual/release validation. See [scope selection](/ci/scope-and-routing/selection) and [capacity](/ci/capacity#owner-path-and-release-coverage) for the coverage trade-off.
+
+Current iOS builds restore three independent input caches: verified Mermaid assets, SwiftPM source packages and binary artifacts, and the Watch RTC Cargo registry and compiled simulator library. Only trusted `main` push and scheduled runs save them; PRs restore only. Frozen targets retain their original cold path. Mermaid validates source and output hashes before copying resources. Its key covers the renderer's complete locked dependency graph, including workspace sources and optional build dependencies, so unrelated root dependency upgrades reuse the assets. SwiftPM keys cover Xcode, package manifests, and available `Package.resolved` files; automatic resolution remains enabled (the generated iOS project currently has no tracked lockfile). Watch keys cover Xcode, architecture, target mappings, the pinned Rust toolchain, lockfile, crate sources, and iOS build settings; the build phase verifies the library checksum and input fingerprint before reuse, and otherwise runs the locked Cargo build. Caching the finished slice avoids rebuilding the Rust standard library when a fresh runner installs `rust-src` with new timestamps. The hourly Watch engine test shares registry downloads, while its host Debug products stay out of the simulator Release cache.
 
 iOS screenshot shards, release qualification, Store Release, and its screenshot-only operation use [larger hosted capacity](/ci/runners). Screenshot capture uses stock simulators and creates and cleans up one at a time; the screenshot-only operation can validate a selected branch without signing or uploading a release. The pairing, chat, and native Overview tests retain their existing assertions and deadlines.
 
@@ -60,11 +65,13 @@ file, so large PRs do not lose test-planning inputs to Actions output or environ
 size limits. Frozen targets that predate this transport retain their bounded JSON
 output contract. Missing or invalid inputs still reject current PR Node planning.
 
-The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 32-class for dispatched proof and defaults to a four-hour outer job budget. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
+The [Testbox check workflow](/ci/local-proof#testbox-validation) requests the Blacksmith 16-class for routine dispatched proof, with a 60-minute total-job deadline including hydration. The explicit high-memory 32-class workflow retains 240 minutes for memory-heavy full-suite gates. The outer GitHub deadline can terminate active SSH commands; the separate 15-minute idle limit does not extend it. PR hydration checks stay on hosted Ubuntu; individual test deadlines remain unchanged.
 
 Full GitHub and hybrid type checks run the five core stripes independently, retaining two compiler children per job. The last four rows then each run one root-test partition serially, leaving extension tests and scripts in the central row. Narrow plans reuse four already-selected rows when available; smaller selections retain central root checking. This adds no jobs or compiler overlap. Current hybrid full runs use three hosted extension-lint jobs; targeted layouts retain six stripe identities. Trusted hybrid first attempts place both packed core-lint rows on the Blacksmith 16-class and the final gate on the 4-class to avoid serial hosted assignment delays. Frozen targets keep their earlier layout; see [static checks](/ci/runners#runner-backend-modes).
 
-Additional checks and narrow-PR dependency scans start directly after preflight. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+Additional checks and narrow-PR guards and dependency scans start directly after preflight. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
+
+Changed compiler planning reads every selected program from one native compiler snapshot. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, this avoids serial compiler discovery without changing graph membership or full fallback. Cold Linux replays reduced compiler planning from 77–91 seconds to 17–21 seconds on four available CPUs; the complete materializer reached 14.8 GiB peak RSS. Eligible hybrid `check-plan` jobs therefore use the 16-class. Hosted fallback, fork, retry, and frozen routing remain unchanged. Set the repository variable to `true` or `1` to restore serial queries.
 
 The extension package boundary row has a 30-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
@@ -84,7 +91,7 @@ Runtime topology checks inherit the existing [Go memory defaults](/ci/local-proo
 
 Android native resource preparation uses the Mermaid renderer's filtered dependency install, including optional build tooling. Pnpm retains root dependencies but omits unrelated plugin packages; Gradle still builds the assets and runs the selected native tests and lint. Historical targets keep their compatibility path.
 
-Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Normal same-repository Blacksmith runs overlap all four rows; other routes retain two. All test and lint tasks remain selected.
+Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Canonical Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and noncanonical repositories retain two. All test and lint tasks remain selected.
 
 macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency and timeout limits.
 
@@ -120,8 +127,11 @@ Roomy serial Blacksmith Node jobs use [measured Vitest worker sizing](/ci/capaci
 
 Source-only Linux Node shards can reuse content-validated compiled workers from the protected warmer; [fixed preparation costs](/ci/capacity#fixed-job-preparation) remain separate from test execution and runner capacity.
 
-Changed-target shards containing canonical E2E tests prepare the private-QA
-runtime once before launching test children. Only a successful preparation step
+Changed-target shards whose executed file routes use the E2E config prepare the
+private-QA runtime once before launching test children, even when selection maps
+those files to a canonical unit-suite owner. Preparation builds runtime JavaScript
+and assets without global declaration emission; the AI package test separately
+prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
@@ -131,9 +141,11 @@ Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a
 focused run and a full run share the persistent cache.
 
-Linux PR tests use Bun for the measured compatible unit lanes and Control UI
-Vitest job. Full Release Validation keeps their Node coverage and runs them on Bun
-too; see [test runtime selection](/ci/pipeline#test-runtime-selection).
+Linux PR tests use Bun for compatible unit lanes and Control UI Vitest selections.
+Audited synchronous unit-fast tests can use Bun's native runner; changed test or
+setup bytes return to Vitest. Full Release Validation retains complete Node
+coverage plus qualified Bun coverage; see
+[test runtime selection](/ci/pipeline#test-runtime-selection).
 Both runtimes group uncached, non-isolated UI files by environment in batches
 to reduce worker restarts while retaining native shard ownership and worker budgets.
 
@@ -306,3 +318,5 @@ Every section heading from the previous single-page version keeps its anchor her
 - [Maturity scorecard](/maturity/scorecard)
 - [Install overview](/install)
 - [Release channels](/install/development-channels)
+
+Ordinary PR iOS smoke keeps app and test-bundle compilation while selecting its two simulator groups by source owner. With neither group selected, simulator preparation is skipped. `OPENCLAW_CI_IOS_SIMULATOR_FULL=true` restores full PR execution; [selection and routing](/ci/scope-and-routing/selection) documents the owners and full hourly/release coverage.

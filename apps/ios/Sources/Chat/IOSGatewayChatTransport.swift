@@ -432,12 +432,30 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             unread: unread)
     }
 
-    func forkSession(parentKey: String) async throws -> String {
-        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
-    }
-
-    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
-        try await self.forkSession(parentKey: parentKey, fromLastCompleted: fromLastCompleted, agentID: nil)
+    func patchSession(
+        key: String,
+        expectedSessionID: String? = nil,
+        label: String?? = nil,
+        category: String?? = nil,
+        color: String?? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        snoozedUntil: OpenClawChatSnoozePatch?,
+        unread: Bool? = nil) async throws
+    {
+        guard let routeLease = await acquireSessionMutationRouteLease() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        try await routeLease.patchSession(
+            key: key,
+            expectedSessionID: expectedSessionID,
+            label: label,
+            category: category,
+            color: color,
+            pinned: pinned,
+            archived: archived,
+            snoozedUntil: snoozedUntil,
+            unread: unread)
     }
 
     func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String {
@@ -606,10 +624,6 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
               error.code == "INVALID_REQUEST"
         else { return false }
         return error.message == "invalid chat.history params: at root: unexpected property 'inputRunIds'"
-    }
-
-    var supportsSlashCommandCatalog: Bool {
-        true
     }
 
     func waitForRunCompletion(

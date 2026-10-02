@@ -1,41 +1,6 @@
+import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
+
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-import type {
-  GatewayMethodDescriptor,
-  GatewayMethodScope,
-  GatewayMethodSessionAccess,
-} from "./descriptor.js";
-
-export type CoreGatewayMethodSpec = {
-  name: string;
-  family?: string;
-  scope: GatewayMethodScope;
-  since?: string;
-  advertise?: false;
-  startup?: true;
-  lifetime?: GatewayMethodDescriptor["lifetime"];
-  controlPlaneWrite?: true;
-  compatibilityRestored?: true;
-  description?: string;
-  sessionAccess?: GatewayMethodSessionAccess;
-};
-
-type CoreGatewayMethodPolicy = Pick<
-  CoreGatewayMethodSpec,
-  | "advertise"
-  | "startup"
-  | "lifetime"
-  | "controlPlaneWrite"
-  | "compatibilityRestored"
-  | "description"
-  | "sessionAccess"
->;
-type CoreGatewayMethodSpecRow = readonly [
-  name: string,
-  family: string | null,
-  scope: GatewayMethodScope,
-  since: string,
-  policy?: CoreGatewayMethodPolicy,
-];
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
 const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
 
@@ -110,7 +75,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["openclaw.chat", "system-agent", "operator.admin", "<=2026.7"],
   ["openclaw.chat.history", "system-agent", "operator.admin", "2026.7"],
   ["openclaw.changes.list", "system-changes", "operator.admin", "<=2026.7"],
-  ["openclaw.approval.list", "system-agent", "operator.approvals", "<=2026.7"],
+  ["openclaw.approval.list", "system-agent-approvals", "operator.approvals", "<=2026.7"],
   ["openclaw.setup.detect", "system-agent", "operator.admin", "<=2026.7"],
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
@@ -686,4 +651,49 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
   ["sessions.catalog.import", "session-catalog", "operator.write", "2026.9"],
+  ["backup.status", "backup", "operator.read", "2026.9"],
+  ["storage.locations.list", "storage", "operator.read", "2026.9"],
+  ["storage.locations.probe", "storage", "operator.read", "2026.9"],
+  [
+    "mcp.app.onboard",
+    "mcp-app-onboarding",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write" } },
+  ],
+  [
+    "mcp.app.discover",
+    "mcp-app-extensions",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write" } },
+  ],
+  [
+    "mcp.app.launch",
+    "mcp-app-extensions",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write" } },
+  ],
+  [
+    "mcp.app.settings",
+    "mcp-app-extensions",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write" } },
+  ],
+  [
+    "mcp.app.mention",
+    "mcp-app-extensions",
+    "operator.write",
+    "2026.9",
+    { sessionAccess: { mode: "write" } },
+  ],
+  ["mcp.app.formResource", "mcp-app", "operator.write", "2026.9"],
+  ["mcp.app.modelContext", "mcp-app", "operator.read", "2026.9"],
+  ["mcp.app.removeModelContext", "mcp-app", "operator.write", "2026.9"],
+  ["mcp.app.writeResource", "mcp-app", "operator.write", "2026.9"],
+  ["mcp.app.subscribeResource", "mcp-app", "operator.read", "2026.9"],
+  ["mcp.app.unsubscribeResource", "mcp-app", "operator.read", "2026.9"],
+  ["mcp.app.openFile", "mcp-app", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

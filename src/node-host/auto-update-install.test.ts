@@ -36,7 +36,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   runCommandWithTimeout: mocks.command,
 }));
 vi.mock("../infra/update-runner-git-node-preflight.js", () => ({
-  checkGitCandidateNodeRuntime: async () => null,
+  prepareGitCandidateNodeRuntime: async () => ({}),
 }));
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: async () => ({ incompatible: [], indeterminate: [] }),
@@ -243,6 +243,14 @@ describe("Bun private node runtime installation", () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("private node runtime installation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined },
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("installs a verified generation without changing the global runtime or live state", async () => {
     await withTestDir({ prefix: "openclaw-node-install-" }, async (directory) => {
       const globalPrefix = path.join(directory, "global");

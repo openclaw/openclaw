@@ -15,11 +15,11 @@ import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
-import { parseCmdScriptCommandLine } from "./cmd-argv.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand, resolveTaskName } from "./schtasks-layout.js";
@@ -94,8 +94,9 @@ export function findInstalledProcessPid(
     if (!commandLine) {
       continue;
     }
-    const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+    const argv = parseWindowsNativeCommandLine(entry.CommandLine ?? "");
     if (
+      !argv ||
       !matchesProcess(argv) ||
       parseTcpPortFromArgs(argv) !== port ||
       !matchesInstalledProgramArguments(comparableArguments(argv), installedArguments)
@@ -182,7 +183,7 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
       listeners.flatMap((listener) =>
         typeof listener.pid === "number" &&
         listener.commandLine &&
-        classifyOpenClawArgv(parseCmdScriptCommandLine(listener.commandLine), {
+        classifyOpenClawArgv(parseWindowsNativeCommandLine(listener.commandLine) ?? [], {
           command: "gateway",
           pid: listener.pid,
         }).kind === "openclaw"
@@ -364,7 +365,7 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
       continue;
     }
     const argv = listener.commandLine
-      ? parseCmdScriptCommandLine(listener.commandLine)
+      ? parseWindowsNativeCommandLine(listener.commandLine)
       : process.platform === "win32"
         ? readWindowsProcessArgsSync(listener.pid)
         : null;

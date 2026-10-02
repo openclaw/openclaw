@@ -6,23 +6,26 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { classifyClaudeCliHistoryLine } from "./cli-session-history.claude-activity.js";
 import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
 import { buildLegacyReseedPrompt } from "./cli-session-history.test-support.js";
-import { expectRecordFields } from "./test-helpers.assertions.js";
 
-type ClaudeCliFallbackSeed = NonNullable<ReturnType<typeof readClaudeCliFallbackSeed>>;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function requireFallbackSeed(
-  seed: ReturnType<typeof readClaudeCliFallbackSeed>,
-  label: string,
-): ClaudeCliFallbackSeed {
-  if (!seed) {
-    throw new Error(`expected ${label} fallback seed`);
-  }
-  return seed;
-}
+const userTurn = (uuid: string, content: string) => ({
+  type: "user",
+  uuid,
+  message: { role: "user", content },
+});
+const assistantTurn = (uuid: string, text: string) => ({
+  type: "assistant",
+  uuid,
+  message: { role: "assistant", model: "claude-sonnet-4-6", content: [{ type: "text", text }] },
+});
+const boundary = (content = "Conversation compacted") => ({
+  type: "system",
+  subtype: "compact_boundary",
+  content,
+});
 
 describe("Claude history activity rows", () => {
-  it.each(["null", "[]", "42", "true", '"ignored"', "not json"])(
+  it.each(["null", "[]", "42", "not json"])(
     "ignores non-record or malformed activity row %s",
     (line) => {
       expect(
@@ -43,16 +46,8 @@ describe("readClaudeCliFallbackSeed", () => {
     await fs.mkdir(projectsDir, { recursive: true });
   });
 
-  function readFallbackSeed(
-    cliSessionId = SESSION_ID,
-  ): ReturnType<typeof readClaudeCliFallbackSeed> {
+  function readFallbackSeed(cliSessionId = SESSION_ID) {
     return readClaudeCliFallbackSeed({ cliSessionId, homeDir });
-  }
-
-  function readFallbackSeedFromHome(
-    cliSessionId = SESSION_ID,
-  ): Promise<ReturnType<typeof readClaudeCliFallbackSeed>> {
-    return withEnvAsync({ HOME: homeDir }, async () => readClaudeCliFallbackSeed({ cliSessionId }));
   }
 
   async function writeJsonl(lines: ReadonlyArray<unknown>): Promise<void> {
@@ -61,253 +56,87 @@ describe("readClaudeCliFallbackSeed", () => {
   }
 
   it("returns undefined when the Claude session file does not exist", () => {
-    const seed = readFallbackSeed();
-    expect(seed).toBeUndefined();
+    expect(readFallbackSeed()).toBeUndefined();
   });
 
   it("collects valid turns through the HOME-resolved session store despite null rows", async () => {
     await writeJsonl([
-      {
-        type: "user",
-        uuid: "u-1",
-        message: { role: "user", content: "first user prompt" },
-      },
+      userTurn("u-1", "first user prompt"),
       null,
-      {
-        type: "assistant",
-        uuid: "a-1",
-        message: {
-          role: "assistant",
-          model: "claude-sonnet-4-6",
-          content: [{ type: "text", text: "first assistant reply" }],
-        },
-      },
-      {
-        type: "user",
-        uuid: "u-2",
-        message: { role: "user", content: "second user prompt" },
-      },
+      assistantTurn("a-1", "first assistant reply"),
+      userTurn("u-2", "second user prompt"),
     ]);
-
-    const seed = await readFallbackSeedFromHome();
-    const fallbackSeed = requireFallbackSeed(seed, "uncompacted session");
-    expect(fallbackSeed.summaryText).toBeUndefined();
-    expect(fallbackSeed.recentTurns).toHaveLength(3);
-    expectRecordFields(fallbackSeed.recentTurns[0], "fields", { role: "user" });
-    expectRecordFields(fallbackSeed.recentTurns[2], "fields", { role: "user" });
+    const seed = await withEnvAsync({ HOME: homeDir }, async () =>
+      readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID }),
+    );
+    expect(seed).toMatchObject({
+      recentTurns: [
+        { role: "user", content: "first user prompt" },
+        { role: "assistant", content: [{ type: "text", text: "first assistant reply" }] },
+        { role: "user", content: "second user prompt" },
+      ],
+    });
+    expect(seed?.summaryText).toBeUndefined();
   });
 
   it("preserves reseed envelopes in fallback model context", async () => {
     const reseedPrompt = buildLegacyReseedPrompt();
-    await writeJsonl([
-      {
-        type: "user",
-        uuid: "u-1",
-        message: { role: "user", content: reseedPrompt },
-      },
-    ]);
-
-    const seed = requireFallbackSeed(readFallbackSeed(), "reseed session");
-
-    expectRecordFields(seed.recentTurns[0], "fields", { role: "user", content: reseedPrompt });
+    await writeJsonl([userTurn("u-1", reseedPrompt)]);
+    expect(readFallbackSeed()).toMatchObject({
+      recentTurns: [{ role: "user", content: reseedPrompt }],
+    });
   });
 
-  it("uses the explicit /compact summary and drops pre-boundary turns", async () => {
+  it("uses the latest explicit summary and drops all pre-boundary turns", async () => {
     await writeJsonl([
-      {
-        type: "user",
-        uuid: "u-pre",
-        message: { role: "user", content: "pre-compact user turn excluded from seed" },
-      },
-      {
-        type: "assistant",
-        uuid: "a-pre",
-        message: {
-          role: "assistant",
-          model: "claude-sonnet-4-6",
-          content: [{ type: "text", text: "PRE-COMPACT assistant turn" }],
-        },
-      },
-      {
-        type: "summary",
-        summary: "User asked about deployment; agent recommended a blue-green strategy.",
-        leafUuid: "a-pre",
-      },
-      {
-        type: "system",
-        subtype: "compact_boundary",
-        content: "Conversation compacted",
-        compactMetadata: { trigger: "manual", preTokens: 12345 },
-      },
-      {
-        type: "user",
-        uuid: "u-post",
-        message: { role: "user", content: "POST-COMPACT user follow-up" },
-      },
-      {
-        type: "assistant",
-        uuid: "a-post",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "POST-COMPACT assistant reply" }],
-        },
-      },
+      userTurn("u-pre", "PRE-COMPACT user turn"),
+      assistantTurn("a-pre", "PRE-COMPACT assistant turn"),
+      { type: "summary", summary: "EARLY summary that should be superseded.", leafUuid: "a-pre" },
+      boundary(),
+      userTurn("u-mid", "mid-window turn"),
+      { type: "summary", summary: "LATER summary that must win.", leafUuid: "u-mid" },
+      boundary(),
+      userTurn("u-tail", "tail turn"),
+      assistantTurn("a-tail", "tail reply"),
     ]);
-
-    const seed = readFallbackSeed();
-    const fallbackSeed = requireFallbackSeed(seed, "compacted session");
-    expect(fallbackSeed.summaryText).toBe(
-      "User asked about deployment; agent recommended a blue-green strategy.",
-    );
-    expect(fallbackSeed.recentTurns).toHaveLength(2);
-    const recentText = JSON.stringify(fallbackSeed.recentTurns);
-    expect(recentText).toContain("POST-COMPACT user follow-up");
-    expect(recentText).toContain("POST-COMPACT assistant reply");
-    expect(recentText).not.toContain("PRE-COMPACT");
+    expect(readFallbackSeed()).toMatchObject({
+      summaryText: "LATER summary that must win.",
+      recentTurns: [
+        { role: "user", content: "tail turn" },
+        { role: "assistant", content: [{ type: "text", text: "tail reply" }] },
+      ],
+    });
   });
 
-  it("falls back to compact_boundary content when no explicit summary entry is present", async () => {
-    await writeJsonl([
-      {
-        type: "user",
-        uuid: "u-pre",
-        message: { role: "user", content: "early turn" },
-      },
-      {
-        type: "system",
-        subtype: "compact_boundary",
-        content: "Conversation compacted",
-        compactMetadata: { trigger: "auto", preTokens: 50000 },
-      },
-      {
-        type: "user",
-        uuid: "u-post",
-        message: { role: "user", content: "post-boundary user turn" },
-      },
-    ]);
-
-    const seed = readFallbackSeed();
-    const fallbackSeed = requireFallbackSeed(seed, "compact boundary session");
-    // Falls back to the boundary's content so the seed at least labels
-    // that compaction happened, instead of replaying nothing.
-    expect(fallbackSeed.summaryText).toBe("Conversation compacted");
-    expect(fallbackSeed.recentTurns).toHaveLength(1);
-    expect(JSON.stringify(fallbackSeed.recentTurns)).toContain("post-boundary user turn");
-  });
-
-  it("prefers the most recent summary when the session has been compacted multiple times", async () => {
-    await writeJsonl([
-      {
-        type: "summary",
-        summary: "EARLY summary that should be superseded.",
-        leafUuid: "x",
-      },
-      {
-        type: "system",
-        subtype: "compact_boundary",
-        content: "Conversation compacted",
-        compactMetadata: { trigger: "manual", preTokens: 1000 },
-      },
-      {
-        type: "user",
-        uuid: "u-mid",
-        message: { role: "user", content: "mid-window turn" },
-      },
-      {
-        type: "summary",
-        summary: "LATER summary that must win.",
-        leafUuid: "y",
-      },
-      {
-        type: "system",
-        subtype: "compact_boundary",
-        content: "Conversation compacted",
-        compactMetadata: { trigger: "manual", preTokens: 2000 },
-      },
-      {
-        type: "user",
-        uuid: "u-tail",
-        message: { role: "user", content: "tail turn" },
-      },
-    ]);
-
-    const seed = readFallbackSeed();
-    expect(seed?.summaryText).toBe("LATER summary that must win.");
-    expect(seed?.recentTurns).toHaveLength(1);
-    expect(JSON.stringify(seed?.recentTurns)).toContain("tail turn");
-    expect(JSON.stringify(seed?.recentTurns)).not.toContain("mid-window turn");
-  });
-
-  it("returns undefined when the session file is empty or has no usable content", async () => {
-    await writeJsonl([
-      // Sidechain entries are filtered out by the underlying parser.
-      {
-        type: "user",
-        uuid: "u-side",
-        isSidechain: true,
-        message: { role: "user", content: "sidechain user turn" },
-      },
-    ]);
-    const seed = readFallbackSeed();
-    expect(seed).toBeUndefined();
+  it("returns undefined when the session file has no usable content", async () => {
+    await writeJsonl([{ ...userTurn("u-side", "sidechain user turn"), isSidechain: true }]);
+    expect(readFallbackSeed()).toBeUndefined();
   });
 
   it("rejects path-like session ids instead of escaping the Claude projects tree", () => {
-    const seed = readFallbackSeed("../escape");
-    expect(seed).toBeUndefined();
+    expect(readFallbackSeed("../escape")).toBeUndefined();
   });
 
   it("falls back to the latest boundary content when a newer compaction has no summary", async () => {
     await writeJsonl([
       { type: "summary", summary: "FIRST compact summary", leafUuid: "x" },
-      {
-        type: "system",
-        subtype: "compact_boundary",
-        content: "Conversation compacted (1)",
-        compactMetadata: { trigger: "manual", preTokens: 1000 },
-      },
-      {
-        type: "user",
-        uuid: "u-mid",
-        message: { role: "user", content: "post-first-compact turn" },
-      },
-      {
-        type: "system",
-        subtype: "compact_boundary",
-        content: "Conversation compacted (2)",
-        compactMetadata: { trigger: "auto", preTokens: 2000 },
-      },
-      {
-        type: "user",
-        uuid: "u-tail",
-        message: { role: "user", content: "post-second-compact turn" },
-      },
+      boundary("Conversation compacted (1)"),
+      userTurn("u-mid", "post-first-compact turn"),
+      boundary("Conversation compacted (2)"),
+      userTurn("u-tail", "post-second-compact turn"),
     ]);
-
-    const seed = readFallbackSeed();
-    const fallbackSeed = requireFallbackSeed(seed, "latest boundary session");
-    expect(fallbackSeed.summaryText).toBe("Conversation compacted (2)");
-    expect(fallbackSeed.summaryText).not.toBe("FIRST compact summary");
-    expect(fallbackSeed.recentTurns).toHaveLength(1);
-    expect(JSON.stringify(fallbackSeed.recentTurns)).toContain("post-second-compact turn");
+    expect(readFallbackSeed()).toMatchObject({
+      summaryText: "Conversation compacted (2)",
+      recentTurns: [{ role: "user", content: "post-second-compact turn" }],
+    });
   });
 
   it("uses a trailing summary that has no following compact_boundary marker", async () => {
     await writeJsonl([
-      {
-        type: "user",
-        uuid: "u-1",
-        message: { role: "user", content: "earlier turn" },
-      },
+      userTurn("u-1", "earlier turn"),
       { type: "summary", summary: "trailing summary without boundary", leafUuid: "x" },
-      {
-        type: "user",
-        uuid: "u-2",
-        message: { role: "user", content: "later turn" },
-      },
+      userTurn("u-2", "later turn"),
     ]);
-
-    const seed = readFallbackSeed();
-    expect(seed?.summaryText).toBe("trailing summary without boundary");
+    expect(readFallbackSeed()?.summaryText).toBe("trailing summary without boundary");
   });
 });

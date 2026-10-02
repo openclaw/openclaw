@@ -44,6 +44,7 @@ import {
   type HistoryDatabaseResource,
   type SessionCostWorkerLane,
   type SessionDatabaseCleanup,
+  type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
@@ -159,7 +160,7 @@ export function prepareSessionEntryPresenceRead(input: SessionAccessScope): Read
 
 /** Single and batch reads synchronously retain the same lane-aware database owner. */
 export function retainSessionHistoryWorkerDatabase(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
   lane: SessionHistoryWorkerLane = historyLane,
 ) {
   const owned = acquireHistoryDatabaseResource(options);
@@ -316,7 +317,7 @@ export function retainSessionHistoryWorkerDatabase(
 
 /** Capture every selected store before yielding; a closed target cannot join a later generation. */
 export async function withSessionHistoryWorkerDatabases<T>(
-  options: readonly OpenClawAgentDatabaseOptions[],
+  options: readonly SessionHistoryDatabaseTarget[],
   operation: (owners: readonly SessionHistoryWorkerDatabase[]) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {
@@ -357,7 +358,7 @@ export async function withSessionHistoryWorkerDatabases<T>(
 
 /** Single-target callers retain the same batch admission and revocation boundary. */
 export function withSessionHistoryWorkerDatabase<T>(
-  options: OpenClawAgentDatabaseOptions,
+  options: SessionHistoryDatabaseTarget,
   operation: (owner: SessionHistoryWorkerDatabase) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
 ): Promise<T> {

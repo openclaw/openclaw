@@ -1,13 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { runInNewContext } from "node:vm";
 import ignore from "ignore";
@@ -591,12 +583,6 @@ describe("security review workflow trust boundaries", () => {
     expect(result.stderr.trim()).toBe(
       "GitHub token, event, event name, and repository are required.",
     );
-
-    rmSync(join(workspace, "scripts/lib/bounded-response.mjs"));
-    const missingModule = runSelectedEntry(workspace, entry);
-    expect(missingModule.status).toBe(1);
-    expect(missingModule.stderr).toContain("ERR_MODULE_NOT_FOUND");
-    expect(missingModule.stderr).toContain("bounded-response.mjs");
   });
 
   it.skipIf(process.platform === "win32")(
@@ -680,16 +666,6 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       expect(loaded.stderr.trim()).toBe(
         "GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.",
       );
-
-      rmSync(join(workspace, ".github/security-review-policy.yml"));
-      const missingPolicy = spawnSync(process.execPath, [probe], {
-        cwd: workspace,
-        env: {},
-        encoding: "utf8",
-      });
-      expect(missingPolicy.status).toBe(1);
-      expect(missingPolicy.stderr).toContain("ENOENT");
-      expect(missingPolicy.stderr).toContain("security-review-policy.yml");
     },
   );
 
@@ -762,14 +738,11 @@ describe("security review ownership", () => {
   it.each([
     ".github/CODEOWNERS",
     "SECURITY.md",
-    ".github/codeql/codeql-core-auth-secrets-critical-security.yml",
     ".github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql",
     ".github/workflows/codeql-macos-critical-security.yml",
     ".github/workflows/security-review.yml",
     ".github/security-review-policy.yml",
     ".github/actions/setup-security-review/action.yml",
-    ".github/actions/setup-security-review/package.json",
-    ".github/actions/setup-security-review/package-lock.json",
     "scripts/github/security-review-policy.mjs",
     "scripts/github/security-review-event.mjs",
     "scripts/github/security-review.mjs",

@@ -115,6 +115,10 @@ export async function withShimFixture<T>(
       "scripts/lib/local-check-runtime.mts",
       path.join(checkoutRoot, "scripts", "lib", "local-check-runtime.mts"),
     );
+    copyFileSync(
+      "scripts/lib/tooling-dependencies.mjs",
+      path.join(checkoutRoot, "scripts", "lib", "tooling-dependencies.mjs"),
+    );
     writeFileSync(path.join(checkoutRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
     outcome = {
       value: await run({

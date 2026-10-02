@@ -654,17 +654,11 @@ extension OpenClawChatViewModel {
 
     private static func outboxUserMessage(for command: OpenClawChatOutboxCommand) -> OpenClawChatMessage {
         var content = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: command.text,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
+            OpenClawChatMessageContent(type: "text", text: command.text),
         ]
         content.append(contentsOf: command.attachments.map { attachment in
             OpenClawChatMessageContent(
                 type: attachment.type,
-                text: nil,
                 mimeType: attachment.mimeType,
                 fileName: attachment.fileName,
                 sizeBytes: attachment.data.count,
@@ -1140,12 +1134,8 @@ extension OpenClawChatViewModel {
     }
 
     func outboxAgentID(for session: SessionSnapshot) -> String? {
-        guard self.transport.outboxRequiresSessionRoutingContract else { return nil }
-        if session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "unknown" {
-            return nil
-        }
-        let normalized = session.deliveryAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        guard self.outboxRequiresAgentID(for: session) else { return nil }
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.deliveryAgentID)?.lowercased()
     }
 
     private func outboxRequiresAgentID(for session: SessionSnapshot) -> Bool {
@@ -1157,9 +1147,7 @@ extension OpenClawChatViewModel {
         if !self.transport.outboxRequiresSessionRoutingContract {
             return OpenClawChatOutboxCommand.legacyUnboundRoutingContract
         }
-        let normalized = session.sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.sessionRoutingContract)
     }
 
     /// Resolve once, before persistence. Re-resolving a presentation alias

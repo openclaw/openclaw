@@ -1,6 +1,7 @@
 import { reduceSessionProjection } from "@openclaw/gateway-client/browser";
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { missingScopeErrorShape } from "../../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -34,6 +35,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -333,13 +336,12 @@ function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTe
 }
 
 type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatHistoryHost & {
-  chatStreamSegments: HistoryToolSegment[];
-  chatToolMessages: Record<string, unknown>[];
-  toolStreamById: Map<string, unknown>;
-  toolStreamOrder: string[];
-  toolStreamSyncTimer: number | null;
-};
+type LiveToolState = ChatHistoryHost &
+  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder"> & {
+    chatStreamSegments: HistoryToolSegment[];
+    chatToolMessages: Record<string, unknown>[];
+    toolStreamSyncTimer: number | null;
+  };
 
 function attachLiveToolState(
   state: ChatHistoryHost,
@@ -350,9 +352,23 @@ function attachLiveToolState(
   liveState.chatStreamSegments = segments;
   liveState.chatToolMessages = tools;
   liveState.toolStreamById = new Map(
-    tools.map((tool) => [String(tool.toolCallId), { message: tool }]),
+    tools.map((tool) => {
+      const toolCallId = String(tool.toolCallId);
+      const runId = typeof tool.runId === "string" ? tool.runId : (state.chatRunId ?? "run-1");
+      return [
+        buildToolStreamIdentity(runId, toolCallId),
+        {
+          toolCallId,
+          runId,
+          message: tool,
+          name: "shell",
+          startedAt: 0,
+          receivedAt: 0,
+        },
+      ];
+    }),
   );
-  liveState.toolStreamOrder = tools.map((tool) => String(tool.toolCallId));
+  liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
   liveState.toolStreamSyncTimer = null;
   return liveState;
 }
@@ -1611,7 +1627,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.not.objectContaining({ agentId: expect.anything() }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1634,7 +1650,7 @@ describe("loadChatHistory filtering", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1708,7 +1724,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledWith(
       "chat.startup",
@@ -1717,7 +1733,7 @@ describe("loadChatHistory filtering", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
   });
 
@@ -1772,7 +1788,7 @@ describe("loadChatHistory retry handling", () => {
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(request).toHaveBeenCalledTimes(1);
     expect(getChatHistoryLoadState(state)).toMatchObject({
@@ -2005,10 +2021,16 @@ describe("loadChatHistory retry handling", () => {
     ).toEqual(remainingSegments);
     expect(state.toolStreamById.size).toBe(remainingTools.length);
     expect(state.toolStreamOrder).toEqual(
-      remainingTools.map((index) => String(tools[index]?.toolCallId)),
+      remainingTools.map((index) =>
+        buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+      ),
     );
     for (const index of remainingTools) {
-      expect(state.toolStreamById.has(String(tools[index]?.toolCallId))).toBe(true);
+      expect(
+        state.toolStreamById.has(
+          buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+        ),
+      ).toBe(true);
     }
   });
 
@@ -2193,17 +2215,15 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
     expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
-    expect(state.toolStreamOrder).toEqual(["call_current"]);
+    expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "PERMISSION_DENIED",
-        message: "not allowed",
-        details: { code: "AUTH_UNAUTHORIZED" },
-      }),
-    );
+    const scopeError = missingScopeErrorShape({
+      missingScope: "operator.read",
+      requiredScopes: ["operator.read"],
+    });
+    const request = vi.fn().mockRejectedValue(new GatewayRequestError(scopeError));
     const state = createHistoryState(request, {
       chatMessages: [textMessage("assistant", "old")],
       chatThinkingLevel: "high",
@@ -2218,7 +2238,7 @@ describe("loadChatHistory retry handling", () => {
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
       message:
-        "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();

@@ -54,8 +54,7 @@ import {
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { sessionObserverScopeKey } from "../session-observer-model.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { resolveSessionStoreKey } from "../session-store-key.js";
+import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayMethod } from "./validation.js";
@@ -86,17 +85,12 @@ function resolveBoardSession(
   respond: Parameters<GatewayRequestHandlers[string]>[0]["respond"],
 ): Required<BoardSessionTarget> | undefined {
   const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  const requested = resolveRequestedSessionStoreTarget(cfg, params.sessionKey, params.agentId);
   if (!requested.ok) {
     respond(false, undefined, requested.error);
     return undefined;
   }
-  const canonicalKey = resolveSessionStoreKey({
-    cfg,
-    sessionKey: params.sessionKey,
-    storeAgentId: requested.agentId,
-  });
-  return { sessionKey: canonicalKey, agentId: requested.agentId };
+  return requested.value;
 }
 
 function projectBoardSnapshot<T extends BoardSnapshot>(snapshot: T, agentId: string): T {
@@ -394,19 +388,12 @@ export function createBoardHandlers(
               authority.assertActive();
               identity?.assertSelected();
               const cfg = context.getRuntimeConfig();
-              const current = resolveRequestedSessionAgentId(
+              const current = resolveRequestedSessionStoreTarget(
                 cfg,
                 boardSession.sessionKey,
                 boardSession.agentId,
               );
-              if (
-                !current.ok ||
-                resolveSessionStoreKey({
-                  cfg,
-                  sessionKey: boardSession.sessionKey,
-                  storeAgentId: current.agentId,
-                }) !== boardSession.sessionKey
-              ) {
+              if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
                 throw new BoardValidationError("invalid_operation", "board session changed; retry");
               }
             },

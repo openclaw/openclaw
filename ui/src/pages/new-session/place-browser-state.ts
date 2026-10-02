@@ -97,13 +97,12 @@ export class PlaceBrowserState {
   }
 
   async activate(): Promise<void> {
-    const entry = this.highlightedEntry();
-    const draft = this.draft.trim();
-    if (entry) {
-      await this.navigate(entry.path);
-    } else if (!draft || isAbsolutePath(draft)) {
-      await this.navigate(draft || undefined);
+    const path = this.usablePath();
+    // A relative draft still shows the loaded listing; its highlight must not stand in for the draft.
+    if (path === null) {
+      return;
     }
+    await this.navigate(this.highlightedEntry()?.path ?? (path || undefined));
   }
 
   usablePath(): string | null {

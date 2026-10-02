@@ -59,7 +59,6 @@ import {
   QA_TOOL_PROGRESS_PROMPT_RE,
   QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE,
   QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE,
-  QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE,
   QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE,
   QA_THREAD_REPLY_RECEIPT_PROMPT_RE,
   QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE,
@@ -121,6 +120,7 @@ import {
   extractEmbeddingInputTexts,
   buildDeterministicEmbedding,
 } from "./mock-openai-contracts.js";
+import { planCronBlockedOutcomeTurn } from "./mock-openai-cron-blocked-outcome.js";
 import { planCronFailureRepairTurn } from "./mock-openai-cron-failure-repair.js";
 import {
   extractExactReplyDirective,
@@ -152,6 +152,7 @@ import {
   buildReasoningAndAssistantEvents,
   buildFailedResponseEvents,
 } from "./mock-openai-events.js";
+import { planGroupMessageToolTurn } from "./mock-openai-group-message-tool.js";
 import {
   extractLatestScenarioFamilyPrompt,
   extractLastUserText,
@@ -536,6 +537,10 @@ async function buildResponsesPayload(
   if (cronFailureRepairTurn) {
     return cronFailureRepairTurn;
   }
+  const cronBlockedOutcomeTurn = planCronBlockedOutcomeTurn(prompt);
+  if (cronBlockedOutcomeTurn) {
+    return cronBlockedOutcomeTurn;
+  }
   // The queued followup carries the stalled prompt in transcript history, so
   // current-turn dispatch must win before the persistent recovery fixture.
   if (QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE.test(prompt)) {
@@ -863,7 +868,7 @@ async function buildResponsesPayload(
   const terminalCompletionCase = terminalTurn?.caseName;
   const current = terminalTurn?.text ?? "";
   if (terminalCompletionCase && terminalTurn?.kind === "settled") {
-    return buildAssistantEvents("NO_REPLY");
+    return buildAssistantEvents("Completion processed.");
   }
   if (terminalCompletionCase === "private") {
     const nonce = QA_SUBAGENT_PRIVATE_RESULT_RE.exec(current)?.[0];
@@ -886,7 +891,11 @@ async function buildResponsesPayload(
           mode: "run",
         });
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents(
+        current.includes(QA_SUBAGENT_PRIVATE_SECOND_RESULT)
+          ? "Private review complete."
+          : "Second worker started.",
+      );
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents("Worker started.");
@@ -1394,15 +1403,15 @@ async function buildResponsesPayload(
     }
     return buildAssistantEvents(divergentFinal || marker);
   }
-  if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
-    const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
-    if (!hasCompletedToolOutput && hasDeclaredTool(body, "message")) {
-      return buildToolCallEventsWithArgs("message", {
-        action: "send",
-        message: marker,
-      });
-    }
-    return buildAssistantEvents("");
+  const groupMessageToolTurn = planGroupMessageToolTurn({
+    allInputText,
+    body,
+    marker: exactMarkerDirective ?? exactReplyDirective,
+    hasCompletedToolOutput,
+    isSettledToolContinuation,
+  });
+  if (groupMessageToolTurn) {
+    return groupMessageToolTurn;
   }
   if (QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-MSTEAMS-THREAD-DEDUPE-OK";

@@ -2,7 +2,6 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { STALE_WORKER_BUILD_REASON, supportsCurrentWorkerLaunch } from "./admission.js";
 import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   placementTurnOwner,
@@ -12,12 +11,15 @@ import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+} from "./placement-target.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementAuthorization,
 } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { isTerminalWorkerEnvironmentState } from "./state.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 

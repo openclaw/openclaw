@@ -4650,9 +4650,9 @@ describe("check-database-first-legacy-stores", () => {
   it.each(
     namedCases({
       "allows doctor and migration owners to import or archive legacy files": fsCase`
-        await fs.rename("cron/jobs.json", "cron/jobs.json.migrated");
+        await fs.rename("cron/jobs-quarantine.json", "cron/jobs-quarantine.json.migrated");
         await fs.writeFile("sessions.json", "{}\\n", "utf8");
-      `("src/commands/doctor/cron/legacy-store-migration.ts", []),
+      `("src/commands/doctor/cron/quarantine-archive.ts", []),
       "blocks runtime writes to the retired device identity file": sourceCase`
         import fs from "node:fs";
         fs.writeFileSync(path.join(stateDir, "identity/device.json"), "{}\\n");

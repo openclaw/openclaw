@@ -112,7 +112,9 @@ export interface CreateAgentSessionOptions {
 
 type CreateAgentSessionInternalOptions = Pick<
   AgentSessionConfig,
-  "cleanupProviderSessionResourcesOnDispose" | "contextOverflowRecoveryOwner"
+  | "cleanupProviderSessionResourcesOnDispose"
+  | "contextOverflowRecoveryOwner"
+  | "resolveCompactionThinkingLevel"
 > & { beforeToolBatch?: InternalBeforeToolBatchHook };
 
 /** Result from createAgentSession */
@@ -588,6 +590,7 @@ async function createAgentSessionImpl(
     sessionStartEvent: options.sessionStartEvent,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
     contextOverflowRecoveryOwner: internalOptions.contextOverflowRecoveryOwner,
+    resolveCompactionThinkingLevel: internalOptions.resolveCompactionThinkingLevel,
     cleanupProviderSessionResourcesOnDispose,
   });
   const extensionsResult = resourceLoader.getExtensions();
@@ -629,5 +632,5 @@ async function createDefaultSdkSessionManager(
   if (!created.ok) {
     throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
   }
-  return SessionManager.open(target, cwd);
+  return await SessionManager.openAsync(target, cwd);
 }

@@ -555,35 +555,6 @@ describe("GatewayBrowserClient", () => {
     },
   );
 
-  it("reconnects a silently stalled socket using its advertised Gateway heartbeat", async () => {
-    useNodeFakeTimers();
-    const { ws, connectFrame } = await startConnect(createClient());
-    emitHello(ws, connectFrame.id, { role: "operator", scopes: [] }, { tickIntervalMs: 1_000 });
-
-    await vi.advanceTimersByTimeAsync(3_000);
-
-    expect(ws.lastClose).toEqual({ code: 4000, reason: "tick timeout" });
-  });
-
-  it("clamps an overflowing advertised heartbeat before scheduling its browser timer", async () => {
-    const advertisedTickIntervalMs = Number.MAX_SAFE_INTEGER;
-    useNodeFakeTimers();
-    const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
-
-    const { ws, connectFrame } = await startConnect(createClient());
-    emitHello(
-      ws,
-      connectFrame.id,
-      { role: "operator", scopes: [] },
-      { tickIntervalMs: advertisedTickIntervalMs },
-    );
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(setIntervalSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_147_483_647);
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(ws.lastClose).toBeNull();
-  });
-
   it("retains negative response payloads without leaking them into timing or error JSON", async () => {
     const onRequestTiming = vi.fn<(timing: RequestTimingPayload) => void>();
     const client = createClient({ token: "shared-auth-token", onRequestTiming });

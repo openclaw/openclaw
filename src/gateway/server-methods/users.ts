@@ -19,18 +19,23 @@ import {
   getCanonicalUserPreferences,
   setCanonicalUserPreferences,
 } from "../../state/user-preferences.js";
+import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
+import {
+  projectUserProfileDisplay,
+  readResidentUserProfileRevision,
+} from "../../state/user-profile-list.js";
+import { readUserProfileSnapshot } from "../../state/user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
+  setCanonicalUserProfileAvatar,
+  setCanonicalUserProfileDisplayName,
   setCanonicalUserProfileRole,
 } from "../../state/user-profile-writes.js";
 import { UserProfileMergeError, UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
-  getUserProfileDisplay,
   getUserProfileListItem,
   listProfiles,
-  setAvatar,
-  setDisplayName,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -56,14 +61,15 @@ import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
   context: GatewayRequestHandlerOptions["context"],
-  profile: { id: string; updatedAt: number },
-  display = getUserProfileDisplay(profile.id),
-): ReturnType<typeof getUserProfileDisplay> {
-  context.refreshConnectedUserProfile?.({
-    ...display,
-    updatedAt: profile.updatedAt,
-  });
-  return display;
+  profileId: string,
+): void {
+  const current = readResidentUserProfileRevision(profileId, profileCatalogPath({}));
+  if (current) {
+    context.refreshConnectedUserProfile?.({
+      ...projectUserProfileDisplay(current),
+      updatedAt: current.updated_at,
+    });
+  }
 }
 
 function profileError(error: unknown) {
@@ -106,7 +112,13 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
-    respond(true, { profiles: await listProfiles() });
+    const { githubAccountIds } = params;
+    respond(
+      true,
+      githubAccountIds === undefined
+        ? { profiles: await listProfiles() }
+        : await readUserProfileSnapshot(githubAccountIds),
+    );
   },
   "users.self": async (options) => {
     const { client, params, respond } = options;
@@ -247,10 +259,11 @@ export const usersHandlers: GatewayRequestHandlers = {
     const targetProfileId = params.targetProfileId;
     try {
       const assertCurrent = await prepareUserProfileAdministration(options);
-      const { profile, display } = await linkCanonicalUserProfileEmail(email, targetProfileId, {
+      const { profile } = await linkCanonicalUserProfileEmail(email, targetProfileId, {
         assertCurrent,
       });
-      refreshConnectedProfile(context, profile, display);
+      assertCurrent();
+      refreshConnectedProfile(context, profile.id);
       broadcastChatMetadataChanged(context);
       respond(true, { profile });
     } catch (error) {
@@ -265,7 +278,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     try {
       const assertCurrent = await prepareUserProfileAdministration(options);
       holdGatewayPolicyResponse(respond);
-      const { profile, display, movedAliasKinds } = await mergeCanonicalUserProfiles(
+      const { profile, movedAliasKinds } = await mergeCanonicalUserProfiles(
         params.sourceProfileId,
         params.targetProfileId,
         {
@@ -278,8 +291,17 @@ export const usersHandlers: GatewayRequestHandlers = {
           },
         },
       );
-      refreshConnectedProfile(context, profile, display);
-      broadcastChatMetadataChanged(context);
+      let canPublish = true;
+      try {
+        assertCurrent();
+      } catch {
+        // A committed merge can revoke its requester; its receipt still completes the held response.
+        canPublish = false;
+      }
+      if (canPublish) {
+        refreshConnectedProfile(context, profile.id);
+        broadcastChatMetadataChanged(context);
+      }
       respond(true, { profile, movedAliasKinds });
     } catch (error) {
       respond(false, undefined, profileError(error));
@@ -297,9 +319,13 @@ export const usersHandlers: GatewayRequestHandlers = {
       if (!assertCurrent) {
         return;
       }
+      const { profile } = await setCanonicalUserProfileDisplayName(
+        params.profileId,
+        params.displayName,
+        { assertCurrent },
+      );
       assertCurrent();
-      const profile = setDisplayName(params.profileId, params.displayName);
-      refreshConnectedProfile(context, profile);
+      refreshConnectedProfile(context, profile.id);
       respond(true, { profile });
     } catch (error) {
       respond(false, undefined, profileError(error));
@@ -360,14 +386,17 @@ export const usersHandlers: GatewayRequestHandlers = {
       if (!assertCurrent) {
         return;
       }
+      const result = await setCanonicalUserProfileAvatar(params.profileId, bytes, params.mime, {
+        assertCurrent,
+      });
       assertCurrent();
-      const result = setAvatar(params.profileId, bytes, params.mime);
       if (!result.ok) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, result.error.code));
         return;
       }
-      const display = refreshConnectedProfile(context, result.value);
-      respond(true, { profile: result.value, avatarRevision: display.avatarRevision });
+      const { profile, display } = result.value;
+      refreshConnectedProfile(context, profile.id);
+      respond(true, { profile, avatarRevision: display.avatarRevision });
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

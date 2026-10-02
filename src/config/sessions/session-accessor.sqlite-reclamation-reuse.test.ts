@@ -202,13 +202,13 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
       ]);
     }
     if (operation === "durable completion") {
-      beginConversationDeliveryOperation(scope, {
+      await beginConversationDeliveryOperation(scope, {
         operationId,
         operationKind: "send",
         conversationRef: conversation.conversationRef,
         message: "synthetic message",
       });
-      markConversationDeliveryQueued(scope, operationId, "queue-admission");
+      await markConversationDeliveryQueued(scope, operationId, "queue-admission");
     }
     const runForeground = (): Promise<unknown> => {
       if (operation === "directory discovery") {
@@ -329,14 +329,14 @@ test.each(["directory discovery", "Gateway send", "durable completion"] as const
       expect(result).toMatchObject({ kind: "lifecycle-artifacts", value: { removedEntries: 1 } });
       expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
       if (operation === "directory discovery") {
-        expect(listConversations(scope)).toEqual([
+        expect(await listConversations(scope)).toEqual([
           expect.objectContaining({
             conversationRef: conversation.conversationRef,
             target: conversation.target,
           }),
         ]);
       } else {
-        expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
           status: "sent",
           platformMessageId: "outbound-admission",
         });
@@ -426,7 +426,6 @@ test("warm Worker results cannot revive proof invalidated after a competing pare
 });
 
 test.each([
-  { cold: false, agentId: "main" },
   { cold: true, agentId: "main" },
   { cold: false, agentId: "MAIN" },
 ])(
@@ -615,7 +614,7 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+test("retains reclamation Workers across alternating databases and retires all idle heaps under pressure", async () => {
   const pressure = channel("openclaw.memory.critical");
   expect(pressure.hasSubscribers).toBe(false);
   const fixtures = [createFixture(), createFixture()];
@@ -628,11 +627,12 @@ test("retains maintenance Workers across alternating databases and retires all i
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const plan =
       pass % 3 === 0
-        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        ? fixture.plans[0]!
         : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
     await expect(
       runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
     ).resolves.toMatchObject({ kind: plan.kind });
+    expect(diagnostics.workerThreadId).toBe(spawned[index]!.threadId);
     threads[index]!.add(diagnostics.workerThreadId!);
   }
   expect(spawned).toHaveLength(2);
@@ -655,10 +655,7 @@ test("retains maintenance Workers across alternating databases and retires all i
   const fixture = fixtures[0]!;
   await runSqliteSessionReclamation({
     forceInProcess: false,
-    plan: reclamation.createSessionMaintenanceStatisticsOperation({
-      ...fixture.options,
-      path: fixture.database.path,
-    }),
+    plan: fixture.plans[1]!,
   });
   expect(spawned).toHaveLength(3);
   expect(pressure.hasSubscribers).toBe(true);

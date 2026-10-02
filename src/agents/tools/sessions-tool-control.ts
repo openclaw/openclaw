@@ -14,11 +14,11 @@ import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
   hasSessionControlAuthority,
   readSessionControlAuthority,
-  prepareSessionControlTarget,
-} from "./sessions-control-authority.js";
+} from "./sessions-operator-authority.js";
 
 type ControlTarget = {
   cfg: OpenClawConfig;

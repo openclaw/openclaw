@@ -101,7 +101,7 @@ it.each(["save", "apply", "patch"] as const)(
   },
 );
 
-it.each(["unchanged", "edited", "saved"] as const)(
+it.each(["unchanged", "saved"] as const)(
   "preserves current %s draft feedback when opening the saved file succeeds",
   async (outcome) => {
     vi.useFakeTimers();
@@ -133,15 +133,13 @@ it.each(["unchanged", "edited", "saved"] as const)(
       if (outcome !== "unchanged") {
         reject = false;
         runtimeConfig.setRaw('{"count":2}');
-        if (outcome === "saved") {
-          await expect(runtimeConfig.save()).resolves.toBe(true);
-        }
+        await expect(runtimeConfig.save()).resolves.toBe(true);
       }
       opened.resolve({ ok: true });
       await opening;
 
       expect(runtimeConfig.state.configAutoSaveStatus).toBe(
-        outcome === "unchanged" ? "rejected" : outcome === "saved" ? "saved" : "idle",
+        outcome === "unchanged" ? "rejected" : "saved",
       );
       if (outcome === "unchanged") {
         expect(runtimeConfig.state.lastError).toContain("Expected number");

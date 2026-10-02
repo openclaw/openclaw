@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A transient discovery failure must survive successful runtime cancellation. */
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
@@ -20,18 +20,11 @@ import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
-import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
-const nativeState = await vi.importActual<typeof registryState>("./subagent-registry-state.js");
-beforeEach(() => {
-  vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow).mockImplementation(
-    nativeState.persistSubagentRunsToDiskAsyncOrThrow,
-  );
-});
 
 it("retains a captured child prefix when the next child's session preparation fails", async () => {
   const owner = "agent:main:main";
@@ -219,7 +212,7 @@ it.each([
     setActiveEmbeddedRun("a-session", handleA, aKey);
     setActiveEmbeddedRun("d-session", handleD, dKey);
     const startG = vi.fn(async () => {
-      expect(startQueuedSubagentRun("g")).toBe(true);
+      expect(await startQueuedSubagentRun("g")).toBe(true);
     });
     const startFailure = vi.fn(() => true);
     const prepare = generations.prepareSessionGenerationFacts;
@@ -246,7 +239,7 @@ it.each([
         };
       });
     const grandchildCancelled = createDeferred();
-    const stopObserving = subscribeSubagentRunChanges((runIds) => {
+    const stopObserving = subscribeSubagentRunChanges("projection", ({ runIds }) => {
       if (
         runIds?.includes("g") &&
         resolveSubagentSessionStatus(subagentRuns.get("g")) === "killed"
@@ -316,17 +309,18 @@ it.each([
           identities: [gKey, "g-session"],
           run: async () => {},
         });
-        expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-        expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+        expect(subagentRuns.get(a.runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+        expect(subagentRuns.get(d.runId)?.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
         expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
         expect(startG).not.toHaveBeenCalled();
         armed = true;
         admissionHealthy.release();
       }
       const result = await pending;
-      expect(healthy.endedReason, "independent healthy sibling still stops").toBe(
-        SUBAGENT_ENDED_REASON_KILLED,
-      );
+      expect(
+        subagentRuns.get(healthy.runId)?.endedReason,
+        "independent healthy sibling still stops",
+      ).toBe(SUBAGENT_ENDED_REASON_KILLED);
       expect(startFailure).not.toHaveBeenCalled();
       if (faultAt === undefined) {
         expect(result).toMatchObject({ status: "ok", killed: 4 });
@@ -341,9 +335,9 @@ it.each([
           phase,
           faultAt,
           failedReads,
-          aKilled: a.endedReason,
-          dKilled: d.endedReason,
-          healthyKilled: healthy.endedReason,
+          aKilled: subagentRuns.get(a.runId)?.endedReason,
+          dKilled: subagentRuns.get(d.runId)?.endedReason,
+          healthyKilled: subagentRuns.get(healthy.runId)?.endedReason,
           gTask: resolveSubagentSessionStatus(subagentRuns.get("g")),
           gExecution: subagentRuns.get("g")?.execution.status,
           gDispatches: startG.mock.calls.length,

@@ -28,11 +28,8 @@ import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js"
 import { openClawStateDatabaseCache } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import * as githubIdentities from "../../src/state/user-profile-github-identity.js";
-import {
-  ensureProfileForEmail,
-  linkEmail,
-  syncGitHubIdentity,
-} from "../../src/state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { trackSqliteStatementExecutions } from "../helpers/sqlite-statement-execution-counter.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -736,155 +733,148 @@ describe("session-share node commands", () => {
     });
   });
 
-  it.each([undefined, []])(
-    "does not advertise or publish without share groups %j",
-    async (groups) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const fixture = commandFixture(groups ?? []);
-        if (groups === undefined) {
-          fixture.config.plugins = undefined;
-        }
-        const manifest = JSON.parse(
-          fs.readFileSync(
-            new URL("../../extensions/session-share/openclaw.plugin.json", import.meta.url),
-            "utf8",
-          ),
-        ) as { configSchema: Record<string, unknown> };
-        expect(
-          validateJsonSchemaValue({
-            schema: manifest.configSchema,
-            cacheKey: "session-share.disabled-config",
-            value: fixture.config.plugins?.entries?.["session-share"]?.config ?? {},
-          }).ok,
-        ).toBe(true);
-        for (const command of fixture.commands) {
-          expect(command.isAvailable?.({ config: fixture.config, env: {} })).toBe(false);
-        }
-        expect((await fixture.list()).sessions).toEqual([]);
-        await expect(fixture.read("agent:main:unshared")).rejects.toThrow("not shared");
-      });
-    },
-  );
+  it("does not advertise or publish without share configuration", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const fixture = commandFixture([]);
+      fixture.config.plugins = undefined;
+      const manifest = JSON.parse(
+        fs.readFileSync(
+          new URL("../../extensions/session-share/openclaw.plugin.json", import.meta.url),
+          "utf8",
+        ),
+      ) as { configSchema: Record<string, unknown> };
+      expect(
+        validateJsonSchemaValue({
+          schema: manifest.configSchema,
+          cacheKey: "session-share.disabled-config",
+          value: {},
+        }).ok,
+      ).toBe(true);
+      for (const command of fixture.commands) {
+        expect(command.isAvailable?.({ config: fixture.config, env: {} })).toBe(false);
+      }
+      expect((await fixture.list()).sessions).toEqual([]);
+      await expect(fixture.read("agent:main:unshared")).rejects.toThrow("not shared");
+    });
+  });
 });
 
 describe("session-share receiver identity integration", () => {
-  it.each(["alpha", "beta"])(
-    "keeps %s claims remote by default and applies only explicit owner and numeric GitHub links",
-    async (nodeId) => {
-      await withCatalogFixture(async (fixture) => {
-        const profile = syncGitHubIdentity({
-          identity: { accountId: 4242, login: "catalog-person", name: "Catalog Person" },
-          authenticationAlias: { kind: "github-login", login: "catalog-person" },
-        });
-        fixture.list.mockResolvedValue({ nodes: [{ nodeId, connected: true, commands }] });
-        const hostId = `node:${nodeId}`;
-        const namespacedIdentity = { ...remoteIdentity, domain: hostId };
-        const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
-        const fullIdentityScans = () =>
-          identityReads.mock.calls.filter(([, profileIds]) => profileIds === undefined).length;
-        const human = {
-          ...nativeSession,
-          createdActor: {
-            type: "human" as const,
-            id: "4242",
-            identity: remoteIdentity,
-            label: "Remote Person",
-          },
-        };
-        const agent = {
-          ...nativeSession,
-          threadId: "agent:main:agent",
-          createdActor: { type: "agent" as const, id: "assistant", label: "Assistant" },
-        };
-        const unmatched = {
-          ...human,
-          threadId: "agent:main:unmatched",
-          createdActor: {
-            ...human.createdActor,
-            id: "9999",
-            identity: { ...remoteIdentity, id: "9999" },
-          },
-        };
-        const transcript = {
-          threadId: nativeSession.threadId,
-          items: [remoteIdentity, remoteIdentity, { ...remoteIdentity, id: "9999" }].map(
-            (identity) => ({
-              type: "userMessage",
-              text: "Question",
-              sender: { identity, label: "Remote Person" },
-            }),
-          ),
-        };
-        fixture.invoke.mockImplementation(async ({ command }) =>
-          command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
-        );
-        const namespacedHuman = {
-          ...human,
-          createdActor: { ...human.createdActor, identity: namespacedIdentity },
-        };
-        const namespacedUnmatched = {
-          ...unmatched,
-          createdActor: {
-            ...unmatched.createdActor,
-            identity: { ...namespacedIdentity, id: "9999" },
-          },
-        };
-        expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
-          namespacedHuman,
-          agent,
-          namespacedUnmatched,
-        ]);
-        expect(
-          (await fixture.catalog.read({ hostId, threadId: nativeSession.threadId })).items[0]
-            ?.sender?.identity,
-        ).toEqual(namespacedIdentity);
-        expect(fullIdentityScans()).toBe(0);
-        for (const owner of [`profile:${profile.id}`, "github:CATALOG-PERSON"]) {
-          fixture.setConfig({
-            plugins: {
-              entries: { "session-share": { config: { nodes: { [nodeId]: { owner } } } } },
-            },
-          });
-          const rows = (await fixture.catalog.list({}))[0]!.sessions;
-          expect(rows[0]).toEqual(namespacedHuman);
-          expect(rows[1]?.createdActor).toMatchObject({
-            type: "human",
-            id: profile.id,
-            identity: { type: "profile", id: profile.id },
-            label: "Catalog Person",
-          });
-          expect(rows[2]).toEqual(namespacedUnmatched);
-        }
+  it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
+    const nodeId = "alpha";
+    await withCatalogFixture(async (fixture) => {
+      const profile = syncGitHubIdentity({
+        identity: { accountId: 4242, login: "catalog-person", name: "Catalog Person" },
+        authenticationAlias: { kind: "github-login", login: "catalog-person" },
+      });
+      fixture.list.mockResolvedValue({ nodes: [{ nodeId, connected: true, commands }] });
+      const hostId = `node:${nodeId}`;
+      const namespacedIdentity = { ...remoteIdentity, domain: hostId };
+      const identityReads = vi.spyOn(githubIdentities, "selectStoredGitHubIdentities");
+      const fullIdentityScans = () =>
+        identityReads.mock.calls.filter(([, profileIds]) => profileIds === undefined).length;
+      const human = {
+        ...nativeSession,
+        createdActor: {
+          type: "human" as const,
+          id: "4242",
+          identity: remoteIdentity,
+          label: "Remote Person",
+        },
+      };
+      const agent = {
+        ...nativeSession,
+        threadId: "agent:main:agent",
+        createdActor: { type: "agent" as const, id: "assistant", label: "Assistant" },
+      };
+      const unmatched = {
+        ...human,
+        threadId: "agent:main:unmatched",
+        createdActor: {
+          ...human.createdActor,
+          id: "9999",
+          identity: { ...remoteIdentity, id: "9999" },
+        },
+      };
+      const transcript = {
+        threadId: nativeSession.threadId,
+        items: [remoteIdentity, remoteIdentity, { ...remoteIdentity, id: "9999" }].map(
+          (identity) => ({
+            type: "userMessage",
+            text: "Question",
+            sender: { identity, label: "Remote Person" },
+          }),
+        ),
+      };
+      fixture.invoke.mockImplementation(async ({ command }) =>
+        command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
+      );
+      const namespacedHuman = {
+        ...human,
+        createdActor: { ...human.createdActor, identity: namespacedIdentity },
+      };
+      const namespacedUnmatched = {
+        ...unmatched,
+        createdActor: {
+          ...unmatched.createdActor,
+          identity: { ...namespacedIdentity, id: "9999" },
+        },
+      };
+      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
+        namespacedHuman,
+        agent,
+        namespacedUnmatched,
+      ]);
+      expect(
+        (await fixture.catalog.read({ hostId, threadId: nativeSession.threadId })).items[0]?.sender
+          ?.identity,
+      ).toEqual(namespacedIdentity);
+      expect(fullIdentityScans()).toBe(0);
+      for (const owner of [`profile:${profile.id}`, "github:CATALOG-PERSON"]) {
         fixture.setConfig({
           plugins: {
-            entries: {
-              "session-share": { config: { nodes: { [nodeId]: { linkGitHubIdentities: true } } } },
-            },
+            entries: { "session-share": { config: { nodes: { [nodeId]: { owner } } } } },
           },
         });
-        identityReads.mockClear();
-        const linked = (await fixture.catalog.list({}))[0]!.sessions;
-        expect.soft(fullIdentityScans()).toBe(1);
-        expect(linked[0]?.createdActor).toMatchObject({
+        const rows = (await fixture.catalog.list({}))[0]!.sessions;
+        expect(rows[0]).toEqual(namespacedHuman);
+        expect(rows[1]?.createdActor).toMatchObject({
           type: "human",
           id: profile.id,
           identity: { type: "profile", id: profile.id },
           label: "Catalog Person",
         });
-        expect(linked[1]).toEqual(agent);
-        expect(linked[2]).toEqual(namespacedUnmatched);
-        identityReads.mockClear();
-        const page = await fixture.catalog.read({
-          hostId,
-          threadId: nativeSession.threadId,
-        });
-        expect.soft(fullIdentityScans()).toBe(1);
-        expect(page.items.map((item) => item.sender)).toEqual([
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
-          { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
-        ]);
+        expect(rows[2]).toEqual(namespacedUnmatched);
+      }
+      fixture.setConfig({
+        plugins: {
+          entries: {
+            "session-share": { config: { nodes: { [nodeId]: { linkGitHubIdentities: true } } } },
+          },
+        },
       });
-    },
-  );
+      identityReads.mockClear();
+      const linked = (await fixture.catalog.list({}))[0]!.sessions;
+      expect.soft(fullIdentityScans()).toBe(1);
+      expect(linked[0]?.createdActor).toMatchObject({
+        type: "human",
+        id: profile.id,
+        identity: { type: "profile", id: profile.id },
+        label: "Catalog Person",
+      });
+      expect(linked[1]).toEqual(agent);
+      expect(linked[2]).toEqual(namespacedUnmatched);
+      identityReads.mockClear();
+      const page = await fixture.catalog.read({
+        hostId,
+        threadId: nativeSession.threadId,
+      });
+      expect.soft(fullIdentityScans()).toBe(1);
+      expect(page.items.map((item) => item.sender)).toEqual([
+        { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+        { identity: { type: "profile", id: profile.id }, label: "Catalog Person" },
+        { identity: { ...namespacedIdentity, id: "9999" }, label: "Remote Person" },
+      ]);
+    });
+  });
 });

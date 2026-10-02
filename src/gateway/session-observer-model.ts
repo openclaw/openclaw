@@ -25,6 +25,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
@@ -133,6 +134,15 @@ export type SessionObserverRevisionFloor = Pick<
   "sessionId" | "lifecycleRevision" | "revision" | "previousDigest"
 >;
 
+export function snapshotSessionObserverRevisionFloor({
+  sessionId,
+  lifecycleRevision,
+  revision,
+  previousDigest,
+}: SessionObserverRevisionFloor): SessionObserverRevisionFloor {
+  return { sessionId, lifecycleRevision, revision, previousDigest };
+}
+
 export function rememberSessionObserverRevisionFloor(
   floors: Map<string, SessionObserverRevisionFloor>,
   sessionKey: string,
@@ -168,12 +178,7 @@ export function rememberSessionObserverDormantRun(
     rememberSessionObserverRevisionFloor(
       floors,
       resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
-      {
-        sessionId: evicted.sessionId,
-        lifecycleRevision: evicted.lifecycleRevision,
-        revision: evicted.revision,
-        previousDigest: evicted.previousDigest,
-      },
+      snapshotSessionObserverRevisionFloor(evicted),
     );
   }
 }
@@ -475,27 +480,21 @@ export function normalizeSessionObserverModelOutput(text: string): {
   health: SessionObserverHealth;
   planProgress?: SessionObserverPlanProgress;
 } | null {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text.trim()) as unknown;
-  } catch {
+  const digest = safeParseJsonWithSchema(ModelDigestSchema, text.trim());
+  if (!digest) {
     return null;
   }
-  const result = ModelDigestSchema.safeParse(parsed);
-  if (!result.success) {
-    return null;
-  }
-  const headline = sanitizeSessionObserverModelText(result.data.headline, HEADLINE_MAX_CHARS);
-  const assessment = result.data.assessment
-    ? sanitizeSessionObserverModelText(result.data.assessment, ASSESSMENT_MAX_CHARS)
+  const headline = sanitizeSessionObserverModelText(digest.headline, HEADLINE_MAX_CHARS);
+  const assessment = digest.assessment
+    ? sanitizeSessionObserverModelText(digest.assessment, ASSESSMENT_MAX_CHARS)
     : undefined;
-  if (!headline || (result.data.assessment && !assessment)) {
+  if (!headline || (digest.assessment && !assessment)) {
     return null;
   }
   return {
     headline,
     ...(assessment ? { assessment } : {}),
-    health: result.data.health,
-    ...(result.data.planProgress ? { planProgress: result.data.planProgress } : {}),
+    health: digest.health,
+    ...(digest.planProgress ? { planProgress: digest.planProgress } : {}),
   };
 }

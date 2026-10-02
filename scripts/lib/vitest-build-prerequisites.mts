@@ -283,7 +283,6 @@ const runtimeConsumers = [
     "src/commands/doctor-config-preflight.test.ts",
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
-    "src/commands/doctor-plugin-install-config.process.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.commands.config.ts"],
@@ -524,11 +523,14 @@ export async function prepareVitestRuntime(
   }
   options.signal?.throwIfAborted();
   const cwd = path.resolve(import.meta.dirname, "../..");
-  if (!options.runtimePrepared) {
+  if (!options.runtimePrepared || controlUi) {
     console.error(`[test] preparing ${mode} runtime before Vitest workers`);
     const code = await runManagedCommand({
       bin: process.execPath,
-      args: ["scripts/prepare-vitest-runtime.mjs"],
+      args: [
+        "scripts/prepare-vitest-runtime.mjs",
+        ...(controlUi ? ["--require-current-head"] : []),
+      ],
       cwd,
       env: { ...env, ...(mode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
       signal: options.signal,

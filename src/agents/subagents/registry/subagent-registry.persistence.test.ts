@@ -14,9 +14,10 @@ import {
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
 import { registerSubagentOrphanTaskCases } from "./subagent-registry.persistence.orphan.test-support.js";
 import type { SubagentRunFixture } from "./subagent-registry.persistence.test-support.js";
@@ -29,10 +30,7 @@ import {
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import {
-  loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   activateSubagentRegistry,
   addSubagentRunForTests,
@@ -45,13 +43,6 @@ import {
   testing,
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-
-vi.mock("./subagent-registry-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
-  const { saveSubagentRegistryToSqlite: saveRegistryToSqlite } =
-    await import("./subagent-registry.store.sqlite.js");
-  return { ...actual, persistSubagentRunsToDisk: saveRegistryToSqlite };
-});
 
 function makeRun(runId: string, overrides: Partial<SubagentRunFixture> = {}): SubagentRunRecord {
   return createCanonicalSubagentRunFixture({
@@ -144,7 +135,7 @@ describe("subagent registry persistence", () => {
   };
 
   const restartRegistry = async () => {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await initSubagentRegistry();
     const recoveryRuntime = createSubagentPersistenceRuntime(callGateway);
     const gateway = { recoveryRuntime, resolveGatewayContext: () => gateway as never };
@@ -354,7 +345,7 @@ describe("subagent registry persistence", () => {
       updatedAt: run.execution.endedAt,
     });
 
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const restored = loadSubagentRegistryFromSqlite().get(run.runId);
 
     expect(restored).toMatchObject({
@@ -448,7 +439,7 @@ describe("subagent registry persistence", () => {
       expect(held?.cleanupHandled, "serialized lock is not retry readiness").toBe(false);
       expect(
         getSubagentRunByChildSessionKey(childSessionKey)?.cleanupHandled,
-        "announcement still owns cleanup",
+        "acknowledged runtime lock remains held; decoded durable row is restart-ready",
       ).toBe(true);
       expect(
         held?.delivery?.attemptCount,
@@ -628,7 +619,7 @@ describe("subagent registry persistence", () => {
       sessionId: "sess-resume-guard",
       updatedAt: now,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId,
       childSessionKey,
       requesterSessionKey: "agent:main:main",

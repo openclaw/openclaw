@@ -1,16 +1,14 @@
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import * as projection from "./codex-mcp-projection.js";
 
 describe("codex MCP projection", () => {
   it("does not expose scheduled authority minting", async () => {
-    const projection = await import("./codex-mcp-projection.js");
-
     expect(projection).not.toHaveProperty("bindCronScheduledTool");
   });
 
   it("does not capture a colliding plugin-created gateway exec tool", async () => {
-    const projection = await import("./codex-mcp-projection.js");
     const tools: Array<string | { name: string; pluginId?: string }> = [];
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
     const collidingTool = {
@@ -33,7 +31,6 @@ describe("codex MCP projection", () => {
   });
 
   it("captures the canonical authority implied by Codex native code mode", async () => {
-    const projection = await import("./codex-mcp-projection.js");
     const tools: Array<string | { name: string; pluginId?: string }> = [];
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
 
@@ -45,7 +42,6 @@ describe("codex MCP projection", () => {
   });
 
   it("never projects conditionally available write, edit, apply_patch, or process from native mode", async () => {
-    const projection = await import("./codex-mcp-projection.js");
     const tools: Array<string | { name: string; pluginId?: string }> = [];
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
 
@@ -60,7 +56,6 @@ describe("codex MCP projection", () => {
   });
 
   it("captures apply_patch and process only when the bridged tool surface carries them", async () => {
-    const projection = await import("./codex-mcp-projection.js");
     const tools: Array<string | { name: string; pluginId?: string }> = [];
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
     const applyPatchTool = {
@@ -85,7 +80,6 @@ describe("codex MCP projection", () => {
   });
 
   it("does not invent native authority when Codex code mode is disabled", async () => {
-    const projection = await import("./codex-mcp-projection.js");
     const tools: Array<string | { name: string; pluginId?: string }> = [];
     const captureRef: { value?: { version: 1; source: "final-executable-surface" } } = {};
 

@@ -7,6 +7,7 @@
  * remain abortable by authorized requesters after chat.send terminalizes.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import {
   resolveChatAbortDiagnosticReason,
@@ -222,16 +223,8 @@ export function listQueuedChatTurnsForSession(params: {
   agentId?: string;
   defaultAgentId?: string;
 }): QueuedChatTurnMatch[] {
-  const sessionKeys = new Set(
-    Array.from(params.sessionKeys, (k) => normalizeOptionalString(k)).filter((k): k is string =>
-      Boolean(k),
-    ),
-  );
-  const sessionIds = new Set(
-    Array.from(params.sessionIds ?? [], (id) => normalizeOptionalString(id)).filter(
-      (id): id is string => Boolean(id),
-    ),
-  );
+  const sessionKeys = new Set(normalizeTrimmedStringList([...params.sessionKeys]));
+  const sessionIds = new Set(normalizeTrimmedStringList([...(params.sessionIds ?? [])]));
   const agentId = normalizeOptionalString(params.agentId)?.toLowerCase();
   const defaultAgentId = normalizeOptionalString(params.defaultAgentId)?.toLowerCase();
   const matches: QueuedChatTurnMatch[] = [];

@@ -1,16 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../../test-utils/openclaw-test-state.js";
+import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
-import { restoreSubagentRunsFromDisk } from "./subagent-registry-state.js";
+import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
+import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
@@ -47,7 +54,6 @@ vi.mock("./subagent-control-session.js", () => ({
   }),
 }));
 vi.mock("../../../gateway/call.js", () => ({ callGateway: vi.fn() }));
-vi.mock("./subagent-registry-state.js", { spy: true });
 vi.mock("./subagent-session-reconciliation.js", () => ({
   loadSubagentSessionEntry: () => ({
     sessionId: fixture.sessionId,
@@ -55,44 +61,72 @@ vi.mock("./subagent-session-reconciliation.js", () => ({
   }),
 }));
 
+let state: OpenClawTestState;
+beforeAll(async () => {
+  state = await createOpenClawTestState({ scenario: "minimal" });
+});
+afterAll(async () => {
+  await state.cleanup();
+});
 beforeEach(() => {
   vi.mocked(applySessionEntryExactReplacements).mockClear();
   subagentRuns.clear();
 });
-afterEach(() => {
-  vi.mocked(restoreSubagentRunsFromDisk).mockReset();
+afterEach(async () => {
+  vi.restoreAllMocks();
+  const stored = await readStored();
+  for (const [id, entry] of stored) {
+    subagentRuns.set(id, entry);
+  }
+  await mutateSubagentRuns([...stored.keys()], () => ({
+    value: undefined,
+    postimages: new Map([...stored.keys()].map((id) => [id, null])),
+  }));
   subagentRuns.clear();
 });
 
+async function readStored() {
+  const reply = await executeExistingOpenClawStateRead(
+    { env: state.env },
+    { type: "subagents.runs", scope: { kind: "all" } },
+  );
+  if (!reply?.ok || reply.type !== "subagents.runs" || reply.projection) {
+    throw new Error("Queued recovery fixture could not read its durable registry");
+  }
+  return reply.runs;
+}
+
 function createRegistrationFixture() {
-  const stored = new Map<string, SubagentRunRecord>();
-  const persist = (...runIds: string[]) => {
-    for (const runId of runIds.length > 0 ? runIds : subagentRuns.keys()) {
-      const entry = subagentRuns.get(runId);
-      if (entry) {
-        stored.set(runId, structuredClone(entry));
-      } else {
-        stored.delete(runId);
-      }
-    }
-  };
+  const refusal = { descriptor: true, terminal: false };
+  const execute = stateWorker.runOpenClawStateWorkerOperation;
+  vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
+    (owner, run, options) =>
+      execute(
+        owner,
+        (scope) =>
+          run({
+            execute: async (command, executeOptions) => {
+              if (isSubagentRegistryWriteCommand(command)) {
+                const rows = command.input.values.map(rowToSubagentRunRecord);
+                if (refusal.descriptor && rows.some((row) => row?.queuedLaunch)) {
+                  throw new Error("descriptor refused");
+                }
+                if (refusal.terminal && rows.some((row) => row?.execution.status === "terminal")) {
+                  throw new Error("terminal settlement refused");
+                }
+              }
+              return scope.execute(command, executeOptions);
+            },
+          }),
+        options,
+      ),
+  );
   const options: SubagentManagerOptions = {
     acquireTerminalCompletionLock: async () => () => {},
     runs: subagentRuns,
     getRunsForChildSession: (key) =>
       [...subagentRuns.values()].filter((run) => run.childSessionKey === key),
     resumedRuns: new Set(),
-    persist,
-    persistOrThrow: persist,
-    persistAsyncOrThrow: async (_context, publication, ...runIds) => {
-      publication.assertCurrent();
-      if (runIds.some((runId) => subagentRuns.get(runId)?.queuedLaunch !== undefined)) {
-        throw new SubagentRegistryWriteError("not-committed", new Error("descriptor refused"));
-      }
-      persist(...runIds);
-      await Promise.resolve();
-      publication.onCommitted?.();
-    },
     callGateway: async () => {
       throw new Error("Unexpected registration Gateway call");
     },
@@ -105,47 +139,36 @@ function createRegistrationFixture() {
     clearPendingLifecycleTimeout: () => {},
     resolveSubagentWaitTimeoutMs: () => 100,
     scheduleSweep: () => {},
-    resolveSubagentSessionCompletion: () => null,
-    resolveSubagentSessionStartedAt: () => undefined,
+    resolveSubagentSessionCompletion: async () => null,
+    resolveSubagentSessionStartedAt: async () => undefined,
     notifyContextEngineSubagentEnded: async () => {},
-    completeCleanupBookkeeping: () => {},
+    completeCleanupBookkeeping: async () => {},
     completeSubagentRun: async () => {},
   };
   const manager = createSubagentRunManager(options);
-  return { stored, persist, options, manager };
+  return { refusal, manager };
 }
 
 it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   "reconciles a retained descriptorless registration through %s",
   async (recovery) => {
     const newerSibling = recovery === "restart with newer sibling";
-    const { stored, persist, manager } = createRegistrationFixture();
+    const { refusal, manager } = createRegistrationFixture();
+    refusal.terminal = true;
     let ownership: SubagentRegistrationScope | undefined;
     const runId = "retained-registration";
     const childSessionKey = "agent:main:subagent:retained-registration";
+    const settleRootWork = observeRootWork();
     const sql = observeMainThreadSql();
     const transport = vi.mocked(callGateway).mockReset().mockResolvedValue({});
     const cleanupResources = vi.fn(async () => true);
-    const cleaned = vi.fn();
+    const cleaned = vi.fn(async () => {});
     const resume = vi.fn();
-    const startQueued = vi.fn(() => true);
-    vi.mocked(restoreSubagentRunsFromDisk).mockImplementation(async ({ runs }) => {
-      for (const [id, entry] of stored) {
-        runs.set(id, structuredClone(entry));
-      }
-      return stored.size;
-    });
+    const startQueued = vi.fn(async () => true);
     const restorer = createSubagentRegistryRestorer({
       runs: subagentRuns,
       getGatewayContextResolver: () => undefined,
       bindGatewayOwners: () => true,
-      persistOrThrow: persist,
-      persistAsyncOrThrow: async (_context, publication, ...runIds) => {
-        publication.assertCurrent();
-        persist(...runIds);
-        await Promise.resolve();
-        publication.onCommitted?.();
-      },
       settleRequesterTurn: async () => false,
       ensureListener: () => {},
       startSweeper: () => {},
@@ -186,9 +209,22 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
             },
           },
         ),
-      ).rejects.toMatchObject({ outcome: "not-committed" });
-      expect(stored.get(runId)?.queuedLaunch).toBeUndefined();
-      expect(stored.get(runId)?.execution.status).toBe("queued");
+      ).rejects.toMatchObject({
+        cause: expect.objectContaining({ outcome: "not-committed" }),
+        errors: [
+          expect.objectContaining({
+            outcome: "not-committed",
+            message: expect.stringContaining("descriptor refused"),
+          }),
+          expect.objectContaining({
+            outcome: "not-committed",
+            message: expect.stringContaining("terminal settlement refused"),
+          }),
+        ],
+      });
+      refusal.terminal = false;
+      expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
+      expect((await readStored()).get(runId)?.execution.status).toBe("queued");
       expect(expectDefined(ownership, "registration scope").canCleanupSession()).toBe(false);
       expect(transport).not.toHaveBeenCalled();
       expect(cleanupResources).not.toHaveBeenCalled();
@@ -197,17 +233,17 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
         expect(await manager.markSubagentRunTerminated({ runId })).toBe(1);
         const stopped = expectDefined(subagentRuns.get(runId), "stopped original run");
         const stoppedExecution = stopped.execution;
-        expect(stored.get(runId)?.killReconciliation).toBeDefined();
+        expect((await readStored()).get(runId)?.killReconciliation).toBeDefined();
         await expect(
           expectDefined(ownership, "registration scope").settleFailedLaunch("later callback"),
         ).resolves.toBeUndefined();
-        expect(stopped.execution).toBe(stoppedExecution);
+        expect(subagentRuns.get(runId)?.execution).toEqual(stoppedExecution);
         expect(expectDefined(ownership, "registration scope").canCleanupSession()).toBe(false);
         expect(applySessionEntryExactReplacements).toHaveBeenCalled();
         return;
       }
       if (newerSibling) {
-        const original = expectDefined(stored.get(runId), "retained original intent");
+        const original = expectDefined((await readStored()).get(runId), "retained original intent");
         const successor: SubagentRunRecord = {
           ...structuredClone(original),
           runId: "recovered-successor",
@@ -218,21 +254,24 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
           },
         };
-        stored.set(successor.runId, successor);
-        subagentRuns.set(successor.runId, successor);
+        await mutateSubagentRuns([successor.runId], () => ({
+          value: undefined,
+          postimages: new Map([[successor.runId, successor]]),
+        }));
       }
       subagentRuns.clear();
       await restorer.restoreOnce();
       await restorer.activate();
-      await vi.waitFor(() => expect(stored.get(runId)?.execution.status).toBe("terminal"));
-      expect(stored.get(runId)).toMatchObject({
+      await settleRootWork(true);
+      expect((await readStored()).get(runId)?.execution.status).toBe("terminal");
+      expect((await readStored()).get(runId)).toMatchObject({
         execution: { status: "terminal", lifecycleGeneration: getAgentEventLifecycleGeneration() },
         collectorCompletion: { status: "failed" },
       });
       if (newerSibling) {
         expect(transport).not.toHaveBeenCalled();
         expect(cleanupResources).not.toHaveBeenCalled();
-        expect(stored.get(runId)?.execution.suppressSessionEffects).toBe(true);
+        expect((await readStored()).get(runId)?.execution.suppressSessionEffects).toBe(true);
         expect(resume).toHaveBeenCalledExactlyOnceWith("recovered-successor");
       } else {
         expect(transport).toHaveBeenCalledExactlyOnceWith(
@@ -254,7 +293,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
     } finally {
       try {
         restorer.reset();
-        await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        await settleRootWork();
         sql.expectIdle();
       } finally {
         sql.restore();
@@ -264,13 +303,8 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
 );
 
 it("settles an acknowledged queued launch failure through its captured native registry owner", async () => {
-  const { stored, persist, options, manager } = createRegistrationFixture();
-  options.persistAsyncOrThrow = async (_context, publication, ...runIds) => {
-    publication.assertCurrent();
-    persist(...runIds);
-    await Promise.resolve();
-    publication.onCommitted?.();
-  };
+  const { refusal, manager } = createRegistrationFixture();
+  refusal.descriptor = false;
   const runId = "acknowledged-launch-failure";
   const childSessionKey = "agent:main:subagent:acknowledged-launch-failure";
   let scope: SubagentRegistrationScope | undefined;
@@ -301,15 +335,15 @@ it("settles an acknowledged queued launch failure through its captured native re
   );
   const original = expectDefined(subagentRuns.get(runId), "acknowledged native run");
   expect(original.execution.status).toBe("queued");
-  expect(stored.get(runId)?.queuedLaunch).toBeDefined();
+  expect((await readStored()).get(runId)?.queuedLaunch).toBeDefined();
   await expectDefined(scope, "retained registration").settleFailedLaunch("launch refused");
-  const terminal = expectDefined(stored.get(runId), "native run after settlement");
+  const terminal = expectDefined((await readStored()).get(runId), "native run after settlement");
   expect(terminal).toMatchObject({
     execution: { status: "terminal", outcome: { status: "error", error: "launch refused" } },
   });
-  expect(stored.get(runId)).toMatchObject({
+  expect((await readStored()).get(runId)).toMatchObject({
     execution: { status: "terminal", endedAt: terminal.execution.endedAt },
     collectorCompletion: { status: "failed" },
   });
-  expect(stored.get(runId)?.queuedLaunch).toBeUndefined();
+  expect((await readStored()).get(runId)?.queuedLaunch).toBeUndefined();
 });

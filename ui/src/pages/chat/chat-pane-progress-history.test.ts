@@ -104,7 +104,7 @@ describe("retained bare pane progress follows accepted history ownership", () =>
         limit: 80,
         maxBytes: 256 * 1024,
       },
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     progress.hostUpdate();
     await vi.waitFor(() => expect(progress.card).toEqual(card));

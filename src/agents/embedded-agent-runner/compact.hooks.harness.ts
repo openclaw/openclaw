@@ -21,7 +21,10 @@ import {
   type CompactHooksQueuedCompaction,
   type MockResolvedModel,
 } from "./compact.hooks.metadata.test-support.js";
-import { mockCompactHooksTools } from "./compact.hooks.tools.test-support.js";
+import {
+  mockCompactHooksSkills,
+  mockCompactHooksTools,
+} from "./compact.hooks.tools.test-support.js";
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
@@ -230,7 +233,7 @@ const buildEmbeddedExtensionFactoriesMock = vi.fn(() => []);
 export const resolveEffectiveCompactionModeMock = vi.fn(() => "default");
 const guardSessionManagerMock = vi.fn((sessionManager: Record<string, unknown>) => ({
   ...sessionManager,
-  flushPendingToolResults: vi.fn(),
+  flushPendingToolResultsAsync: vi.fn(async () => undefined),
 }));
 const applyAgentCompactionSettingsFromConfigMock = vi.fn();
 const createPreparedEmbeddedAgentSettingsManagerMock = vi.fn(() => ({
@@ -244,7 +247,9 @@ export const listRegisteredPluginAgentPromptGuidanceMock = vi.fn((params?: { sur
       : ["Main compact command guidance."],
 );
 export const buildEmbeddedSystemPromptMock = vi.fn<typeof buildEmbeddedSystemPrompt>(() => "");
-export const resolveSkillsPromptMock = vi.fn((): string | undefined => undefined);
+export const resolveSkillsPromptMock = vi.fn<
+  typeof import("../../skills/loading/workspace-skill-prompt.js").resolveSkillsPrompt
+>(async () => "");
 export const resolveEmbeddedAgentStreamMock: Mock<
   (params?: unknown) => { streamFn: MockEmbeddedAgentStreamFn; strategy: string }
 > = vi.fn((_params?: unknown) => ({ streamFn: vi.fn(), strategy: "session-custom" }));
@@ -505,7 +510,7 @@ export function resetCompactSessionStateMocks(): void {
   buildEmbeddedSystemPromptMock.mockReset();
   buildEmbeddedSystemPromptMock.mockReturnValue("");
   resolveSkillsPromptMock.mockReset();
-  resolveSkillsPromptMock.mockReturnValue(undefined);
+  resolveSkillsPromptMock.mockResolvedValue("");
 }
 
 export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = "session-1"): void {
@@ -572,7 +577,7 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
   guardSessionManagerMock.mockReset();
   guardSessionManagerMock.mockImplementation((sessionManager) => ({
     ...sessionManager,
-    flushPendingToolResults: vi.fn(),
+    flushPendingToolResultsAsync: vi.fn(async () => undefined),
   }));
   applyAgentCompactionSettingsFromConfigMock.mockReset();
   createPreparedEmbeddedAgentSettingsManagerMock.mockReset();
@@ -871,22 +876,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     limitHistoryTurns: limitHistoryTurnsMock,
   }));
 
-  vi.doMock("../../skills/runtime/env-overrides.js", () => ({
-    applySkillEnvOverrides: vi.fn(() => () => {}),
-    applySkillEnvOverridesFromSnapshot: vi.fn(() => () => {}),
-  }));
-
-  vi.doMock("../../skills/loading/workspace-skill-loader.js", () => {
-    return {
-      prepareWorkspaceSkills: vi.fn<
-        typeof import("../../skills/loading/workspace-skill-loader.js").prepareWorkspaceSkills
-      >(async () => []),
-    };
-  });
-
-  vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
-    resolveSkillsPrompt: resolveSkillsPromptMock,
-  }));
+  mockCompactHooksSkills(resolveSkillsPromptMock);
 
   vi.doMock("../agent-scope.js", async () => {
     const { listAgentIds } = await import("../agent-scope-config.js");

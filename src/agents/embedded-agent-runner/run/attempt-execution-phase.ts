@@ -12,6 +12,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
@@ -44,6 +45,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     throw new Error("embedded attempt requires an active admitted run");
   }
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
@@ -71,7 +73,7 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory(input);
+    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
   } catch (error) {
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,

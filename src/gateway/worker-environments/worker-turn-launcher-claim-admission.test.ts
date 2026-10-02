@@ -420,8 +420,8 @@ describe("worker turn launcher claim admission", () => {
           termination: "exit",
         };
       }
-      const completed = openSessionManager();
-      const leafId = completed.appendMessage(
+      const completed = await openSessionManager();
+      const leafId = await completed.appendMessageAsync(
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "Recovered after cancellation" }],
           timestamp: 41,
@@ -601,8 +601,8 @@ describe("worker turn launcher claim admission", () => {
           );
           expect(launchTurn).toHaveBeenCalledOnce();
 
-          const completed = openSessionManager();
-          const leafId = completed.appendMessage(
+          const completed = await openSessionManager();
+          const leafId = await completed.appendMessageAsync(
             makeAgentAssistantMessage({
               content: [{ type: "text", text: "Only worker reply" }],
               timestamp: 31,
@@ -617,7 +617,7 @@ describe("worker turn launcher claim admission", () => {
             launchRequest.plan.assignment.toolAuthority.allowedToolNames.includes("portal"),
           ).toBe(portalAvailable);
           expect(environments.supportsNodePortal).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: launchRequest.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
@@ -697,8 +697,8 @@ describe("worker turn launcher claim admission", () => {
             });
             turnIds.push(descriptor.assignment.turnId);
             if (launchCount === 1) {
-              const completed = openSessionManager();
-              const leafId = completed.appendMessage(
+              const completed = await openSessionManager();
+              const leafId = await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content: [{ type: "text", text: "Remote model failed" }],
                   stopReason: "error",
@@ -706,7 +706,7 @@ describe("worker turn launcher claim admission", () => {
                   timestamp: 31,
                 }),
               );
-              createWorkerSessionPlacementGate(placements).updateAckCursors({
+              await createWorkerSessionPlacementGate(placements).updateAckCursors({
                 claim: request.turnClaim,
                 transcriptSeq: 2,
                 liveSeq: 1,
@@ -725,8 +725,8 @@ describe("worker turn launcher claim admission", () => {
                 termination: "exit",
               };
             }
-            const completed = openSessionManager();
-            const leafId = completed.appendMessage(
+            const completed = await openSessionManager();
+            const leafId = await completed.appendMessageAsync(
               makeAgentAssistantMessage({
                 content: [{ type: "text", text: "Recovered worker reply" }],
                 timestamp: 41,

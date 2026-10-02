@@ -4,6 +4,7 @@ import type { TranslationMap } from "../lib/types.ts";
 import * as agentEn from "./en-agents.ts";
 
 export const en: TranslationMap & {
+  mcpApp: TranslationMap;
   linkReader: TranslationMap;
   agentTools: TranslationMap;
   board: TranslationMap & { widget: TranslationMap };
@@ -252,19 +253,7 @@ export const en: TranslationMap & {
     bundle: {},
     label: "Support files",
   },
-  mcpApp: {
-    title: "MCP App",
-    unavailable: "MCP App unavailable: {error}",
-    errors: {
-      gatewayUnavailable: "MCP App gateway unavailable",
-      mountUnavailable: "MCP App mount unavailable",
-      sandboxTimedOut: "MCP App sandbox timed out",
-      sandboxUnavailable: "MCP App sandbox unavailable",
-      initializationTimedOut: "MCP App initialization timed out",
-      requestFailed: "Request failed",
-      invalidSandboxUrl: "MCP App sandbox URL is invalid",
-    },
-  },
+  mcpApp: {},
   sessionHovercard: {
     ariaLabel: "Session information",
     agentNotepad: "Agent Notepad",
@@ -565,12 +554,11 @@ export const en: TranslationMap & {
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
   communityInvite: {
-    cardLabel: "Join the OpenClaw community on Discord",
-    artAlt: "A lobster beside the Discord mark on a lit seafloor pedestal",
-    title: "Come build with us",
-    body: "Ask anything, show what you're making, and find out what everyone else is building.",
-    bodyGreeting: "Or just say hi.",
-    action: "Join us on Discord",
+    title: "Find your people",
+    body: "Questions, projects, and the latest from OpenClaw.",
+    reddit: "Reddit",
+    discord: "Discord",
+    x: "X",
     dismissForever: "Dismiss and don't show again",
     dismissFailed: "Invitation dismissed, but your preference couldn't be saved.",
   },
@@ -2706,6 +2694,9 @@ export const en: TranslationMap & {
       frameResolverMissing: "Widget content is unavailable.",
       sandboxUnavailable: "Widget sandbox host is unavailable.",
       runtimeError: "Script error: {message}",
+      waitingForConnection: "Waiting for the connection. This view will recover automatically.",
+      resourceUnavailable:
+        "A widget resource could not load. Retry when the connection is available.",
       frameAuthorizationFailed: "Widget authorization failed after repeated refresh attempts.",
       sandboxOriginRequired:
         "Widget authorization failed after repeated refresh attempts. If the gateway runs behind a reverse proxy or tunnel that does not route the widget sandbox port, set mcp.apps.sandboxOrigin to a dedicated public origin routed to the sandbox listener.",
@@ -3010,6 +3001,10 @@ export const en: TranslationMap & {
     },
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
+    errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
+    errorBusySummary: "OpenClaw is busy. Check status before trying again.",
+    errorSignInSummary: "Couldn't sign in to the AI service. Sign in again under Models.",
+    errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
     details: "Details",
     copyError: "Copy error",
@@ -3704,6 +3699,9 @@ export const en: TranslationMap & {
       draftConflict: "This question was edited in another tab. Copy your answer before reloading.",
     },
     questions: {
+      resourcePreview: "Preview resource",
+      addResources: "Add resources",
+      resourceUploadTooLarge: "Selected resources exceed the upload limits.",
       other: "Type your own answer here",
       multilineHint: "Enter adds a line · {shortcut} to continue",
       answer: "Answer",
@@ -4569,6 +4567,7 @@ export const en: TranslationMap & {
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
       deliveryModeLabel: "Mode",
+      selectDeliveryMode: "Choose a delivery mode",
       announceDefault: "Announce summary",
       webhookPost: "Webhook POST",
       noneInternal: "None (internal)",
@@ -4684,6 +4683,8 @@ export const en: TranslationMap & {
       systemTextRequired: "System text is required.",
       agentMessageRequired: "Agent message is required.",
       timeoutInvalid: "If set, timeout must be 0 or greater (0 disables this timeout).",
+      deliveryModeRequired:
+        "Choose a delivery mode explicitly, or run openclaw doctor --fix to repair legacy settings.",
       webhookUrlRequired: "Webhook URL is required.",
       webhookUrlInvalid: "Webhook URL must be a valid http(s):// URL without embedded credentials.",
       invalidRunTime: "Invalid run time.",

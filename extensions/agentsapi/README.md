@@ -4,6 +4,18 @@ The `agentsapi` harness runs commands and file operations in an OpenAI-hosted Li
 VM by default, while OpenClaw handles channel messaging and configured Gateway
 tools. It uses OpenAI API-key authentication.
 
+API keys authenticate requests and are not part of the native conversation's
+identity. Rotating the key used by the harness preserves existing session IDs;
+subsequent attempts use the newly resolved key. The replacement key must have API
+access to those sessions. Authentication or permission errors surface normally
+without resetting the saved binding. The hosted service currently requires the
+original API key to submit input to an existing hosted session, even when another
+key can read it. If the service rejects input for this reason, restore the
+creating key to continue the same session.
+
+Model, environment, and effective HTTP MCP configuration changes still require a
+session reset. Bindings created before this change are not migrated or supported.
+
 Start with the [setup and supported features guide](https://docs.openclaw.ai/plugins/agentsapi).
 Enable the `agentsapi` plugin and select it for the model through
 `agents.defaults.models["openai/<model>"].agentRuntime.id: "agentsapi"`.
@@ -13,6 +25,46 @@ overrides are covered in the
 [harness configuration reference](https://docs.openclaw.ai/plugins/sdk-agent-harness/runtime-config).
 
 Multi-user Gateways are not supported by the Agents API MVP.
+
+Configure native Agents API tools with
+`plugins.entries.agentsapi.config.nativeTools`. Omitting the setting uses live
+web search and programmatic tool calling, without computer use. The default list
+is equivalent to:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "agentsapi": {
+        "config": {
+          "nativeTools": [
+            { "type": "web_search", "mode": "live" },
+            { "type": "programmatic_tool_calling", "enabled": true }
+          ]
+        }
+      }
+    }
+  }
+}
+```
+
+A supplied list replaces the defaults. List every native tool declaration you
+want to send. Each entry requires a `type` string; other tool options are passed
+unchanged to the session's `agent.tools`. OpenClaw does not maintain an enum of
+tool types or options; the API validates them and reports unsupported values.
+
+An empty list sends no native tool declarations and disables native web search.
+The API still enables programmatic tool calling by default. To disable both,
+set `nativeTools` to `[{ "type": "programmatic_tool_calling", "enabled": false }]`.
+See the native API's [web-search guide](https://developers.openai.com/api/docs/guides/agents-api/tools/web-search)
+and [programmatic tool calling guide](https://developers.openai.com/api/docs/guides/tools-programmatic-tool-calling#agents-api).
+
+The list does not filter OpenClaw functions, MCP servers, installed plugins, or
+environment-provided shell and file tools. Those retain their existing settings;
+shell and file tools come from the execution environment without entries here.
+Existing sessions keep the tools selected at creation. Restart the Gateway after
+editing this setting, then start or reset a session to adopt it. There is no live
+tool-list update or automatic session reset.
 
 Configure HTTP MCP servers through the shared `mcp.servers` configuration or an
 enabled plugin's MCP bundle. For example:
@@ -245,7 +297,8 @@ whose backend startup remains unresolved.
 Saved sessions keep their native conversation, workspace, and original tool
 declarations when Gateway tools are added. Fresh sessions receive the current
 Gateway tool declarations. Reset an existing session to adopt the new tool
-surface; changing its model or API key still requires a reset.
+surface. Changing its model still requires a reset; changing its API key does not
+reset the saved binding and remains subject to the service permissions above.
 
 Child sessions use the same Gateway tool-policy filtering as other OpenClaw
 runtimes, including inherited restrictions and the child's role. Denied session

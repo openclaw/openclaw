@@ -1,10 +1,17 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  openPackageActivationJournal,
+  resolvePackageActivationAnchor,
+} from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
@@ -115,30 +122,126 @@ describe.skipIf(process.platform === "win32")("managed publication drift facts",
     }
   });
 
-  it("bounds entry diagnostics through the journaled swap and preserves both packages", async () => {
+  it("bounds ordered drift diagnostics and preserves the journaled fingerprint format", async ({
+    signal,
+  }) => {
     const f = await createPackageSwapFixture(root);
     await fixture.writePostCoreCapability(f.params.stage.packageRoot);
     for (let index = 0; index < 6; index++) {
       await fs.writeFile(path.join(f.packageRoot, `drift-${index}.js`), "before");
+    }
+    await fs.mkdir(path.join(f.packageRoot, "nested"));
+    await fs.writeFile(path.join(f.packageRoot, "nested", "a.txt"), "nested content");
+    await fs.symlink("../drift-0.js", path.join(f.packageRoot, "nested", "link"));
+    // These bytes are persisted in version-1 journals; the oracle names the
+    // fixture's postorder explicitly instead of replaying the reader's walk.
+    const expectedEntries: Array<[string, "file" | "directory" | "symlink"]> = [
+      ["dist/index.js", "file"],
+      ["dist/postinstall-content-inventory.json", "file"],
+      ["dist/postinstall-inventory.json", "file"],
+      ["dist", "directory"],
+      ["drift-0.js", "file"],
+      ["drift-1.js", "file"],
+      ["drift-2.js", "file"],
+      ["drift-3.js", "file"],
+      ["drift-4.js", "file"],
+      ["drift-5.js", "file"],
+      ["nested/a.txt", "file"],
+      ["nested/link", "symlink"],
+      ["nested", "directory"],
+      ["package.json", "file"],
+      ["", "directory"],
+    ];
+    const expectedDigest = createHash("sha256");
+    for (const [relative, kind] of expectedEntries) {
+      const file = path.join(f.packageRoot, relative);
+      const stat = await fs.lstat(file, { bigint: true });
+      const tuple = [
+        `${stat.dev}:${stat.ino}`,
+        String(stat.mode),
+        String(stat.uid),
+        String(stat.gid),
+      ];
+      if (kind !== "directory") {
+        tuple.push(String(stat.size), String(stat.mtimeNs), kind);
+        tuple.push(
+          kind === "symlink"
+            ? "../drift-0.js"
+            : createHash("sha256")
+                .update(await fs.readFile(file))
+                .digest("hex"),
+        );
+      }
+      expectedDigest.update(JSON.stringify([relative, tuple]));
     }
     await withUpdateCommandExecutor(randomUUID(), async (executor) => {
       const fence = await executor.enter(f.packageRoot);
       let transaction: PackageUpdateTransaction | undefined;
       const result = await swapStagedPackageInstall({
         ...f.params,
-        activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+        activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
         onTransaction: (value) => {
           transaction = value;
         },
       });
       expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      expect(
+        openPackageActivationJournal(resolvePackageActivationAnchor(f.packageRoot)).read()
+          .descriptor.previous.digest,
+      ).toBe(expectedDigest.digest("hex"));
       if (!transaction) {
         throw new Error("missing transaction");
       }
+      const backupRoot = transaction.backupRoot;
       for (let index = 0; index < 6; index++) {
-        await fs.writeFile(path.join(transaction.backupRoot, `drift-${index}.js`), "after!");
+        await fs.writeFile(path.join(backupRoot, `drift-${index}.js`), "after!");
       }
-      const rollback = await transaction.rollback(fence.assertCurrent);
+      const hashes = Array.from({ length: 4 }, () => ({
+        closing: createDeferredCore(),
+        release: createDeferredCore(),
+        completed: createDeferredCore(),
+      }));
+      const reversed: number[] = [];
+      const files = hashes.map((_, index) => path.join(backupRoot, `drift-${index}.js`));
+      const open = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await open(...args);
+        const index = files.indexOf(String(args[0]));
+        if (index >= 0) {
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            await close();
+            hashes[index]!.closing.resolve();
+            await hashes[index]!.release.promise;
+            reversed.push(index);
+            hashes[index]!.completed.resolve();
+          });
+        }
+        return handle;
+      });
+      const rollingBack = transaction.rollback(fence.assertCurrent);
+      let rollback: Awaited<ReturnType<PackageUpdateTransaction["rollback"]>>;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            Promise.all(hashes.map((hash) => hash.closing.promise)),
+            rollingBack,
+            "Rollback settled before its adjacent file hashes reached cleanup",
+          ),
+          signal,
+        );
+        for (const index of [3, 2, 1, 0]) {
+          hashes[index]!.release.resolve();
+          await withinTest(hashes[index]!.completed.promise, signal);
+        }
+        rollback = await withinTest(rollingBack, signal);
+      } finally {
+        for (const hash of hashes) {
+          hash.release.resolve();
+        }
+        await Promise.allSettled([rollingBack]);
+      }
+      expect(reversed).toEqual([3, 2, 1, 0]);
       expect(rollback.exitCode).toBe(1);
       expect(rollback.failureFacts).toHaveLength(5);
       for (let index = 0; index < 5; index++) {
