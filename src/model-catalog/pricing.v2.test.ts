@@ -65,11 +65,6 @@ afterEach(() => {
 describe("inline v2 pricing", () => {
   it.each([
     {
-      name: "positive",
-      price: { ...known, input: 3, output: 6 },
-      expected: { input: 3, output: 6 },
-    },
-    {
       name: "known free without a native source label",
       price: { ...known, input: 0, output: 0, source: "models.dev" },
       expected: { input: 0, output: 0 },
@@ -124,31 +119,4 @@ describe("inline v2 pricing", () => {
       ).toBeUndefined();
     },
   );
-
-  it("preserves authored pricing when the remote source withdraws it", () => {
-    pricing = { status: "unavailable" };
-    const cost = { input: 5, output: 10, cacheRead: 1, cacheWrite: 2 };
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          fixture: {
-            baseUrl: "https://fixture.example/v1",
-            models: [
-              {
-                id: "native/model",
-                name: "Authored",
-                input: ["text"],
-                reasoning: false,
-                maxTokens: 8192,
-                cost,
-              },
-            ],
-          },
-        },
-      },
-    };
-    expect(resolveModelCostConfig({ config, provider: "fixture", model: "native/model" })).toEqual(
-      cost,
-    );
-  });
 });

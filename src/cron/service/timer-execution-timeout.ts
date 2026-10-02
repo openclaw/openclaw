@@ -24,8 +24,6 @@ import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 
 export const MAX_CRON_TIMER_DELAY_MS = 60_000;
 
-export const HEARTBEAT_SKIP_DISABLED = "disabled";
-
 /**
  * Minimum gap between consecutive fires of the same cron job.  This is a
  * safety net that prevents spin-loops when `computeJobNextRunAtMs` returns
@@ -62,6 +60,13 @@ export type TimedCronRunOutcome = CronJobExecutionResult & {
   runReceipt?: CronRunReceiptHandle;
   runReceiptContext?: OpenClawStateWorkerContext;
   receiptSettlementDisposition?: CronRunReceiptSettlementDisposition;
+  request?: {
+    executionJob: CronJob;
+    preserveCadence: boolean;
+    scheduleOwnershipAtMs: number;
+    runId?: string;
+    terminalTracker?: { emitted: boolean };
+  };
   startedAt: number;
   endedAt: number;
 };

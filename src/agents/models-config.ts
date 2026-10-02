@@ -38,10 +38,10 @@ import {
   withPluginModelCatalogAuthObservations,
   type PluginModelCatalogAuthSnapshot,
 } from "./plugin-model-catalog-auth.js";
+import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
 import { repairPluginModelCatalogTransportMetadata } from "./plugin-model-catalog-repair.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
-  loadPersistedPluginModelCatalogsReadOnly,
   replacePersistedPluginModelCatalogs,
   type PersistedPluginModelCatalog,
 } from "./plugin-model-catalog.js";
@@ -87,7 +87,11 @@ async function buildModelsJsonFingerprint(context: PreparedModelsConfigContext):
   const authProfilesWalMtimeMs = await readFileMtimeMs(`${authProfilesSqlitePath}-wal`);
   const modelsFileMtimeMs = await readFileMtimeMs(path.join(context.agentDir, "models.json"));
   const pluginCatalogFingerprint = createHash("sha256")
-    .update(stableStringify(loadPersistedPluginModelCatalogsReadOnly(context.agentDir)))
+    .update(
+      stableStringify(
+        await loadPersistedPluginModelCatalogs(context.agentDir, undefined, context.env),
+      ),
+    )
     .digest("base64url");
   const pluginMetadataSnapshotIndexFingerprint = context.pluginMetadataSnapshot
     ? resolveInstalledManifestRegistryIndexFingerprint(context.pluginMetadataSnapshot.index)
@@ -306,12 +310,12 @@ export async function ensureOpenClawModelsJson(
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
     const existingModelsFile = await readExistingModelsFile(targetPath);
     const authSnapshot = await capturePluginModelCatalogAuth(agentDir, context.env);
-    const plan = await withPluginModelCatalogAuthObservations(authSnapshot, () =>
+    const plan = await withPluginModelCatalogAuthObservations(authSnapshot, async () =>
       planOpenClawModelsJson({
         context,
         existingRaw: existingModelsFile.raw,
         existingParsed: existingModelsFile.parsed,
-        pluginCatalogs: loadPersistedPluginModelCatalogsReadOnly(agentDir),
+        pluginCatalogs: await loadPersistedPluginModelCatalogs(agentDir, undefined, context.env),
       }),
     );
 
@@ -375,7 +379,11 @@ export async function planOpenClawModelsJsonSource(
   const context = await prepareModelsConfigContext(config, agentDirOverride, options);
   const { agentDir } = context;
   const existingModelsFile = await readExistingModelsFile(path.join(agentDir, "models.json"));
-  const existingPluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+  const existingPluginCatalogs = await loadPersistedPluginModelCatalogs(
+    agentDir,
+    undefined,
+    context.env,
+  );
   const plan = await planOpenClawModelsJson({
     context,
     ...(authStore ? { authStore } : {}),

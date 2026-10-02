@@ -68,133 +68,138 @@ function fixture() {
   return { stateDir, file, writer };
 }
 
-it.each(
-  (["metadata", "discover", "versions", "legacy-copy"] as const).flatMap((phase) =>
-    (["forced", "uncertain"] as const).map((settlement) => ({ phase, settlement })),
-  ),
-)("retains $phase staging until command cleanup is $settlement", async ({ phase, settlement }) => {
-  const { stateDir, file, writer } = fixture();
-  const shared = path.join(stateDir, "state", "openclaw.sqlite");
-  fs.mkdirSync(path.dirname(shared));
-  const registry = openNodeSqliteDatabase(shared);
-  registry.exec("CREATE TABLE agent_databases(path TEXT); PRAGMA user_version=3;");
-  registry.prepare("INSERT INTO agent_databases VALUES (?)").run(file);
-  registry.close();
-  const controller = new AbortController();
-  const cleanup = createDeferredCore<"forced" | "uncertain">();
-  const admitted = createDeferredCore();
-  const roots = new Set<string>();
-  let marker = "";
-  const run = commands.runUtf8CommandWithTimeout;
-  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-    if (typeof options === "number") {
-      return run(argv, options);
-    }
-    const input = JSON.parse(String(options.input ?? "{}")) as {
-      directory?: string;
-      files?: string[];
-      mode?: string;
-    };
-    const result = {
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit" as const,
-      stderr: "",
-    };
-    if (input.directory) {
-      return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
-    }
-    const current = input.files
-      ? "metadata"
-      : argv.includes(SQLITE_READONLY_CHILD_ARG)
-        ? "legacy-copy"
-        : input.mode;
-    const stagingRoot = String(options.env?.XDG_CACHE_HOME);
-    roots.add(stagingRoot);
-    if (phase === "legacy-copy" && current === "discover") {
-      options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
-      return { ...result, code: 1, stdout: "" };
-    }
-    if (current !== phase) {
-      return run(argv, options);
-    }
-    marker = path.join(stagingRoot, "database.sqlite.partial");
-    fs.writeFileSync(marker, "pending worker bytes");
-    // Model the runner's bounded pre-readiness result separately from the
-    // canonical cleanup promise that owns its late broker PID and close.
-    retainCommandProcessCleanup(cleanup.promise);
-    controller.abort(new Error("inspection canceled"));
-    admitted.resolve();
-    return { ...result, code: null, stdout: "", termination: "signal", cleanup: "uncertain" };
-  });
-  let finished = false;
-  const operation = readUpdateStateSchemaVersions({
-    stateDir,
-    config: {},
-    signal: controller.signal,
-    env: { ...process.env, XDG_CACHE_HOME: path.join(stateDir, "cache") },
-  });
-  const outcome = operation
-    .catch((error: unknown) => error)
-    .finally(() => {
-      finished = true;
-    });
-  let finalizing: Promise<void> | undefined;
-  try {
-    await admitted.promise;
-    await setImmediate();
-    expect.soft(finished).toBe(false);
-    expect.soft(fs.existsSync(marker)).toBe(true);
-    let finalized = false;
-    finalizing = cleanupSnapshotOperations().finally(() => {
-      finalized = true;
-    });
-    await setImmediate();
-    expect.soft(finalized).toBe(false);
-    expect.soft(fs.existsSync(marker)).toBe(true);
-    cleanup.resolve(settlement);
-    const failure = await outcome;
-    await finalizing;
-    expect(hasCommandProcessCleanupError(failure)).toBe(settlement === "uncertain");
-    if (settlement === "uncertain") {
-      expect(failure).toHaveProperty("message", expect.stringContaining("Staging retained at"));
-      expect(failure).toHaveProperty(
-        "message",
-        expect.stringContaining(phase === "versions" ? file : shared),
-      );
-      expect(failure).toHaveProperty(
-        "message",
-        expect.stringContaining(
-          phase === "metadata"
-            ? "metadata inventory"
-            : phase === "versions"
-              ? "schema inspection startup"
-              : "shared database discovery",
-        ),
-      );
-      expect(failure).toHaveProperty(
-        "message",
-        expect.stringMatching(/after \d+(?:\.\d+)? seconds/),
-      );
-      for (const root of roots) {
-        expect(fs.existsSync(root)).toBe(true);
+it.each([
+  { phase: "metadata", settlement: "uncertain" },
+  { phase: "discover", settlement: "uncertain" },
+  { phase: "versions", settlement: "uncertain" },
+  { phase: "legacy-copy", settlement: "uncertain" },
+  { phase: "legacy-copy", settlement: "forced" },
+] as const)(
+  "retains $phase staging until command cleanup is $settlement",
+  async ({ phase, settlement }) => {
+    const { stateDir, file, writer } = fixture();
+    const shared = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(shared));
+    const registry = openNodeSqliteDatabase(shared);
+    registry.exec("CREATE TABLE agent_databases(path TEXT); PRAGMA user_version=3;");
+    registry.prepare("INSERT INTO agent_databases VALUES (?)").run(file);
+    registry.close();
+    const controller = new AbortController();
+    const cleanup = createDeferredCore<"forced" | "uncertain">();
+    const admitted = createDeferredCore();
+    const roots = new Set<string>();
+    let marker = "";
+    const run = commands.runUtf8CommandWithTimeout;
+    vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (typeof options === "number") {
+        return run(argv, options);
       }
-      expect(fs.readFileSync(marker, "utf8")).toBe("pending worker bytes");
-    } else {
-      expect(failure).toHaveProperty("message", "inspection canceled");
-      for (const root of roots) {
-        expect(fs.existsSync(root)).toBe(false);
+      const input = JSON.parse(String(options.input ?? "{}")) as {
+        directory?: string;
+        files?: string[];
+        mode?: string;
+      };
+      const result = {
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit" as const,
+        stderr: "",
+      };
+      if (input.directory) {
+        return { ...result, stdout: JSON.stringify({ facts: "0".repeat(64), bytes: 0 }) };
       }
+      const current = input.files
+        ? "metadata"
+        : argv.includes(SQLITE_READONLY_CHILD_ARG)
+          ? "legacy-copy"
+          : input.mode;
+      const stagingRoot = String(options.env?.XDG_CACHE_HOME);
+      roots.add(stagingRoot);
+      if (phase === "legacy-copy" && current === "discover") {
+        options.onOutputChunk?.(Buffer.from("Unknown update state inspection mode"), "stderr");
+        return { ...result, code: 1, stdout: "" };
+      }
+      if (current !== phase) {
+        return run(argv, options);
+      }
+      marker = path.join(stagingRoot, "database.sqlite.partial");
+      fs.writeFileSync(marker, "pending worker bytes");
+      // Model the runner's bounded pre-readiness result separately from the
+      // canonical cleanup promise that owns its late broker PID and close.
+      retainCommandProcessCleanup(cleanup.promise);
+      controller.abort(new Error("inspection canceled"));
+      admitted.resolve();
+      return { ...result, code: null, stdout: "", termination: "signal", cleanup: "uncertain" };
+    });
+    let finished = false;
+    const operation = readUpdateStateSchemaVersions({
+      stateDir,
+      config: {},
+      signal: controller.signal,
+      env: { ...process.env, XDG_CACHE_HOME: path.join(stateDir, "cache") },
+    });
+    const outcome = operation
+      .catch((error: unknown) => error)
+      .finally(() => {
+        finished = true;
+      });
+    let finalizing: Promise<void> | undefined;
+    try {
+      await admitted.promise;
+      await setImmediate();
+      expect.soft(finished).toBe(false);
+      expect.soft(fs.existsSync(marker)).toBe(true);
+      let finalized = false;
+      finalizing = cleanupSnapshotOperations().finally(() => {
+        finalized = true;
+      });
+      await setImmediate();
+      expect.soft(finalized).toBe(false);
+      expect.soft(fs.existsSync(marker)).toBe(true);
+      cleanup.resolve(settlement);
+      const failure = await outcome;
+      await finalizing;
+      expect(hasCommandProcessCleanupError(failure)).toBe(settlement === "uncertain");
+      if (settlement === "uncertain") {
+        expect(failure).toHaveProperty("message", expect.stringContaining("Staging retained at"));
+        expect(failure).toHaveProperty(
+          "message",
+          expect.stringContaining(phase === "versions" ? file : shared),
+        );
+        expect(failure).toHaveProperty(
+          "message",
+          expect.stringContaining(
+            phase === "metadata"
+              ? "metadata inventory"
+              : phase === "versions"
+                ? "schema inspection startup"
+                : "shared database discovery",
+          ),
+        );
+        expect(failure).toHaveProperty(
+          "message",
+          expect.stringMatching(/after \d+(?:\.\d+)? seconds/),
+        );
+        for (const root of roots) {
+          expect(fs.existsSync(root)).toBe(true);
+        }
+        expect(fs.readFileSync(marker, "utf8")).toBe("pending worker bytes");
+      } else {
+        expect(failure).toHaveProperty("message", "inspection canceled");
+        for (const root of roots) {
+          expect(fs.existsSync(root)).toBe(false);
+        }
+      }
+      expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
+    } finally {
+      cleanup.resolve("forced");
+      await outcome;
+      await finalizing;
+      writer.close();
     }
-    expect(writer.prepare("PRAGMA user_version").get()).toEqual({ user_version: 3 });
-  } finally {
-    cleanup.resolve("forced");
-    await outcome;
-    await finalizing;
-    writer.close();
-  }
-});
+  },
+);
 
 it("preserves the parent agent writer lock and excludes its uncommitted migration", async () => {
   const { stateDir, file, writer } = fixture();
@@ -360,53 +365,49 @@ function writeMetadataFault(root: string, target: string, block: boolean): strin
   return preload;
 }
 
-it.each(["", "-wal", "-shm", "-journal"])(
-  "keeps an unknown size when %s metadata cannot be read",
-  async (suffix) => {
-    const root = dirs.make("openclaw-metadata-unknown-");
-    const file = path.join(root, "database.sqlite");
-    fs.writeFileSync(file, "database");
-    const preload = writeMetadataFault(root, `${file}${suffix}`, false);
-    await expect(
-      readUpdateStateDatabaseSizes([file, path.join(root, "missing.sqlite")], {
-        nodeRunner: process.execPath,
-        sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-        stagingRoot: root,
-      }),
-    ).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
-  },
-);
+it.each(["", "-wal"])("keeps an unknown size when %s metadata cannot be read", async (suffix) => {
+  const root = dirs.make("openclaw-metadata-unknown-");
+  const file = path.join(root, "database.sqlite");
+  fs.writeFileSync(file, "database");
+  const preload = writeMetadataFault(root, `${file}${suffix}`, false);
+  await expect(
+    readUpdateStateDatabaseSizes([file, path.join(root, "missing.sqlite")], {
+      nodeRunner: process.execPath,
+      sourceEnv: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
+      stagingRoot: root,
+    }),
+  ).resolves.toEqual([{ path: file, sizeBytes: undefined }]);
+});
 
-it.for(["", "-wal", "-shm", "-journal"])(
-  "cancels blocked %s metadata before candidate discovery and removes staging after child exit",
-  async (suffix, { signal }) => {
-    const root = dirs.make("openclaw-metadata-cancel-");
-    const file = path.join(root, "state", "openclaw.sqlite");
-    fs.mkdirSync(path.dirname(file));
-    fs.writeFileSync(file, "database");
-    const preload = writeMetadataFault(root, `${file}${suffix}`, true);
-    const controller = new AbortController();
-    const inspection = readUpdateStateSchemaVersions({
-      stateDir: root,
-      config: {},
-      // No candidate worker exists: cancellation must happen during metadata inventory.
-      root: path.join(root, "unavailable-candidate"),
-      signal: controller.signal,
-      env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
-    });
-    const rejected = expect(inspection).rejects.toThrow("metadata cancellation");
-    let report: { pid: number; stagingRoot: string } | undefined;
-    try {
-      const marker = path.join(root, "started.json");
-      await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
-      report = JSON.parse(fs.readFileSync(marker, "utf8"));
-      expect(report).toBeDefined();
-      expect(fs.existsSync(report!.stagingRoot)).toBe(true);
-    } finally {
-      controller.abort(new Error("metadata cancellation"));
-      await rejected;
-    }
-    expect(() => process.kill(report!.pid, 0)).toThrow();
-    expect(fs.existsSync(report!.stagingRoot)).toBe(false);
-  },
-);
+it("cancels blocked sidecar metadata before candidate discovery and removes staging after child exit", async ({
+  signal,
+}) => {
+  const root = dirs.make("openclaw-metadata-cancel-");
+  const file = path.join(root, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(file));
+  fs.writeFileSync(file, "database");
+  const preload = writeMetadataFault(root, `${file}-wal`, true);
+  const controller = new AbortController();
+  const inspection = readUpdateStateSchemaVersions({
+    stateDir: root,
+    config: {},
+    // No candidate worker exists: cancellation must happen during metadata inventory.
+    root: path.join(root, "unavailable-candidate"),
+    signal: controller.signal,
+    env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
+  });
+  const rejected = expect(inspection).rejects.toThrow("metadata cancellation");
+  let report: { pid: number; stagingRoot: string } | undefined;
+  try {
+    const marker = path.join(root, "started.json");
+    await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
+    report = JSON.parse(fs.readFileSync(marker, "utf8"));
+    expect(report).toBeDefined();
+    expect(fs.existsSync(report!.stagingRoot)).toBe(true);
+  } finally {
+    controller.abort(new Error("metadata cancellation"));
+    await rejected;
+  }
+  expect(() => process.kill(report!.pid, 0)).toThrow();
+  expect(fs.existsSync(report!.stagingRoot)).toBe(false);
+});

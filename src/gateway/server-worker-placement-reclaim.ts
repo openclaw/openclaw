@@ -47,6 +47,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       cfg: getRuntimeConfig(),
       key: sessionKey,
       agentId,
+      preserveQualifiedAddress: true,
       clone: false,
       exactRead: true,
     });
@@ -144,6 +145,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         cfg: getRuntimeConfig(),
         key: sessionKey,
         agentId,
+        preserveQualifiedAddress: true,
         clone: false,
         exactRead: true,
       });
@@ -312,6 +314,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
           cfg: getRuntimeConfig(),
           key: sessionKey,
           agentId,
+          preserveQualifiedAddress: true,
           clone: false,
           exactRead: true,
         });

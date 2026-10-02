@@ -303,20 +303,31 @@ describe("visible session placement and authority", () => {
   });
 
   it.each([
-    { placement: { kind: "profile", profileId: "build" }, visible: false },
-    { placement: { kind: "profile", profileId: "build" }, visible: true, worktree: false },
-    { placement: { kind: "profile", profileId: "build", os: "" }, visible: true, worktree: true },
-    { placement: { kind: "device", deviceId: "other" }, visible: true, worktree: true },
-    ...[null, {}, { kind: "local", profileId: "placeholder" }].map((placement) => ({
-      placement,
-      visible: true,
-      worktree: true,
+    ...[
+      { placement: { kind: "profile", profileId: "build" }, visible: false },
+      { placement: { kind: "profile", profileId: "build" }, visible: true, worktree: false },
+    ].map((args) => ({
+      args,
+      error:
+        /^Cloud placement requires visible=true and worktree=true\. Corrected call: sessions_spawn\(/,
     })),
-  ])("rejects invalid placement before creating a child: %j", async (args) => {
+    ...[
+      { placement: { kind: "profile", profileId: "build", os: "" }, visible: true, worktree: true },
+      { placement: { kind: "device", deviceId: "other" }, visible: true, worktree: true },
+      ...[null, {}, { kind: "local", profileId: "placeholder" }].map((placement) => ({
+        placement,
+        visible: true,
+        worktree: true,
+      })),
+    ].map((args) => ({
+      args,
+      error: /Omit placement for local.*configured cloud profile/,
+    })),
+  ])("rejects invalid placement before creating a child: %j", async ({ args, error }) => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({ callGateway, countActiveRuns: () => 0 });
     await expect(tool.execute("invalid-cloud", { task: "inspect", ...args })).rejects.toThrow(
-      /Omit placement for local.*configured cloud profile/,
+      error,
     );
     expect(callGateway).not.toHaveBeenCalled();
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
@@ -366,7 +377,7 @@ describe("visible session placement and authority", () => {
       }
       return { runId: "cloud-run" };
     });
-    const registerRun = vi.fn(() => {
+    const registerRun = vi.fn(async () => {
       if (failure === "registration-failed") {
         throw new Error("registration unavailable");
       }

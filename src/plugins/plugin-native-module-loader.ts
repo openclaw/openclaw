@@ -12,6 +12,7 @@ import { withPluginCache, type getPluginCache } from "./plugin-cache.js";
 import type { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
 import type { PluginModuleLoaderOwner } from "./plugin-instance.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { resolvePluginNativeAliasForParent } from "./plugin-sdk-native-resolver.js";
 import { isPluginSdkAliasSpecifier } from "./sdk-alias.js";
 
 function getBunConditions(requireMode: boolean): Set<string> {
@@ -118,6 +119,10 @@ export function bindNativePluginInstanceModuleLoader(
         }
         return withPluginCache(cache, () => {
           artifact.prepareModule(source);
+          // Deferred SDK imports retain their generation's host selection after cache replacement.
+          if (source === parent && isPluginSdkAliasSpecifier(request)) {
+            return resolvePluginNativeAliasForParent(request, parent);
+          }
           let target: string | undefined;
           const requireMode = kind === "require-call" || kind === "require-resolve";
           const conditions = [...getBunConditions(requireMode)];
@@ -141,6 +146,8 @@ export function bindNativePluginInstanceModuleLoader(
             source === parent &&
             !path.isAbsolute(request) &&
             !request.startsWith("file:") &&
+            // Bun handles package-import pattern trailers that the JS resolver rejects.
+            !request.startsWith("#") &&
             !isBuiltin(request)
           ) {
             const captured = artifact.captureModule(parent, request, conditions);

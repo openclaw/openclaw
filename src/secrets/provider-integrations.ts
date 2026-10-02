@@ -9,6 +9,7 @@ import type {
 } from "../config/types.secrets.js";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "../plugins/config-state.js";
 import { shouldRejectHardlinkedPluginFiles } from "../plugins/hardlink-policy.js";
 import { isActivatedManifestOwner } from "../plugins/manifest-owner-policy.js";
@@ -146,7 +147,7 @@ function materializeExecProviderConfig(
   return {
     source: "exec",
     command: process.execPath,
-    ...(args ? { args } : {}),
+    ...(args ? { args: [...resolveRuntimeArgs(), ...args] } : {}),
     ...(integration.timeoutMs !== undefined ? { timeoutMs: integration.timeoutMs } : {}),
     ...(integration.noOutputTimeoutMs !== undefined
       ? { noOutputTimeoutMs: integration.noOutputTimeoutMs }

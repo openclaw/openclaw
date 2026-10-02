@@ -184,36 +184,33 @@ export function installEmbeddedAttemptStreamGuards(
       );
     }
   };
-  const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
-  const cacheObserver = cacheObservabilityEnabled
-    ? createPromptCacheRequestObserver(
-        {
-          sessionId: attempt.sessionId,
-          sessionKey: attempt.sessionKey,
-          promptCacheKey: attempt.promptCacheKey,
-          cacheRetention: effectivePromptCacheRetention,
-          streamStrategy,
-          transport: effectiveAgentTransport,
-        },
-        (observation, snapshot) => {
-          if (observation.broke) {
-            const changes =
-              observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
-              "no tracked cache input change";
-            log.warn(
-              `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
-                `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
-            );
-          }
-          cacheTrace?.recordStage("cache:result", { options: { ...observation } });
-        },
-        (request) => {
-          cacheTrace?.recordStage("cache:state", {
-            options: { ...request, previousCacheRead: request.previousCacheRead ?? undefined },
-          });
-        },
-      )
-    : undefined;
+  const cacheObserver = createPromptCacheRequestObserver(
+    {
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
+      promptCacheKey: attempt.promptCacheKey,
+      cacheRetention: effectivePromptCacheRetention,
+      streamStrategy,
+      transport: effectiveAgentTransport,
+    },
+    (observation, snapshot) => {
+      if (observation.broke) {
+        const changes =
+          observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
+          "no tracked cache input change";
+        log.warn(
+          `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
+            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
+        );
+      }
+      cacheTrace?.recordStage("cache:result", { options: { ...observation } });
+    },
+    (request) => {
+      cacheTrace?.recordStage("cache:state", {
+        options: { ...request, previousCacheRead: request.previousCacheRead ?? undefined },
+      });
+    },
+  );
   if (cacheTrace) {
     cacheTrace.recordStage("session:loaded", {
       messages: session.messages,
@@ -446,17 +443,15 @@ export function installEmbeddedAttemptStreamGuards(
     );
   }
   return {
-    onModelRequest: cacheObserver?.onModelRequest,
-    onModelUsage: cacheObserver
-      ? (usage: NormalizedUsage | undefined) => {
-          // Async-tool fragments also end messages. result() marks the terminal
-          // response before core commits its final fragment with normalized usage.
-          if (modelResponseTerminal) {
-            modelResponseTerminal = false;
-            cacheObserver.onModelUsage(usage);
-          }
-        }
-      : undefined,
-    getPromptCacheObservation: cacheObserver?.getObservation,
+    onModelRequest: cacheObserver.onModelRequest,
+    onModelUsage: (usage: NormalizedUsage | undefined) => {
+      // Async-tool fragments also end messages. result() marks the terminal
+      // response before core commits its final fragment with normalized usage.
+      if (modelResponseTerminal) {
+        modelResponseTerminal = false;
+        cacheObserver.onModelUsage(usage);
+      }
+    },
+    getPromptCacheObservation: cacheObserver.getObservation,
   };
 }

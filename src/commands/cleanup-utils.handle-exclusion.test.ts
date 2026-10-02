@@ -69,7 +69,7 @@ it.skipIf(process.platform === "win32")(
     const resumeRemoval = createDeferred();
     const realRm = fsPromises.rm;
     const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
-      if (String(target) === configPath) {
+      if (String(target) === configPath || String(target) === path.dirname(databasePath)) {
         started.resolve();
         await resumeRemoval.promise;
       }
@@ -207,9 +207,24 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
   const resumeRemoval = createDeferred();
   const unlinked = createDeferred();
   const resumeFinalization = createDeferred();
+  const entryName = (entry: string | Buffer | fs.Dirent<string | Buffer>) =>
+    typeof entry === "string" || Buffer.isBuffer(entry) ? entry.toString() : entry.name.toString();
+  const readdir = fsPromises.readdir.bind(fsPromises);
+  const discovery = vi
+    .spyOn(fsPromises, "readdir")
+    .mockImplementation(async (directory, settings) => {
+      const entries = await readdir(directory, settings);
+      // Directory enumeration may reach the database before the config file.
+      return String(directory) === stateDir
+        ? entries.toSorted(
+            (left, right) =>
+              Number(entryName(right) === "state") - Number(entryName(left) === "state"),
+          )
+        : entries;
+    });
   const realRm = fsPromises.rm;
   const remove = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, settings) => {
-    if (String(target) === configPath) {
+    if (String(target) === configPath || String(target) === path.dirname(database.path)) {
       started.resolve();
       await resumeRemoval.promise;
     }
@@ -232,7 +247,11 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
   );
   try {
     expect(
-      await Promise.race([started.promise.then(() => "removing"), deleting.then(() => "removed")]),
+      await Promise.race([
+        started.promise.then(() => "removing"),
+        unlinked.promise.then(() => "unlinked"),
+        deleting.then(() => "removed"),
+      ]),
     ).toBe("removing");
     expect(database.db.isOpen).toBe(false);
     expect(() => retainedStatement.get()).toThrow(/finalized/);
@@ -253,6 +272,7 @@ it("drains the local cache and excludes reopening throughout awaited removal", a
     resumeFinalization.resolve();
     await deleting.finally(() => {
       remove.mockRestore();
+      discovery.mockRestore();
       closeOpenClawStateDatabaseForTest();
     });
   }

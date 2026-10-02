@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
@@ -25,6 +26,7 @@ let stateRoot: string;
 let owner: LocalWorkspaceOwner;
 let revoked = false;
 const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
+const podmanFixture = createFixtureLifetime();
 const readText = (directory: string, ...parts: string[]) =>
   fs.readFile(path.join(directory, ...parts), "utf8");
 async function expectMissing(directory: string, ...parts: string[]) {
@@ -88,6 +90,8 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  // Timeout unwinding still needs the engine environment and registry to remove containers.
+  await podmanFixture.cleanup();
   // Retain the physical database and its reader worker; remove only this case's
   // ownership. The store refuses deletion while a receipt or journal is pending.
   revoked = false;
@@ -108,12 +112,14 @@ afterEach(async () => {
 describe("local sandbox workspace reconciliation", () => {
   it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
     "edits and runs Git in a real required Podman sandbox across turns",
-    async () => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-      const { proveRequiredPodmanWorkspace } =
-        await import("./local-workspace-podman.test-support.js");
-      await proveRequiredPodmanWorkspace(root, owner);
-    },
+    ({ signal }) =>
+      podmanFixture.run(async () => {
+        signal.throwIfAborted();
+        vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+        const { proveRequiredPodmanWorkspace } =
+          await import("./local-workspace-podman.test-support.js");
+        await proveRequiredPodmanWorkspace(root, owner, signal, podmanFixture.verifyCleanup);
+      }),
     120000,
   );
 

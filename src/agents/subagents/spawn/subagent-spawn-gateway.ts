@@ -8,6 +8,10 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
+import {
+  bindInProcessSessionRun,
+  type PreparedSessionRun,
+} from "../../../gateway/in-process-session-run.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.js";
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
@@ -42,6 +46,7 @@ async function callSubagentGatewayWithDispatchMode(
   options?: {
     agentRunTracking?: "native_subagent";
     gatewayContextResolver?: GatewayContextResolver;
+    preparedLaunch?: PreparedSessionRun;
   },
 ): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
@@ -83,7 +88,10 @@ async function callSubagentGatewayWithDispatchMode(
     ...(scopes != null ? { scopes } : {}),
   };
   if (hasInProcessGateway && isRecord(request.params)) {
-    const requestParams = request.params;
+    const requestParams =
+      request.method === "agent" && options?.preparedLaunch
+        ? bindInProcessSessionRun(request.params, options.preparedLaunch)
+        : request.params;
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
     // Agent launches are host-owned even when the parent request came from CLI/HTTP.
@@ -247,6 +255,7 @@ export async function callNativeSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
+  preparedLaunch?: PreparedSessionRun,
 ): Promise<{
   response: SubagentGatewayResponse;
   registrationRequired: boolean;
@@ -254,6 +263,7 @@ export async function callNativeSubagentGateway(
   const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
     agentRunTracking: "native_subagent",
     gatewayContextResolver,
+    preparedLaunch,
   });
   return {
     response: result.response,

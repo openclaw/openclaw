@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-// Carry exact local-turn cleanup to its reply and backend owners; never recover by session id.
+// Carry exact turn cleanup to its reply and backend owners; never recover by session id.
 const forcedTerminalSettlement = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"),
   () => new AsyncLocalStorage<{ settle: () => Promise<void>; assertCurrent: () => void }>(),
@@ -10,8 +10,8 @@ const forcedTerminalSettlement = resolveGlobalSingleton(
 export function withSessionPlacementForcedTerminalSettlement<T>(
   settle: () => Promise<void>,
   assertClaimCurrent: () => void,
-  task: () => Promise<T>,
-): Promise<T> {
+  task: () => T,
+): T {
   return forcedTerminalSettlement.run({ settle, assertCurrent: assertClaimCurrent }, task);
 }
 

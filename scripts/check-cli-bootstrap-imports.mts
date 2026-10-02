@@ -511,7 +511,7 @@ export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParam
   for (const { relativeEntrypoint, source } of sources) {
     try {
       for (const specifier of listRuntimeImportSpecifiers(source)) {
-        if (isBuiltinSpecifier(specifier)) {
+        if (isBuiltinSpecifier(specifier) || specifier === "bun:ffi") {
           continue;
         }
         errors.push(

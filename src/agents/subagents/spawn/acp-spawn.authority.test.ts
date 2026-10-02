@@ -120,7 +120,7 @@ beforeEach(async () => {
     artifactBasename: "browser-maintenance.js",
   });
   managerTesting.resetAcpSessionManagerForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -132,7 +132,7 @@ afterEach(async () => {
     managerTesting.resetAcpSessionManagerForTests();
     unregisterAcpRuntimeBackend(backendId);
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await cleanupSessionStateForTest({ stateDir });
   } finally {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();

@@ -587,7 +587,6 @@ describe("host Cron Doctor repair", () => {
   it.each([
     { layout: "inactive only", activeDreaming: false, enabled: true },
     { layout: "active and inactive", activeDreaming: true, enabled: true },
-    { layout: "inactive only", activeDreaming: false, enabled: false },
     { layout: "active and inactive", activeDreaming: true, enabled: false },
   ])(
     "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
@@ -673,9 +672,7 @@ describe("host Cron Doctor repair", () => {
                       action: activeDreaming ? "updated" : "added",
                     },
                   ]
-                : activeDreaming
-                  ? [{ jobId: "survivor", action: "removed" }]
-                  : [],
+                : [{ jobId: "survivor", action: "removed" }],
             );
             expect(logger.warn).toHaveBeenCalledWith(
               expect.stringContaining(

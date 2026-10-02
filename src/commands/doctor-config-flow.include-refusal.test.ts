@@ -23,6 +23,86 @@ describe("doctor config persistence", () => {
     closeOpenClawStateDatabaseForTest();
   });
 
+  it("refuses retired Telegram inputs before include repair or backup recovery", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        channels: { $include: "./channels.json" },
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const includePath = path.join(path.dirname(configPath), "channels.json");
+      const channels = {
+        telegram: {
+          dm: {},
+          direct: { "42": { threadReplies: "always" } },
+          accounts: {
+            native: {
+              streaming: {
+                preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["42"] },
+              },
+            },
+            flat: {
+              streamMode: "partial",
+              chunkMode: "newline",
+              blockStreaming: true,
+              blockStreamingCoalesce: {},
+              draftChunk: {},
+            },
+            scalar: { streaming: "block" },
+            disabled: { streaming: false },
+          },
+        },
+      };
+      const includedBytes = JSON.stringify(channels);
+      await fs.writeFile(includePath, includedBytes);
+      const rootBytes = await fs.readFile(configPath, "utf8");
+      const backupBytes = '{"gateway":{"mode":"local"}}\n';
+      await fs.writeFile(`${configPath}.bak`, backupBytes);
+      const failure = await prepareDoctorContext(configPath).then(
+        () => null,
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toHaveProperty(
+        "message",
+        expect.stringContaining("Install OpenClaw 2026.9.5"),
+      );
+      for (const field of [
+        "channels.telegram.dm",
+        "channels.telegram.direct.42.threadReplies",
+        "channels.telegram.accounts.native.streaming.preview.nativeToolProgress",
+        "channels.telegram.accounts.native.streaming.preview.nativeToolProgressAllowFrom",
+        "channels.telegram.accounts.flat.streamMode",
+        "channels.telegram.accounts.flat.chunkMode",
+        "channels.telegram.accounts.flat.blockStreaming",
+        "channels.telegram.accounts.flat.blockStreamingCoalesce",
+        "channels.telegram.accounts.flat.draftChunk",
+        "channels.telegram.accounts.scalar.streaming",
+        "channels.telegram.accounts.disabled.streaming",
+      ]) {
+        expect(failure).toHaveProperty("message", expect.stringContaining(field));
+      }
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootBytes);
+      await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includedBytes);
+      await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupBytes);
+    });
+  });
+
+  it("keeps canonical Telegram streaming settings eligible for Doctor", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const channels = {
+        telegram: { streaming: { mode: "off" as const }, direct: { "42": {} } },
+      };
+      const configPath = await writeOpenClawConfig(home, {
+        channels,
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const ctx = await prepareDoctorContext(configPath);
+      expect(ctx.cfg.channels?.telegram?.streaming).toEqual(channels.telegram.streaming);
+    });
+  });
+
   it("preserves browser references across authorized successive writes and environment rotation", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       await withEnvAsync(

@@ -24,7 +24,7 @@ import {
   type EnvSubstitutionWarning,
   resolveConfigEnvVars,
 } from "../config/env-substitution.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
@@ -482,7 +482,7 @@ function materializeValidationRoster(config: OpenClawConfig): OpenClawConfig {
   // empty or malformed rosters must remain visible to schema repair.
   return hasAgentRosterProperty(config)
     ? config
-    : (migratePersistedImplicitMainRoster(config).config as OpenClawConfig);
+    : (applyImplicitAgentRosterDefaults(config) as OpenClawConfig);
 }
 
 export async function checkTouchedTextModelRefs(params: {

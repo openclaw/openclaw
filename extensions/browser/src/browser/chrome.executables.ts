@@ -474,7 +474,9 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
       if (!entry.startsWith("chromium-")) {
         continue;
       }
-      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+      // Playwright 1.63 uses Chrome for Testing's ARM64 layout; older installs
+      // still use chrome-linux. Keep both discoverable without a configured path.
+      for (const linuxDir of ["chrome-linux64", "chrome-linux", "chrome-linux-arm64"]) {
         candidates.push({
           kind: "chromium",
           path: path.join(browserPath, entry, linuxDir, "chrome"),

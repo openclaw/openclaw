@@ -443,7 +443,7 @@ struct DashboardManagerGatewayTargetTests {
             #expect(!recovered._testUpdateBridgeAvailable)
             #expect(manager._testController() === controller)
 
-            await manager._testSwitchTarget(.profile(studio), in: recovered)
+            _ = await manager.switchTarget(.profile(studio), in: recovered)?.value
             let replacement = try #require(manager._testAuxiliaryWindows().first?.controller)
             #expect(replacement !== auxiliary.controller)
             #expect(replacement.window === auxiliaryWindow)
@@ -500,11 +500,11 @@ struct DashboardManagerGatewayTargetTests {
         defer { manager.close() }
 
         let first = Task { @MainActor in
-            await manager._testSwitchTarget(.profile(firstID), in: controller)
+            _ = await manager.switchTarget(.profile(firstID), in: controller)?.value
         }
         await gate.waitUntilRequested()
         let second = Task { @MainActor in
-            await manager._testSwitchTarget(.profile(secondID), in: controller)
+            _ = await manager.switchTarget(.profile(secondID), in: controller)?.value
         }
         await second.value
         await gate.release()
@@ -566,7 +566,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(promotedWindow !== fixedWindow)
 
         primary.setEndpoint(saved.snapshot())
-        await manager._testSwitchTarget(.primary, in: promoted)
+        _ = await manager.switchTarget(.primary, in: promoted)?.value
         #expect(manager.gatewayEntries.contains { $0.id == "profile:saved-b" })
         saved.setEndpoint(GatewayConnection.EndpointSnapshot(
             config: (url: savedServer.websocketURL(), token: nil, password: "password-only"), routeAuthority: nil))
@@ -630,7 +630,7 @@ struct DashboardManagerGatewayTargetTests {
             try await manager.show()
             let source = try #require(manager._testController())
             let window = try #require(source.window)
-            let selection = Task { await manager._testSwitchTarget(.profile("secondary"), in: source) }
+            let selection = Task { _ = await manager.switchTarget(.profile("secondary"), in: source)?.value }
             await gate.waitUntilRequested()
 
             await manager.handleEndpointState(.connecting(mode: .remote, detail: "Reconnecting"))
@@ -667,7 +667,7 @@ struct DashboardManagerGatewayTargetTests {
             let secondary = try #require(manager._testAuxiliaryWindows().first?.controller)
             let window = try #require(secondary.window)
             await gate.hold()
-            let selection = Task { await manager._testSwitchTarget(.primary, in: secondary) }
+            let selection = Task { _ = await manager.switchTarget(.primary, in: secondary)?.value }
             await gate.waitUntilRequested()
             source.setEndpoint(GatewayConnection.EndpointSnapshot(
                 config: (url: server.websocketURL(), token: "after", password: nil), routeAuthority: nil))
@@ -925,7 +925,7 @@ struct DashboardManagerGatewayTargetTests {
                 source.closeDashboard()
                 manager.handleGatewayRequest(.openWindow(target), from: source)
             case "replaced-source":
-                await manager._testSwitchTarget(.profile("replacement"), in: source)
+                _ = await manager.switchTarget(.profile("replacement"), in: source)?.value
                 manager.handleGatewayRequest(.openWindow(target), from: source)
             default:
                 source.closeDashboard()
@@ -1039,7 +1039,7 @@ struct DashboardManagerGatewayTargetTests {
         #expect(manager._testController() === controller)
         #expect(controller.nativeBrowser.webView(for: "reading") === tab)
         #expect(controller.isWindowOpen)
-        #expect(manager._testPendingGatewayAlerts().isEmpty)
+        #expect(manager.alertPresenter._testPendingAlerts.isEmpty)
     }
 
     private func withConfiguredPrimary(_ body: @MainActor () async throws -> Void) async throws {
@@ -1112,7 +1112,7 @@ extension DashboardManagerGatewayTargetTests {
                 #expect(manager.showConfiguredWindowIfPossible())
             }
             let source = try #require(manager._testController())
-            await manager._testSwitchTarget(.profile("secondary"), in: source)
+            _ = await manager.switchTarget(.profile("secondary"), in: source)?.value
             let selected = try #require(manager._testController())
             #expect(manager._testMainTarget() == .profile("secondary"))
             await gate.release()

@@ -1,12 +1,14 @@
 import path from "node:path";
 import { serialize } from "node:v8";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { appendAttemptCacheTtlIfNeeded } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
+import { createToolResultPromptProjectionState } from "../embedded-agent-runner/session-prompt-state.js";
 import type { AgentEvent } from "../runtime/index.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import {
@@ -20,7 +22,7 @@ import { SessionManager } from "./session-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
-it("commits streamed messages off the host thread before adopting guard state and rebases only within the turn", async () => {
+it("commits streamed and custom messages off the host thread and adopts the committed branch", async () => {
   await withOpenClawTestState({ label: "session-stream-worker" }, async (state) => {
     const target = {
       agentId: "main",
@@ -42,8 +44,7 @@ it("commits streamed messages off the host thread before adopting guard state an
     const handleEvent = Reflect.get(session, "handleAgentEvent") as (
       event: AgentEvent,
     ) => Promise<void>;
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
-    const hostExec = vi.spyOn(database.db, "exec");
+    const sql = observeHostDataSql();
     const withWorker = metadataRuntime.withSessionMetadataWorker;
     const commandBytes: number[] = [];
     const workerSpy = vi
@@ -61,12 +62,21 @@ it("commits streamed messages off the host thread before adopting guard state an
         ),
       );
     const payload = "const value = 42;\n".repeat(1280);
+    const expectNoHostTranscriptSql = () => {
+      expect(
+        sql.queries.filter((query) =>
+          /\b(?:transcript_events|transcript_payloads|session_windows|session_nodes)\b|BEGIN\s+IMMEDIATE/i.test(
+            query,
+          ),
+        ),
+      ).toEqual([]);
+    };
     const assertWorkerCommit = async (
       message: Extract<AgentEvent, { type: "message_end" }>["message"],
     ) => {
-      hostExec.mockClear();
+      sql.queries.length = 0;
       await handleEvent({ type: "message_end", message });
-      expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+      expectNoHostTranscriptSql();
     };
     try {
       await assertWorkerCommit(
@@ -100,6 +110,66 @@ it("commits streamed messages off the host thread before adopting guard state an
       expect(loadTranscriptEventsSync(target)).toEqual(manager.getPersistedEntries());
       expect(committed).toEqual(["assistant", "toolResult", "assistant"]);
 
+      sql.queries.length = 0;
+      await appendAttemptCacheTtlIfNeeded({
+        sessionManager: manager,
+        timedOutDuringCompaction: false,
+        compactionOccurredThisAttempt: false,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+        provider: "anthropic",
+        modelId: "test-model",
+        isCacheTtlEligibleProvider: () => true,
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      });
+      expectNoHostTranscriptSql();
+      expect(manager.getLeafEntry()).toMatchObject({
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+      });
+      const priorLeaf = manager.getLeafId();
+      const customMessage = {
+        customType: "runtime-note",
+        content: "Synthetic custom message persisted before publication.",
+        display: true,
+        details: { source: "test" },
+      };
+      const published: string[] = [];
+      const unsubscribe = session.subscribe((event) => {
+        if (event.type === "message_end" && event.message.role === "custom") {
+          expect(manager.getLeafEntry()).toMatchObject({
+            type: "custom_message",
+            parentId: priorLeaf,
+            ...customMessage,
+          });
+          published.push(event.message.customType);
+        }
+      });
+      try {
+        sql.queries.length = 0;
+        await session.sendCustomMessage(customMessage);
+        expectNoHostTranscriptSql();
+      } finally {
+        unsubscribe();
+      }
+      expect(published).toEqual([customMessage.customType]);
+      expect(session.agent.state.messages.at(-1)).toMatchObject({
+        role: "custom",
+        ...customMessage,
+      });
+      const directCustomId = manager.getLeafId();
+      await assertWorkerCommit({
+        role: "custom",
+        ...customMessage,
+        customType: "streamed-note",
+        timestamp: 3,
+      });
+      expect(manager.getLeafEntry()).toMatchObject({
+        type: "custom_message",
+        parentId: directCustomId,
+        customType: "streamed-note",
+      });
+      expect(loadTranscriptEventsSync(target)).toEqual(manager.getPersistedEntries());
+
       SessionManager.open(target).appendMessage({
         role: "user",
         content: "new turn",
@@ -116,7 +186,7 @@ it("commits streamed messages off the host thread before adopting guard state an
       expect(committed).toEqual(["assistant", "toolResult", "assistant"]);
     } finally {
       workerSpy.mockRestore();
-      hostExec.mockRestore();
+      sql.restore();
       session.dispose();
     }
   });

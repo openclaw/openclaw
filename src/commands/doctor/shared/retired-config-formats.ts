@@ -55,6 +55,12 @@ export function findRetiredConfigUpgradeRequirement(
     ]);
     checkKeys(scope.sandbox, `${configPath}.sandbox`, ["perSession"]);
     checkKeys(scope.silentReply, `${configPath}.silentReply`, ["direct"]);
+    checkKeys(scope.model, `${configPath}.model`, ["timeoutMs"]);
+    checkKeys(
+      isRecord(scope.subagents) ? scope.subagents.model : undefined,
+      `${configPath}.subagents.model`,
+      ["timeoutMs"],
+    );
     checkMemoryStore(scope, `${configPath}.`);
   });
   if (isRecord(config.surfaces)) {
@@ -82,6 +88,31 @@ export function findRetiredConfigUpgradeRequirement(
   checkKeys(config.gateway, "gateway", ["webchat"]);
   checkKeys(channels, "channels", ["webchat"]);
   checkKeys(channels.telegram, "channels.telegram", ["requireMention"]);
+  visitChannelEntries(config, "telegram", (scope, configPath) => {
+    checkKeys(scope, configPath, [
+      "streamMode",
+      "chunkMode",
+      "blockStreaming",
+      "blockStreamingCoalesce",
+      "draftChunk",
+    ]);
+    if (isRecord(scope.dm)) {
+      retired.push(`${configPath}.dm`);
+    }
+    if (typeof scope.streaming === "boolean" || typeof scope.streaming === "string") {
+      retired.push(`${configPath}.streaming`);
+    }
+    const streaming = isRecord(scope.streaming) ? scope.streaming : {};
+    checkKeys(streaming.preview, `${configPath}.streaming.preview`, [
+      "nativeToolProgress",
+      "nativeToolProgressAllowFrom",
+    ]);
+    if (isRecord(scope.direct)) {
+      for (const [chatId, direct] of Object.entries(scope.direct)) {
+        checkKeys(direct, `${configPath}.direct.${chatId}`, ["threadReplies"]);
+      }
+    }
+  });
   for (const channelId of ["discord", "line", "matrix", "telegram"]) {
     visitChannelEntries(config, channelId, (scope, configPath) => {
       checkKeys(scope.threadBindings, `${configPath}.threadBindings`, ["ttlHours"]);

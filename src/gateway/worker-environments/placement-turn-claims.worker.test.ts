@@ -473,14 +473,10 @@ it("settles a failed local startup after precommit release contention without re
   ).resolves.toBe("next turn completed");
 });
 
-it.each(
-  (["ordinary", "forced"] as const).flatMap((completion) =>
-    (["authority", "entered writer"] as const).map((failure) => ({ completion, failure })),
-  ),
-)(
-  "retains $failure cleanup refusal across $completion local completion",
-  async ({ completion, failure }) => {
-    const claim = input(`release-refused-${completion}-${failure}`);
+it.each(["authority", "entered writer"] as const)(
+  "retains %s cleanup refusal from forced settlement through ordinary completion",
+  async (failure) => {
+    const claim = input(`release-refused-forced-${failure}`);
     const refused =
       failure === "authority"
         ? new Error("release authority refused")
@@ -500,23 +496,19 @@ it.each(
             admit(request, grant);
           }, attachment),
       );
-      if (completion === "forced") {
-        forcedSettlement = resolveSessionPlacementForcedTerminalSettlement();
-        if (forcedSettlement) {
-          try {
-            await forcedSettlement();
-          } catch (error) {
-            forcedFailure = error;
-          }
+      forcedSettlement = resolveSessionPlacementForcedTerminalSettlement();
+      if (forcedSettlement) {
+        try {
+          await forcedSettlement();
+        } catch (error) {
+          forcedFailure = error;
         }
       }
       throw startupError;
     });
     await expect(executeLocalTurn({ claim, placements, runLocal })).rejects.toBe(refused);
-    if (completion === "forced") {
-      expect(forcedSettlement).toBeTypeOf("function");
-      expect(forcedFailure).toBe(refused);
-    }
+    expect(forcedSettlement).toBeTypeOf("function");
+    expect(forcedFailure).toBe(refused);
     expect(runLocal).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     const retained = release.mock.calls[0]![0];

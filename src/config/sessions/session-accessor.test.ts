@@ -1453,7 +1453,7 @@ describe("session accessor seam", () => {
       "agent:main:other",
       "agent:main:shared-running",
     ]);
-    const doneSessions = listSessionEntriesByStatus({ storePath }, ["done"]);
+    const doneSessions = await listSessionEntriesByStatus({ storePath }, ["done"]);
     expect(doneSessions.map((entry) => entry.sessionKey)).toEqual([
       "agent:main:done",
       "agent:main:shared-done",

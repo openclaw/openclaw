@@ -135,9 +135,9 @@ import {
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { projectSessionEntryLifecycleCarry } from "./session-entry-lifecycle-carry.js";
 import {
-  buildSessionStartHookPayload,
   createReplySessionResetBoundary,
   emitReplySessionEndHook,
+  emitReplySessionStartHook,
   resolveExplicitSessionEndReason,
   resolveStaleSessionEndReason,
 } from "./session-hooks.js";
@@ -1251,15 +1251,12 @@ async function initSessionStateAttemptLocked(
       });
     }
     if (hookRunner.hasHooks("session_start")) {
-      const payload = buildSessionStartHookPayload({
+      emitReplySessionStartHook(hookRunner, {
         sessionId: effectiveSessionId,
         sessionKey,
         agentId,
         resumedFrom: previousSessionEntry?.sessionId,
       });
-      void runWithGatewayIndependentRootWorkContinuation(async () => {
-        await hookRunner.runSessionStart(payload.event, payload.context);
-      }, "hooks:session-start").catch(() => {});
     }
   }
 

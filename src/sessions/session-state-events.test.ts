@@ -52,7 +52,7 @@ import {
   seedChild,
   watcher,
 } from "./session-state-events.test-support.js";
-import { recordSubagentTerminalState } from "./subagent-terminal-state.js";
+import { prepareSubagentTerminalState } from "./subagent-terminal-state.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -978,33 +978,20 @@ describe("session state events", () => {
     });
     const terminalContext = captureOpenClawStateWorkerContext(database);
     const assertTerminalCurrent = () => terminalContext.admission.assertCurrent();
-    await recordSubagentTerminalState(
-      {
+    for (const terminal of [
+      { runId: "run-child", outcomeStatus: "ok" },
+      { runId: "run-child", outcomeStatus: "ok" },
+      { runId: "run-child-cancelled", outcomeStatus: "cancelled" },
+    ] as const) {
+      const prepared = prepareSubagentTerminalState({
         childSessionKey: child,
-        runId: "run-child",
         requesterSessionKey: watcher,
-        outcomeStatus: "ok",
-      },
-      assertTerminalCurrent,
-    );
-    await recordSubagentTerminalState(
-      {
-        childSessionKey: child,
-        runId: "run-child",
-        requesterSessionKey: watcher,
-        outcomeStatus: "ok",
-      },
-      assertTerminalCurrent,
-    );
-    await recordSubagentTerminalState(
-      {
-        childSessionKey: child,
-        runId: "run-child-cancelled",
-        requesterSessionKey: watcher,
-        outcomeStatus: "cancelled",
-      },
-      assertTerminalCurrent,
-    );
+        ...terminal,
+      });
+      await recordSessionStateEventAsync(prepared.input.event, {
+        assertCurrent: assertTerminalCurrent,
+      });
+    }
     await recordSessionGoalChanged({
       sessionKey: child,
       entry: {

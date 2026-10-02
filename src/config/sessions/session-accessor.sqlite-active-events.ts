@@ -30,7 +30,6 @@ import {
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
-  iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
   readVisibleMessageRange,
   resolveVisibleMessagePositions,
@@ -71,19 +70,24 @@ export function readSessionTranscriptMessageEvents(
 /** Reads the last active-path message without hydrating its historical ancestors. */
 export function readLatestSessionTranscriptMessageEvent(
   scope: SessionTranscriptReadScope,
+  options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
 ): SessionTranscriptMessageEvent | undefined {
-  return withCurrentProjectionSnapshot(scope, (projection) => {
-    const fence = resolveSqliteSessionTranscriptReadFence({
-      database: projection.database,
-      ...projection.resolved,
-    });
-    const row = getMessageRangeReaders(projection.database).latest({
-      sessionId: projection.resolved.sessionId,
-      start: 0,
-      endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
-    });
-    return row ? parseActiveTranscriptMessageRow(row) : undefined;
-  });
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) => {
+      const fence = resolveSqliteSessionTranscriptReadFence({
+        database: projection.database,
+        ...projection.resolved,
+      });
+      const row = getMessageRangeReaders(projection.database).latest({
+        sessionId: projection.resolved.sessionId,
+        start: 0,
+        endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
+      });
+      return row ? parseActiveTranscriptMessageRow(row) : undefined;
+    },
+    options,
+  );
 }
 
 /** Checks user control facts from an exact input on one active-path snapshot, without loading bodies. */
@@ -155,20 +159,6 @@ export function everySessionTranscriptUserInputFrom(
   });
 }
 
-/** Visits messages synchronously inside one active-path read snapshot. */
-export function visitSessionTranscriptMessageEvents(
-  scope: SessionTranscriptReadScope,
-  visit: (entry: SessionTranscriptMessageEvent) => void,
-): void {
-  withCurrentProjectionSnapshot(scope, (projection) => {
-    const visible = resolveVisibleMessagePositions(projection);
-    // Keep cursors inside the snapshot; for-of closes them on visitor or parse failure.
-    for (const entry of iterateVisibleMessageRange(projection, 0, visible.total)) {
-      visit(entry);
-    }
-  });
-}
-
 /** Read one active identity using the caller's existing admitted snapshot. */
 export function readActiveTranscriptEntryIdentityInSnapshot(
   projection: CurrentTranscriptProjection,
@@ -215,13 +205,17 @@ export function readSessionTranscriptActivePathEntryRelation(
 export function readRecentSessionTranscriptActiveEvents(
   scope: SessionTranscriptReadScope,
   maxEvents: number,
+  options?: Parameters<typeof withCurrentProjectionSnapshot>[2],
 ): TranscriptEvent[] {
-  return withCurrentProjectionSnapshot(scope, (projection) =>
-    withRecentSessionTranscriptActiveEventsInSnapshot(projection, maxEvents, (visit) => {
-      const events: TranscriptEvent[] = [];
-      visit((event) => events.push(event));
-      return events.toReversed();
-    }),
+  return withCurrentProjectionSnapshot(
+    scope,
+    (projection) =>
+      withRecentSessionTranscriptActiveEventsInSnapshot(projection, maxEvents, (visit) => {
+        const events: TranscriptEvent[] = [];
+        visit((event) => events.push(event));
+        return events.toReversed();
+      }),
+    options,
   );
 }
 

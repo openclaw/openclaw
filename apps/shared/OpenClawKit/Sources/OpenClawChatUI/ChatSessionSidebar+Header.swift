@@ -50,7 +50,7 @@ extension ChatSessionSidebar {
         .disabled(self.viewModel.isCreatingSession)
     }
 
-    var threadsHeading: some View {
+    func threadsHeading(ownership: ChatSidebarOwnership) -> some View {
         HStack(alignment: .firstTextBaseline) {
             Text("Threads")
                 .font(OpenClawChatTypography.body(size: 12, weight: .semibold, relativeTo: .body))
@@ -59,31 +59,26 @@ extension ChatSessionSidebar {
                 .font(OpenClawChatTypography.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            Menu {
-                Picker("Sort", selection: self.$sessionSort) {
-                    Text("Created").tag(ChatSessionSidebarModel.Sort.created)
-                    Text("Last updated").tag(ChatSessionSidebarModel.Sort.updated)
+            Button { self.isPresentingFilters.toggle() } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "line.3.horizontal.decrease")
+                    if self.filterOptions.filterCount > 0 {
+                        Text(self.filterOptions.filterCount, format: .number).monospacedDigit()
+                    }
                 }
-                .pickerStyle(.inline)
-                Divider()
-                Toggle("Show message preview", isOn: self.$showMessagePreview)
-                Toggle("Show automation sessions", isOn: self.$showAutomationSessions)
-                Toggle("Show system sessions", isOn: self.$showSystemSessions)
-            } label: {
-                Image(systemName: "line.3.horizontal.decrease")
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(width: 22, height: 22)
-                    .contentShape(Rectangle())
+                .font(OpenClawChatTypography.caption)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 22, minHeight: 22)
+                .contentShape(Rectangle())
             }
-            // Keep the custom label visible when the sidebar's window is inactive.
-            .menuStyle(.button)
             .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
             .help(String(localized: "View options"))
             .accessibilityLabel(String(localized: "View options"))
             .accessibilityIdentifier("chat-sidebar-view-options")
+            .popover(isPresented: self.$isPresentingFilters) {
+                ChatSessionSidebarFilters(options: self.filterBinding, ownership: ownership)
+                    .onExitCommand { self.isPresentingFilters = false }
+            }
         }
         .padding(.top, 14)
         .padding(.bottom, 2)

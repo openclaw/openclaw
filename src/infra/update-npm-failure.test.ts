@@ -23,15 +23,20 @@ describe("npm install failure reports", () => {
       ].join("\n");
       const step = await runStep({
         name: "package-install",
-        argv: [
-          process.execPath,
-          "-e",
-          "process.stderr.write(process.argv[1]); process.exitCode = 1",
-          stderr,
-        ],
+        argv: ["npm", "install", "-g", "openclaw"],
         cwd: process.cwd(),
         env: context.env,
-        runCommand: runCommandWithTimeout,
+        // Keep the classified package manager independent of the fixture's Node/Bun runner.
+        runCommand: (_argv, options) =>
+          runCommandWithTimeout(
+            [
+              process.execPath,
+              "-e",
+              "process.stderr.write(process.argv[1]); process.exitCode = 1",
+              stderr,
+            ],
+            options,
+          ),
         stepIndex: 0,
         totalSteps: 1,
       });

@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
+import { saveCronJobsStore } from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
 import {
@@ -37,6 +38,8 @@ describe("Doctor workspace persistence", () => {
               systemPromptOverride: "custom prompt",
               silentReplyRewrite: true,
               silentReply: { direct: true },
+              model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+              subagents: { model: { primary: "openai/gpt-5.6-sol", timeoutMs: 10_000 } },
             },
             entries: {
               ops: {
@@ -45,6 +48,8 @@ describe("Doctor workspace persistence", () => {
                 agentRuntime: {},
                 sandbox: { perSession: true },
                 memorySearch: { store: { path: "old.sqlite" } },
+                model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+                subagents: { model: { primary: "openai/gpt-5.6-sol", timeoutMs: 10_000 } },
               },
             },
           },
@@ -75,6 +80,10 @@ describe("Doctor workspace persistence", () => {
           "agentRuntime",
           "sandbox.perSession",
           "memorySearch.store.path",
+          "agents.defaults.model.timeoutMs",
+          "agents.defaults.subagents.model.timeoutMs",
+          "agents.entries.ops.model.timeoutMs",
+          "agents.entries.ops.subagents.model.timeoutMs",
           "parentForkMaxTokens",
           "relayBindHost",
           "allowPrivateNetwork",
@@ -164,7 +173,7 @@ describe("Doctor workspace persistence", () => {
                 memorySearch: { enabled: false, extraPaths: [path.join(home, "notes")] },
                 sandbox: { scope: "agent", browser: { enableNoVnc: true } },
                 embeddedAgent: { executionContract: "default" },
-                model: { primary: "openai/gpt-5.6-sol", timeoutMs: 20_000 },
+                model: { primary: "openai/gpt-5.6-sol" },
               },
               research: { memory: { search: { provider: "auto" } } },
             };
@@ -258,11 +267,7 @@ describe("Doctor workspace persistence", () => {
             });
             const before = await readConfigFileSnapshot();
             expect(before.valid).toBe(false);
-            if (legacyId === "main") {
-              expect(resolveAgentWorkspaceDir(before.sourceConfig, "main")).toBe(workspace);
-            } else {
-              expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
-            }
+            expect(before.sourceConfig.agents?.list?.[0]?.id).toBe(legacyId);
 
             const ctx = await prepareDoctorContext(configPath);
             await runInitialConfigWriteHealth(ctx);
@@ -361,24 +366,26 @@ describe("Doctor workspace persistence", () => {
             plugins: { enabled: false },
           });
           const storePath = path.join(stateDir, "cron", "jobs.json");
-          await fs.mkdir(path.dirname(storePath), { recursive: true });
-          await fs.writeFile(
-            storePath,
-            JSON.stringify({
-              version: 1,
-              jobs: [
-                makeCronJob({
-                  id: "retained-owner",
-                  enabled: false,
-                  payload: {
-                    kind: "agentTurn",
-                    message: "Do not run this disabled job",
-                    model: "codex/gpt-5.6-sol",
-                  },
-                }),
-              ],
-            }),
-          );
+          await saveCronJobsStore(storePath, {
+            version: 1,
+            jobs: [
+              makeCronJob({
+                id: "retained-owner",
+                enabled: false,
+                payload: {
+                  kind: "agentTurn",
+                  message: "Do not run this disabled job",
+                  model: "codex/gpt-5.6-sol",
+                },
+              }),
+            ],
+          });
+          const seededRows = loadCronRows(openOpenClawStateDatabase().db, cronStoreKey(storePath));
+          expect(seededRows).toHaveLength(1);
+          expect(seededRows[0]?.agent_id).toBeNull();
+          const seededJob: unknown = JSON.parse(seededRows[0]!.job_json);
+          expect(seededJob).not.toHaveProperty("agentId");
+          expect(seededJob).toMatchObject({ payload: { model: "codex/gpt-5.6-sol" } });
 
           let firstPolicies: unknown;
           let firstRows: unknown;

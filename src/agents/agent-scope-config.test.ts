@@ -2,10 +2,10 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import * as agentRoster from "./agent-roster.js";
 import {
   AgentSelectionRequiredError,
@@ -189,7 +189,7 @@ describe("agent roster resolution", () => {
     },
     {
       name: "configured system agent before a retained migrated legacy owner",
-      config: migratePersistedImplicitMainRoster({
+      config: createCanonicalAgentConfigFixture({
         agents: {
           defaults: { systemAgent: { agentId: "beta" } },
           entries: { alpha: { default: true }, beta: {} },
@@ -292,7 +292,7 @@ describe("agent roster resolution", () => {
   });
 
   it("preserves retained legacy ownership for migrated CLI operations", () => {
-    const cfg = migratePersistedImplicitMainRoster({
+    const cfg = createCanonicalAgentConfigFixture({
       agents: {
         entries: { ops: { default: true }, research: {} },
       },
@@ -303,7 +303,7 @@ describe("agent roster resolution", () => {
   });
 
   it("uses the recorded explicit owner ahead of migration provenance and retired markers", () => {
-    const migrated = migratePersistedImplicitMainRoster({
+    const migrated = createCanonicalAgentConfigFixture({
       agents: {
         defaults: { systemAgent: { agentId: "research" } },
         entries: { ops: { default: true }, research: {} },
@@ -352,7 +352,7 @@ describe("agent roster resolution", () => {
 
   it("does not designate a sole explicit agent from migration provenance", () => {
     const config = retainLegacyDefaultAgentId(
-      { agents: { ownership: "explicit", entries: { ops: {} } } },
+      { agents: { ownership: "explicit", entries: { ops: {} } } } satisfies OpenClawConfig,
       "ops",
     );
     expect(tryResolveLegacyCompatibilityAgentId(config)).toBeUndefined();
@@ -440,12 +440,12 @@ describe("agent roster resolution", () => {
     expect(resolveAgentEntry(config, "OPS")?.name).toBe("first");
   });
 
-  it("refreshes immutable roster facts when retained migration ownership changes", () => {
+  it("does not treat Doctor migration provenance as runtime ownership", () => {
     const config = captureRuntimeConfig({ agents: { entries: { ops: {}, research: {} } } });
     retainLegacyDefaultAgentId(config, "ops");
-    expect(tryResolveLegacyDataOwnerAgentId(config)).toBe("ops");
+    expect(tryResolveLegacyDataOwnerAgentId(config)).toBeUndefined();
     retainLegacyDefaultAgentId(config, "research");
-    expect(tryResolveLegacyDataOwnerAgentId(config)).toBe("research");
+    expect(tryResolveLegacyDataOwnerAgentId(config)).toBeUndefined();
     retainLegacyDefaultAgentId(config, undefined);
     expect(tryResolveLegacyDataOwnerAgentId(config)).toBeUndefined();
   });
@@ -457,8 +457,8 @@ describe("agent roster resolution", () => {
     expect(resolveAgentConfig(config, "ops")?.name).toBe("after");
   });
 
-  it("keeps the retained legacy owner on the inherited workspace before config write", () => {
-    const cfg = migratePersistedImplicitMainRoster({
+  it("uses the workspace owner persisted by Doctor without migration provenance", () => {
+    const cfg = createCanonicalAgentConfigFixture({
       agents: {
         defaults: { workspace: "/srv/ops" },
         entries: { ops: { default: true }, research: {} },
@@ -466,7 +466,7 @@ describe("agent roster resolution", () => {
     }).config as OpenClawConfig;
 
     expect(cfg.agents?.entries?.ops?.default).toBeUndefined();
-    expect(cfg.agents?.entries?.ops?.workspace).toBeUndefined();
+    expect(cfg.agents?.entries?.ops?.workspace).toBe("/srv/ops");
     expect(resolveAgentWorkspaceDir(cfg, "ops")).toBe(path.resolve("/srv/ops"));
     expect(resolveAgentWorkspaceDir(cfg, "research")).toBe(path.resolve("/srv/ops/research"));
   });

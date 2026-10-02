@@ -266,10 +266,13 @@ export async function mountControlUiHost(
 <script type="module">
 import { GatewayBrowserClient } from "/src/api/gateway.ts";
 import "/src/components/mcp-app-view-registration.ts";
-import { WIDGET_PROMPT_EVENT } from "/src/components/mcp-app-security.ts";
+import { MCP_APP_MESSAGE_EVENT } from "/src/components/mcp-app-security.ts";
+import { mcpAppMessageText } from "/src/lib/mcp-app-message-content.ts";
 window.mcpConformanceGatewayBrowserClient = GatewayBrowserClient;
-document.addEventListener(WIDGET_PROMPT_EVENT, (event) => {
-  window.mcpConformancePrompt = event.detail.text;
+document.addEventListener(MCP_APP_MESSAGE_EVENT, (event) => {
+  event.preventDefault();
+  window.mcpConformancePrompt = mcpAppMessageText(event.detail.content);
+  event.detail.respond(true);
 });
 window.mcpConformanceUnmount = async () => {
   const mount = document.getElementById("mount");

@@ -1,6 +1,11 @@
 import { getChildLogger } from "../logging/logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  mapRetainedOperation,
+  type RetainedOperation,
+} from "./retained-operation.js";
 import {
   retainSnapshotWork,
   SqliteSnapshotCleanupError,
@@ -88,54 +93,23 @@ function removeFlight(key: string, flight: SnapshotFlight): void {
 }
 
 function startReleaseFlight(key: string, flight: SnapshotFlight): RetainedOperation<boolean> {
-  let cleanup: RetainedOperation<boolean> | undefined;
-  let producerClose: RetainedOperation<void> | undefined;
-  const retained = createRetainedOperation<boolean>(() => {
-    if (!cleanup || retained.operation.read().status !== "pending") {
-      return;
-    }
-    cleanup.service();
-    const result = cleanup.read();
-    if (result.status === "rejected") {
-      retained.reject(result.error);
-    } else if (result.status === "fulfilled") {
-      if (!result.value) {
-        retained.resolve(false);
-        return;
-      }
-      if (!producerClose) {
-        producerClose = startCloseProducer(flight);
-        void producerClose.result.then(
-          () => retained.operation.service(),
-          () => retained.operation.service(),
-        );
-      }
-      producerClose.service();
-      const closed = producerClose.read();
-      if (closed.status === "pending") {
-        return;
-      }
-      if (closed.status === "rejected") {
-        retained.reject(closed.error);
-        return;
-      }
-      flight.leases--;
-      removeFlight(key, flight);
-      retained.resolve(true);
-    }
-  });
   if (flight.leases > 1 || flight.waiters > 0) {
+    const retained = createRetainedOperation<boolean>(() => {});
     flight.leases--;
     retained.resolve(true);
-  } else {
-    cleanup = flight.startCleanup!();
-    void cleanup.result.then(
-      () => retained.operation.service(),
-      () => retained.operation.service(),
-    );
-    retained.operation.service();
+    return retained.operation;
   }
-  return retained.operation;
+  const cleanup = flight.startCleanup!();
+  return flatMapRetainedOperation(cleanup, (removed) => {
+    if (!removed) {
+      return cleanup;
+    }
+    return mapRetainedOperation(startCloseProducer(flight), () => {
+      flight.leases--;
+      removeFlight(key, flight);
+      return true;
+    });
+  });
 }
 
 function leaseFlight(

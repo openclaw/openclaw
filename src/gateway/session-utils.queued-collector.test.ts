@@ -15,6 +15,7 @@ import {
   releaseSubagentRun,
   releaseSubagentRunKillClaim,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { isSameSubagentRunOwner } from "../agents/subagents/registry/subagent-run-generation.js";
 import * as nativeSpawn from "../agents/subagents/spawn/subagent-spawn.js";
 import {
   activateSwarmRun,
@@ -515,8 +516,8 @@ describe("queued collector session projection", () => {
       respond,
     });
     expectAborted(respond, entry.runId);
-    expect(entry.collectorCompletion?.status).toBe("killed");
-    expect(entry.execution.startedAt).toBeUndefined();
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
+    expect(subagentRuns.get(entry.runId)?.execution.startedAt).toBeUndefined();
     expect(isSubagentRunQueued(unrelated.entry)).toBe(true);
     expect(launchedRunIds).toEqual([]);
   });
@@ -526,7 +527,8 @@ describe("queued collector session projection", () => {
     const context = requestContext();
     const order: string[] = [];
     vi.mocked(context.broadcastToConnIds).mockImplementation(() => {
-      expect(subagentRuns.get(entry.runId)).toBe(entry);
+      expect(isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry)).toBe(true);
+      expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
       order.push("published");
     });
     const kill = subagentKill.killSubagentRunAdmin;
@@ -536,7 +538,7 @@ describe("queued collector session projection", () => {
         const result = await kill(...args);
         // Real cancellation is complete; an awaited consumer can now observe
         // another owner before it consumes the predecessor's result.
-        releaseSubagentRun(entry.runId);
+        await releaseSubagentRun(entry.runId);
         {
           reserveSwarmRun({
             runId: entry.runId,
@@ -734,7 +736,7 @@ describe("queued collector session projection", () => {
       respond,
     });
     expectAborted(respond, entry.runId);
-    expect(entry.collectorCompletion?.status).toBe("killed");
+    expect(subagentRuns.get(entry.runId)?.collectorCompletion?.status).toBe("killed");
   });
 
   it.each([

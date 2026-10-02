@@ -129,13 +129,7 @@ function readChatMessagePreview(toolMessage: Record<string, unknown>): ChatMessa
     }
   }
   const text = extractTextCached(toolMessage) ?? undefined;
-  const toolName =
-    typeof toolMessage.toolName === "string"
-      ? toolMessage.toolName
-      : typeof toolMessage.tool_name === "string"
-        ? toolMessage.tool_name
-        : undefined;
-  const preview = extractToolPreview(text, toolName);
+  const preview = extractToolPreview(text);
   if (preview?.kind !== "canvas") {
     return null;
   }

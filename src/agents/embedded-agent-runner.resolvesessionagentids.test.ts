@@ -51,20 +51,16 @@ describe("session agent ownership", () => {
   it.each([
     { config: {}, expected: "main" },
     { config: { agents: { entries: { beta: {} } } }, expected: "beta" },
-    {
-      config: { agents: { list: [{ id: "main" }, { id: "beta", default: true }] } },
-      expected: "beta",
-    },
   ])("preserves ownerless fallback for %j", ({ config: fallbackConfig, expected }) => {
     expect(resolve({ config: fallbackConfig })).toBe(expected);
   });
 
-  it("uses the retained migration owner only while configured", () => {
+  it("does not use retained migration metadata to select a runtime owner", () => {
     const migrated: OpenClawConfig = {
       agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
     };
     setRetainedLegacyDefaultAgentId(migrated, "beta");
-    expect(resolve({ config: migrated })).toBe("beta");
+    expect(() => resolve({ config: migrated })).toThrow(AgentSelectionRequiredError);
     setRetainedLegacyDefaultAgentId(migrated, "retired");
     expect(() => resolve({ config: migrated })).toThrow(AgentSelectionRequiredError);
   });
@@ -111,15 +107,13 @@ describe("session agent ownership", () => {
     expect(resolve({ config, ...owner })).toBe(expected);
   });
 
-  it.each(["raw", "retained"])("preserves a different %s default for paired callers", (source) => {
+  it("keeps the selected owner for paired callers despite retained migration metadata", () => {
     const paired: OpenClawConfig = {
-      agents: { entries: { main: { default: source === "raw" }, beta: {} } },
+      agents: { ownership: "explicit", entries: { main: {}, beta: {} } },
     };
-    if (source === "retained") {
-      setRetainedLegacyDefaultAgentId(paired, "main");
-    }
+    setRetainedLegacyDefaultAgentId(paired, "main");
     expect(resolveSessionAgentIds({ config: paired, agentId: "beta" })).toEqual({
-      defaultAgentId: "main",
+      defaultAgentId: "beta",
       sessionAgentId: "beta",
     });
   });

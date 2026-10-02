@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import {
   loadTranscriptEvents,
@@ -51,12 +52,15 @@ async function withTranscriptOwners(
 
 async function createTranscriptOwners(stateDir: string) {
   const memory = SessionManager.inMemory(stateDir);
-  const entryId = memory.appendMessage({
-    role: "user",
-    content: "memory ".repeat(40),
-    timestamp: 1,
-  });
-  memory.appendMessage({ role: "user", content: "memory tail", timestamp: 2 });
+  const entryId = expectDefined(
+    await memory.appendMessageAsync({
+      role: "user",
+      content: "memory ".repeat(40),
+      timestamp: 1,
+    }),
+    "memory owner entry id",
+  );
+  await memory.appendMessageAsync({ role: "user", content: "memory tail", timestamp: 2 });
   const target = {
     agentId: "main",
     sessionId: memory.getSessionId(),
@@ -72,7 +76,7 @@ async function createTranscriptOwners(stateDir: string) {
     }
   }
   await replaceTranscriptEvents(target, [memory.getHeader(), ...durableEntries]);
-  const durable = SessionManager.open(target, stateDir);
+  const durable = await SessionManager.openAsync(target, stateDir);
   const durableBefore = await loadTranscriptEvents(target);
   return {
     memory,
@@ -100,7 +104,7 @@ describe("context-engine maintenance transcript ownership", () => {
       const events: string[] = [];
       const published = vi.fn();
       const unsubscribe = onSessionTranscriptUpdate(published);
-      const open = vi.spyOn(SessionManager, "open");
+      const openAsync = vi.spyOn(SessionManager, "openAsync");
       const maintain = vi.fn<NonNullable<ContextEngine["maintain"]>>(async ({ runtimeContext }) => {
         await release.promise;
         expect.soft(runtimeContext?.allowDeferredCompactionExecution).toBeUndefined();
@@ -142,14 +146,14 @@ describe("context-engine maintenance transcript ownership", () => {
           .soft(manager.getBranch().map((entry) => entry.type === "message" && entry.message))
           .toEqual([replacement, { role: "user", content: "memory tail", timestamp: 2 }]);
         expect.soft(events).toEqual(["locked", "unlocked", "maintained", "returned"]);
-        expect.soft(open).not.toHaveBeenCalled();
+        expect.soft(openAsync).not.toHaveBeenCalled();
         expect.soft(published).not.toHaveBeenCalled();
         expect.soft(await loadTranscriptEvents(target)).toEqual(durableBefore);
         expect.soft(deferred).toHaveLength(0);
       } finally {
         release.resolve();
         await Promise.allSettled([run, ...deferred]);
-        open.mockRestore();
+        openAsync.mockRestore();
         unsubscribe();
       }
     });
@@ -162,7 +166,7 @@ describe("context-engine maintenance transcript ownership", () => {
         const deferred: Promise<void>[] = [];
         const published = vi.fn();
         const unsubscribe = onSessionTranscriptUpdate(published);
-        const open = vi.spyOn(SessionManager, "open");
+        const openAsync = vi.spyOn(SessionManager, "openAsync");
         const lock = vi.fn();
         const run = runContextEngineMaintenance({
           ...params,
@@ -183,7 +187,7 @@ describe("context-engine maintenance transcript ownership", () => {
         try {
           await run;
           await Promise.all(deferred);
-          expect(open).toHaveBeenCalledExactlyOnceWith(target);
+          expect(openAsync).toHaveBeenCalledExactlyOnceWith(target);
           expect(lock).not.toHaveBeenCalled();
           expect(published).toHaveBeenCalledExactlyOnceWith({
             agentId: target.agentId,
@@ -195,7 +199,7 @@ describe("context-engine maintenance transcript ownership", () => {
               sessionKey: target.sessionKey,
             },
           });
-          expect(SessionManager.open(target).getBranch()[0]).toMatchObject({
+          expect((await SessionManager.openAsync(target)).getBranch()[0]).toMatchObject({
             message: replacement,
           });
           expect(durable.getBranch()[0]).toMatchObject({
@@ -204,7 +208,7 @@ describe("context-engine maintenance transcript ownership", () => {
           expect(deferred).toHaveLength(executionMode ? 0 : 1);
         } finally {
           await Promise.allSettled([run, ...deferred]);
-          open.mockRestore();
+          openAsync.mockRestore();
           unsubscribe();
         }
       });

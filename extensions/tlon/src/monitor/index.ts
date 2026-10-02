@@ -455,11 +455,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     let commandAuthorized = false;
 
     if (shouldComputeAuth) {
-      const useAccessGroups = true;
       const commandAccess = await resolveTlonCommandAuthorizationWithIngress({
         senderShip,
         ownerShip: effectiveOwnerShip,
-        useAccessGroups,
       });
       commandAuthorized = commandAccess.commandAccess.authorized;
 
@@ -706,7 +704,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               accountId: account.accountId,
               conversation: { kind: isGroup ? "group" : "direct", id: conversationId },
               allowFrom: [approval.requestingShip],
-              ...(isGroup ? { groupPolicy: "allowlist" } : { dmPolicy: "allowlist" }),
+              ...(isGroup ? { groupPolicy: "allowlist" } : {}),
               contextBinding,
             }),
         });
@@ -977,7 +975,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           accountId: account.accountId,
           conversation: { kind: "direct", id: senderShip },
           allowFrom: ownerDm ? [senderShip] : effectiveDmAllowlist,
-          dmPolicy: "allowlist",
           contextBinding,
         });
       if (!ownerDm && !(await resolveChannelIngress()).senderAccess.allowed) {

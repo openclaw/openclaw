@@ -256,13 +256,6 @@ function assertManagedMediaByteLimit(
   }
 }
 
-function estimateBase64DecodedByteLength(base64: string): number {
-  const normalized = base64.replace(/\s+/g, "");
-  const paddingMatch = /=+$/u.exec(normalized);
-  const padding = Math.min(paddingMatch?.[0].length ?? 0, 2);
-  return Math.floor((normalized.length * 3) / 4) - padding;
-}
-
 function getManagedImageMetadataLimitError(
   metadata: { width: number; height: number } | null,
   alt: string,
@@ -327,11 +320,7 @@ async function deleteAgedOrphanManagedImageFiles(params: {
     const filePath = path.join(originalsDir, name);
     try {
       const stat = await fs.lstat(filePath);
-      if (
-        !stat.isFile() ||
-        stat.isSymbolicLink() ||
-        params.nowMs - stat.mtimeMs < params.minAgeMs
-      ) {
+      if (!stat.isFile() || params.nowMs - stat.mtimeMs < params.minAgeMs) {
         continue;
       }
       await fs.rm(filePath, { force: true });
@@ -346,7 +335,7 @@ async function deleteAgedOrphanManagedImageFiles(params: {
 function deriveAltText(source: string, index: number) {
   const fallback = `Generated image ${index + 1}`;
   try {
-    if (/^https?:\/\//i.test(source)) {
+    if (hasHttpUrlPrefix(source)) {
       const parsed = new URL(source);
       const name = path.basename(parsed.pathname || "").trim();
       return name || fallback;
@@ -395,8 +384,10 @@ function parseMediaDataUrl(
   }
 
   const maxBytes = maxBytesForManagedMediaKind(mediaKind, imageLimits);
+  const base64 = base64Part.replace(/\s+/g, "");
+  const padding = Math.min(/=+$/u.exec(base64)?.[0].length ?? 0, 2);
   assertManagedMediaByteLimit(
-    estimateBase64DecodedByteLength(base64Part),
+    Math.floor((base64.length * 3) / 4) - padding,
     mediaKind,
     label,
     maxBytes,
@@ -404,7 +395,7 @@ function parseMediaDataUrl(
 
   return {
     kind: "media-data-url",
-    buffer: Buffer.from(base64Part.replace(/\s+/g, ""), "base64"),
+    buffer: Buffer.from(base64, "base64"),
     contentType,
     mediaKind,
   };
@@ -835,16 +826,17 @@ async function recordMatchesTranscriptMessage(
 
   // Archive file stats cannot establish current SQLite visibility. Reuse membership
   // only within a cleanup pass; each new request must select canonical history again.
+  // Cleanup also owns off-path branches because rewind/switch can expose them again;
+  // serving stays limited to visible history.
   const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
-  const messages = cache
-    ? (
-        await readSessionMessagesWithSourceAsync(scope, {
-          mode: "full",
-          reason: "managed outgoing attachment index",
-          allowResetArchiveFallback: true,
-        })
-      ).messages
-    : await readSessionMessagesMatchingIdAsync(scope, requestedMessageId);
+  const { messages } = cache
+    ? await readSessionMessagesWithSourceAsync(scope, {
+        mode: "full",
+        reason: "managed outgoing attachment index",
+        allowResetArchiveFallback: true,
+        includeOffPathMessages: true,
+      })
+    : { messages: await readSessionMessagesMatchingIdAsync(scope, requestedMessageId) };
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];

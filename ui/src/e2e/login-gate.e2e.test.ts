@@ -378,7 +378,7 @@ suite.define(() => {
         retryable: true,
       },
       expectedKind: "profile-unavailable",
-      expectedTitle: "Profile verification unavailable",
+      expectedTitle: "Couldn't verify your account",
     },
     {
       name: "GitHub profile rate limit",
@@ -390,7 +390,7 @@ suite.define(() => {
         retryable: true,
       },
       expectedKind: "profile-unavailable",
-      expectedTitle: "Profile verification unavailable",
+      expectedTitle: "Couldn't verify your account",
     },
   ])("renders $name guidance from the application gateway snapshot", async (fixture) => {
     const viewport = { height: 900, width: 1280 };

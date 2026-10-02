@@ -113,7 +113,7 @@ export function useSubagentRestartRecoveryFixture() {
     // Preserve stores and their environment while detached delivery still owns them.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
         clearRuntimeConfigSnapshot();
         if (tempStateDir) {

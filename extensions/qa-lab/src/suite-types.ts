@@ -3,7 +3,6 @@ import type {
   QaEvidenceOccurrence,
   QaEvidenceRttMeasurement,
   QaEvidenceTiming,
-  QaEvidenceSummaryJson,
   QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import type { QaCliBackendAuthMode, QaGatewayChildCommand } from "./gateway-child.js";
@@ -109,7 +108,7 @@ export type QaSuiteRunParams = {
 };
 
 export type QaSuiteResult = {
-  evidence?: QaEvidenceSummaryJson;
+  evidence: QaEvidenceSummaryV3Json;
   outputDir: string;
   evidencePath: string;
   reportPath: string;

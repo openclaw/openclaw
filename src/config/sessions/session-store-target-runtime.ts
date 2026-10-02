@@ -26,12 +26,17 @@ type StoreTargetReadOwner = {
 /** Capture registry admission now; retain its witness independently of discovery custody. */
 export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
+  unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
 ) {
   const { candidates, ...prepared } = request;
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env });
+  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead(
+    { env: request.env },
+    unchangedBy,
+  );
   let registryStarted = false;
   const assertRegistryCurrent = () => {
-    if (registryStarted) {
+    // Scoped publications need their witness even when discovery needs no registry rows.
+    if (registryStarted || unchangedBy) {
       registry.assertCurrent();
     }
   };

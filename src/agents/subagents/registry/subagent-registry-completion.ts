@@ -2,7 +2,11 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-cont
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import { SUBAGENT_KILL_TASK_ERROR, type SubagentTerminalState } from "./subagent-control.types.js";
+import {
+  SUBAGENT_KILL_TASK_ERROR,
+  type SubagentKillTargetState,
+  type SubagentTerminalState,
+} from "./subagent-control.types.js";
 import {
   SUBAGENT_ENDED_OUTCOME_ERROR,
   SUBAGENT_ENDED_OUTCOME_OK,
@@ -13,11 +17,43 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const log = createSubsystemLogger("agents/subagent-registry-completion");
 
+export function resolveSubagentKillTargetState(
+  entry: SubagentRunRecord,
+): SubagentKillTargetState | undefined {
+  if (
+    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+    entry.suppressAnnounceReason !== "steer-restart"
+  ) {
+    const taskEndedAt = resolveKilledSubagentTaskEndedAt(entry);
+    return typeof taskEndedAt === "number"
+      ? {
+          state: "terminal",
+          task: {
+            status: "cancelled",
+            endedAt: taskEndedAt,
+            error: SUBAGENT_KILL_TASK_ERROR,
+          },
+        }
+      : undefined;
+  }
+  const terminal = resolveFinalizedSubagentTaskState(entry);
+  if (terminal) {
+    return { state: "terminal", task: terminal };
+  }
+  return typeof entry.execution.endedAt === "number" &&
+    entry.pauseReason !== "sessions_yield" &&
+    (entry.endedReason !== SUBAGENT_ENDED_REASON_KILLED ||
+      entry.suppressAnnounceReason === "steer-restart")
+    ? { state: "finalizing" }
+    : undefined;
+}
+
 /** Returns terminal execution facts only after completion capture has settled. */
-export function resolveFinalizedSubagentTaskState(
+function resolveFinalizedSubagentTaskState(
   entry: SubagentRunRecord,
 ): SubagentTerminalState | undefined {
   const endedAt = entry.execution.endedAt;
@@ -119,17 +155,18 @@ export async function emitSubagentEndedHookOnce(params: {
   accountId?: string;
   outcome?: SubagentLifecycleEndedOutcome;
   error?: string;
-  inFlightRunIds: Set<string>;
+  inFlightOwners: Set<object>;
   recordEmitted: () => void | Promise<void>;
 }) {
   const runId = params.entry.runId.trim();
-  if (!runId || params.entry.endedHookEmittedAt || params.inFlightRunIds.has(runId)) {
+  const owner = getSubagentRunRuntimeKey(params.entry);
+  if (!runId || params.entry.endedHookEmittedAt || params.inFlightOwners.has(owner)) {
     return false;
   }
 
   // In-flight guard prevents concurrent completion paths from double-emitting
   // the hook before endedHookEmittedAt is persisted.
-  params.inFlightRunIds.add(runId);
+  params.inFlightOwners.add(owner);
   try {
     const hookRunner = getGlobalHookRunner();
     if (!hookRunner) {
@@ -166,6 +203,6 @@ export async function emitSubagentEndedHookOnce(params: {
     );
     return false;
   } finally {
-    params.inFlightRunIds.delete(runId);
+    params.inFlightOwners.delete(owner);
   }
 }

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveAgentRunContext } from "../../agents/command/run-context.js";
@@ -359,7 +360,10 @@ describe("startAgentRunExecution Gateway ownership", () => {
     expect(dispatchedGeneration).toBe(
       execution.params.prepared.replyDispatchRuntime.pluginGeneration,
     );
-    expect(dispatchedSnapshot).toBe(execution.params.prepared.preparedModelRuntimeLease.snapshot);
+    expect(dispatchedSnapshot).toBe(
+      expectDefined(execution.params.prepared.preparedModelRuntimeLease, "ready session runtime")
+        .snapshot,
+    );
     const dispatch = dispatchAgentRunFromGateway.mock.calls[0]?.[0];
     expect(dispatch?.commandRuntimeContext).toEqual({
       config: { runtime: "A" },

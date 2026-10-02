@@ -24,6 +24,7 @@ import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.completion.test-support.js";
+import { registerSessionsSpawnInputTests } from "./sessions-spawn-tool.input.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-visible-spawn-");
 
@@ -153,44 +154,11 @@ describe("sessions_spawn tool", () => {
     mockCallArg,
   });
 
-  it.each([
-    ["private ACP", { completionTarget: "parent", runtime: "acp" }, /completionTarget/],
-    ["private visible", { completionTarget: "parent", visible: true }, /completionTarget/],
-    ["invalid completion target", { completionTarget: "channel" }, /completionTarget/],
-    ["schema without collect", { outputSchema: { type: "object" } }, "requires collect=true"],
-    ["group without collect", { groupId: "swarm:custom" }, "requires collect=true"],
-    [
-      "negative timeout",
-      { runTimeoutSeconds: -1 },
-      "runTimeoutSeconds must be a non-negative integer",
-    ],
-    [
-      "nonnumeric timeout",
-      { runTimeoutSeconds: "not-a-number" },
-      "runTimeoutSeconds must be a non-negative integer",
-    ],
-    [
-      "retired timeout alias",
-      { timeout_seconds: 2 },
-      'sessions_spawn does not support "timeout_seconds". Use "runTimeoutSeconds" for a per-run timeout.',
-    ],
-    [
-      "channel delivery",
-      { channel: "example" },
-      'sessions_spawn does not support "channel"; remove channel-delivery parameters.',
-    ],
-    [
-      "ACP light context",
-      { runtime: "acp", lightContext: true },
-      "lightContext is only supported for runtime='subagent'.",
-    ],
-  ] as const)("%s is rejected before dispatch", async (_name, input, error) => {
-    registerAcpBackendForTest();
-    const tool = makeTool({ config: { tools: { swarm: true } } });
-    await expect(tool.execute("invalid", { task: "inspect", ...input })).rejects.toThrow(error);
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.inProcessCreationMock).not.toHaveBeenCalled();
+  registerSessionsSpawnInputTests({
+    createTool: makeTool,
+    registerAcpBackendForTest,
+    mockGateway,
+    mocks: hoisted,
   });
 
   it("hides and rejects swarm parameters while tools.swarm is disabled", async () => {
@@ -848,7 +816,7 @@ describe("sessions_spawn tool", () => {
     );
   });
 
-  it("dispatches a native child with caller-owned identity, policy, and completion context", async () => {
+  it("dispatches a hidden managed-worktree child with caller identity, policy, and private completion", async () => {
     const caller: SpawnOptions = {
       agentSessionKey: "agent:main:telegram:default:direct:456",
       completionOwnerKey: "agent:main:main",
@@ -865,7 +833,10 @@ describe("sessions_spawn tool", () => {
       taskName: "review_subagents-v2",
       agentId: "main",
       thinking: "medium",
-      cwd: "/workspace/requester",
+      projectId: "example-project",
+      worktree: true,
+      worktreeName: "api-review",
+      worktreeBaseRef: "origin/main",
       mode: "run",
       completionTarget: "parent",
       lightContext: true,

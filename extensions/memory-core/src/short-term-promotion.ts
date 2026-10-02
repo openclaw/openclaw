@@ -1,4 +1,3 @@
-// Stable public surface for short-term promotion behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isPromotionOriginBlocked } from "./dreaming-consolidation-candidates.js";
@@ -8,6 +7,7 @@ import {
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
   type PromotionCandidate,
+  type PromotionWeights,
   type RankShortTermPromotionOptions,
   type ShortTermPhaseSignalEntry,
 } from "./short-term-promotion-types.js";
@@ -17,7 +17,6 @@ import {
   isContaminatedDreamingSnippet,
   isShortTermMemoryPath,
   isShortTermSessionCorpusPath,
-  normalizeWeights,
   toFiniteNonNegativeInt,
   toFinitePositive,
   toFiniteScore,
@@ -30,6 +29,14 @@ const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
 const PHASE_SIGNAL_LIGHT_BOOST_MAX = 0.06;
 const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
+const PROMOTION_WEIGHTS: PromotionWeights = {
+  frequency: 0.24,
+  relevance: 0.3,
+  diversity: 0.15,
+  recency: 0.15,
+  consolidation: 0.1,
+  conceptual: 0.06,
+};
 
 function calculateConsolidationComponent(recallDays: string[]): number {
   if (recallDays.length === 0) {
@@ -103,8 +110,6 @@ export async function rankShortTermPromotionCandidates(
     options.recencyHalfLifeDays,
     DEFAULT_RECENCY_HALF_LIFE_DAYS,
   );
-  const weights = normalizeWeights(options.weights);
-
   const [store, phaseSignals] = await Promise.all([
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
@@ -160,12 +165,12 @@ export async function rankShortTermPromotionCandidates(
 
     const phaseBoost = calculatePhaseSignalBoost(phaseSignals.entries[entry.key], nowMs);
     const score =
-      weights.frequency * frequency +
-      weights.relevance * avgScore +
-      weights.diversity * diversity +
-      weights.recency * recency +
-      weights.consolidation * consolidation +
-      weights.conceptual * conceptual +
+      PROMOTION_WEIGHTS.frequency * frequency +
+      PROMOTION_WEIGHTS.relevance * avgScore +
+      PROMOTION_WEIGHTS.diversity * diversity +
+      PROMOTION_WEIGHTS.recency * recency +
+      PROMOTION_WEIGHTS.consolidation * consolidation +
+      PROMOTION_WEIGHTS.conceptual * conceptual +
       phaseBoost;
 
     if (score < minScore) {

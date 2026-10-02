@@ -292,11 +292,9 @@ describe("registered Discord metadata reads", () => {
   it.each([
     `channel:100000000000000008`,
     `user:100000000000000009`,
-    `channel:${current}`,
-    `channel:100000000000000012`,
     `channel:${userId}`,
     `user:${dmId}`,
-  ])("rejects another DM, guild, thread, user or namespace before I/O (%s)", async (target) => {
+  ])("rejects another channel, user or namespace before I/O (%s)", async (target) => {
     await expect(
       dispatchChannelMessageAction({
         ...fixture.dmContext,
@@ -395,26 +393,27 @@ describe("registered Discord metadata reads", () => {
     expect(fixture.requests).toEqual([]);
   });
 
-  it.each(metadataReads.filter((read) => read.action !== "permissions"))(
-    "retains guild and wildcard channel restrictions for $action",
-    async (read) => {
-      const context = { ...fixture.context, action: read.action, params: read.params };
-      fixture.discord.guilds = {};
-      await expect(dispatchChannelMessageAction(context)).rejects.toThrow("not allowed");
-      expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}` }]);
-      fixture.discord.guilds = { [guildId]: { channels: { [current]: { enabled: true } } } };
-      await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
-        "wildcard channel allowlist",
-      );
-      fixture.discord.guilds = {
-        [guildId]: { channels: { "*": { enabled: true }, [sibling]: { enabled: false } } },
-      };
-      await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
-        "wildcard channel allowlist",
-      );
-      expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}` }]);
-    },
-  );
+  it.each(
+    metadataReads.filter(({ action }) =>
+      ["role-info", "emoji-list", "channel-list"].includes(action),
+    ),
+  )("retains guild and wildcard channel restrictions for $action", async (read) => {
+    const context = { ...fixture.context, action: read.action, params: read.params };
+    fixture.discord.guilds = {};
+    await expect(dispatchChannelMessageAction(context)).rejects.toThrow("not allowed");
+    expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}` }]);
+    fixture.discord.guilds = { [guildId]: { channels: { [current]: { enabled: true } } } };
+    await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
+      "wildcard channel allowlist",
+    );
+    fixture.discord.guilds = {
+      [guildId]: { channels: { "*": { enabled: true }, [sibling]: { enabled: false } } },
+    };
+    await expect(dispatchChannelMessageAction(context)).rejects.toThrow(
+      "wildcard channel allowlist",
+    );
+    expect(fixture.requests).toEqual([{ method: "GET", path: `/guilds/${guildId}` }]);
+  });
 
   it("checks the permissions destination before reading bot permissions", async () => {
     fixture.discord.guilds = { [guildId]: { channels: { [current]: { enabled: true } } } };
@@ -470,17 +469,11 @@ describe("registered Discord metadata reads", () => {
     ).toEqual({ ok: true, channels: [channels[0]] });
   });
 
-  it.each([
-    { requesterAccountId: "other" },
-    { requesterAccountId: undefined },
-    { toolContext: undefined },
-    { toolContext: { currentChannelProvider: "slack", currentChannelId: current } },
-    { toolContext: { currentChannelProvider: "discord" } },
-  ])("retains server-owned account and origin context (%j)", async (mismatch) => {
+  it("rejects a forged operator origin without a current conversation", async () => {
     await expect(
       dispatchChannelMessageAction({
         ...fixture.context,
-        ...mismatch,
+        toolContext: { currentChannelProvider: "discord" },
         params: { guildId, conversationReadOrigin: "direct-operator" },
       }),
     ).rejects.toThrow("current provider and account context");

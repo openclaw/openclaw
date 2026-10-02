@@ -156,7 +156,7 @@ export function normalizeCommandBody(raw: string, options?: CommandNormalizeOpti
 }
 
 /** Returns cached exact and regex detectors for the current command registry instance. */
-export function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
+function getCommandDetection(_cfg?: OpenClawConfig): CommandDetection {
   return getCommandRegistryLookup().detection;
 }
 

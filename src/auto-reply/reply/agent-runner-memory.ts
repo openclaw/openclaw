@@ -37,18 +37,16 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import {
-  persistCompactionBoundaryWithSessionEntrySync,
+  persistCompactionBoundaryWithSessionEntryAsync,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import {
   SQLITE_USAGE_TAIL_MAX_EVENTS,
-  type SessionTranscriptAccountingSnapshot,
   type SessionTranscriptUsageSnapshot,
 } from "../../config/sessions/session-transcript-accounting.types.js";
 import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionTranscriptAccountingAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -63,7 +61,10 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { readPreflightTranscriptContextMessages } from "./agent-runner-memory-transcript-context.js";
+import {
+  readPreflightTranscriptContextMessages,
+  readSessionLogSnapshot,
+} from "./agent-runner-memory-transcript-context.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -258,33 +259,6 @@ function hasUsableProviderPromptUsage(
 // Leave room for large assistant outputs when checking near-threshold usage.
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 
-async function readSessionLogSnapshot(params: {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
-  includeByteSize: boolean;
-  includeTurnTaint?: boolean;
-  includeUsage: boolean;
-  usageEventLimit?: number;
-}): Promise<SessionTranscriptAccountingSnapshot> {
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  if (!params.sessionId || !params.storePath || !agentId) {
-    return params.includeTurnTaint ? { turnTainted: true } : {};
-  }
-  const scope = {
-    agentId,
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    storePath: params.storePath,
-  };
-  try {
-    return await readSessionTranscriptAccountingAsync(scope, params);
-  } catch {
-    return params.includeTurnTaint ? { turnTainted: true } : {};
-  }
-}
-
 type TranscriptTokenEstimate = {
   promptTokens: number;
   promptTokenSource:
@@ -340,6 +314,7 @@ async function estimatePromptTokensFromSessionTranscript({
       storePath: params.storePath,
       includeByteSize: true,
       includeUsage: true,
+      abortSignal,
     });
     let usage = snapshot.usage;
     if (
@@ -356,6 +331,7 @@ async function estimatePromptTokensFromSessionTranscript({
           includeByteSize: false,
           includeUsage: true,
           usageEventLimit: snapshot.eventCount,
+          abortSignal,
         })
       ).usage;
     }
@@ -533,6 +509,7 @@ export async function runSessionCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           includeByteSize: true,
           includeUsage: false,
+          abortSignal: params.abortSignal,
         })
       : undefined;
   assertActive();
@@ -712,6 +689,7 @@ export async function runSessionCompactionIfNeeded(params: {
               sessionId: acceptedEntry.sessionId,
               includeByteSize: true,
               includeUsage: false,
+              abortSignal: params.abortSignal,
             })
           ).byteSize
         : undefined;
@@ -814,9 +792,8 @@ export async function runSessionCompactionIfNeeded(params: {
               typeof activeTranscriptBytes === "number" &&
               typeof maxActiveTranscriptBytes === "number"
                 ? {
-                    withCompactionPersistence: (prepared) => {
-                      assertActive();
-                      const committed = persistCompactionBoundaryWithSessionEntrySync(
+                    withCompactionPersistenceAsync: async (prepared) => {
+                      const committed = await persistCompactionBoundaryWithSessionEntryAsync(
                         {
                           ...compactionTarget,
                           expectedLifecycleRevision: expectedSession.lifecycleRevision,
@@ -831,6 +808,7 @@ export async function runSessionCompactionIfNeeded(params: {
                             maxBytes: maxActiveTranscriptBytes,
                           },
                         },
+                        assertActive,
                       );
                       hostAccountingCommitted = true;
                       return committed;
@@ -1069,6 +1047,7 @@ export async function runMemoryFlushIfNeeded(params: {
         includeByteSize: shouldCheckTranscriptSizeForForcedFlush,
         includeTurnTaint: true,
         includeUsage: shouldReadTranscript,
+        abortSignal,
       })
     : undefined;
   assertMemoryFlushCurrent();

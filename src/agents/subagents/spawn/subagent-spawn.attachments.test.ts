@@ -46,7 +46,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDirOverride);
     configOverride = createSubagentSpawnTestConfig(workspaceDirOverride);
-    subagentSpawnModule.resetSubagentRegistryForTests();
+    await subagentSpawnModule.resetSubagentRegistryForTests();
     callGatewayMock.mockClear();
     updateSessionStoreMock.mockReset();
     const store: Record<string, Record<string, unknown>> = {};

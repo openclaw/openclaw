@@ -1,4 +1,5 @@
 // Verifies transcript repair pairs tool calls/results and sanitizes tool inputs.
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import {
@@ -10,9 +11,6 @@ import {
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 import { sparseAssistant, textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
-
-const DEFAULT_MISSING_TOOL_RESULT_TEXT =
-  "[openclaw] missing tool result in session history; inserted synthetic error result for transcript repair.";
 
 const TOOL_CALL_BLOCK_TYPES = new Set([
   "toolCall",
@@ -478,6 +476,7 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
       toolCallId,
       toolName: "read",
       content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
+      details: { openclawSyntheticMissingToolResult: true },
       isError: true,
     };
   }
@@ -1336,7 +1335,7 @@ describe("sanitizeToolCallInputs allowed-name filtering", () => {
 });
 
 describe("stripToolResultDetails", () => {
-  it("removes details only from toolResult messages", () => {
+  it("strips opaque details and keeps synthetic projections stable", () => {
     const input = castAgentMessages([
       {
         role: "toolResult",
@@ -1347,6 +1346,10 @@ describe("stripToolResultDetails", () => {
       },
       { role: "assistant", content: [{ type: "text", text: "keep me" }], details: { no: "touch" } },
       { role: "user", content: "hello" },
+      {
+        ...makeMissingToolResult({ toolCallId: "missing", toolName: "read" }),
+        details: { internal: true, openclawSyntheticMissingToolResult: true },
+      },
     ]);
 
     const out = stripToolResultDetails(input) as unknown as Array<Record<string, unknown>>;
@@ -1358,17 +1361,8 @@ describe("stripToolResultDetails", () => {
     expect(Object.hasOwn(out[1] ?? {}, "details")).toBe(true);
     expect((out[1] ?? {}).role).toBe("assistant");
     expect((out[2] ?? {}).role).toBe("user");
-  });
-
-  it("returns the same array reference when there are no toolResult details", () => {
-    const input = castAgentMessages([
-      { role: "assistant", content: [{ type: "text", text: "a" }] },
-      textToolResult("call_1", "read", "ok"),
-      { role: "user", content: "b" },
-    ]);
-
-    const out = stripToolResultDetails(input);
-    expect(out).toBe(input);
+    expect(out[3]?.details).toEqual({ openclawSyntheticMissingToolResult: true });
+    expect(stripToolResultDetails(out)).toBe(out);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

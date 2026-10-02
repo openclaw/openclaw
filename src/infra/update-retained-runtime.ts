@@ -254,11 +254,15 @@ async function runWithRetainedUpdateRuntime<T>(
       closing = true;
       // A signal can arrive during projection; stop and join its last filesystem write.
       await preparation?.catch(() => undefined);
-      const retained = directory;
-      if (retained) {
-        await removeTemporaryArtifacts(retained, "Updater runtime", (error) => {
-          reportRetainedUpdateRuntime(retained, `cleanup failed: ${formatErrorMessage(error)}`);
-        });
+      if (directory) {
+        if (prepared) {
+          reportRetainedUpdateRuntime(
+            directory,
+            "worker generation settled; cleanup deferred to the next eligible update or openclaw doctor --fix",
+          );
+        } else {
+          await removeTemporaryArtifacts(directory, "Updater runtime");
+        }
       }
       unregister?.();
     },

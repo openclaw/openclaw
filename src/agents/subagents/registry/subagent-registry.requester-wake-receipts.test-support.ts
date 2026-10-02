@@ -10,12 +10,17 @@ import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryVersionConflictError,
+} from "./subagent-registry-persistence.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 function createRequesterWakeReceiptHolds(
   options: { failCompletePublication?: boolean; holdOutcome?: boolean } = {},
@@ -33,6 +38,7 @@ function createRequesterWakeReceiptHolds(
   const mutate = completionStore.mutateRequesterSettleWakeBatch;
   const transitionPublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
   const completePublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
+  const reconcilePublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
   let failCompletePublication = options.failCompletePublication === true;
   const mutationScope = new AsyncLocalStorage<{
     entries: readonly SubagentRunRecord[];
@@ -53,20 +59,20 @@ function createRequesterWakeReceiptHolds(
               }
             },
           });
-          if (!params.committed) {
-            (params.operation.kind === "transition"
+          (params.committed
+            ? reconcilePublication
+            : params.operation.kind === "transition"
               ? transitionPublication
               : completePublication
-            ).resolve(result);
-          }
+          ).resolve(result);
           return result;
         } catch (error) {
-          if (!params.committed) {
-            (params.operation.kind === "transition"
+          (params.committed
+            ? reconcilePublication
+            : params.operation.kind === "transition"
               ? transitionPublication
               : completePublication
-            ).reject(error);
-          }
+          ).reject(error);
           throw error;
         }
       },
@@ -89,6 +95,7 @@ function createRequesterWakeReceiptHolds(
     holds.outcome.release.resolve();
   }
   const observed = new Set<keyof typeof holds>();
+  const executions: Array<keyof typeof holds> = [];
   const runWorker = stateWorker.runOpenClawStateWorkerOperation;
   vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockImplementation(
     (context, operation, workerOptions) => {
@@ -110,6 +117,12 @@ function createRequesterWakeReceiptHolds(
                   ? mutation.entries.map((entry) => ({ entry, wake: entry.requesterSettleWake }))
                   : [];
               const result = await scope.execute(command, executeOptions);
+              if (phase) {
+                executions.push(phase);
+              }
+              if (typeof result === "object" && result !== null && "conflictRunIds" in result) {
+                return result;
+              }
               if (hold && phase) {
                 observed.add(phase);
                 hold.entered.resolve(members);
@@ -121,7 +134,7 @@ function createRequesterWakeReceiptHolds(
         workerOptions,
       ).catch((error: unknown) => {
         const phase = capturedMutation?.phase;
-        if (phase) {
+        if (phase && !(error instanceof SubagentRegistryVersionConflictError)) {
           holds[phase].entered.reject(error);
         }
         throw error;
@@ -136,10 +149,18 @@ function createRequesterWakeReceiptHolds(
   };
   void transitionPublication.promise.catch(() => {});
   void completePublication.promise.catch(() => {});
+  void reconcilePublication.promise.catch(() => {});
   for (const hold of Object.values(holds)) {
     void hold.entered.promise.catch(() => {});
   }
-  return { ...holds, transitionPublication, completePublication, releaseAll };
+  return {
+    ...holds,
+    transitionPublication,
+    completePublication,
+    reconcilePublication,
+    executions,
+    releaseAll,
+  };
 }
 
 async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
@@ -151,7 +172,7 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
   const resume = vi.fn();
   const recovery = createSubagentRegistryCompletionRuntime({
     runs: subagentRuns,
-    resumed: new Set([entry.runId]),
+    resumed: new Set([getSubagentRunRuntimeKey(entry)]),
     retryTimers: new Set(),
     completeSubagentRun: failed,
     scheduleSweep: vi.fn(),
@@ -170,7 +191,7 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
   );
   expect(failed).toHaveBeenCalledTimes(2);
   expect(resume).toHaveBeenCalledWith(entry.runId);
-  expect(entry.cleanupHandled).toBe(false);
+  expect(subagentRuns.get(entry.runId)?.cleanupHandled).toBe(false);
 }
 
 export function registerRequesterWakeReceiptBoundaryTests({
@@ -239,21 +260,21 @@ export function registerRequesterWakeReceiptBoundaryTests({
       emptyReply: false,
     },
     {
-      name: "reconciles a committed requester transition after same-owner cleanup drifts",
+      name: "publishes a requester transition before queued same-owner cleanup",
       rejectRequesterWake: false,
       rejectPersistence: false,
       emptyReply: false,
       receiptDrift: true,
     },
     {
-      name: "reconciles a delivered requester outcome after same-owner cleanup drifts",
+      name: "publishes a delivered requester outcome before queued same-owner cleanup",
       rejectRequesterWake: false,
       rejectPersistence: false,
       emptyReply: false,
       outcomeDrift: true,
     },
     ...(["reply", "delivery"] as const).map((receiptReplacement) => ({
-      name: `reconciles a replaced ${receiptReplacement} owner`,
+      name: `preserves a requester receipt across queued equivalent ${receiptReplacement} metadata`,
       rejectRequesterWake: false,
       rejectPersistence: false,
       emptyReply: false,
@@ -319,14 +340,22 @@ export function registerRequesterWakeReceiptBoundaryTests({
     if (!betaBeforeYield) {
       throw new Error("expected beta run before requester yield");
     }
-    betaBeforeYield.delivery = rejectRequesterWake
-      ? {
-          ...betaBeforeYield.delivery,
-          status: "delivered",
-          disposition: "delivered",
-          deliveredAt: Date.now(),
-        }
-      : { ...betaBeforeYield.delivery, status: "in_progress" };
+    await mutateSubagentRuns([beta.runId], (rows) => {
+      const current = rows.get(beta.runId);
+      if (!current || !isSameSubagentRunOwner(current, betaBeforeYield)) {
+        throw new Error("Beta owner changed before requester yield setup");
+      }
+      const next = structuredClone(current);
+      next.delivery = rejectRequesterWake
+        ? {
+            ...next.delivery,
+            status: "delivered",
+            disposition: "delivered",
+            deliveredAt: Date.now(),
+          }
+        : { ...next.delivery, status: "in_progress" };
+      return { value: undefined, postimages: new Map([[next.runId, next]]) };
+    });
 
     const settleWakeOwner = outcomeDrift || rejectPersistence ? observeRootWork() : undefined;
     const yieldTool = createSessionsYieldTool({
@@ -366,8 +395,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
       const members = await heldReceipts.transition.entered.promise;
       expect(members).toHaveLength(2);
       for (const { entry, wake } of members) {
-        expect(registry.getSubagentRunByRunId(entry.runId)).toBe(entry);
-        expect(entry.requesterSettleWake).toBe(wake);
+        const current = registry.getSubagentRunByRunId(entry.runId);
+        expect(isSameSubagentRunOwner(current, entry)).toBe(true);
+        expect(current?.requesterSettleWake).toEqual(wake);
         expect(wake?.status).toBe("pending");
       }
       await registry.testing.sweepOnceForTests();
@@ -377,35 +407,53 @@ export function registerRequesterWakeReceiptBoundaryTests({
         if (!member) {
           throw new Error("Missing held beta transition owner");
         }
-        if (receiptReplacement === "reply") {
-          const completion = member.entry.completion;
-          if (!completion?.terminalReply) {
-            throw new Error("Missing prepared reply owner");
+        const planSuccessor = vi.fn((rows: ReadonlyMap<string, SubagentRunRecord>) => {
+          const current = rows.get(beta.runId);
+          if (!current || !isSameSubagentRunOwner(current, member.entry)) {
+            throw new Error("Queued beta metadata lost its runtime owner");
           }
-          completion.terminalReply = structuredClone(completion.terminalReply);
-        } else if (receiptReplacement === "delivery") {
-          member.entry.delivery = structuredClone(member.entry.delivery);
-        } else {
-          await driftCompletionCleanup(member.entry);
-        }
-        expect(member.entry.requesterSettleWake).toBe(member.wake);
+          expect(current.requesterSettleWake?.status).toBe("dispatching");
+          const next = structuredClone(current);
+          if (receiptReplacement === "reply") {
+            const reply = next.completion?.terminalReply;
+            if (!reply || !next.completion) {
+              throw new Error("Missing prepared reply owner");
+            }
+            next.completion.terminalReply = structuredClone(reply);
+          } else {
+            next.delivery = structuredClone(next.delivery);
+          }
+          return { value: undefined, postimages: new Map([[next.runId, next]]) };
+        });
+        const successor = receiptDrift
+          ? driftCompletionCleanup(member.entry)
+          : mutateSubagentRuns([beta.runId], planSuccessor);
+        void successor.catch(() => {});
+        expect(planSuccessor).not.toHaveBeenCalled();
+        expect(registry.getSubagentRunByRunId(beta.runId)?.requesterSettleWake).toEqual(
+          member.wake,
+        );
         const database = openOpenClawStateDatabase();
+        // Beta's queued metadata write and the later settled outcome remain allowed.
+        // The isolated test database owns trigger cleanup after its workers drain.
         database.db.exec(
-          "CREATE TRIGGER reject_wake_replay BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'requester wake write replayed'); END",
+          "CREATE TRIGGER reject_wake_replay BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'run-alpha' AND json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'dispatching' BEGIN SELECT RAISE(ABORT, 'requester wake write replayed'); END",
         );
         try {
           heldReceipts.transition.release.resolve();
           await expect(heldReceipts.transitionPublication.promise).resolves.toEqual({
             applied: true,
-            publication: "superseded",
+            publication: "published",
           });
-          expect(getRequesterWakeCalls()).toHaveLength(0);
-          await vi.advanceTimersByTimeAsync(30_000);
-          await heldReceipts.reconcile.entered.promise;
-          expect(getRequesterWakeCalls()).toHaveLength(0);
+          await successor;
+          if (receiptReplacement) {
+            expect(planSuccessor).toHaveBeenCalledOnce();
+          }
+          expect(heldReceipts.executions.filter((phase) => phase === "transition")).toHaveLength(1);
+          expect(heldReceipts.executions).not.toContain("reconcile");
         } finally {
-          database.db.exec("DROP TRIGGER reject_wake_replay");
-          heldReceipts.reconcile.release.resolve();
+          heldReceipts.transition.release.resolve();
+          await Promise.allSettled([successor]);
         }
       }
       heldReceipts.transition.release.resolve();
@@ -418,23 +466,25 @@ export function registerRequesterWakeReceiptBoundaryTests({
         throw new Error("Missing acknowledged requester outcome member");
       }
       expect(loadSubagentRegistryFromSqlite().get(beta.runId)?.requesterSettleWake).toBeUndefined();
-      expect(member.entry.requesterSettleWake).toBe(member.wake);
-      await driftCompletionCleanup(member.entry);
+      expect(registry.getSubagentRunByRunId(beta.runId)?.requesterSettleWake).toEqual(member.wake);
+      const successor = driftCompletionCleanup(member.entry);
+      void successor.catch(() => {});
       const database = openOpenClawStateDatabase();
+      // Guard the committed outcome through cleanup; database teardown removes the trigger.
       database.db.exec(
-        "CREATE TRIGGER reject_outcome_replay BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'requester outcome write replayed'); END",
+        "CREATE TRIGGER reject_outcome_replay BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'run-alpha' BEGIN SELECT RAISE(ABORT, 'requester outcome write replayed'); END",
       );
       try {
         heldReceipts.outcome.release.resolve();
+        await successor;
         await settleWakeOwner(true);
-        heldReceipts.reconcile.release.resolve();
-        await vi.advanceTimersByTimeAsync(30_000);
-        await settleWakeOwner(true);
-        expect(member.entry.requesterSettleWake).toBeUndefined();
+        expect(registry.getSubagentRunByRunId(beta.runId)?.requesterSettleWake).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(1);
+        expect(heldReceipts.executions.filter((phase) => phase === "outcome")).toHaveLength(1);
+        expect(heldReceipts.executions).not.toContain("reconcile");
       } finally {
-        database.db.exec("DROP TRIGGER reject_outcome_replay");
         heldReceipts.releaseAll();
+        await Promise.allSettled([successor]);
       }
     }
     await waitForDeliveredCleanup(alpha.runId, {
@@ -486,6 +536,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
 
     releaseAgentCall(beta.childSessionKey);
     if (receiptDrift || outcomeDrift) {
+      heldReceipts?.releaseAll();
       // The failed completion owner revoked this older child cleanup attempt.
       // Join its refusal; requester recovery must not require it to mint another wake.
       await flushOwnedWork();
@@ -505,8 +556,9 @@ export function registerRequesterWakeReceiptBoundaryTests({
       const members = await heldReceipts.complete.entered.promise;
       expect(members.length).toBeGreaterThan(0);
       for (const { entry, wake } of members) {
-        expect(registry.getSubagentRunByRunId(entry.runId)).toBe(entry);
-        expect(entry.requesterSettleWake).toBe(wake);
+        const current = registry.getSubagentRunByRunId(entry.runId);
+        expect(isSameSubagentRunOwner(current, entry)).toBe(true);
+        expect(current?.requesterSettleWake).toEqual(wake);
         expect(wake).toBeDefined();
       }
       await registry.testing.sweepOnceForTests();
@@ -518,13 +570,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
     await registry.testing.sweepOnceForTests();
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
     expect(sendMessageMock).not.toHaveBeenCalled();
-    expect(registry.getSubagentRunByRunId(beta.runId)?.delivery).toMatchObject({
+    const delivery = registry.getSubagentRunByRunId(beta.runId)?.delivery;
+    expect(delivery).toMatchObject({
       status: "delivered",
       disposition: "delivered",
-      payload: undefined,
-      lastError: undefined,
-      lastDropReason: undefined,
     });
+    expect(delivery?.payload).toBeUndefined();
+    expect(delivery?.lastError).toBeUndefined();
+    expect(delivery?.lastDropReason).toBeUndefined();
   });
 
   it.each(["unchanged", "source-change", "callback-failure"] as const)(
@@ -557,8 +610,8 @@ export function registerRequesterWakeReceiptBoundaryTests({
       expect(entry.runId).toBe(runId);
       expect(wake?.retireAfterSettle).toBe(true);
       expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-      expect(registry.getSubagentRunByRunId(runId)).toBe(entry);
-      expect(entry.requesterSettleWake).toBe(wake);
+      expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
+      expect(registry.getSubagentRunByRunId(runId)?.requesterSettleWake).toEqual(wake);
       await registry.testing.sweepOnceForTests();
       expect(getRequesterWakeCalls()).toHaveLength(0);
       const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -573,14 +626,14 @@ export function registerRequesterWakeReceiptBoundaryTests({
         }
         held.complete.release.resolve();
         if (change === "source-change") {
-          await expect(held.completePublication.promise).resolves.toEqual({
-            applied: true,
+          await expect(held.completePublication.promise).rejects.toMatchObject({
+            outcome: "committed",
             publication: "superseded",
           });
           await flushOwnedWork();
           await vi.advanceTimersByTimeAsync(30_000);
           await flushOwnedWork();
-          expect(registry.getSubagentRunByRunId(runId)).toBe(entry);
+          expect(isSameSubagentRunOwner(registry.getSubagentRunByRunId(runId), entry)).toBe(true);
           expect(getGatewayContextResolver(entry)).toBeDefined();
           expect(getRequesterWakeCalls()).toHaveLength(0);
           process.env.OPENCLAW_STATE_DIR = originalStateDir;
@@ -592,6 +645,11 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await flushOwnedWork();
           expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
           expect(getGatewayContextResolver(entry)).toBeDefined();
+        } else {
+          await expect(held.completePublication.promise).resolves.toEqual({
+            applied: true,
+            publication: "published",
+          });
         }
         if (change !== "unchanged") {
           database.db.exec(
@@ -601,15 +659,24 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await registry.testing.sweepOnceForTests();
           await vi.advanceTimersByTimeAsync(30_000);
           await held.reconcile.entered.promise;
+          held.reconcile.release.resolve();
+          await expect(held.reconcilePublication.promise).resolves.toEqual({
+            applied: true,
+            publication: "published",
+          });
           database.db.exec("DROP TRIGGER reject_quiet_retirement_replay");
           replayTrigger = false;
-          held.reconcile.release.resolve();
         }
         await flushOwnedWork();
         expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
         expect(getGatewayContextResolver(entry)).toBeUndefined();
         expect(getRequesterWakeCalls()).toHaveLength(0);
+        expect(held.executions.filter((phase) => phase === "complete")).toHaveLength(1);
+        // A source change first refreshes its committed deletion after a version conflict.
+        expect(held.executions.filter((phase) => phase === "reconcile")).toHaveLength(
+          change === "unchanged" ? 0 : change === "source-change" ? 2 : 1,
+        );
       } finally {
         process.env.OPENCLAW_STATE_DIR = originalStateDir;
         if (replayTrigger) {

@@ -19,6 +19,7 @@ import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv, withEnvAsync } from "../../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
+import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
 
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -179,15 +180,8 @@ describe("runDaemonInstall integration", () => {
   ] as const)(
     "repairs $condition Node in the $platform definition (force=$force)",
     async ({ platform, force, condition }) => {
-      const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
-      const testNodeExecPath = resolveTestNodeExecPath();
+      const { execPath: testNodeExecPath } = stubNodeRuntime();
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);
-      if (process.versions.bun) {
-        Object.defineProperty(process, "execPath", {
-          value: testNodeExecPath,
-          configurable: true,
-        });
-      }
       const entry = path.join(tempHome, "dist", "index.js");
       await fs.mkdir(path.dirname(entry), { recursive: true });
       await fs.writeFile(entry, "");
@@ -290,9 +284,6 @@ describe("runDaemonInstall integration", () => {
         }
       } finally {
         process.argv = originalArgv;
-        if (process.versions.bun) {
-          Object.defineProperty(process, "execPath", execPathDescriptor);
-        }
       }
     },
   );
@@ -731,6 +722,7 @@ describe("runDaemonInstall integration", () => {
   }>)(
     "preserves $name through the real install plan without importing operator values",
     async (testCase) => {
+      stubNodeRuntime();
       const originalArgv = process.argv;
       const physical = vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
       const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);

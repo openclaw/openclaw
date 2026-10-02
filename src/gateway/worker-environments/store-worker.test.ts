@@ -3,6 +3,9 @@ import { once } from "node:events";
 import { symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/kysely-sync.js";
@@ -67,15 +70,20 @@ vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => 
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  delivery.afterTransition = undefined;
-  delivery.afterTouch = undefined;
-  delivery.commands = [];
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-});
+const fixture = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // The aborted body still owns its child, store, and environment until cleanup joins.
+    await fixture.cleanup();
+    vi.unstubAllEnvs();
+    delivery.afterTransition = undefined;
+    delivery.afterTouch = undefined;
+    delivery.commands = [];
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function createIntent(store: WorkerEnvironmentStore, environmentId: string) {
   return store.createIntent({
@@ -611,70 +619,101 @@ it("rejects queued cleanup before it can revoke a successor owner's credential",
   expect(revoked).toEqual([]);
 });
 
-it("keeps the same inventory writable after a foreign maintenance owner releases state", async () => {
-  const stateDir = tempDirs.make("worker-inventory-contention-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  const database = openOpenClawStateDatabase();
-  const pathname = database.path;
-  // Bootstrap before acquiring the inventory. The resident inventory and its
-  // worker admission do not require a cached host-native SQLite connection.
-  await closeOpenClawStateDatabaseAsync();
-  const store = await createWorkerEnvironmentStore();
-  await createIntent(store, "before-lock");
-  const events: string[] = [];
-  const unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
-    if (event.kind === "open-error" && event.path === pathname) {
-      expect(event.error).toEqual(
-        expect.objectContaining({ message: expect.stringContaining("offline maintenance") }),
-      );
-      events.push(event.kind);
-    }
-  });
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      `
-    import { acquireGatewayStateOwner } from "./src/infra/gateway-state-owner.ts";
-    const lease = acquireGatewayStateOwner({ databasePath: process.argv[1] });
-    process.once("message", () => {
-      lease.release(); process.disconnect();
-    });
-    process.send({ locked: true });
-  `,
-      pathname,
-    ],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
-  );
-  let stderr = "";
-  child.stderr?.on("data", (chunk) => {
-    stderr += String(chunk);
-  });
-  const exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
-    child.once("close", (code, signal) => resolve([code, signal]));
-  });
-  try {
-    const [ready] = await once(child, "message", { signal: AbortSignal.timeout(10_000) });
-    expect(ready).toEqual({ locked: true });
-    expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
-    expect(child.exitCode).toBeNull();
-    expect(events).toEqual(["open-error"]);
-    child.send({ release: true });
-    expect(await exited, stderr).toEqual([0, null]);
-    expect(openOpenClawStateDatabase().path).toBe(pathname);
-    expect(store.get("before-lock")?.state).toBe("requested");
-    await store.transition({ environmentId: "before-lock", from: "requested", to: "provisioning" });
-    expect(store.get("before-lock")?.state).toBe("provisioning");
-    expect(store.list()).toHaveLength(1);
-    await closeOpenClawStateDatabaseAsync();
-    expect(() => store.list()).toThrow("inventory has closed");
-  } finally {
-    unsubscribe();
-    await stopChildProcess(child, 5_000);
-    await exited;
-    await store.close();
-  }
-}, 30_000);
+it(
+  "keeps the same inventory writable after a foreign maintenance owner releases state",
+  ({ signal }) =>
+    fixture.run(async () => {
+      signal.throwIfAborted();
+      const stateDir = tempDirs.make("worker-inventory-contention-");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const database = openOpenClawStateDatabase();
+      const pathname = database.path;
+      // Bootstrap before acquiring the inventory. The resident inventory and its
+      // worker admission do not require a cached host-native SQLite connection.
+      await closeOpenClawStateDatabaseAsync();
+      const store = await createWorkerEnvironmentStore();
+      let child: ReturnType<typeof spawn> | undefined;
+      let exited: Promise<[number | null, NodeJS.Signals | null]> | undefined;
+      let unsubscribe = () => {};
+      try {
+        signal.throwIfAborted();
+        await createIntent(store, "before-lock");
+        const events: string[] = [];
+        unsubscribe = registerOpenClawStateDatabaseLifecycleListener((event) => {
+          if (event.kind === "open-error" && event.path === pathname) {
+            expect(event.error).toEqual(
+              expect.objectContaining({ message: expect.stringContaining("offline maintenance") }),
+            );
+            events.push(event.kind);
+          }
+        });
+        signal.throwIfAborted();
+        const maintenance = spawn(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "--input-type=module",
+            "--eval",
+            `
+          import { acquireGatewayStateOwner } from "./src/infra/gateway-state-owner.ts";
+          const lease = acquireGatewayStateOwner({ databasePath: process.argv[1] });
+          process.once("message", () => {
+            lease.release(); process.disconnect();
+          });
+          process.send({ locked: true });
+        `,
+            pathname,
+          ],
+          { stdio: ["ignore", "ignore", "pipe", "ipc"] },
+        );
+        child = maintenance;
+        let stderr = "";
+        child.stderr?.on("data", (chunk) => {
+          stderr += String(chunk);
+        });
+        exited = new Promise<[number | null, NodeJS.Signals | null]>((resolve) => {
+          maintenance.once("close", (code, exitSignal) => resolve([code, exitSignal]));
+        });
+        const [ready] = await withinTest(
+          awaitGateBeforeSettlement(
+            once(child, "message", { signal }),
+            exited,
+            "foreign maintenance owner exited before acquiring its lock",
+          ),
+          signal,
+        );
+        expect(ready).toEqual({ locked: true });
+        expect(() => openOpenClawStateDatabase()).toThrow("offline maintenance");
+        expect(child.exitCode).toBeNull();
+        expect(events).toEqual(["open-error"]);
+        child.send({ release: true });
+        expect(await withinTest(exited, signal), stderr).toEqual([0, null]);
+        expect(openOpenClawStateDatabase().path).toBe(pathname);
+        expect(store.get("before-lock")?.state).toBe("requested");
+        await store.transition({
+          environmentId: "before-lock",
+          from: "requested",
+          to: "provisioning",
+        });
+        expect(store.get("before-lock")?.state).toBe("provisioning");
+        expect(store.list()).toHaveLength(1);
+        await closeOpenClawStateDatabaseAsync();
+        expect(() => store.list()).toThrow("inventory has closed");
+      } finally {
+        await fixture.verifyCleanup(() =>
+          runQaGatewayFixture(
+            async () => {
+              unsubscribe();
+              if (child) {
+                await stopChildProcess(child, 5_000);
+                await exited;
+              }
+            },
+            () => store.close(),
+          ),
+        );
+      }
+    }),
+  30_000,
+);

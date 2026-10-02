@@ -227,7 +227,7 @@ actor GatewayConnection: Observable {
         let shutdownGeneration: UInt64
         let activationBindingKey: SymmetricKey?
 
-        func matches(endpoint: EndpointSnapshot, shutdownGeneration: UInt64? = nil) -> Bool {
+        func matches(endpoint: EndpointSnapshot, shutdownGeneration: UInt64) -> Bool {
             self.endpoint.config.url == endpoint.config.url &&
                 self.endpoint.config.token == endpoint.config.token &&
                 self.endpoint.config.password == endpoint.config.password &&
@@ -235,11 +235,7 @@ actor GatewayConnection: Observable {
                 GatewayTLSRoute.hasSameConnectionIdentity(self.endpoint.tls, endpoint.tls) &&
                 self.endpoint.deviceAuthGatewayID == endpoint.deviceAuthGatewayID &&
                 self.endpoint.routeAuthority == endpoint.routeAuthority &&
-                shutdownGeneration.map { self.shutdownGeneration == $0 } ?? true
-        }
-
-        func matches(route: Route) -> Bool {
-            route.matches(self.endpoint)
+                self.shutdownGeneration == shutdownGeneration
         }
     }
 
@@ -950,12 +946,9 @@ extension GatewayConnection {
     }
 
     private func routeMatchesCurrentState(_ route: Route, endpoint: EndpointSnapshot) -> Bool {
-        route.matches(endpoint) && self.routeMatchesConfiguredConnection(route)
-    }
-
-    private func routeMatchesConfiguredConnection(_ route: Route) -> Bool {
-        route.generation == self.routeGeneration &&
-            self.configuredConnection?.matches(route: route) == true
+        guard let configuredConnection else { return false }
+        return route.matches(endpoint) && route.generation == self.routeGeneration &&
+            route.matches(configuredConnection.endpoint)
     }
 
     func sessionRoutingIdentity(

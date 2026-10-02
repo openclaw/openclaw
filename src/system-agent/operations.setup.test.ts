@@ -4,6 +4,7 @@ import { applyLocalSetupWorkspaceConfig } from "../commands/onboard-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { LocalOnboardingState } from "../state/local-onboarding-state.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import {
   executeSystemAgentOperation as executeOperation,
@@ -317,7 +318,8 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-operations-setup-"));
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   vi.unstubAllEnvs();
 });

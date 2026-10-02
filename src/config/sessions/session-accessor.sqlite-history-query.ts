@@ -66,6 +66,41 @@ const recentHistoryWindows = new Map<
   }
 >();
 
+/** Reads physical event rows in this snapshot: selected seqs, or every off-active-path row. */
+function readSnapshotEventRows(
+  projection: CurrentTranscriptProjection,
+  selection: { eventSeqs: readonly number[] } | "off-active-path",
+) {
+  const sessionId = projection.resolved.sessionId;
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("transcript_events as event")
+    .select(["event.seq", transcriptEventJsonSql(projection.database.db, "event").as("event_json")])
+    .where("event.session_id", "=", sessionId);
+  return executeSqliteQuerySync(
+    projection.database.db,
+    selection === "off-active-path"
+      ? query
+          .where((eb) =>
+            eb.not(
+              eb.exists(
+                eb
+                  .selectFrom("session_transcript_active_events as active")
+                  .select("active.event_seq")
+                  .where("active.session_id", "=", sessionId)
+                  .whereRef("active.event_seq", "=", "event.seq"),
+              ),
+            ),
+          )
+          .orderBy("event.seq", "asc")
+      : query.where(
+          "event.seq",
+          "in",
+          /* kysely-allow-raw: boundaries were selected in this snapshot; bind their physical rows once. */
+          sql<number>`(SELECT value FROM json_each(${JSON.stringify(selection.eventSeqs)}))`,
+        ),
+  ).rows;
+}
+
 function readBoundaryEvents(
   projection: CurrentTranscriptProjection,
   boundaries: Iterable<VisibleHistoryBoundary>,
@@ -74,24 +109,11 @@ function readBoundaryEvents(
   if (eventSeqs.length === 0) {
     return new Map();
   }
-  const db = getActiveTranscriptKysely(projection.database);
   return new Map(
-    executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_events as event")
-        .select([
-          "event.seq",
-          transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
-        ])
-        .where("event.session_id", "=", projection.resolved.sessionId)
-        .where(
-          "event.seq",
-          "in",
-          /* kysely-allow-raw: boundaries were selected in this snapshot; bind their physical rows once. */
-          sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
-        ),
-    ).rows.map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
+    readSnapshotEventRows(projection, { eventSeqs }).map((row) => [
+      row.seq,
+      parseStoredTranscriptEvent(row.event_json),
+    ]),
   );
 }
 
@@ -323,6 +345,20 @@ export function readSessionTranscriptHistoryEventsFromProjection(
 ): SessionTranscriptMessageEvent[] {
   const history = resolveVisibleHistoryProjection(projection);
   return readVisibleHistoryRange(projection, 0, history.total, history);
+}
+
+/**
+ * Events outside the active path, such as branches left by rewind or switch. They stay
+ * switchable, so retention owners must see them; retired active ancestors stay excluded.
+ */
+export function readOffPathSessionTranscriptEventsFromProjection(
+  projection: CurrentTranscriptProjection,
+): SessionTranscriptMessageEvent[] {
+  return readSnapshotEventRows(projection, "off-active-path").map((row) => ({
+    event: parseStoredTranscriptEvent(row.event_json),
+    eventSeq: row.seq,
+    seq: row.seq + 1,
+  }));
 }
 
 function readRecentHistoryInSnapshot(

@@ -10,6 +10,7 @@ import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { getCliHistoryWriter, runWithCliHistoryWriter } from "./cli-history-boundary.js";
 import type {
   SessionTranscriptContextVersion,
+  SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
 import {
@@ -63,6 +64,7 @@ type SessionTranscriptWriteTarget = {
   env?: Readonly<NodeJS.ProcessEnv>;
   expectedLifecycleRevision?: string;
   expectedWriterRunId?: string;
+  expectedOwner?: SessionTranscriptWriteScope["expectedOwner"];
 };
 
 export type OwnedSessionTranscriptWriteContext = {
@@ -89,6 +91,7 @@ function captureWriteTarget(target: SessionTranscriptWriteTarget): SessionTransc
     ...target,
     ...(storePath ? { storePath: path.resolve(storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(target.env ?? process.env),
+    ...(target.expectedOwner ? { expectedOwner: { ...target.expectedOwner } } : {}),
   };
 }
 
@@ -404,7 +407,7 @@ export function captureOwnedTranscriptWriteAssertion(
   return () => assertTranscriptWriteContext(context, target);
 }
 
-/** Applies the admitted-run fence inherited by a matching synchronous writer. */
+/** Applies the admitted-run fence inherited by a matching writer. */
 export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscriptWriteTarget>(
   scope: T,
 ): T {
@@ -413,6 +416,11 @@ export function withOwnedSessionTranscriptWriterFence<T extends SessionTranscrip
     sessionKey: target.sessionKey,
     sessionTarget: target,
   });
+  const context = ownedTranscriptWriteContext.getStore();
+  const expectedOwner = context?.sessionTarget?.expectedOwner;
+  if (expectedOwner && context && ownsRequestedSession({ context, sessionTarget: target })) {
+    return { ...scope, ...fence, expectedOwner: { ...expectedOwner } };
+  }
   return fence ? { ...scope, ...fence } : scope;
 }
 

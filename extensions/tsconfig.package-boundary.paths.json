@@ -569,6 +569,9 @@
       "@openclaw/memory-core/api.js": [
         "../.artifacts/extension-package-boundary/plugins/memory-core/api.d.ts"
       ],
+      "@openclaw/memory-core/session-search-visibility-api.js": [
+        "../.artifacts/extension-package-boundary/plugins/memory-core/session-search-visibility-api.d.ts"
+      ],
       "@openclaw/matrix/test-api.js": [
         "../.artifacts/extension-package-boundary/plugins/matrix/test-api.d.ts"
       ],
@@ -954,6 +957,9 @@
       ],
       "openclaw/plugin-sdk/agent-harness-completion": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/agent-harness-completion.d.ts"
+      ],
+      "openclaw/plugin-sdk/compiled-subprocess-testing": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/compiled-subprocess-testing.d.ts"
       ]
     }
   }

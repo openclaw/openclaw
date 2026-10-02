@@ -741,6 +741,8 @@ describe("oxlint config", () => {
         {
           cwd: root,
           encoding: "utf8",
+          // Capture the complete JSON and owner trace when temporary paths are long.
+          maxBuffer: 8 * 1024 * 1024,
           timeout: 30_000,
           env: {
             ...process.env,

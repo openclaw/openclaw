@@ -1,4 +1,5 @@
 import { reloadSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { listAgentIds } from "../agents/agent-roster.js";
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { refreshContextWindowCache } from "../agents/context.js";
 import {
@@ -31,6 +32,7 @@ import { resolveHooksConfig } from "./hooks.js";
 import type { GatewayCronExitWatcherHandoff } from "./server-cron.js";
 import { applyGatewayLaneConcurrency, resolveGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayActiveWorkTracker } from "./server-reload-active-work.js";
+import { reviveAgentDatabasesAfterConfigCommit } from "./server-reload-agent-databases.js";
 import { restartGatewayChannels } from "./server-reload-channel-restart.js";
 import {
   assertReloadPublicationCurrent,
@@ -270,18 +272,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelReloadTargets = () =>
       new Set<ChannelKind>([...channelsToRestart, ...restartChannelAccounts.keys()]);
     const getChannelAutostartSuppression = () => params.getChannelAutostartSuppression?.() ?? null;
-    const logSuppressedChannelRestart = (
-      channels: ReadonlySet<ChannelKind>,
-      action: string,
-    ): void => {
-      const suppression = getChannelAutostartSuppression();
-      if (!suppression) {
-        return;
-      }
-      params.logChannels.info(
-        `${action} suppressed by crash-loop breaker for channels: ${[...channels].join(", ")}`,
-      );
-    };
     const commitRuntime = async (runtime?: GatewayRuntimePublication) => {
       if (runtimeCommitted) {
         return;
@@ -363,6 +353,11 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         } catch (error) {
           failConfigCommit(error);
         }
+      }
+      if (plan.restartHeartbeat) {
+        await reviveAgentDatabasesAfterConfigCommit(listAgentIds(nextConfig), (message) =>
+          params.logReload.warn(message),
+        );
       }
       if (!ownsCron()) {
         return;
@@ -717,7 +712,6 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       isLifecycleReloadAborted,
       getChannelAutostartSuppression,
       channelReloadTargets,
-      logSuppressedChannelRestart,
       scheduleRecoveryRestart,
     });
 
