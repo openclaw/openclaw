@@ -12,8 +12,9 @@ import {
 } from "../plugins/doctor-contract-registry.js";
 import { preparePluginDoctorMigrationResources } from "../plugins/doctor-migration-resources.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { prepareOpenClawStateDatabaseSchema } from "../state/openclaw-state-db.js";
+import { formatErrorMessage } from "./errors.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 import { formatStartupMigrationFailure } from "./state-migrations.messages.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
@@ -562,7 +563,10 @@ export async function runPostSessionPluginDoctorStateRepairs(params: {
     return {
       ...completed,
       completedPluginIds: undefined,
-      warnings: [...completed.warnings, `Plugin session repair did not settle: ${String(error)}.`],
+      warnings: [
+        ...completed.warnings,
+        `Plugin session repair did not settle: ${formatErrorMessage(error)}.`,
+      ],
       warningDisposition: undefined,
     };
   }

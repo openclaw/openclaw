@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import { toRepoRelativePath } from "./cli-paths.js";
 import { captureQaEvidenceLaunchIdentity } from "./evidence-environment.js";
@@ -799,7 +799,7 @@ async function runWeightedUnifiedPartitionTasks(
       }
       finished = true;
       if (firstError) {
-        reject(toErrorObject(firstError, "QA suite partition failed"));
+        reject(firstError);
         return;
       }
       resolve(results);

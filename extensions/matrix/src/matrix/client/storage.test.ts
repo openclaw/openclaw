@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -116,8 +117,8 @@ describe("matrix client storage paths", () => {
   }
 
   async function setupCurrentTokenBackfillScenario(params: {
-    currentRootFiles: "thread-bindings" | "startup-verification";
-    oldRootFiles: "crypto-only" | "thread-bindings";
+    currentRootState: "thread-bindings" | "startup-verification";
+    oldRootState: "crypto-only" | "thread-bindings";
   }) {
     const stateDir = setupStateDir();
     const canonicalPaths = resolveMatrixAccountStorageRoot({
@@ -134,29 +135,15 @@ describe("matrix client storage paths", () => {
       accessTokenHash: canonicalPaths.tokenHash,
       deviceId: null,
     });
-    if (params.currentRootFiles === "thread-bindings") {
-      writeJson(canonicalPaths.rootDir, "thread-bindings.json", {
-        version: 1,
-        bindings: [
-          {
-            accountId: "default",
-            conversationId: "$thread-new",
-            targetKind: "subagent",
-            targetSessionKey: "agent:ops:subagent:new",
-            boundAt: 1,
-            lastActivityAt: 1,
-          },
-        ],
-      });
+    if (params.currentRootState === "thread-bindings") {
+      seedThreadBinding(canonicalPaths.rootDir, "new");
       expect(
         await claimCurrentTokenStorageState({
           rootDir: canonicalPaths.rootDir,
         }),
       ).toBe(true);
     } else {
-      writeJson(canonicalPaths.rootDir, "startup-verification.json", {
-        deviceId: "DEVICE123",
-      });
+      seedStartupVerification(canonicalPaths.rootDir, "DEVICE123");
     }
 
     const oldStoragePaths = await seedExistingStorageRoot({
@@ -165,24 +152,10 @@ describe("matrix client storage paths", () => {
       storageMeta: await storageMetaFor("secret-token-old"),
     });
     fs.mkdirSync(oldStoragePaths.cryptoPath, { recursive: true });
-    if (params.oldRootFiles === "thread-bindings") {
-      writeJson(oldStoragePaths.rootDir, "thread-bindings.json", {
-        version: 1,
-        bindings: [
-          {
-            accountId: "default",
-            conversationId: "$thread-old",
-            targetKind: "subagent",
-            targetSessionKey: "agent:ops:subagent:old",
-            boundAt: 1,
-            lastActivityAt: 1,
-          },
-        ],
-      });
+    if (params.oldRootState === "thread-bindings") {
+      seedThreadBinding(oldStoragePaths.rootDir, "old");
     } else {
-      writeJson(oldStoragePaths.rootDir, "startup-verification.json", {
-        deviceId: "DEVICE123",
-      });
+      seedStartupVerification(oldStoragePaths.rootDir, "DEVICE123");
     }
 
     return { stateDir, canonicalPaths, oldStoragePaths };
@@ -241,6 +214,38 @@ describe("matrix client storage paths", () => {
       "matrix",
       openMatrixStorageMetaStoreOptions(rootDir),
     ).register("current", value);
+  }
+
+  function seedThreadBinding(rootDir: string, suffix: "new" | "old"): void {
+    const conversationId = `$thread-${suffix}`;
+    const digest = createHash("sha256").update(`default\0\0${conversationId}`).digest("hex");
+    createPluginStateSyncKeyedStoreForTests("matrix", {
+      namespace: "thread-bindings",
+      maxEntries: 10_000,
+      env: { OPENCLAW_STATE_DIR: rootDir },
+    }).register(`default:${digest}`, {
+      accountId: "default",
+      conversationId,
+      targetKind: "subagent",
+      targetSessionKey: `agent:ops:subagent:${suffix}`,
+      boundAt: 1,
+      lastActivityAt: 1,
+    });
+  }
+
+  function seedStartupVerification(rootDir: string, deviceId: string): void {
+    createPluginStateSyncKeyedStoreForTests("matrix", {
+      namespace: "startup-verification",
+      maxEntries: 1_000,
+      env: { OPENCLAW_STATE_DIR: rootDir },
+    }).register("default", {
+      userId: defaultStorageAuth.userId,
+      deviceId,
+      attemptedAt: "2026-07-13T12:00:00.000Z",
+      outcome: "requested",
+      requestId: "verification-1",
+      transactionId: "txn-1",
+    });
   }
 
   function seedLegacyStorageMeta(rootDir: string, value: Record<string, unknown>): void {
@@ -395,9 +400,7 @@ describe("matrix client storage paths", () => {
       seedStorageMeta(storagePaths.rootDir, params.storageMeta);
     }
     if (params.startupVerificationDeviceId) {
-      writeJson(storagePaths.rootDir, "startup-verification.json", {
-        deviceId: params.startupVerificationDeviceId,
-      });
+      seedStartupVerification(storagePaths.rootDir, params.startupVerificationDeviceId);
     }
     return storagePaths;
   }
@@ -779,7 +782,7 @@ describe("matrix client storage paths", () => {
     );
   });
 
-  it.each(["thread-bindings.json", "recovery-key.json", "crypto-idb-snapshot.json"])(
+  it.each(["recovery-key.json", "crypto-idb-snapshot.json"])(
     "keeps a legacy %s root selectable until its state migrates",
     async (legacyFilename) => {
       const stateDir = setupStateDir();
@@ -886,8 +889,8 @@ describe("matrix client storage paths", () => {
 
   it("keeps the current-token storage root stable after deviceId backfill when startup claimed state there", async () => {
     const { stateDir, canonicalPaths } = await setupCurrentTokenBackfillScenario({
-      currentRootFiles: "thread-bindings",
-      oldRootFiles: "crypto-only",
+      currentRootState: "thread-bindings",
+      oldRootState: "crypto-only",
     });
 
     await repairCurrentTokenStorageMetaDeviceId({
@@ -911,10 +914,10 @@ describe("matrix client storage paths", () => {
     expect(restartedPaths.rootDir).toBe(canonicalPaths.rootDir);
   });
 
-  it("does not keep the current-token storage root sticky when only marker files exist after backfill", async () => {
+  it("does not keep the current-token storage root sticky when only startup verification state exists after backfill", async () => {
     const { stateDir, oldStoragePaths } = await setupCurrentTokenBackfillScenario({
-      currentRootFiles: "startup-verification",
-      oldRootFiles: "thread-bindings",
+      currentRootState: "startup-verification",
+      oldRootState: "thread-bindings",
     });
 
     await repairCurrentTokenStorageMetaDeviceId({

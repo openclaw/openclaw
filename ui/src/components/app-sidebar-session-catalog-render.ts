@@ -40,6 +40,7 @@ import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionGlyph } from "./session-glyph.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
+import { sessionRunVisibility } from "./session-run-visibility.ts";
 
 type SessionCatalogGroupsParams = {
   catalogs: readonly SidebarSessionCatalog[];
@@ -597,7 +598,7 @@ function renderCatalogSessionRow(
         }}
       >
         <span class="sidebar-session-indicator">
-          ${running ? renderSessionGlyph({ content: nothing, running }) : nothing}
+          ${running ? renderSessionGlyph({ content: nothing, running, runVisibility: sessionRunVisibility() }) : nothing}
         </span>
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row"> ${marqueeLabel} </span>

@@ -1,5 +1,6 @@
 // Shared fixtures for session-history sanitization tests.
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { SessionManager } from "./sessions/index.js";
 
@@ -35,16 +36,19 @@ export function makeInMemorySessionManager(
   entries: SessionEntry[],
   activeBranchEntries: SessionEntry[] = entries,
 ): SessionManager {
+  const appendCustomEntry = vi.fn((customType: string, data: unknown) => {
+    const entry = { type: "custom", customType, data };
+    entries.push(entry);
+    if (activeBranchEntries !== entries) {
+      activeBranchEntries.push(entry);
+    }
+  });
   return {
     getEntries: vi.fn(() => entries),
     getBranch: vi.fn(() => activeBranchEntries),
-    appendCustomEntry: vi.fn((customType: string, data: unknown) => {
-      const entry = { type: "custom", customType, data };
-      entries.push(entry);
-      if (activeBranchEntries !== entries) {
-        activeBranchEntries.push(entry);
-      }
-    }),
+    appendCustomEntry,
+    appendCustomEntryAsync: async (customType: string, data: unknown) =>
+      appendCustomEntry(customType, data),
   } as unknown as SessionManager;
 }
 
@@ -53,6 +57,7 @@ export function makeMockSessionManager(): SessionManager {
     getEntries: vi.fn().mockReturnValue([]),
     getBranch: vi.fn().mockReturnValue([]),
     appendCustomEntry: vi.fn(),
+    appendCustomEntryAsync: vi.fn(async () => {}),
   } as unknown as SessionManager;
 }
 

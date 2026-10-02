@@ -34,7 +34,7 @@ import {
   inspectUpdateDatabaseContexts,
   revalidateUpdateDatabaseContexts,
 } from "./update-command-database-context.js";
-import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { preparePackageDoctorContext } from "./update-command-doctor-context.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
   admitSourceUpdateArtifacts,
@@ -56,7 +56,6 @@ import { observeOriginalManagedServiceRuntime } from "./update-command-original-
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
 import {
   runPackageInstallUpdate,
-  preparePackageDoctorContext,
   type PackageInstallUpdateParams,
 } from "./update-command-package.js";
 import {
@@ -105,7 +104,7 @@ export async function executeMutableUpdate(
     admitExecutor,
     captureWriteOptions,
     recordPhase,
-  } = createUpdateCommandExecutionGuards(opts, params.root);
+  } = params.executionGuards;
   let retentionInstallTarget = params.packageInstallTarget;
   const prepareMutableUpdate = async (env?: NodeJS.ProcessEnv, activationTimeoutMs?: number) => {
     assertExecutionCurrent();
@@ -615,7 +614,7 @@ export async function executeMutableUpdate(
         beforeActivate,
         ...createPackageUpdateActivationOptions({
           run: opts.run,
-          nodeRunner: params.packageUpdateNodeRunner,
+          runtime: params.packageActivationRuntime,
           assertCurrent: assertExecutionCurrent,
         }),
         managedServiceEnv: preManagedServiceStop?.serviceEnv,

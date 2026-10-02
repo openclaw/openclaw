@@ -7,7 +7,8 @@ import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
+import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createFixture } from "./control-ui-session-pr-access.test-support.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
@@ -76,7 +77,11 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
       const other = ensureProfileForEmail("other@example.test");
       linkEmail(unselected, profile.id);
       linkEmail("retained@example.test", profile.id);
-      const params = { profileId: profile.id, emails: [selected] };
+      syncGitHubIdentity({
+        identity: { accountId: 42, login: "selected-account" },
+        authenticationAlias: { kind: "email", email: selected },
+      });
+      const params = { profileId: profile.id, emails: [selected], githubAccountIds: [42] };
       try {
         const callback = vi.fn(async () => undefined);
         await expect(
@@ -87,10 +92,19 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
             withProfile({ ...params, emails: ["other@example.test"] }, callback),
           ),
         ).rejects.toThrow("user profile not found");
+        await expect(
+          withPluginRuntimeGatewayRequestScope(scope, () =>
+            withProfile({ ...params, githubAccountIds: [84] }, callback),
+          ),
+        ).rejects.toThrow("user profile not found");
         expect(callback).not.toHaveBeenCalled();
         let retained: (() => void) | undefined;
         resolveGatewayContext.mockClear();
-        const mutable = { ...params, emails: [...params.emails] };
+        const mutable = {
+          ...params,
+          emails: [...params.emails],
+          githubAccountIds: [...params.githubAccountIds],
+        };
         const preparing = withPluginRuntimeGatewayRequestScope(scope, () =>
           withProfile(mutable, async (assertCurrent) => {
             assertCurrent();
@@ -105,6 +119,7 @@ it.each(["caller", "plugin", "gateway", "role"] as const)(
         );
         mutable.profileId = other.id;
         mutable.emails.length = 0;
+        mutable.githubAccountIds[0] = 84;
         await expect(preparing).resolves.toBe("checked");
         if (retireGateway) {
           expect(resolveGatewayContext).toHaveBeenCalled();

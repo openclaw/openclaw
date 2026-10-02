@@ -14,7 +14,8 @@ import type {
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
-import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.js";
+import type { CronStatusSummary } from "../../../src/cron/service/state.js";
+import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import type {
   GatewaySessionRow as GatewayWireSessionRow,
   GatewaySessionsDefaults as GatewayWireSessionsDefaults,
@@ -291,12 +292,8 @@ export type CronRunsStatusFilter = NonNullable<CronRunsParams["status"]>;
 export type CronSortDir = NonNullable<CronListParams["sortDir"]>;
 export type CronPayload = ProtocolCronJob["payload"];
 
-export type CronStatus = {
-  enabled: boolean;
-  triggersEnabled: boolean;
-  jobs: number;
-  nextWakeAtMs?: number | null;
-};
+export type CronStatus = Pick<CronStatusSummary, "enabled" | "triggersEnabled" | "jobs"> &
+  Partial<Pick<CronStatusSummary, "nextWakeAtMs">>;
 
 export type { CronServiceRunResult as CronRunResult } from "../../../src/cron/service-contract.js";
 
@@ -327,7 +324,7 @@ export type {
   ModelAuthStatusProvider,
   ModelAuthStatusProfile,
   ModelAuthStatusResult,
-} from "../../../src/gateway/server-methods/models-auth-status.js";
+} from "../../../src/gateway/server-methods/models-auth-status.types.js";
 export type ProviderLoginOption = NonNullable<
   NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["loginOptions"]
 >[number];

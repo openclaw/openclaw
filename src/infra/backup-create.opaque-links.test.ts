@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import * as tar from "tar";
 import { describe, expect, it } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupCreateCommand } from "../commands/backup.js";
@@ -12,6 +11,7 @@ import {
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { listArchiveEntries } from "./backup-create.test-support.js";
 
 describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops", () => {
   it("skips an unmanaged loop with one filename warning and restores adjacent files", async () => {
@@ -44,15 +44,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite symbolic link loops
           "state asset",
         );
         const archivedDirectory = path.posix.join(stateAsset.archivePath, "foreign");
-        const entries: string[] = [];
-        await tar.t({
-          file: archive.archivePath,
-          gzip: true,
-          onentry: (entry) => {
-            entries.push(entry.path);
-            entry.resume();
-          },
-        });
+        const entries = await listArchiveEntries(archive.archivePath);
         expect(entries).not.toContain(`${archivedDirectory}/cycle.sqlite`);
         expect(entries).toContain(`${archivedDirectory}/keep.txt`);
 

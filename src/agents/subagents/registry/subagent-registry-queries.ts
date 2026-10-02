@@ -7,15 +7,11 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
-  compareSubagentRunGeneration,
+  isSameSubagentRun,
   latestSubagentRun,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
-import {
-  hasSubagentRunEnded,
-  isRetainedUnendedSubagentRun,
-  isSubagentRunQueued,
-} from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
   return entry.collect
@@ -245,16 +241,15 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     if (isRetainedUnendedSubagentRun(entry, clock)) {
       return true;
     }
-    if (hasSubagentRunEnded(entry) || entry.execution.status !== "queued") {
+    if (hasSubagentRunEnded(entry)) {
       return false;
     }
-    // Compact projections cannot own reservations; only the matching raw owner can.
+    // Compact facts resolve status through the captured resident owner, never acquire custody.
     const current = inMemoryDisplayByChildSessionKey.get(entry.childSessionKey.trim());
     return (
       current !== undefined &&
-      current.requesterSessionKey === entry.requesterSessionKey &&
-      compareSubagentRunGeneration(current, entry) === 0 &&
-      isSubagentRunQueued(current)
+      isSameSubagentRun(current, entry) &&
+      isRetainedUnendedSubagentRun(current, clock)
     );
   };
 
@@ -444,24 +439,14 @@ export function getSubagentRunByChildSessionKeyFromRuns(
     return null;
   }
 
-  let latestActive: SubagentRunRecord | null = null;
-  let latestEnded: SubagentRunRecord | null = null;
-  for (const entry of runs.values()) {
-    if (entry.childSessionKey !== key) {
-      continue;
-    }
-    if (isRetainedUnendedSubagentRun(entry)) {
-      if (!latestActive || compareSubagentRunGeneration(entry, latestActive) > 0) {
-        latestActive = entry;
-      }
-      continue;
-    }
-    if (!latestEnded || compareSubagentRunGeneration(entry, latestEnded) > 0) {
-      latestEnded = entry;
-    }
-  }
-
-  return latestActive ?? latestEnded;
+  return (
+    latestSubagentRun(
+      runs.values(),
+      (entry) => entry.childSessionKey === key && isRetainedUnendedSubagentRun(entry),
+    ) ??
+    latestSubagentRun(runs.values(), (entry) => entry.childSessionKey === key) ??
+    null
+  );
 }
 
 export function resolveRequesterForChildSessionFromRuns(

@@ -26,6 +26,7 @@ export type SubagentSessionEffects = {
 export type SubagentRecoveryCurrent = {
   prepare(): Promise<boolean>;
   isHostCurrent(): boolean;
+  onPublished?(entry: SubagentRunRecord): void;
 };
 
 export type SubagentCompletionRequest = {
@@ -171,10 +172,7 @@ type SubagentKillIntent = {
   suppressTaskDelivery?: boolean;
 };
 
-/** Persisted execution, completion, delivery, and attachment state for child runs. */
 export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "collectorCompletion"> & {
-  /** Agent captured at registration for raw child session keys. */
-  childAgentId?: string;
   /** Child identity stays fixed when recovery redirects transcript writes. */
   childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */
@@ -253,6 +251,7 @@ export type SubagentRunMaintenanceRecord = Pick<
   SubagentRunRecord,
   | "runId"
   | "childSessionKey"
+  | "childAgentId"
   | "requesterSessionKey"
   | "createdAt"
   | "cleanupCompletedAt"
@@ -275,7 +274,8 @@ export type SubagentRegistrationScope = {
 };
 
 export type RegisterSubagentRunOptions = {
-  persistence?: "worker";
+  /** An accepted dispatch replay retains its original completion owner and waiter. */
+  acceptedRunReplay?: true;
   assertCurrent?: () => void;
   assertPublicationCurrent?: () => void;
   retainOwnership?: (scope: SubagentRegistrationScope) => void;

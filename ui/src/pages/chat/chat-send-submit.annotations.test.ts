@@ -56,7 +56,7 @@ describe("handleSendChat browser annotation context", () => {
     await handleSendChat(host);
 
     expect(createChatSession).toHaveBeenCalledOnce();
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
   it.each(["/stop", "stop", "esc", "abort", "wait", "exit"])(
@@ -77,7 +77,7 @@ describe("handleSendChat browser annotation context", () => {
         runId: "annotation-stop-run",
         sessionKey: "agent:main",
       });
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     },
   );
 
@@ -105,7 +105,7 @@ describe("handleSendChat browser annotation context", () => {
       expect(host.chatLocalInputHistoryBySession[host.sessionKey]?.[0]?.text).toBe(
         `${command} ${question}`.trim(),
       );
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
     },
   );
 

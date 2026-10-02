@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
@@ -14,9 +14,8 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -28,10 +27,15 @@ import {
   replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
+import * as activeTranscriptEvents from "./session-accessor.sqlite-active-events.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  createExactAssistantMessage,
+  transcriptMessage,
+  type ExactAssistantMessage,
+} from "./transcript-message.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
   runWithOwnedSessionTranscriptWrite,
@@ -47,27 +51,24 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "transcript-test-");
+
 describe("appendAssistantMessageToSessionTranscript", () => {
   beforeAll(async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-warm-"));
-    try {
-      const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      const storePath = path.join(sessionsDir, "sessions.json");
-      await replaceSessionEntry(
-        { sessionKey: "agent:main:warm", storePath },
-        { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
-      );
-      await appendAssistantMessageToSessionTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:warm",
-        text: "warm",
-        storePath,
-      });
-    } finally {
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const tempDir = sessionDirs.make();
+    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:warm", storePath },
+      { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
+    );
+    await appendAssistantMessageToSessionTranscript({
+      agentId: "main",
+      sessionKey: "agent:main:warm",
+      text: "warm",
+      storePath,
+    });
   });
 
   const fixture = useTempSessionsFixture("transcript-test-");
@@ -76,9 +77,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   function createFixtureTranscriptScope() {
     return { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
   }
-  type ExactAssistantMessage = Parameters<
-    typeof appendExactAssistantMessageToSessionTranscript
-  >[0]["message"];
   type BeforeMessageWriteParams = Parameters<
     NonNullable<
       Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["beforeMessageWrite"]
@@ -140,31 +138,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
   }
 
-  function createExactAssistantMessage(params: {
-    text?: string;
-    content?: ExactAssistantMessage["content"];
-    provider?: string;
-    model?: string;
-  }): ExactAssistantMessage {
-    return {
-      role: "assistant",
-      content: params.content ?? [{ type: "text", text: params.text ?? "" }],
-      api: "openai-responses",
-      provider: params.provider ?? "codex",
-      model: params.model ?? "gpt-5.4",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
-  }
-
   function requireTranscriptUpdateCall(
     spy: TranscriptUpdateEmitterSpy,
   ): InternalSessionTranscriptUpdate {
@@ -196,7 +169,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
 
   it("uses configured session.store when storePath is omitted", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
+    const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
@@ -246,19 +219,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
         setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("uses the session key agent for configured session.store templates", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-agent-store-"));
+    const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
@@ -321,14 +291,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
         setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
@@ -706,11 +673,22 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       },
     );
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Active branch reply",
-      storePath: fixture.storePath(),
-    });
+    const hostRead = vi
+      .spyOn(activeTranscriptEvents, "readLatestSessionTranscriptMessageEvent")
+      .mockImplementation(() => {
+        throw new Error("Delivery mirror must read the active tail in its worker");
+      });
+    let mirrorResult;
+    try {
+      mirrorResult = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Active branch reply",
+        storePath: fixture.storePath(),
+      });
+      expect(hostRead).not.toHaveBeenCalled();
+    } finally {
+      hostRead.mockRestore();
+    }
 
     expect(mirrorResult.ok).toBe(true);
     if (mirrorResult.ok) {

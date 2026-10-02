@@ -44,6 +44,20 @@ it.each(["added", "renamed", "deleted", "import-edge"])(
   },
 );
 
+it("selects changed test files directly only on routable Vitest surfaces", () => {
+  const cwd = tempDirs.make("node-selection-routable-");
+  // Skill scripts carry node:test files that no Vitest config owns.
+  const skillTest = ".agents/skills/example/scripts/driver.test.mjs";
+  const routable = "src/infra/own.test.ts";
+  for (const file of [skillTest, routable]) {
+    mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+    writeFileSync(path.join(cwd, file), "export {};\n");
+  }
+  expect(
+    resolveChangedNodeTestTargets([skillTest, routable], { cwd, selectionMode: "aggressive" }),
+  ).toEqual([routable]);
+});
+
 it("bounds protected regressions to nearby consumers and restores area coverage in full mode", () => {
   const cwd = tempDirs.make("node-selection-");
   const source = "src/agents/example/subject.ts";

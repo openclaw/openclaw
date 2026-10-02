@@ -18,7 +18,7 @@ import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import { createWorkerEnvironmentCommitAdmission } from "./store-commit-authority.js";
 import { publishWorkerEnvironmentNativeMutation } from "./store-native-publication.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
-import type { WorkerEnvironmentFacts } from "./store-worker-contract.js";
+import type { WorkerEnvironmentFacts } from "./store.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const environment: WorkerEnvironmentRecord = {

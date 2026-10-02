@@ -85,7 +85,7 @@ const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
 const COMPUTER_USE_LIVE_TEST_THREAD_NAME = "OpenClaw Computer Use readiness probe";
 const COMPUTER_USE_LIST_APPS_TOOL = "list_apps";
 const COMPUTER_USE_UNIFIED_JS_TOOL = "js";
-const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.getState();";
+const COMPUTER_USE_UNIFIED_JS_PROBE = "await cua.listApps();";
 
 export async function runCodexComputerUseLiveTest(params: {
   request: CodexComputerUseRequest;

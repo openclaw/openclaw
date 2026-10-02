@@ -20,6 +20,7 @@ import {
   publishSessionEntryCacheInvalidation,
   trackSessionEntryCacheWrite,
 } from "./session-accessor.sqlite-entry-cache.js";
+import { sessionSharingEntriesEqual } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   sqliteSessionEntriesEqual,
   type SqliteLifecycleTargetSnapshot,
@@ -645,7 +646,18 @@ export function writeSessionEntry(
     {
       sessionKey,
       entry: normalizedEntry,
+      sharingUnchanged:
+        !options.allowStoredAliases &&
+        sessionSharingEntriesEqual(canonicalPreviousEntry, {
+          ...normalizedEntry,
+          owner: canonicalPreviousEntry?.owner,
+        }),
       entryJson: persisted.entryJson,
+      sideMetadata: structuredClone({
+        owner: canonicalPreviousEntry?.owner,
+        participants: canonicalPreviousEntry?.participants,
+        participantCount: canonicalPreviousEntry?.participantCount,
+      }),
       previousEntry: canonicalPreviousEntry,
       ...(!options.allowStoredAliases
         ? {

@@ -3,6 +3,7 @@
 import os from "node:os";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { expect, vi } from "vitest";
+import "../../../test-utils/prepare-compiled-subprocesses.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
@@ -23,7 +24,7 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
     >
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
-  resetSubagentRegistryForTests: MockFn;
+  resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
 
 export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
@@ -295,7 +296,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
     vi.resetModules();
   }
 
-  const resetSubagentRegistryForTests = vi.fn();
+  const resetSubagentRegistryForTests = vi.fn(async () => {});
 
   vi.doMock("../../provider-model-normalization.runtime.js", () => ({
     normalizeProviderModelIdWithRuntime: () => undefined,
@@ -477,44 +478,44 @@ export async function loadSubagentSpawnModuleForTest(params: {
   }));
 
   vi.doMock("../registry/subagent-registry.js", () => ({
-    completeCollectorLaunchCleanup: params.completeCollectorLaunchCleanupMock ?? vi.fn(),
+    completeCollectorLaunchCleanup:
+      params.completeCollectorLaunchCleanupMock ?? vi.fn(async () => {}),
     countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
     listSwarmRunsForGroup: params.listSwarmRunsForGroup ?? vi.fn(() => []),
     registerSubagentRun: vi.fn(
-      (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
+      async (record: RegisterSubagentRunParams, options?: RegisterSubagentRunOptions) => {
         if (!record.queued || !options?.retainOwnership) {
-          return params.registerSubagentRunMock?.(record, options);
+          await params.registerSubagentRunMock?.(record, options);
+          return;
         }
         let retained = false;
-        const result = params.registerSubagentRunMock?.(record, {
+        await params.registerSubagentRunMock?.(record, {
           ...options,
           retainOwnership(scope) {
             retained = true;
             options.retainOwnership?.(scope);
           },
         } satisfies RegisterSubagentRunOptions);
-        return Promise.resolve(result).then(() => {
-          // Successful queued registration transfers custody; stricter test scopes win.
-          if (!retained) {
-            options.retainOwnership?.({
-              canLaunch: () => true,
-              canAcceptLaunch: () => true,
-              canCleanupSession: () => true,
-              canRetireReservation: () => true,
-              waitForClaim: () => undefined,
-              waitForRetirementPublication: () => undefined,
-              settleFailedLaunch: async (error) => {
-                params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
-              },
-            });
-          }
-        });
+        // Successful queued registration transfers custody; stricter test scopes win.
+        if (!retained) {
+          options.retainOwnership?.({
+            canLaunch: () => true,
+            canAcceptLaunch: () => true,
+            canCleanupSession: () => true,
+            canRetireReservation: () => true,
+            waitForClaim: () => undefined,
+            waitForRetirementPublication: () => undefined,
+            settleFailedLaunch: async (error) => {
+              await params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+            },
+          });
+        }
       },
     ),
     resetSubagentRegistryForTests,
     settleFailedQueuedSubagentLaunch:
-      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(() => true),
-    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(() => true),
+      params.settleFailedQueuedSubagentLaunchMock ?? vi.fn(async () => true),
+    startQueuedSubagentRun: params.startQueuedSubagentRunMock ?? vi.fn(async () => true),
   }));
 
   const subagentSpawnModule = await import("./subagent-spawn.js");

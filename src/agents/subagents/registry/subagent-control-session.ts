@@ -136,12 +136,8 @@ export async function prepareSubagentKillSession(
           release,
           assertCurrent,
           withPublication: (run) =>
-            runOpenClawAgentWriteAdmission(database, async () => {
-              // A pending metadata writer hides generation facts until publication.
-              // Hold its FIFO only over the registry commit, never over cancellation drain.
-              assertCurrent();
-              return await run();
-            }),
+            // The consumer checks its retained authority after joining the writer FIFO.
+            runOpenClawAgentWriteAdmission(database, run),
         };
       },
     );
@@ -160,7 +156,6 @@ export async function persistSubagentAbortedLastRun(params: {
   abortedLastRun: boolean;
   isCurrent?: (current: SessionEntry) => boolean;
   assertCommitAllowed?: () => void;
-  strict?: boolean;
 }): Promise<boolean> {
   if (!params.hasSessionEntry) {
     return true;
@@ -207,9 +202,6 @@ export async function persistSubagentAbortedLastRun(params: {
     return true;
   } catch (error) {
     if (hasSqliteWorkerOutcomeUnknown(error)) {
-      throw error;
-    }
-    if (params.strict) {
       throw error;
     }
     logVerbose(

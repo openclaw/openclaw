@@ -272,6 +272,7 @@ it("keeps global outbox event recovery bound to the event's agent", async () => 
     [
       "chat.history",
       { sessionKey: "global", agentId: "work", inputRunIds: ["work-run"], limit: 1000 },
+      { timeoutMs: 30_000 },
     ],
   ]);
   expect(listStoredChatOutboxes(host)).toHaveLength(2);

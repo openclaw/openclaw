@@ -6,8 +6,8 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type {
-  SessionCatalogHost,
   SessionsCatalogListParams,
+  SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -44,9 +44,6 @@ import {
 import type { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
 import type { GatewayClient } from "./types.js";
 
-type CatalogResult = {
-  catalogs: Array<{ id: string; hosts: SessionCatalogHost[]; error?: { message: string } }>;
-};
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 
 export async function createComposedCatalogFixture(
@@ -309,14 +306,16 @@ export async function createComposedCatalogFixture(
       }
       return result;
     }
-    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
-      const result = (await call("sessions.catalog.list", {
+    const requestList = async (params: Partial<SessionsCatalogListParams> = {}) =>
+      (await call("sessions.catalog.list", {
         catalogId: "codex",
         agentId: "main",
         limitPerHost: 64,
         ...params,
         hostIds: ["gateway:local"],
-      })) as CatalogResult;
+      })) as SessionsCatalogListResult;
+    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      const result = await requestList(params);
       const catalog = result.catalogs.find((value) => value.id === "codex");
       if (!catalog || catalog.error) {
         throw new Error(catalog?.error?.message ?? "Missing Codex catalog");
@@ -336,6 +335,7 @@ export async function createComposedCatalogFixture(
       projection,
       rows,
       requests,
+      requestList,
       list,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {

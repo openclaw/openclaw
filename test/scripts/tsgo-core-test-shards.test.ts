@@ -65,6 +65,9 @@ describe("tsgo core test shards", () => {
     }
     for (const [file, owner] of [
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
+      ["src/agents/subagents/spawn/acp-spawn-target.test.ts", "agents-sessions"],
+      ["src/agents/session-maintenance/run.test.ts", "agents-sessions"],
+      ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
       ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
@@ -90,6 +93,10 @@ describe("tsgo core test shards", () => {
       ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
       ["src/gateway/worker-environments/admission.test.ts", "gateway-other"],
       ["src/gateway/worker-environments/computer-transport.test.ts", "gateway-other"],
+      ["src/node-host/connection.test.ts", "gateway-other"],
+      ["src/worker/worker-connection.test.ts", "gateway-other"],
+      ["src/infra/state-migrations.test.ts", "state-logging"],
+      ["src/infra/state-migrations.workspace-setup.test.ts", "state-logging"],
       ["src/gateway/server-plugin-reload.recovery.test.ts", "gateway-server"],
       ["src/gateway/server-methods/plugins.decisions.test.ts", "gateway-methods"],
       ["src/plugins/loader.native-module-loader.test.ts", "plugins-platform"],
@@ -679,14 +686,14 @@ import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
 if (process.argv[2] === "boundary") {
   await checkCoreTsgoGraphBoundary();
 } else {
-  const plan = await createChangedCiTypeCheckPlan([${JSON.stringify(extension)}], {
+  const plan = await createChangedCiTypeCheckPlan([process.argv[2] === "core-plan" ? ${JSON.stringify(helper)} : ${JSON.stringify(extension)}], {
     cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
   });
   console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
 }
 `,
       );
-      const inspectExtension = async (mode: "plan" | "boundary") => {
+      const inspectExtension = async (mode: "plan" | "core-plan" | "boundary", serial = "") => {
         write("compiler-events.jsonl", "");
         return await lifetime.track(
           runNodeScript(
@@ -696,25 +703,35 @@ if (process.argv[2] === "boundary") {
               plannerDriver,
               mode,
             ],
-            env,
+            { ...env, OPENCLAW_CI_TYPE_PLAN_SERIAL: serial },
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
         );
       };
-      const extensionPlan = await inspectExtension("plan");
-      expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
-      expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
-        mode: "changed",
-        names: ["extensions", "extensions-test", "scripts", "test-root"],
-      });
-      const discovery = fs
-        .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line) as string[]);
-      expect(discovery).toHaveLength(4);
-      expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
+      for (const serial of ["", "1"]) {
+        const extensionPlan = await inspectExtension("plan", serial);
+        expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
+        expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
+          mode: "changed",
+          names: ["extensions", "extensions-test", "scripts", "test-root"],
+        });
+        const discovery = fs
+          .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as string[]);
+        expect(discovery).toHaveLength(serial ? 4 : 1);
+        expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
+          true,
+        );
+        const corePlan = await inspectExtension("core-plan", serial);
+        expect(corePlan.status, corePlan.stderr).toBe(0);
+        expect(JSON.parse(corePlan.stdout.trim())).toEqual({
+          mode: "changed",
+          names: ["core-test-agents-other"],
+        });
+      }
       // Its parallel owner must still reject a type-only edge into an extension.
       write(
         consumer,
@@ -726,6 +743,10 @@ if (process.argv[2] === "boundary") {
         "Core tsgo graphs include bundled extension files",
       );
       expect(extensionBoundary.stderr).toContain(extension);
+      const invalidCorePlan = await inspectExtension("core-plan");
+      expect(invalidCorePlan.status).not.toBe(0);
+      expect(invalidCorePlan.stderr).toContain("Core tsgo graphs include bundled extension files");
+      expect(invalidCorePlan.stderr).toContain(extension);
       write(
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",

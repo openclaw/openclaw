@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -24,13 +25,11 @@ import {
 } from "./managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "./managed-image-record-store.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./method-scopes.js";
+import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
 import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
@@ -196,17 +195,35 @@ describe("Gateway agent and artifact APIs", () => {
     clearConfigCache();
     clearSessionStoreCacheForTest();
 
-    const port = await getGatewayE2ePortBlock();
-    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(port));
-    let server = await startGatewayServer(port, {
-      bind: "loopback",
-      auth: { mode: "token", token },
-      controlUiEnabled: false,
+    const claim = await acquireGatewayE2ePortBlock();
+    // Restarts reuse the port, so the claim outlives each server.
+    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let releaseClaim: (() => Promise<void>) | undefined = claim.release;
+    cleanup.push(async () => {
+      await server?.close();
+      await releaseClaim?.();
     });
-    cleanup.push(() => server.close());
+    const startServer = () =>
+      startGatewayServer(claim.port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      }).catch((error: unknown) => {
+        // Incomplete startup rollback can leave the listener bound; keep the port claimed.
+        if (
+          collectNestedErrorCandidates(error).some(
+            (cause) => cause instanceof GatewayStartupCleanupError,
+          )
+        ) {
+          releaseClaim = undefined;
+        }
+        throw error;
+      });
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", String(claim.port));
+    server = await startServer();
 
     let client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token,
       clientDisplayName: "gateway agent artifact APIs",
       scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -215,16 +232,13 @@ describe("Gateway agent and artifact APIs", () => {
     cleanup.push(() => disconnectGatewayClient(client));
     const restartGateway = async (clientDisplayName: string) => {
       await disconnectGatewayClient(client);
-      await server.close();
+      await server?.close();
+      server = undefined;
       clearRuntimeConfigSnapshot();
       clearConfigCache();
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
+      server = await startServer();
       client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token,
         clientDisplayName,
         scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -404,7 +418,7 @@ describe("Gateway agent and artifact APIs", () => {
 
     await disconnectGatewayClient(client);
     client = await connectGatewayClient({
-      url: `ws://127.0.0.1:${port}`,
+      url: `ws://127.0.0.1:${claim.port}`,
       token,
       clientDisplayName: "gateway artifact APIs after reload",
       scopes: [ADMIN_SCOPE, READ_SCOPE],
@@ -461,7 +475,7 @@ describe("Gateway agent and artifact APIs", () => {
       );
       expect(download.url).toContain("mediaTicket=");
       expect(download.expiresAt).toBeTruthy();
-      const downloadUrl = `http://127.0.0.1:${port}${download.url}`;
+      const downloadUrl = `http://127.0.0.1:${claim.port}${download.url}`;
       const response = await fetch(downloadUrl);
       expect(response.status).toBe(200);
       expect(Buffer.from(await response.arrayBuffer())).toEqual(fixture.body);

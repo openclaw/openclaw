@@ -146,29 +146,37 @@ describe("resolveBuildAllStep", () => {
     ).toThrow("full 40-character hexadecimal SHA");
   });
 
-  it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
-    const step = getBuildAllStep("plugins:assets:build");
-    const tempDir = tempDirs.make("openclaw-pnpm-runner-");
-    const npmExecPath = path.join(tempDir, "pnpm.cjs");
-    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath,
-      env: {},
-    });
-
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: [npmExecPath, "plugins:assets:build"],
-      options: {
-        stdio: "inherit",
+  it.each([false, true])(
+    "routes pnpm steps through the npm_execpath pnpm runner on Windows (defer isolated: %s)",
+    (deferIsolatedAssets) => {
+      const step = getBuildAllStep("plugins:assets:build");
+      const tempDir = tempDirs.make("openclaw-pnpm-runner-");
+      const npmExecPath = path.join(tempDir, "pnpm.cjs");
+      fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
         env: {},
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
-  });
+        deferIsolatedAssets,
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [
+          npmExecPath,
+          "plugins:assets:build",
+          ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
+        ],
+        options: {
+          stdio: "inherit",
+          env: {},
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    },
+  );
 
   it("passes encoded import URLs literally to managed Node on Windows", () => {
     const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
@@ -192,35 +200,74 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
-  it("runs pnpm-free plugin builds through managed Node on Windows", () => {
-    const args = ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"];
-    const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-    });
-    expect(
-      createManagedCommandInvocation({
-        bin: result.command,
-        args: result.args,
-        ...result.options,
+  it.each([false, true])(
+    "runs pnpm-free plugin builds through managed Node on Windows (defer isolated: %s)",
+    (deferIsolatedAssets) => {
+      const args = [
+        "--import",
+        "tsx",
+        "scripts/bundled-plugin-assets.mts",
+        "--phase",
+        "build",
+        ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
+      ];
+      const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
         platform: "win32",
-      }),
-    ).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args,
-      shell: false,
-      windowsVerbatimArguments: undefined,
-    });
-    expect(result.options).toEqual({
-      stdio: "inherit",
-      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-      shell: false,
-    });
-  });
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+        deferIsolatedAssets,
+      });
+      expect(
+        createManagedCommandInvocation({
+          bin: result.command,
+          args: result.args,
+          ...result.options,
+          platform: "win32",
+        }),
+      ).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args,
+        shell: false,
+        windowsVerbatimArguments: undefined,
+      });
+      expect(result.options).toEqual({
+        stdio: "inherit",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+        shell: false,
+      });
+    },
+  );
 });
 
 describe("resolveBuildAllSteps", () => {
+  it.each([
+    ["full", "0"],
+    ["full", "1"],
+    ["package", "0"],
+    ["package", "1"],
+    ["ciArtifacts", "0"],
+  ])(
+    "generates native protocol models before compiling %s with skip-dts=%s",
+    async (profile, skipDts) => {
+      const runner = buildRunner();
+      const result = await runBuildAllSteps(profile, {
+        ...runner,
+        cacheEnabled: false,
+        env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
+      });
+      expect(result.exitCode).toBe(0);
+      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const generation = invocations.findIndex(({ args }) =>
+        args.includes("scripts/prepare-native-protocol.mjs"),
+      );
+      const compilation = invocations.findIndex(({ args }) =>
+        args.includes("scripts/tsdown-build.mts"),
+      );
+      expect(generation).toBeGreaterThanOrEqual(0);
+      expect(compilation).toBeGreaterThan(generation);
+    },
+  );
+
   it("rebuilds UI after runtime cleanup without reusing stale build metadata", () => {
     const steps = resolveBuildAllSteps("full");
     const labels = steps.map(({ label }) => label);
@@ -285,6 +332,75 @@ describe("resolveBuildAllSteps", () => {
     expect(runner.runStep).not.toHaveBeenCalled();
     expect(runner.resolveCacheState).not.toHaveBeenCalled();
     expect(runner.logger.error).toHaveBeenCalledWith(message);
+  });
+
+  it.each(["gatewayWatch", "cliStartup"])(
+    "records %s runtime phase completeness",
+    async (profile) => {
+      const cwd = tempDirs.make("openclaw-phase-stamp-");
+      const steps = resolveBuildAllSteps(profile, {})
+        .filter((step) => ["runtime-postbuild", "runtime-postbuild-stamp"].includes(step.label))
+        .map((step) => {
+          if (step.kind === "pnpm") {
+            throw new Error("Runtime metadata steps must use the native Node owner");
+          }
+          return step.label === "runtime-postbuild"
+            ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
+            : step;
+        });
+      const result = await runBuildAllSteps(profile, {
+        cwd,
+        env: {},
+        steps,
+        logger: { error() {}, warn() {} },
+        memoryLimit: buildMemoryLimit(16),
+      });
+      expect(result.exitCode).toBe(0);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(cwd, "dist/.runtime-postbuildstamp"), "utf8"))
+          .staticAssets,
+      ).toBe(false);
+    },
+  );
+
+  it("invalidates old runtime stamps before a failed declaration-cache restoration", async () => {
+    const cwd = tempDirs.make("openclaw-restore-stamps-");
+    fs.mkdirSync(path.join(cwd, "dist"));
+    const stamps = [".buildstamp", ".runtime-postbuildstamp"].map((name) =>
+      path.join(cwd, "dist", name),
+    );
+    for (const stamp of stamps) {
+      fs.writeFileSync(stamp, "previous valid generation");
+    }
+    await expect(
+      runBuildAllSteps("pluginSdkStrictSmoke", {
+        cwd,
+        env: {},
+        memoryLimit: buildMemoryLimit(16),
+        logger: { error() {}, warn() {} },
+        steps: [getBuildAllStep("tsdown-ai"), getBuildAllStep("build-stamp")],
+        resolveCacheState: () => ({
+          cacheable: true,
+          fresh: true,
+          restorable: true,
+          reason: "fresh-cache",
+          signature: "fixture",
+          outputRoot: cwd,
+          stampPath: path.join(cwd, "cache.json"),
+          inputFiles: 1,
+          outputFiles: 1,
+          relativeOutputFiles: ["dist/entry.js"],
+          stampedOutputs: ["dist/entry.js"],
+          record: undefined,
+        }),
+        restoreCache() {
+          expect(stamps.some((file) => fs.existsSync(file))).toBe(false);
+          fs.writeFileSync(path.join(cwd, "dist/entry.js"), "partial restoration");
+          return false;
+        },
+      }),
+    ).rejects.toThrow("Build cache changed before restoration");
+    expect(stamps.some((file) => fs.existsSync(file))).toBe(false);
   });
 
   it("admits package once and freezes its heap for every child", async () => {

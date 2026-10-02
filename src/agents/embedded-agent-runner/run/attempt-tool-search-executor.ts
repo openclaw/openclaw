@@ -84,7 +84,7 @@ export function createSubscribedToolSearchExecutor(params: {
           await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
-              withSessionManagerWrite(manager, () => {
+              withSessionManagerWrite(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
                   return;
@@ -92,7 +92,7 @@ export function createSubscribedToolSearchExecutor(params: {
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
                 }
-                manager.appendMessage(message);
+                await manager.appendMessageAsync(message);
                 const recorded = readNestedToolActivity(
                   redactTranscriptMessage(message, attempt.config),
                 );

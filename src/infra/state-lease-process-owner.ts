@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
 
@@ -11,16 +12,7 @@ export type StateLeaseProcessOwner = {
 export function parseStateLeaseProcessOwner(
   payloadJson: string | null,
 ): StateLeaseProcessOwner | null {
-  if (!payloadJson) {
-    return null;
-  }
-  let owner: unknown;
-  try {
-    const parsed: unknown = JSON.parse(payloadJson);
-    owner = isRecord(parsed) ? parsed.owner : null;
-  } catch {
-    return null;
-  }
+  const owner = safeParseJsonRecord(payloadJson ?? "")?.owner;
   if (!isRecord(owner)) {
     return null;
   }

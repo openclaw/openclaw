@@ -19,7 +19,7 @@ export * from "./exec-approvals-allowlist.js";
 export * from "./exec-approvals-core.js";
 export * from "./exec-approvals-generated-migration.js";
 export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
-export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+export type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 export type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";
 export {
   DEFAULT_EXEC_APPROVAL_ASK_FALLBACK,

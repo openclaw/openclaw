@@ -18,6 +18,7 @@ import { persistToolResultProjections } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
 import { runEmbeddedAttemptBeforeAgentRun } from "./attempt-before-agent-run.js";
+import { logDecisionToolRequest } from "./attempt-decision-diagnostics.js";
 import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   prepareEmbeddedAttemptPromptAssembly,
@@ -116,11 +117,11 @@ export async function runEmbeddedAttemptPromptPhase(
     promptState.preflightRecovery = state.preflightRecovery;
     setFailure(state.promptError, state.promptErrorSource);
   };
-  const releaseLeasedSteering = (error?: unknown) => {
+  const releaseLeasedSteering = async (error?: unknown) => {
     if (!leasedSteering) {
       return;
     }
-    releasePendingAgentSteeringItems({
+    await releasePendingAgentSteeringItems({
       runIds: leasedSteering.runIds,
       leaseId: leasedSteering.leaseId,
       error: error ? formatErrorMessage(error) : undefined,
@@ -161,10 +162,11 @@ export async function runEmbeddedAttemptPromptPhase(
       sessionAgentId,
       runtimeModel: runtimeInfo.model,
       systemPromptText,
+      runAbortSignal: input.runAbortController.signal,
       setActiveSessionSystemPrompt,
-      applyPromptBuildToolsAllow: (toolsAllow) => {
+      applyPromptBuildToolsAllow: (toolsAllow, decisionIsCurrent) => {
         // Hook authority follows reachable capabilities, not just provider-visible controls.
-        return promptToolPolicy.apply(toolsAllow).callableToolNames;
+        return promptToolPolicy.apply(toolsAllow, decisionIsCurrent).callableToolNames;
       },
       prepareSystemPrompt: async (currentSystemPrompt) => {
         const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
@@ -247,9 +249,9 @@ export async function runEmbeddedAttemptPromptPhase(
         sessionManager: {
           appendCustomEntry: async (customType, data) => {
             await withOwnedTranscriptWrite(() =>
-              withSessionManagerWrite(sessionManager, () => {
+              withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
-                sessionManager.appendCustomEntry(customType, data);
+                await sessionManager.appendCustomEntryAsync(customType, data);
               }),
             );
           },
@@ -414,16 +416,45 @@ export async function runEmbeddedAttemptPromptPhase(
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
         },
+        assertHostActive: promptAssembly.assertHostActive,
+        preparePrimaryModelRequest: () =>
+          promptToolPolicy.prepareForDispatch(async () => {
+            promptAssembly.decisionPrefilter.restrictionApplied = false;
+            promptAssembly.decisionPrefilter.status = "retained";
+            promptAssembly.decisionPrefilter.reason = "selection-changed";
+            const refresh = await prepared.systemPrompt.prepareToolPrompt?.(
+              promptToolPolicy.current.effectiveTools,
+            );
+            input.runAbortController.signal.throwIfAborted();
+            promptAssembly.assertHostActive?.();
+            if (refresh) {
+              setActiveSessionSystemPrompt(refresh(activeSession.agent.state.systemPrompt));
+            }
+            return () => ({
+              tools: activeSession.agent.state.tools.slice(),
+              systemPrompt: activeSession.agent.state.systemPrompt,
+            });
+          }),
+        onPrimaryModelRequest: (tools) => {
+          logDecisionToolRequest({
+            decision: promptAssembly.decisionPrefilter,
+            baseline: promptToolPolicy.readDecisionBaseline(),
+            readFinal: () => tools,
+            requiredNames: promptToolPolicy.decisionRequiredNames,
+            trace: runTrace,
+          });
+        },
         onSteeringAcknowledged: () => {
           leasedSteering = undefined;
         },
         persistToolResultProjections: async () => {
           if (!isRawModelRun && toolResultPromptProjectionState.frozen.size > 0) {
             await withOwnedTranscriptWrite(() =>
-              withSessionManagerWrite(sessionManager, () => {
+              withSessionManagerWrite(sessionManager, async () => {
                 runAbortController.signal.throwIfAborted();
-                persistToolResultProjections(toolResultPromptProjectionState, (customType, data) =>
-                  sessionManager.appendCustomEntry(customType, data),
+                await persistToolResultProjections(
+                  toolResultPromptProjectionState,
+                  (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
                 );
               }),
             );
@@ -446,7 +477,7 @@ export async function runEmbeddedAttemptPromptPhase(
         trajectoryRecorder,
       });
     } else {
-      releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
+      await releaseLeasedSteering(state.promptError ?? "prompt submission skipped");
     }
     publishDispatchState(state);
   } catch (error) {

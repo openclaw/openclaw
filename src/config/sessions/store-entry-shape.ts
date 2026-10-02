@@ -5,8 +5,9 @@ import {
   normalizeSessionColorValue,
   normalizeSessionIconValue,
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { validateSessionId } from "./paths.js";
+import { normalizeSessionConversationLink } from "./conversation-link.js";
+import { SessionStoreMigrationRequiredError } from "./migration-required.js";
+import { hasLegacySessionEntryState } from "./session-entry-state-format.js";
 import type { PendingTranscriptRepairState, SessionEntry } from "./types.js";
 
 function normalizeSessionEntryArchiveReason(
@@ -21,51 +22,20 @@ function normalizeSessionEntryArchiveReason(
     : undefined;
 }
 
-// Persisted stores may contain old or malformed ids; reject path-like ids before use.
-function isSafeSessionId(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 255 || trimmed !== trimmed.normalize("NFC")) {
-    return false;
-  }
-  return /^[\p{L}\p{N}][\p{L}\p{N}\p{M}._:@-]*$/u.test(trimmed);
-}
-
-function normalizeTranscriptSessionId(value: string): string | undefined {
-  try {
-    return validateSessionId(value);
-  } catch {
-    return undefined;
-  }
-}
-
 function normalizeOptionalTimestamp(value: unknown): number | undefined {
   return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
 }
 
 /** Removes retired runtime locator fields before a session entry is persisted or returned. */
 export function projectCanonicalSessionEntryShape(value: Record<string, unknown>): SessionEntry {
+  if (hasLegacySessionEntryState(value)) {
+    throw new SessionStoreMigrationRequiredError(
+      "Legacy session entry state requires migration; stop the Gateway and run openclaw doctor --fix.",
+    );
+  }
   const {
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
-    pendingFinalDeliveryCreatedAt,
-    pendingFinalDeliveryLastAttemptAt: _pendingFinalDeliveryLastAttemptAt,
-    pendingFinalDeliveryAttemptCount: _pendingFinalDeliveryAttemptCount,
-    pendingFinalDeliveryLastError: _pendingFinalDeliveryLastError,
-    pendingFinalDeliveryText,
-    pendingFinalDeliveryContext,
-    pendingFinalDeliveryIntentId,
-    fallbackNoticeSelectedModel,
-    fallbackNoticeActiveModel,
-    fallbackNoticeReason,
-    memoryFlushAt: _memoryFlushAt,
-    memoryFlushCompactionCount,
-    memoryFlushContextHash: _memoryFlushContextHash,
-    memoryFlushFailureCount,
-    memoryFlushLastFailedAt: _memoryFlushLastFailedAt,
-    memoryFlushLastFailureError: _memoryFlushLastFailureError,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,
@@ -78,6 +48,10 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
       delete canonicalValue[key];
     }
   };
+  setOptionalField(
+    "conversationLink",
+    normalizeSessionConversationLink(canonicalValue.conversationLink),
+  );
   const icon =
     typeof canonicalValue.icon === "string" ? normalizeSessionIconValue(canonicalValue.icon) : null;
   setOptionalField("icon", icon);
@@ -86,30 +60,10 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
       ? normalizeSessionColorValue(canonicalValue.color)
       : null;
   setOptionalField("color", color);
-  const legacyPendingText = normalizeOptionalString(pendingFinalDeliveryText);
-  const legacySelectedModel = normalizeOptionalString(fallbackNoticeSelectedModel);
-  const legacyActiveModel = normalizeOptionalString(fallbackNoticeActiveModel);
-  const legacyFlushCompactionCount = normalizeCount(memoryFlushCompactionCount);
-  const legacyFlushFailureCount = normalizeCount(memoryFlushFailureCount);
-  const intentId = normalizeOptionalString(pendingFinalDeliveryIntentId);
-  const pendingFinalDelivery =
-    normalizePendingFinalDelivery(canonicalValue.pendingFinalDelivery) ??
-    (legacyPendingText || value.pendingFinalDelivery === true
-      ? {
-          ...(legacyPendingText
-            ? { kind: "replayable" as const, text: legacyPendingText }
-            : { kind: "transport-only" as const }),
-          createdAt:
-            normalizeOptionalTimestamp(pendingFinalDeliveryCreatedAt) ??
-            normalizeOptionalTimestamp(value.updatedAt) ??
-            0,
-          ...(isRecord(pendingFinalDeliveryContext)
-            ? { context: pendingFinalDeliveryContext }
-            : {}),
-          ...(intentId ? { intentId } : {}),
-        }
-      : undefined);
-  setOptionalField("pendingFinalDelivery", pendingFinalDelivery);
+  setOptionalField(
+    "pendingFinalDelivery",
+    normalizePendingFinalDelivery(canonicalValue.pendingFinalDelivery),
+  );
   setOptionalField(
     "pendingDeliveryNotice",
     normalizePendingDeliveryNotice(canonicalValue.pendingDeliveryNotice),
@@ -118,32 +72,8 @@ export function projectCanonicalSessionEntryShape(value: Record<string, unknown>
     "pendingTranscriptRepair",
     normalizePendingTranscriptRepair(canonicalValue.pendingTranscriptRepair),
   );
-  const reason = normalizeOptionalString(fallbackNoticeReason);
-  const fallbackNotice =
-    normalizeFallbackNotice(canonicalValue.fallbackNotice) ??
-    (legacySelectedModel && legacyActiveModel
-      ? {
-          kind: "active" as const,
-          selectedModel: legacySelectedModel,
-          activeModel: legacyActiveModel,
-          ...(reason ? { reason } : {}),
-        }
-      : undefined);
-  setOptionalField("fallbackNotice", fallbackNotice);
-  const memoryFlush =
-    normalizeMemoryFlush(canonicalValue.memoryFlush) ??
-    (legacyFlushFailureCount && legacyFlushFailureCount > 0
-      ? {
-          kind: "failed" as const,
-          ...(legacyFlushCompactionCount !== undefined
-            ? { compactionCount: legacyFlushCompactionCount }
-            : {}),
-          failureCount: legacyFlushFailureCount,
-        }
-      : legacyFlushCompactionCount !== undefined
-        ? { kind: "succeeded" as const, compactionCount: legacyFlushCompactionCount }
-        : undefined);
-  setOptionalField("memoryFlush", memoryFlush);
+  setOptionalField("fallbackNotice", normalizeFallbackNotice(canonicalValue.fallbackNotice));
+  setOptionalField("memoryFlush", normalizeMemoryFlush(canonicalValue.memoryFlush));
   const archiveReason = normalizeSessionEntryArchiveReason(canonicalValue.archiveReason);
   if (canonicalValue.archivedAt !== undefined) {
     setOptionalField("archiveReason", archiveReason);
@@ -180,7 +110,7 @@ export function stripRuntimeOnlySessionSkillsFields(entry: SessionEntry): Sessio
   return { ...entry, skillsSnapshot };
 }
 
-function normalizePendingFinalDelivery(
+export function normalizePendingFinalDelivery(
   value: unknown,
 ): SessionEntry["pendingFinalDelivery"] | undefined {
   if (!isRecord(value)) {
@@ -281,7 +211,9 @@ function normalizePendingTranscriptRepairRecord(
   };
 }
 
-function normalizeFallbackNotice(value: unknown): SessionEntry["fallbackNotice"] | undefined {
+export function normalizeFallbackNotice(
+  value: unknown,
+): SessionEntry["fallbackNotice"] | undefined {
   if (!isRecord(value) || value.kind !== "active") {
     return undefined;
   }
@@ -293,7 +225,7 @@ function normalizeFallbackNotice(value: unknown): SessionEntry["fallbackNotice"]
     : undefined;
 }
 
-function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"] | undefined {
+export function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"] | undefined {
   if (!isRecord(value)) {
     return undefined;
   }
@@ -315,56 +247,4 @@ function normalizeMemoryFlush(value: unknown): SessionEntry["memoryFlush"] | und
 function normalizeCount(value: unknown): number | undefined {
   const number = asNonNegativeFiniteNumber(value);
   return number === undefined ? undefined : Math.floor(number);
-}
-
-/** Normalizes persisted session store entries before they reach runtime callers. */
-export function normalizePersistedSessionEntryShape(
-  value: unknown,
-  options: { sessionKey?: string } = {},
-): SessionEntry | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const modelSelectionLocked = value.modelSelectionLocked === true;
-  let next = projectCanonicalSessionEntryShape(value);
-  if (value.sessionId !== undefined) {
-    if (!isSafeSessionId(value.sessionId)) {
-      return undefined;
-    }
-    const sessionId = value.sessionId.trim();
-    const legacySessionFile = value.sessionFile;
-    const pendingLegacyKeyId =
-      !modelSelectionLocked &&
-      options.sessionKey !== undefined &&
-      parseAgentSessionKey(options.sessionKey) !== null &&
-      sessionId === options.sessionKey &&
-      (value.initializationPending === true ||
-        typeof legacySessionFile !== "string" ||
-        !legacySessionFile.trim());
-    if (pendingLegacyKeyId) {
-      const { sessionId: _legacyPendingSessionId, ...pendingEntry } = next;
-      next = { ...pendingEntry, initializationPending: true } as SessionEntry;
-    } else {
-      if (modelSelectionLocked && sessionId !== value.sessionId) {
-        // A harness lock protects the exact durable identity. Repairing it here
-        // would make a corrupted row look valid before ownership validation.
-        return undefined;
-      }
-      const transcriptSessionId = normalizeTranscriptSessionId(sessionId);
-      if (!transcriptSessionId) {
-        return undefined;
-      }
-      if (sessionId !== value.sessionId) {
-        next = { ...next, sessionId };
-      }
-    }
-  }
-
-  const updatedAt = normalizeOptionalTimestamp(value.updatedAt);
-  if (updatedAt !== value.updatedAt) {
-    next.updatedAt = updatedAt ?? 0;
-  }
-
-  return next;
 }

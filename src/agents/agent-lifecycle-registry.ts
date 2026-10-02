@@ -21,6 +21,7 @@ import {
   type AgentDeletionJournalCleanupPath,
   type AgentDeletionJournalEntry,
 } from "../state/agent-deletion-journal.js";
+import { readAgentDeletionJournalAuthorityInWorker } from "../state/agent-deletion-journal.read.js";
 import { readAgentProvenance, type AgentProvenance } from "../state/agent-provenance.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "../state/openclaw-agent-db-lease.js";
 import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
@@ -31,6 +32,7 @@ import type {
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 
 export class AgentDeletionAuthorityRollbackError extends AggregateError {}
@@ -63,6 +65,7 @@ type AgentDeletionInput = Omit<
 export type AgentDeletionOperation = {
   entry: AgentDeletionJournalEntry;
   assertCurrent: (database?: OpenClawStateDatabase) => void;
+  assertCurrentAsync: () => Promise<void>;
   runDatabaseCleanup: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
   fenceDatabasePaths: (paths: readonly string[]) => void;
   fenceCleanupPaths: (paths: readonly AgentDeletionJournalCleanupPath[]) => void;
@@ -128,13 +131,13 @@ export function withAgentDeletion<T>(
             }
             return entryJournal;
           }, stateOptions);
-          const assertJournal = (
+          const readContext = captureOpenClawStateReadWorkerContext(stateOptions);
+          const assertJournalIdentity = (
             currentStatePath: string,
             entries: readonly Pick<
               AgentDeletionJournalEntry,
               "agentId" | "operationId" | "cleanupCompleted"
             >[],
-            database?: OpenClawStateDatabase,
           ) => {
             if (
               closed ||
@@ -148,6 +151,14 @@ export function withAgentDeletion<T>(
             ) {
               throw new Error(`Agent ${id} deletion no longer owns database cleanup.`);
             }
+            return id;
+          };
+          const assertJournal = (
+            currentStatePath: string,
+            entries: Parameters<typeof assertJournalIdentity>[1],
+            database?: OpenClawStateDatabase,
+          ) => {
+            assertJournalIdentity(currentStatePath, entries);
             if (database) {
               lease.assertOwnedInTransaction(database.db);
             } else {
@@ -162,6 +173,32 @@ export function withAgentDeletion<T>(
                 ? readAgentDeletionJournalInDatabase(database, id)
                 : readAgentDeletionJournal(id, stateOptions);
             assertJournal(database?.path ?? statePath, current ? [current] : [], database);
+          };
+          const assertAsyncScopeCurrent = () => {
+            if (closed) {
+              throw new Error(`Agent ${id} deletion no longer owns database cleanup.`);
+            }
+            lease.signal.throwIfAborted();
+            readContext.maintenanceScope?.assertAdmission();
+            readContext.admission.assertCurrent();
+          };
+          const assertCurrentAsync = async () => {
+            assertAsyncScopeCurrent();
+            const verifyLease = lease.assertOwnedAsync;
+            if (!verifyLease) {
+              throw new Error(
+                "Agent deletion requires asynchronous worker-heartbeat verification.",
+              );
+            }
+            const current = await readAgentDeletionJournalAuthorityInWorker(
+              id,
+              readContext,
+              lease.signal,
+            );
+            assertAsyncScopeCurrent();
+            assertJournalIdentity(readContext.admission.databasePath, current ? [current] : []);
+            await verifyLease();
+            assertAsyncScopeCurrent();
           };
           const mutateJournal = <Result>(mutate: () => Result): Result =>
             runOpenClawStateWriteTransaction((database) => {
@@ -178,6 +215,7 @@ export function withAgentDeletion<T>(
           return {
             entry: journal,
             assertCurrent,
+            assertCurrentAsync,
             runDatabaseCleanup: createAgentDeletionDatabaseCleanup({
               statePath,
               assertAdmission: () => assertNoOpenClawAgentDatabaseLeases(id, stateOptions),

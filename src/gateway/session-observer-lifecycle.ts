@@ -7,6 +7,7 @@ import {
   markSessionObserverRunSuperseded,
   rememberSessionObserverRevisionFloor,
   resolveSessionObserverDigestForLifecycle,
+  snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {
   DormantSessionObserverRun,
@@ -46,12 +47,11 @@ export function createSessionObserverLifecycle(params: {
         !supersededRuns.has(state.runId) &&
         state.previousDigest
       ) {
-        rememberSessionObserverRevisionFloor(revisionFloors, scopeKey, {
-          sessionId: state.sessionId,
-          lifecycleRevision: state.lifecycleRevision,
-          revision: state.revision,
-          previousDigest: state.previousDigest,
-        });
+        rememberSessionObserverRevisionFloor(
+          revisionFloors,
+          scopeKey,
+          snapshotSessionObserverRevisionFloor(state),
+        );
       }
       states.delete(scopeKey);
     }

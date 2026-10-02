@@ -89,6 +89,9 @@ const changedNodeTestPlan = await importTargetPlan(
 const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
   ? await import(fromTarget("./scripts/lib/ci-docker-seed-plan.mts"))
   : {};
+const publishedDriverUpdatePlan = existsSync("./scripts/lib/ci-published-driver-update-plan.mts")
+  ? await import(fromTarget("./scripts/lib/ci-published-driver-update-plan.mts"))
+  : {};
 const channelContractPlan = await importTargetPlan(
   existsSync("./scripts/lib/channel-contract-test-plan.mts")
     ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -469,6 +472,9 @@ const targetWorkflow = existsSync(".github/workflows/ci.yml")
 const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
 const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
 const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
+const supportsPublishedDriverUpdate = targetWorkflow.includes(
+  "published-driver-update-contract-v1",
+);
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
 const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
 // Unit tests do not compile the benchmark. Keep its build when inputs
@@ -717,6 +723,19 @@ const dockerSeedLanes =
           : ["published-upgrade-survivor"]
         : []
     : [];
+if (
+  supportsPublishedDriverUpdate &&
+  typeof publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate !== "function"
+) {
+  throw new Error("Current CI target requires the published-driver update owner selector");
+}
+const publishedDriverUpdate =
+  isCanonicalRepository &&
+  supportsPublishedDriverUpdate &&
+  !docsOnly &&
+  (runtimePullRequest
+    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths)
+    : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
 // main have no branch-protection consumers. Dispatch (release
@@ -899,14 +918,15 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const runBuildArtifacts =
-  runNodeFull &&
-  (changedScopeHasBuildImpact ||
-    runSqliteSessionLifecycle ||
-    runBrowserNativeHost ||
-    runDoctorPluginIndex ||
-    runDiscordComponentProof ||
-    runGatewayWatch ||
-    selectedTuiPty);
+  publishedDriverUpdate ||
+  (runNodeFull &&
+    (changedScopeHasBuildImpact ||
+      runSqliteSessionLifecycle ||
+      runBrowserNativeHost ||
+      runDoctorPluginIndex ||
+      runDiscordComponentProof ||
+      runGatewayWatch ||
+      selectedTuiPty));
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1265,6 +1285,25 @@ const additionalChecks = [
       ? changedScopeHasPromptSnapshotImpact
       : narrowCheckScope.additionalGroups.includes(group)),
 );
+// Move an already-selected boundary row; sharing must never add another CI job.
+const sharedSdkDeclarations =
+  workflowEventName === "pull_request" &&
+  isCanonicalRepository &&
+  runnerProfile === "hybrid" &&
+  runCheckPlan &&
+  runNodeFull &&
+  !releaseFastLane &&
+  !releaseGate &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  existsSync("scripts/ci-sdk-declarations.mts") &&
+  additionalChecks.some(({ group }) => group === "extension-package-boundary");
+if (sharedSdkDeclarations) {
+  additionalChecks.splice(
+    additionalChecks.findIndex(({ group }) => group === "extension-package-boundary"),
+    1,
+  );
+}
 const checkTasks = [
   { check_name: "check-guards", task: "guards", runner: "blacksmith-4vcpu-ubuntu-2404" },
   { check_name: "check-npm-lock", task: "npm-lock", runner: "blacksmith-4vcpu-ubuntu-2404" },
@@ -1293,15 +1332,6 @@ const checkTasks = [
     : narrowCheckScope.checkTasks.includes(row.task);
 });
 
-// Move dependencies only when the preflight-only family is admitted.
-if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  const index = checkTasks.findIndex(({ task }) => task === "dependencies");
-  if (index >= 0) {
-    const { task, ...row } = checkTasks.splice(index, 1)[0];
-    additionalChecks.push({ ...row, group: task });
-  }
-}
-
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
   !frozenTarget &&
@@ -1315,6 +1345,17 @@ if (
   }
 }
 
+// These rows need no compiler plan; retain their existing full-check placement.
+if (runCheckPlan && runNodeFull && !releaseFastLane) {
+  for (const task of ["guards", "dependencies"]) {
+    const index = checkTasks.findIndex((row) => row.task === task);
+    if (index >= 0) {
+      const { task: group, ...row } = checkTasks.splice(index, 1)[0];
+      additionalChecks.push({ ...row, group });
+    }
+  }
+}
+
 const manifest = {
   release_scope: releaseScope,
   release_fast_lane: releaseFastLane,
@@ -1324,6 +1365,7 @@ const manifest = {
   run_node: runNode,
   run_docker_seed_e2e: dockerSeedLanes.length > 0,
   docker_seed_lanes: dockerSeedLanes.join(" "),
+  run_published_driver_update: publishedDriverUpdate,
   run_macos: runMacos,
   run_android: runAndroid,
   run_skills_python: runSkillsPython,
@@ -1404,6 +1446,7 @@ const manifest = {
     : "",
   changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
   run_check_additional: runNodeFull && !releaseFastLane && additionalChecks.length > 0,
+  shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
   run_format_check: runFormatCheck,
@@ -1532,12 +1575,7 @@ const hybridHostedEligible =
   isCanonicalRepository &&
   ["hybrid", "runson"].includes(process.env.OPENCLAW_CI_RUNNER_BACKEND ?? "") &&
   process.env.GITHUB_RUN_ATTEMPT === "1" &&
-  (eventName === "push" ||
-    ciQualification ||
-    (eventName === "pull_request" &&
-      ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"].includes(
-        process.env.OPENCLAW_CI_AUTHOR_ASSOCIATION ?? "",
-      )));
+  (eventName === "push" || ciQualification || eventName === "pull_request");
 let hybridHostedBaseRows = 0;
 let hybridHostedOffloadRows = 0;
 if (hybridHostedEligible) {
@@ -1572,6 +1610,7 @@ if (hybridHostedEligible) {
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
+    "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
     "control-ui-i18n": count(manifest.run_control_ui_i18n),
     "checks-baseline-ratchets": count(hostedControlJobs && manifest.run_baseline_ratchets),
@@ -1635,6 +1674,7 @@ const hybridHostedOffload =
 // Reserve the previous check-row budget so retaining the boundary on Blacksmith
 // does not expand admission for other hosted checks. Report only actual rows below.
 const hybridHostedCheckRows =
+  Number(sharedSdkDeclarations) +
   (manifest.run_check && checkTasks.some(({ task }) => task === "dependencies") ? 1 : 0) +
   (manifest.run_check &&
   checkTasks.some(({ task }) => task === "test-types") &&
@@ -1648,11 +1688,13 @@ const hybridHostedCheckRows =
         ),
       ).length
     : 0);
-const retainedBoundaryRows = manifest.run_check_additional
-  ? manifest.check_additional_matrix.include.filter(
-      (row) => row.group === "extension-package-boundary",
-    ).length
-  : 0;
+const retainedBoundaryRows =
+  Number(sharedSdkDeclarations) +
+  (manifest.run_check_additional
+    ? manifest.check_additional_matrix.include.filter(
+        (row) => row.group === "extension-package-boundary",
+      ).length
+    : 0);
 const hybridHostedExistingRows =
   hybridHostedBaseRows + (hybridHostedOffload ? hybridHostedOffloadRows : 0);
 // R1's slowest admitted hosted check took 496s including setup. A full
@@ -1728,6 +1770,7 @@ manifest.pr_job_count =
   workflowEventName !== "pull_request"
     ? 0
     : 2 +
+      countPrJobs(sharedSdkDeclarations) +
       countPrJobs(manifest.run_check_plan) +
       manifest.pr_check_job_count +
       [
@@ -1739,6 +1782,7 @@ manifest.pr_job_count =
         "run_check_docs",
         "run_skills_python_job",
         "run_docker_seed_e2e",
+        "run_published_driver_update",
       ].reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
       [
         ["run_checks_fast_core", "checks_fast_core_matrix"],

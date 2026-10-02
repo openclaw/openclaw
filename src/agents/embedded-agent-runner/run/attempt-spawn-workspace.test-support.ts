@@ -2,10 +2,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -22,6 +19,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -36,7 +34,11 @@ import {
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
-import type { SessionManagerMocks } from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
+import {
+  readMockSessionCacheTtlTimestamp,
+  resetSessionManagerMocks,
+  type SessionManagerMocks,
+} from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -95,7 +97,7 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveEmbeddedRunSkillEntriesMock: UnknownMock;
   resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
-  getGlobalHookRunnerMock: Mock<() => unknown>;
+  getGlobalHookRunnerMock: Mock<typeof getGlobalHookRunner>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
@@ -151,7 +153,6 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
   );
   const hasCompletedBootstrapTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
-  const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
@@ -190,7 +191,10 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     appendThinkingLevelChange: vi.fn(),
     appendModelChange: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendCustomEntryAsync: vi.fn(),
     appendMessage: vi.fn(),
+    appendMessageAsync: async (...args: unknown[]): Promise<unknown> =>
+      sessionManager.appendMessage(...args),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
     flushPendingPersistence: vi.fn(),
@@ -222,7 +226,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     resolveContextInjectionModeMock,
     hasCompletedBootstrapTurnMock,
     supportsModelToolsMock,
-    getGlobalHookRunnerMock,
+    getGlobalHookRunnerMock: vi.fn<typeof getGlobalHookRunner>(() => null),
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
     detectAndLoadPromptImagesMock,
@@ -362,6 +366,22 @@ vi.mock("../../sessions/sdk.js", () => ({
   createAgentSessionForEmbeddedRunner: (options: CreateAgentSessionOptions) =>
     hoisted.createAgentSessionMock(options),
 }));
+
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../config/sessions/session-entry-read-runtime.js")>();
+  const readSessionEntryInWorker: typeof actual.readSessionEntryInWorker = async (
+    _scope,
+    assertCurrent,
+  ) => {
+    // These attempt fixtures have no quota-recovery entry; retain the async admission boundary.
+    assertCurrent();
+    await Promise.resolve();
+    assertCurrent();
+    return undefined;
+  };
+  return { ...actual, readSessionEntryInWorker };
+});
 
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
@@ -678,44 +698,8 @@ vi.mock("../cache-ttl.js", () => ({
     data: unknown,
   ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
-  readLastCacheTtlTimestamp: (
-    sessionManager: {
-      appendCustomEntry?: { mock?: { calls?: unknown[][] } };
-    },
-    context?: { provider?: string; modelId?: string },
-  ) => {
-    const calls = sessionManager.appendCustomEntry?.mock?.calls ?? [];
-    for (let index = calls.length - 1; index >= 0; index -= 1) {
-      const [customType, data] = calls[index] ?? [];
-      if (customType !== "openclaw.cache-ttl") {
-        continue;
-      }
-      const entry = data as
-        | {
-            timestamp?: unknown;
-            provider?: string;
-            modelId?: string;
-          }
-        | undefined;
-      if (
-        context?.provider &&
-        normalizeOptionalLowercaseString(entry?.provider) !==
-          normalizeOptionalLowercaseString(context.provider)
-      ) {
-        continue;
-      }
-      if (
-        context?.modelId &&
-        normalizeOptionalLowercaseString(entry?.modelId) !==
-          normalizeOptionalLowercaseString(context.modelId)
-      ) {
-        continue;
-      }
-      const timestamp = entry?.timestamp;
-      return typeof timestamp === "number" ? timestamp : null;
-    }
-    return null;
-  },
+  readLastCacheTtlTimestamp: (...args: Parameters<typeof readMockSessionCacheTtlTimestamp>) =>
+    readMockSessionCacheTtlTimestamp(...args),
 }));
 
 vi.mock("../compaction-runtime-context.js", () => ({
@@ -981,7 +965,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
   resetSkillMocks();
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
-  hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+  hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(null);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);
@@ -990,30 +974,7 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.trajectoryEvents.length = 0;
-  hoisted.sessionManager.getSessionTarget.mockReset().mockReturnValue(undefined);
-  hoisted.sessionManager.getSessionId.mockReset().mockReturnValue("embedded-session");
-  hoisted.sessionManager.getAppendParentId.mockReset().mockReturnValue(null);
-  hoisted.sessionManager.getHeader.mockReset().mockReturnValue({ version: 3 });
-  hoisted.sessionManager.getLeafId.mockReset().mockReturnValue(null);
-  hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
-  hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
-  hoisted.sessionManager.getEntries.mockReset().mockReturnValue([]);
-  hoisted.sessionManager.getBranch.mockReset().mockReturnValue([]);
-  hoisted.sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
-  hoisted.sessionManager.branch.mockReset();
-  hoisted.sessionManager.resetLeaf.mockReset();
-  hoisted.sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
-  hoisted.sessionManager.buildSessionContext
-    .mockReset()
-    .mockReturnValue({ messages: params.sessionMessages ?? [] });
-  hoisted.sessionManager.appendThinkingLevelChange.mockReset();
-  hoisted.sessionManager.appendModelChange.mockReset();
-  hoisted.sessionManager.appendCustomEntry.mockReset();
-  hoisted.sessionManager.appendMessage.mockReset();
-  hoisted.sessionManager.appendSessionInfo.mockReset();
-  hoisted.sessionManager.appendLabelChange.mockReset();
-  hoisted.sessionManager.flushPendingPersistence.mockReset();
-  hoisted.sessionManager.reloadPersistedTranscript.mockReset();
+  resetSessionManagerMocks(hoisted.sessionManager, params.sessionMessages);
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }

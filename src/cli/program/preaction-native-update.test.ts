@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loggingState } from "../../logging/state.js";
+import { registerPreActionHooks } from "./preaction.js";
 
 const { ensureConfigReadyMock, ensurePluginRegistryLoadedMock, emitCliBannerMock } = vi.hoisted(
   () => ({
@@ -15,14 +16,10 @@ vi.mock("../plugin-registry.js", () => ({
 }));
 vi.mock("../banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
 vi.mock("../../globals.js", () => ({ setVerbose: vi.fn() }));
-let registerPreActionHooks: typeof import("./preaction.js").registerPreActionHooks;
 let argv: string[];
 let title: string;
 let forceStderr: boolean;
 let earlyRouting: boolean | null;
-beforeAll(async () => {
-  ({ registerPreActionHooks } = await import("./preaction.js"));
-});
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("NODE_NO_WARNINGS", undefined);

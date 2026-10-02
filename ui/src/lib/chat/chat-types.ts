@@ -122,6 +122,8 @@ export type ChatQueueDisplayItem = ChatQueueItem & { serverQueued?: true };
 
 export type ChatQueueItem = {
   id: string;
+  /** Captured local storage identity; never a server credential. */
+  storageScope?: string;
   /** UI question associated with this input; delivery and retry stay outbox-owned. */
   asyncQuestionItemId?: string;
   workContext?: ChatWorkContext;

@@ -6,6 +6,7 @@ import {
   setActiveCredentialDegradedOwner,
   setActiveDegradedSecretOwners,
 } from "../secrets/runtime-degraded-state.js";
+import { getStatusSummary } from "../status/summary.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   registerStatusSummarySessionRowCases,
@@ -174,7 +175,6 @@ const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { listGatewayAgentsBasic } = await import("../gateway/agent-list.js");
 const { peekSystemEvents } = await import("../infra/system-events.js");
 const { resolveLinkChannelContext } = await import("../status/link-channel.js");
-let getStatusSummary: typeof import("../status/summary.js").getStatusSummary;
 let statusSummaryRuntime: typeof import("../status/summary.runtime.js").statusSummaryRuntime;
 
 function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>) {
@@ -189,7 +189,6 @@ function setSession(entry: Record<string, unknown>) {
 
 describe("getStatusSummary", () => {
   beforeAll(async () => {
-    ({ getStatusSummary } = await import("../status/summary.js"));
     ({ statusSummaryRuntime } = await import("../status/summary.runtime.js"));
   });
 

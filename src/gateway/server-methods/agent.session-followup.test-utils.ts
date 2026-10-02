@@ -6,7 +6,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   initSubagentRegistry,
   registerSubagentRun,
-  replaceSubagentRunAfterSteerCore,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { upsertSubagentRunRowInDatabase } from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import {
@@ -128,7 +127,7 @@ describe("gateway agent follow-up activity", () => {
       hiddenTranscript,
     }) => {
       await withPluginSubagentTestState("openclaw-parent-followup-", async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = unregistered
           ? "agent:main:dashboard:parent"
@@ -143,7 +142,7 @@ describe("gateway agent follow-up activity", () => {
         const previousRunId = "previous-review";
         const runId = "continued-review";
         if (!unregistered && !register && !persisted) {
-          addSubagentRunForTests({
+          await addSubagentRunForTests({
             runId: previousRunId,
             runTimeoutSeconds: budget,
             childSessionKey,
@@ -168,7 +167,7 @@ describe("gateway agent follow-up activity", () => {
           });
         }
         if (sourceTool !== "sessions_send") {
-          addSubagentRunForTests({
+          await addSubagentRunForTests({
             runId: "settled-grandchild",
             childSessionKey: "agent:main:subagent:grandchild",
             requesterSessionKey: childSessionKey,
@@ -262,8 +261,11 @@ describe("gateway agent follow-up activity", () => {
             sessionEntry: currentEntry,
           });
           if (replace) {
+            const { replaceSubagentRunAfterSteerCore } = await vi.importActual<
+              typeof import("../../agents/subagents/registry/subagent-registry.js")
+            >("../../agents/subagents/registry/subagent-registry.js");
             expect(
-              replaceSubagentRunAfterSteerCore({
+              await replaceSubagentRunAfterSteerCore({
                 previousRunId,
                 nextRunId: "successor-review",
               }),

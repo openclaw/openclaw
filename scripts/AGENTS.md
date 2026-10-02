@@ -59,7 +59,10 @@ without changing the receipt or substituting today's main or the check's base.
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
 canonical checkout's Git config applies, then the canonical checkout itself.
-The standalone CI watcher resolves missing packages from the same tooling root when its checkout has no `node_modules`, with the same explicit-root identity checks and exact package versions.
+The standalone CI watcher and Crabbox entrypoint resolve missing third-party
+packages from the same tooling root when their checkout has no `node_modules`,
+with the same explicit-root identity checks and exact package versions. They
+never link an installation or resolve workspace packages from another checkout.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
@@ -127,10 +130,12 @@ host-qualified `GH_REPO=github.com/openclaw/openclaw` also avoids discovery whil
 preserving the subsequent authoritative API checks.
 
 Immediate REST squash uses `gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge
---input -` with JSON containing the full prepared 40-hex `sha`,
+--input <absolute-file>` with JSON containing the full prepared 40-hex `sha`,
 `merge_method: "squash"`, and the inspected `commit_message`; an optional
-`commit_title` is accepted. Keep the explicit SHA even when newer Octopool can
-resolve a missing one. Auto-merge needs Octopool's protected auto-merge support
+`commit_title` is accepted. The shared GitHub subprocess owner stages internal
+`--input -` payload bytes in a private temporary file, keeps child stdin empty,
+and removes the file after synchronous completion. Keep the explicit SHA even
+when newer Octopool can resolve a missing one. Auto-merge needs Octopool's protected auto-merge support
 (openclaw/octopool#179), a numeric PR, `--squash --auto --match-head-commit SHA`,
 an explicit `--subject`, and `--body-file`. The wrapper supplies GitHub's
 current-head `viewerMergeHeadlineText` preview so repository title defaults stay

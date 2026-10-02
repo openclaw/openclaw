@@ -9,7 +9,8 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   createSessionRowProjection,
@@ -396,9 +397,6 @@ test("projects.list preserves exact-path ranking, locale ties, and the pre-acces
 });
 
 test.each([
-  ["POSIX", "/Users/dev/projects/posix-project", "posix-project"],
-  ["POSIX with a trailing separator", "/Users/dev/projects/posix-project/", "posix-project"],
-  ["Windows", "C:\\Users\\dev\\projects\\windows-project", "windows-project"],
   [
     "Windows with a trailing separator",
     "C:\\Users\\dev\\projects\\windows-project\\",

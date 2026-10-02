@@ -200,6 +200,12 @@ Backend adapters retain protocol validation and special-mode handling.
     credential before dispatch. Isolated agent-runtime completions reject these
     direct-provider controls before dispatch.
 
+    OpenAI and Azure Responses accept a raw JSON Schema as `responseFormat` and
+    wrap it in `text.format` with `type: "json_schema"` and the name
+    `openclaw_response`. Native `json_schema`, `json_object`, and `text` formats
+    are preserved; Chat Completions-style nested `json_schema` descriptors are
+    flattened for Responses, including any supplied `strict` value.
+
     Set `reasoning` to request a reasoning effort for the selected model. The
     host accepts the canonical thinking levels (`off`, `minimal`, `low`,
     `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`). Direct completions

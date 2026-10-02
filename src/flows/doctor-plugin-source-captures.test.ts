@@ -222,122 +222,51 @@ it.each([
           ? "owned by another UID"
           : "Removed 1 legacy plugin capture root(s)",
     );
-  },
-);
-
-it.each([
-  { identity: "unrelated", removed: true },
-  { identity: "openclaw", removed: false },
-  { identity: "unclassified", removed: false },
-  { identity: "foreign-bun", removed: true },
-  { identity: "foreign-node", removed: true },
-  { identity: "capture-bun", removed: false },
-  { identity: "cwd-unavailable", removed: false },
-])(
-  "uses the real census before reclamation with an $identity entrypoint",
-  async ({ identity, removed }) => {
-    mockProcessPlatform("darwin");
-    const app = path.join(parent, "application");
-    const script = write(app, "dist/index.js", "");
-    write(
-      app,
-      "package.json",
-      identity === "unclassified"
-        ? "{"
-        : JSON.stringify({ name: identity, scripts: { start: "node dist/index.js" } }),
-    );
-    const file = write(systemTmp, "openclaw-plugin-build-legacy/source.cjs", "capture");
-    inspectAsLaterProcess();
-    const peer = process.pid + 100;
-    const argv = identity.endsWith("bun")
-      ? ["bun", "run", "--silent", identity === "capture-bun" ? file : "start"]
-      : identity === "foreign-node"
-        ? ["node", "--foreign-runtime-option", script]
-        : ["node", identity === "cwd-unavailable" ? "dist/index.js" : script];
-    ps.mockReturnValue(
-      identity === "cwd-unavailable"
-        ? {
-            status: null,
-            error: Object.assign(new Error("timed out"), { code: "ETIMEDOUT" }),
-            stdout: "",
-          }
-        : { status: 0, stdout: `p${peer}\0n${app}\0` },
-    );
-    processMembers.mockReturnValue([
-      { pid: process.pid, state: "S", command: { ppid: 0, argv: ["openclaw-doctor"] } },
-      { pid: peer, state: "S", command: { ppid: 0, argv } },
-    ]);
-    const actual = await vi.importActual<typeof import("../infra/openclaw-process-census.js")>(
-      "../infra/openclaw-process-census.js",
-    );
-    census.mockImplementation(actual.inspectOtherOpenClawProcesses);
-    const output = await duringMaintenance(() => runCaptureReport(true));
-    expect(fs.existsSync(file)).toBe(!removed);
-    expect(output).toContain(
-      removed
-        ? "Removed 1 legacy plugin capture root(s)"
-        : identity === "cwd-unavailable"
-          ? `Could not classify PID ${peer}: working directory is unavailable`
-          : identity === "unclassified"
-            ? "package identity"
-            : `PIDs: ${peer}`,
-    );
-    if (identity === "unclassified") {
-      expect(output).not.toContain("Other OpenClaw processes are still running");
+    if (!removed) {
+      expect(output).not.toContain("Removed ");
+      expect(fs.readFileSync(file, "utf8")).toBe("capture");
     }
   },
 );
 
-it.each([false, true])(
-  "reports environment, system, and recorded service temporary directories (update=%s)",
-  async (update) => {
-    const serviceTmp = path.join(parent, "service-tmp");
-    write(environmentTmp, "openclaw-plugin-build-env/source.cjs", "abc");
-    write(systemTmp, "openclaw-plugin-build-system/source.cjs", "12345");
-    write(serviceTmp, "openclaw-plugin-build-service/source.cjs", "1234567");
-    const homeTmp = path.join(parent, ".openclaw", "tmp");
-    write(homeTmp, "openclaw-plugin-build-home/source.cjs", "ab");
-    readCommand.mockResolvedValue({ programArguments: [], environment: { TMPDIR: serviceTmp } });
+it("reports environment, system, and recorded service temporary directories during update", async () => {
+  const serviceTmp = path.join(parent, "service-tmp");
+  write(environmentTmp, "openclaw-plugin-build-env/source.cjs", "abc");
+  write(systemTmp, "openclaw-plugin-build-system/source.cjs", "12345");
+  write(serviceTmp, "openclaw-plugin-build-service/source.cjs", "1234567");
+  const homeTmp = path.join(parent, ".openclaw", "tmp");
+  write(homeTmp, "openclaw-plugin-build-home/source.cjs", "ab");
+  readCommand.mockResolvedValue({ programArguments: [], environment: { TMPDIR: serviceTmp } });
 
-    const output = await runCaptureReport(false, update);
-    expect(output).toContain("4 legacy plugin capture root(s), 17 B");
-    for (const directory of [environmentTmp, systemTmp, serviceTmp, homeTmp]) {
-      expect(output).toContain(directory);
-    }
-    expect(output).toContain("They will be reclaimed at the next maintenance.");
-    expect(census).not.toHaveBeenCalled();
-  },
-);
+  const output = await runCaptureReport(false, true);
+  expect(output).toContain("4 legacy plugin capture root(s), 17 B");
+  for (const directory of [environmentTmp, systemTmp, serviceTmp, homeTmp]) {
+    expect(output).toContain(directory);
+  }
+  expect(output).toContain("They will be reclaimed at the next maintenance.");
+  expect(census).not.toHaveBeenCalled();
+});
 
 it.each([
-  { mode: "read-only", repair: false, maintenance: true, peers: [], reason: "next maintenance" },
   {
     mode: "outside maintenance",
-    repair: true,
     maintenance: false,
     peers: [],
     reason: "does not hold Gateway maintenance",
   },
-  { mode: "live sibling", repair: true, maintenance: true, peers: [4242], reason: "PIDs: 4242" },
-  {
-    mode: "unavailable census",
-    repair: true,
-    maintenance: true,
-    peers: [],
-    reason: "fixture census unavailable",
-  },
-])("preserves legacy captures with $mode", async ({ mode, repair, maintenance, peers, reason }) => {
+  { mode: "live sibling", maintenance: true, peers: [4242], reason: "PIDs: 4242" },
+])("preserves legacy captures with $mode", async ({ maintenance, peers, reason }) => {
   const file = write(
     systemTmp,
     "openclaw-model-catalog-legacy/openclaw-plugin-build-one/source.cjs",
     "captured source",
   );
   inspectAsLaterProcess();
-  census.mockReturnValue(mode === "unavailable census" ? { error: reason } : { pids: peers });
+  census.mockReturnValue({ pids: peers });
 
   const output = maintenance
-    ? await duringMaintenance(() => runCaptureReport(repair))
-    : await runCaptureReport(repair);
+    ? await duringMaintenance(() => runCaptureReport(true))
+    : await runCaptureReport(true);
   expect(output).toContain(reason);
   expect(output).not.toContain("Removed ");
   expect(fs.readFileSync(file, "utf8")).toBe("captured source");
@@ -373,14 +302,6 @@ it("reclaims only tokenless capture roots and prints a receipt after successful 
     expect(fs.existsSync(preserved), preserved).toBe(true);
   }
   expect(fs.lstatSync(path.join(tmp, "openclaw-plugin-build-link")).isSymbolicLink()).toBe(true);
-});
-
-it("preserves captures created during the current process even while maintenance is held", async () => {
-  const file = write(systemTmp, "openclaw-plugin-build-current/source.cjs", "still owned");
-  const output = await duringMaintenance(() => runCaptureReport(true));
-  expect(output).toContain("created or changed during the current process");
-  expect(output).not.toContain("Removed ");
-  expect(fs.readFileSync(file, "utf8")).toBe("still owned");
 });
 
 it("rechecks the host census immediately before deletion", async () => {

@@ -44,8 +44,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
   oauthDir: string;
   pluginSessionStoreAgentIds: readonly string[];
   sessions: {
-    legacyDir: string;
-    legacyStorePath: string;
     targetDir: string;
     targetStorePath: string;
     hasLegacy: boolean;

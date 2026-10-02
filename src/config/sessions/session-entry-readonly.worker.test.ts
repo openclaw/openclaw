@@ -26,6 +26,20 @@ import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.j
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 
+function createEntryFixture(env: NodeJS.ProcessEnv) {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const sessionKey = "agent:main:readonly-entry";
+  writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    storePath: database.path,
+    sessionKey,
+    env,
+  };
+  return { database, scope };
+}
+
 it.each([false, true])(
   "returns unreadable-store data only after its connection closes (close failure: %s)",
   async (failClose) => {
@@ -87,9 +101,7 @@ it.each([false, true])(
   "keeps schema error classification with a disposable reader: %s",
   async (disposable) => {
     await withOpenClawTestState({ label: "readonly-entry-schema-error" }, async ({ env }) => {
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      const sessionKey = "agent:main:schema-error";
-      writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+      const { database, scope } = createEntryFixture(env);
       database.db.exec("DROP TABLE board_widgets");
       if (disposable) {
         await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
@@ -104,13 +116,7 @@ it.each([false, true])(
         throw failure;
       });
       try {
-        const result = loadSessionEntryReadOnlyResultInScope({
-          agentId: "main",
-          databaseAgentId: "main",
-          storePath: database.path,
-          sessionKey,
-          env,
-        });
+        const result = loadSessionEntryReadOnlyResultInScope(scope);
         expect(result.ok).toBe(false);
         if (result.ok) {
           throw new Error("Expected a selected-row failure");
@@ -130,16 +136,7 @@ it.each([false, true])(
 
 it("returns row data failures only after the native snapshot rolled back", async () => {
   await withOpenClawTestState({ label: "readonly-entry-error" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:entry-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const scope = {
-      agentId: "main",
-      databaseAgentId: "main",
-      storePath: database.path,
-      sessionKey,
-      env,
-    };
+    const { database, scope } = createEntryFixture(env);
     loadSessionEntryReadOnlyInScope(scope);
     const continuation = captureCanonicalSessionReaderContinuation(database);
     if (!continuation) {
@@ -163,16 +160,7 @@ it("returns row data failures only after the native snapshot rolled back", async
 
 it("does not downgrade a failed rollback to an ordinary row failure", async () => {
   await withOpenClawTestState({ label: "readonly-entry-rollback" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:rollback-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const scope = {
-      agentId: "main",
-      databaseAgentId: "main",
-      storePath: database.path,
-      sessionKey,
-      env,
-    };
+    const { database, scope } = createEntryFixture(env);
     loadSessionEntryReadOnlyInScope(scope);
     const continuation = captureCanonicalSessionReaderContinuation(database);
     if (!continuation) {
@@ -201,27 +189,15 @@ it("does not downgrade a failed rollback to an ordinary row failure", async () =
 
 it("keeps source refusal outside the ordinary row-error result", async () => {
   await withOpenClawTestState({ label: "readonly-entry-source" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:source-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+    const { scope } = createEntryFixture(env);
     const refusal = Object.assign(new Error("retained source changed"), {
       code: "ERR_SQLITE_ERROR",
       errcode: 26,
     });
     expect(() =>
-      loadSessionEntryReadOnlyResultInScope(
-        {
-          agentId: "main",
-          databaseAgentId: "main",
-          storePath: database.path,
-          sessionKey,
-          env,
-        },
-        undefined,
-        () => {
-          throw refusal;
-        },
-      ),
+      loadSessionEntryReadOnlyResultInScope(scope, undefined, () => {
+        throw refusal;
+      }),
     ).toThrow(refusal);
   });
 });
@@ -309,17 +285,21 @@ it("checks the captured registry after logical data cleanup", async () => {
     const rotate = pool.rotate.bind(pool);
     const closeResources = pool.closeResources.bind(pool);
     let cleanupCalled = false;
-    const cleanup = process.versions.bun
-      ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
-          await rotate();
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        })
-      : vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
-          await closeResources(key);
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        });
+    const invalidateAfterCleanup = () => {
+      if (cleanupCalled) {
+        return;
+      }
+      cleanupCalled = true;
+      invalidateRegisteredAgentDatabasesMemo({ env });
+    };
+    const rotateCleanup = vi.spyOn(pool, "rotate").mockImplementation(async () => {
+      await rotate();
+      invalidateAfterCleanup();
+    });
+    const resourceCleanup = vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
+      await closeResources(key);
+      invalidateAfterCleanup();
+    });
     let consumed = false;
     try {
       const pending = withSessionEntryReadOnlyInWorker(
@@ -337,7 +317,8 @@ it("checks the captured registry after logical data cleanup", async () => {
       expect(cleanupCalled).toBe(true);
       expect(consumed).toBe(true);
     } finally {
-      cleanup.mockRestore();
+      rotateCleanup.mockRestore();
+      resourceCleanup.mockRestore();
     }
   });
 });
@@ -359,7 +340,6 @@ it("returns unavailable registry facts as locator data without catching candidat
 });
 
 it.runIf(process.platform !== "win32").each([
-  { retarget: false, logicalAgentId: "main" },
   { retarget: true, logicalAgentId: "main" },
   { retarget: false, logicalAgentId: "ops" },
 ])(

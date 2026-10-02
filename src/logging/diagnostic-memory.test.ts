@@ -80,6 +80,34 @@ describe("diagnostic memory", () => {
     resetLogger();
   });
 
+  it("defers the default heap probe until a sample needs it and then reuses it", async () => {
+    vi.resetModules();
+    const getHeapStatistics = vi.fn(() => ({ heap_size_limit: 4 * 1024 ** 3 }));
+    vi.doMock("node:v8", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("node:v8")>()),
+      getHeapStatistics,
+    }));
+    try {
+      const { emitDiagnosticMemorySample: sample } = await import("./diagnostic-memory.js");
+      expect(getHeapStatistics).not.toHaveBeenCalled();
+
+      const options = { memoryUsage: memoryUsage({}), emitSample: false };
+      for (const heapSizeLimitBytes of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        sample({ ...options, heapSizeLimitBytes });
+      }
+      expect(getHeapStatistics).not.toHaveBeenCalled();
+
+      sample(options);
+      expect(getHeapStatistics).toHaveBeenCalledTimes(1);
+      sample({ ...options, heapSizeLimitBytes: 8 * 1024 ** 3 });
+      sample(options);
+      expect(getHeapStatistics).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.doUnmock("node:v8");
+      vi.resetModules();
+    }
+  });
+
   it("emits pressure when RSS crosses a threshold", () => {
     const events: DiagnosticEventPayload[] = [];
     const stop = onDiagnosticEvent((event) => events.push(event));

@@ -218,10 +218,7 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
 }
 
 /** Extracts a canvas preview from a JSON-shaped tool or assistant payload. */
-export function extractCanvasFromText(
-  outputText: string | undefined,
-  _toolName?: string,
-): CanvasPreview | undefined {
+export function extractCanvasFromText(outputText: string | undefined): CanvasPreview | undefined {
   const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
   return coerceCanvasPreview(parsed);
 }

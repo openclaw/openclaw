@@ -1,4 +1,3 @@
-/** Controller identity, authorization, and controlled-run read scope. */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
@@ -13,7 +12,7 @@ import {
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
-import type { SessionCapabilityStore } from "../spawn/subagent-session-store.js";
+import type { SessionCapabilityLookup } from "../spawn/subagent-session-store.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
@@ -30,13 +29,11 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import { isSameSubagentRun, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
-/** Recent-run default window used by subagent control UI/tools. */
 export const DEFAULT_RECENT_MINUTES = 30;
-/** Maximum recent-run window accepted by subagent control UI/tools. */
 export const MAX_RECENT_MINUTES = 24 * 60;
 
-/** Controller identity and capability scope resolved from the caller session. */
 export type ResolvedSubagentController = {
   controllerSessionKey: string;
   controllerAgentId?: string;
@@ -51,13 +48,9 @@ export function resolveSubagentControllerIdentity(params: {
   agentSessionKey?: string;
   agentId?: string;
 }): Omit<ResolvedSubagentController, "controlScope"> {
-  const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
+  const { alias } = resolveMainSessionAlias(params.cfg);
   const callerRaw = params.agentSessionKey?.trim() || alias;
-  const callerSessionKey = resolveInternalSessionKey({
-    key: callerRaw,
-    alias,
-    mainKey,
-  });
+  const callerSessionKey = resolveInternalSessionKey({ key: callerRaw, alias });
   const controllerAgentId = resolveSessionAgentId({
     config: params.cfg,
     sessionKey: callerSessionKey,
@@ -71,12 +64,11 @@ export function resolveSubagentControllerIdentity(params: {
   };
 }
 
-/** Resolves which subagent runs the caller is allowed to control. */
 export function resolveSubagentController(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;
   agentId?: string;
-  capabilityStore?: SessionCapabilityStore;
+  capabilityStore?: SessionCapabilityLookup;
 }): ResolvedSubagentController {
   const identity = resolveSubagentControllerIdentity(params);
   if (!identity.callerIsSubagent) {
@@ -109,7 +101,9 @@ export function listControlledSubagentRunsForTurn(
   });
   const runsById = new Map(
     requesterRuns
-      .filter((entry) => getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry)
+      .filter((entry) =>
+        isSameSubagentRun(getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey), entry),
+      )
       .map((entry) => [entry.runId, entry]),
   );
   return controlledRuns.filter(
@@ -285,27 +279,9 @@ export function getLatestOwnedSubagentRun(
   );
 }
 
-export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg?: OpenClawConfig): boolean {
-  if (!cfg) {
-    return getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry;
-  }
-  return (
-    getLatestOwnedSubagentRun(
-      entry.childSessionKey,
-      resolveRunRequesterAgentId(entry, cfg),
-      cfg,
-    ) === entry
-  );
-}
-
-export function isSameSubagentRunGeneration(
-  live: SubagentRunRecord,
-  snapshot: SubagentRunRecord,
-): boolean {
-  return (
-    live.childSessionKey === snapshot.childSessionKey &&
-    live.runId === snapshot.runId &&
-    live.generation === snapshot.generation &&
-    live.createdAt === snapshot.createdAt
+export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg: OpenClawConfig): boolean {
+  return isSameSubagentRunOwner(
+    getLatestOwnedSubagentRun(entry.childSessionKey, resolveRunRequesterAgentId(entry, cfg), cfg),
+    entry,
   );
 }

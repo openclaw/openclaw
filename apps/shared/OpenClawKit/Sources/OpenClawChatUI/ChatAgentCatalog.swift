@@ -8,12 +8,20 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
     public let name: String?
     public let emoji: String?
     public let workspaceGit: Bool?
+    public let workspace: String?
 
-    public init(id: String, name: String? = nil, emoji: String? = nil, workspaceGit: Bool? = nil) {
+    public init(
+        id: String,
+        name: String? = nil,
+        emoji: String? = nil,
+        workspaceGit: Bool? = nil,
+        workspace: String? = nil)
+    {
         self.id = id
         self.name = Self.normalizedName(name)
         self.emoji = Self.textAvatar(emoji)
         self.workspaceGit = workspaceGit
+        self.workspace = workspace
     }
 
     public var displayName: String {
@@ -47,7 +55,8 @@ public struct OpenClawChatAgentChoice: Codable, Identifiable, Sendable, Hashable
             id: self.id,
             name: self.name ?? identity.name,
             emoji: self.emoji ?? Self.textAvatar(identity.emoji) ?? Self.textAvatar(identity.avatar),
-            workspaceGit: self.workspaceGit)
+            workspaceGit: self.workspaceGit,
+            workspace: self.workspace)
     }
 }
 

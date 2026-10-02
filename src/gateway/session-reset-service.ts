@@ -48,7 +48,6 @@ import {
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
-import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -58,6 +57,7 @@ import {
   type SessionCreatedActor,
   type SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
+import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionResetBoundaryId } from "../config/sessions/session-reset-boundary-event.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -954,49 +954,88 @@ export async function performGatewaySessionReset(params: {
           })
         : undefined;
 
-      const { prepareSubagentSessionCleanupRevocation } =
-        await import("../agents/subagents/registry/subagent-registry.js");
-      const revokeCleanup = await prepareSubagentSessionCleanupRevocation(target.canonicalKey);
+      const {
+        prepareSubagentSessionCleanupRevocation,
+        SubagentSessionCleanupRevocationChangedError,
+      } = await import("../agents/subagents/registry/subagent-registry.js");
+      let validateCleanupRevocation: (() => void) | undefined;
+      let rejectedRevocation: unknown;
       const commitGuard = () => {
         assertCompletionAuthorized?.();
-        const current = loadSessionEntryReadOnly({
-          agentId,
-          storePath,
-          sessionKey: target.canonicalKey,
-          clone: false,
-        });
-        if (
-          current?.sessionId === entry?.sessionId &&
-          current?.lifecycleRevision === resetLifecycleRevision
-        ) {
-          // Revoke durably before publishing the successor. A later reset failure may
-          // retain the old session, but must never restore its stale deletion authority.
-          revokeCleanup();
+        try {
+          validateCleanupRevocation?.();
+        } catch (error) {
+          if (error instanceof SubagentSessionCleanupRevocationChangedError) {
+            rejectedRevocation = error;
+          }
+          throw error;
         }
       };
-
+      const withCurrentCleanupRevocation = async <T>(reset: () => Promise<T>): Promise<T> => {
+        for (let attempt = 0; ; attempt += 1) {
+          validateCleanupRevocation = undefined;
+          rejectedRevocation = undefined;
+          try {
+            return await reset();
+          } catch (error) {
+            // This exact guard runs before mutation; SQL and postcommit failures never replay.
+            if (
+              attempt >= 2 ||
+              error !== rejectedRevocation ||
+              !(error instanceof SubagentSessionCleanupRevocationChangedError)
+            ) {
+              throw error;
+            }
+          }
+        }
+      };
       if (incognito) {
         if (!entry) {
           return invalidSessionRequest(`unknown session: ${params.key}`);
         }
-        const deleted = await deleteIncognitoSessionForReset({
-          key: params.key,
-          agentId,
-          storePath,
-          target,
-          entry,
-          commitGuard,
-          beforeDelete: () =>
-            emitGatewayBeforeResetPluginHook({
-              cfg,
-              key: params.key,
-              messages: beforeResetMessages,
-              target,
-              storePath,
-              entry,
-              reason: params.reason,
-            }),
-        });
+        let beforeDeleteEmitted = false;
+        const deleted = await withCurrentCleanupRevocation(() =>
+          deleteIncognitoSessionForReset({
+            key: params.key,
+            agentId,
+            storePath,
+            target,
+            entry,
+            commitGuard,
+            beforeDelete: async () => {
+              if (!beforeDeleteEmitted) {
+                beforeDeleteEmitted = true;
+                await emitGatewayBeforeResetPluginHook({
+                  cfg,
+                  key: params.key,
+                  messages: beforeResetMessages,
+                  target,
+                  storePath,
+                  entry,
+                  reason: params.reason,
+                });
+              }
+              await withSessionEntryReadOnlyInWorker(
+                { agentId, storePath, sessionKey: target.canonicalKey },
+                () => assertCompletionAuthorized?.(),
+                async (read) => {
+                  if (!read.ok) {
+                    throw read.error;
+                  }
+                  if (
+                    read.value?.sessionId === entry.sessionId &&
+                    read.value.lifecycleRevision === resetLifecycleRevision
+                  ) {
+                    validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
+                      target.canonicalKey,
+                      assertCompletionAuthorized,
+                    );
+                  }
+                },
+              );
+            },
+          }),
+        );
         if (!deleted.ok) {
           return deleted;
         }
@@ -1066,7 +1105,7 @@ export async function performGatewaySessionReset(params: {
             ),
           ],
         },
-        buildNextEntry: ({ currentEntry, primaryKey }) => {
+        buildNextEntry: async ({ currentEntry, primaryKey }) => {
           assertCompletionAuthorized?.();
           if (!currentEntry) {
             creationAuthorizationError = authorizeResetCreation();
@@ -1093,6 +1132,11 @@ export async function performGatewaySessionReset(params: {
             resetSkipped = true;
             return currentEntry;
           }
+          // Revoke only the selected session, after no-op generation checks and before reset commits.
+          validateCleanupRevocation = await prepareSubagentSessionCleanupRevocation(
+            target.canonicalKey,
+            assertCompletionAuthorized,
+          );
           resetBoundaryAppended = currentEntry !== undefined;
           const resetPreservedSelection = resolveResetPreservedSelection({
             entry: currentEntry,
@@ -1365,14 +1409,16 @@ export async function performGatewaySessionReset(params: {
           });
         },
       };
-      const resetLifecycle = async (assertSourceCurrent?: () => void) =>
-        await resetSessionEntryLifecycle({
-          ...lifecycleRequest,
-          commitGuard: () => {
-            commitGuard();
-            assertSourceCurrent?.();
-          },
-        });
+      const resetLifecycle = (assertSourceCurrent?: () => void) =>
+        withCurrentCleanupRevocation(() =>
+          resetSessionEntryLifecycle({
+            ...lifecycleRequest,
+            commitGuard: () => {
+              commitGuard();
+              assertSourceCurrent?.();
+            },
+          }),
+        );
       const lifecyclePromise = preparedLifecycle?.withCommit
         ? preparedLifecycle.withCommit(resetLifecycle)
         : resetLifecycle();

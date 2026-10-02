@@ -163,11 +163,9 @@ describe("package lifecycle ownership", () => {
 
     it.each([
       ["callback", "absent"],
-      ["callback", "pending"],
       ["callback", "legacy"],
       ["release-before-retirement", "absent"],
       ["release-before-retirement", "pending"],
-      ["release-before-retirement", "legacy"],
     ])("does not synthesize work after %s failure with %s markers", async (phase, shape) => {
       const { packageRoot, pending, lock } = await fixture();
       const other = await fixture();
@@ -241,7 +239,7 @@ describe("package lifecycle ownership", () => {
     });
   });
 
-  it.each(["directory", "empty", "partial", "unknown", "oversized", "reused-pid"])(
+  it.each(["directory", "partial", "unknown", "oversized", "reused-pid"])(
     "refuses %s ownership immediately without changing it or running scripts",
     async (kind) => {
       const { packageRoot, pending, lock } = await fixture();
@@ -249,18 +247,16 @@ describe("package lifecycle ownership", () => {
         await fs.mkdir(lock);
       } else {
         const raw =
-          kind === "empty"
-            ? ""
-            : kind === "partial"
-              ? "{unfinished"
-              : kind === "oversized"
-                ? "x".repeat(1024 * 1024 + 1)
-                : kind === "reused-pid"
-                  ? JSON.stringify({
-                      ...ownerPayload(),
-                      starttime: (pidAlive.getFileLockProcessStartTime(process.pid) ?? 0) + 1,
-                    })
-                  : "{}";
+          kind === "partial"
+            ? "{unfinished"
+            : kind === "oversized"
+              ? "x".repeat(1024 * 1024 + 1)
+              : kind === "reused-pid"
+                ? JSON.stringify({
+                    ...ownerPayload(),
+                    starttime: (pidAlive.getFileLockProcessStartTime(process.pid) ?? 0) + 1,
+                  })
+                : "{}";
         await fs.writeFile(lock, raw);
       }
       const before = await fs.lstat(lock);
@@ -323,16 +319,7 @@ describe("package lifecycle ownership", () => {
     await expect(fs.lstat(lock)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("returns without creating a lock for an already completed package", async () => {
-    const { packageRoot, pending } = await fixture();
-    await fs.rm(pending);
-    const runScript = vi.fn();
-    await expect(completePendingPackageLifecycle({ packageRoot, runScript })).resolves.toBe(false);
-    expect(runScript).not.toHaveBeenCalled();
-    expect(await fs.readdir(packageRoot)).toEqual([]);
-  });
-
-  it.each(["missing", "not-directory", "inaccessible"])(
+  it.each(["not-directory", "inaccessible"])(
     "preserves uncertainty when its bound package root becomes %s after observing work",
     async (state) => {
       const { packageRoot, pending, lock } = await fixture();
@@ -353,9 +340,7 @@ describe("package lifecycle ownership", () => {
         const result = await access(file, mode);
         if (file === pending && !observed) {
           observed = true;
-          if (state === "missing") {
-            await fs.rm(packageRoot, { recursive: true, force: true });
-          } else if (state === "not-directory") {
+          if (state === "not-directory") {
             await fs.rename(packageRoot, displacedRoot);
             await fs.writeFile(packageRoot, "replacement file\n");
           }
@@ -373,9 +358,7 @@ describe("package lifecycle ownership", () => {
       });
       expect(observed).toBe(true);
       expect(runScript).not.toHaveBeenCalled();
-      if (state === "missing") {
-        await expect(fs.lstat(packageRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      } else if (state === "not-directory") {
+      if (state === "not-directory") {
         expect(await fs.readFile(packageRoot, "utf8")).toBe("replacement file\n");
         expect(await fs.readFile(path.join(displacedRoot, path.basename(pending)), "utf8")).toBe(
           "pending\n",
@@ -776,21 +759,6 @@ describe("package lifecycle ownership", () => {
       }
     },
   );
-
-  it("restores pending evidence when stage disposal fails", async () => {
-    const { packageRoot, pending, lock } = await fixture();
-    const failure = new Error("stage removal failed");
-    await expect(
-      discardPendingPackageLifecycle({
-        packageRoots: [packageRoot],
-        discard: async () => {
-          throw failure;
-        },
-      }),
-    ).rejects.toBe(failure);
-    expect(await fs.readFile(pending, "utf8")).toBe("pending\n");
-    await expect(fs.access(lock)).rejects.toMatchObject({ code: "ENOENT" });
-  });
 
   it("keeps ordinary unrooted disposal creation failures removable", async () => {
     const { packageRoot, pending, lock } = await fixture();

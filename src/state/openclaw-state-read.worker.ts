@@ -12,8 +12,7 @@ import {
 } from "../agents/mcp-oauth-store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
-  loadSubagentRegistryFromSqlite,
-  loadSubagentRunsByRunIdsFromSqlite,
+  loadVersionedSubagentRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentRunsForSessionFromSqlite,
@@ -38,6 +37,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { listCronStandingGrantsInDatabase } from "../gateway/operator-approval-standing-grants.js";
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readSessionGroupCatalogSnapshot } from "../gateway/session-group-catalog.kernel.js";
 import { readSessionGroupMembership } from "../gateway/session-group-membership.read.js";
@@ -47,7 +47,7 @@ import {
 } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
 import { readWorkspaceJournalInDatabase } from "../gateway/worker-environments/placement-workspace-journal.js";
-import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import {
   readWorkerEnvironmentFacts,
   readWorkerEnvironmentPrunePage,
@@ -84,6 +84,7 @@ import {
 } from "../skills/library/selection-read.kernel.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
+import { readAgentDeletionJournalAuthorityInDatabase } from "./agent-deletion-journal-authority.worker.js";
 import {
   readAgentDatabaseDeletionSnapshotInDatabase,
   readAgentDeletionJournalStatusInDatabase,
@@ -121,16 +122,16 @@ import {
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
 import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
-import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
+import {
+  readUserProfileGitHubCommand,
+  selectProfileAccessEntries,
+} from "./user-profile-github-identity.js";
 import {
   readUserProfileAuthorityInDatabase,
   readUserProfileEmailBindings,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
-import {
-  readUserProfileAvatarCommand,
-  selectProfileDisplayEntries,
-} from "./user-profiles-internal.js";
+import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
   (input): OpenClawStateReadReply => {
@@ -231,6 +232,12 @@ serveOwnedWorkerTasks(
                 status: readAgentDeletionJournalStatusInDatabase(db, command.agentId),
               };
             }
+            if (command.type === "agentDeletionJournal.authority") {
+              return {
+                type: command.type,
+                authority: readAgentDeletionJournalAuthorityInDatabase(db, command.agentId),
+              };
+            }
             if (command.type === "deliveryQueue.outbound") {
               // Custody reads retain queue ownership admission even on a read-only connection.
               assertOpenClawStateWriteAllowed({
@@ -260,7 +267,7 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "subagents.runs") {
               if (command.scope.kind === "all") {
-                return { type: command.type, runs: loadSubagentRegistryFromSqlite({ db }) };
+                return { type: command.type, ...loadVersionedSubagentRunsInDatabase({ db }) };
               }
               if (command.scope.kind === "maintenance") {
                 const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
@@ -287,10 +294,13 @@ serveOwnedWorkerTasks(
                   },
                 };
               }
-              const rows =
-                command.scope.kind === "session"
-                  ? loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db })
-                  : loadSubagentRunsByRunIdsFromSqlite(command.scope.runIds, { db });
+              if (command.scope.kind === "ids") {
+                return {
+                  type: command.type,
+                  ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+                };
+              }
+              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
               return {
                 type: command.type,
                 runs: new Map(rows.map((entry) => [entry.runId, entry])),
@@ -482,6 +492,12 @@ serveOwnedWorkerTasks(
                 history: listTerminalOperatorApprovalsInDatabase(command.input, db),
               };
             }
+            if (command.type === "operatorApprovals.listCronGrants") {
+              return {
+                type: command.type,
+                grants: listCronStandingGrantsInDatabase(db, command.input),
+              };
+            }
             if (command.type === "onboardingRecommendations.read") {
               return {
                 type: command.type,
@@ -579,7 +595,7 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "userProfiles.reconcile") {
               const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profile: selectProfileDisplayEntries(db, [command.profileId])[0]?.[1],
+                profile: selectProfileAccessEntries(db, [command.profileId])[0]?.[1],
                 emailBindings: readUserProfileEmailBindings(db, command.profileId),
               }));
               return { type: command.type, ...facts };
@@ -592,7 +608,7 @@ serveOwnedWorkerTasks(
             }
             if (command.type === "userProfiles.catalog") {
               const facts = runSqliteDeferredTransactionSync(db, () => ({
-                profiles: tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : [],
+                profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
                 emailBindings: readUserProfileEmailBindings(db),
               }));
               return { type: command.type, ...facts };

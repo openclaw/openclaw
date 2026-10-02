@@ -32,7 +32,7 @@ import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPruneReadInput,
   WorkerEnvironmentPrunePage,
-} from "./store-worker-contract.js";
+} from "./store.types.js";
 import { readTerminalWorkerEnvironmentPrunePage } from "./terminal-environment-retention.js";
 type WorkerDb = Pick<
   StateDatabase,

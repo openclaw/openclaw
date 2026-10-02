@@ -2,12 +2,21 @@
 import SwiftUI
 
 extension ChatSessionSidebarModel.Node {
-    fileprivate var outlineChildren: [Self]? {
-        self.children.isEmpty ? nil : self.children
-    }
-
     var previewSessions: [OpenClawChatSessionEntry] {
         [self.session] + self.children.flatMap(\.previewSessions)
+    }
+}
+
+private struct ChatSidebarOutlineNode: Identifiable {
+    let node: ChatSessionSidebarModel.Node
+    let ownerID: String?
+    var id: String {
+        self.node.id
+    }
+
+    var children: [Self]? {
+        let nodes = ChatSessionSidebarModel.nodes(self.node.children, matchingOwner: self.ownerID)
+        return nodes.isEmpty ? nil : nodes.map { Self(node: $0, ownerID: self.ownerID) }
     }
 }
 
@@ -17,7 +26,9 @@ struct ChatSessionSidebar: View {
     @Binding var query: String
     @Binding var groups: [OpenClawChatSessionGroup]
     let previews: ChatSessionSidebarPreviews
+    let menuActions: ChatSessionSidebarActions
     var additionalAttentionRequests: [OpenClawChatAttentionRequest] = []
+    @State var menuPresentation: ChatSessionMenuPresentation?
     @State var presentedAttention: OpenClawChatAttentionPresentation?
     @State var sessionPendingDeletion: OpenClawChatSessionEntry?
     @State var sessionPendingRename: OpenClawChatSessionEntry?
@@ -31,33 +42,31 @@ struct ChatSessionSidebar: View {
     @AppStorage("openclaw.chat.sidebar.showMessagePreview") var showMessagePreview = false
     @AppStorage("openclaw.chat.sidebar.showAutomationSessions") var showAutomationSessions = false
     @AppStorage("openclaw.chat.sidebar.showSystemSessions") var showSystemSessions = false
+    @Environment(\.openClawSidebarPeople) var sidebarPeople
+    @State var isPresentingFilters = false
+    @State var sectionOrder: [String] = []
+    @AppStorage("openclaw.chat.sidebar.grouping") var sessionGrouping = ChatSessionSidebarModel.Grouping.category
+    @AppStorage("openclaw.chat.sidebar.status") var sessionStatus = OpenClawChatSidebarStatus.active
+    @AppStorage("openclaw.chat.sidebar.ownerFilter") var sessionOwnerFilter = ""
+    @AppStorage("openclaw.chat.sidebar.emptyGroups") var emptyGroups = ChatSessionSidebarModel.EmptyGroups.filtering
     @State private var observedOrder = ChatSessionSidebarModel.ObservedOrder()
+    @State private var lastSnoozeWake = Date.distantPast
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            self.sidebar(now: context.date)
+            self.sidebar(now: max(context.date, self.lastSnoozeWake))
         }
     }
 
     private func sidebar(now: Date) -> some View {
-        let sections = ChatSessionSidebarModel.sections(
-            sessions: self.viewModel.sessions,
-            currentSessionKey: self.viewModel.sessionKey,
-            mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
-            activeAgentID: self.viewModel.selectedAgentID,
-            groups: self.groups,
-            excludesMainSession: self.viewModel.selectedAgent != nil,
-            query: self.query,
-            sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
-                self.viewModel.sessionRoutingContract,
-            viewOptions: .init(
-                sort: self.sessionSort,
-                showAutomation: self.showAutomationSessions,
-                showSystem: self.showSystemSessions),
-            observedOrder: self.observedOrder)
+        let sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
+        let nextWake = OpenClawChatSessionSnooze.nextWake(
+            in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
+        let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
+        let ownership = self.ownership(for: projectedRows)
         let previewRequest = ChatSessionSidebarPreviews.Request(
             viewModel: self.viewModel,
-            sessions: sections.flatMap(\.nodes).flatMap(\.previewSessions))
+            sessions: projectedRows)
         return List(selection: self.selectionBinding) {
             self.newThreadButton
                 .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 16, trailing: 0))
@@ -66,57 +75,15 @@ struct ChatSessionSidebar: View {
                 .selectionDisabled()
             ChatSidebarOnlineSection(viewModel: self.viewModel)
             self.agentsSection(now: now)
-            self.threadsHeading
+            self.threadsHeading(ownership: ownership)
             ForEach(sections) { section in
-                if section.id.hasPrefix("group:"), let title = section.title {
-                    let attention = self.attentionSummary(sessions: section.nodes.flatMap(\.previewSessions), now: now)
-                    Section {
-                        if !self.isGroupCollapsed(title) || !self.query
-                            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        {
-                            self.rows(section.nodes, now: now, previewRequest: previewRequest)
-                        }
-                    } header: {
-                        HStack(spacing: 6) {
-                            Button {
-                                self.toggleGroupCollapsed(title)
-                            } label: {
-                                HStack {
-                                    Image(systemName: self.isGroupCollapsed(title) ? "chevron.right" : "chevron.down")
-                                    Text(verbatim: title)
-                                        .font(OpenClawChatTypography.caption)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            Spacer(minLength: 0)
-                            self.attentionBadge(summary: attention, targetID: section.id)
-                        }
-                        .modifier(ChatSidebarAttentionAccessibility(
-                            title: title,
-                            targetID: section.id,
-                            summary: attention,
-                            metadata: [],
-                            presentation: self.$presentedAttention))
-                    }
-                } else if let title = section.title {
-                    Section {
-                        self.rows(section.nodes, now: now, previewRequest: previewRequest)
-                    } header: {
-                        Text(LocalizedStringKey(title))
-                            .font(OpenClawChatTypography.caption)
-                    }
-                } else {
-                    Section {
-                        self.rows(section.nodes, now: now, previewRequest: previewRequest)
-                    } header: {
-                        Text("Recent")
-                            .font(OpenClawChatTypography.caption)
-                    }
-                }
+                self.sessionSection(section, now: now, ownership: ownership, previewRequest: previewRequest)
             }
-            if sections.isEmpty {
+            if let data = self.rosterData { ChatSessionSidebarRosterState(data: data) }
+            if sections.allSatisfy(\.nodes.isEmpty), self.rosterData?.isSettled != false {
                 Text(self.query
-                    .isEmpty ? String(localized: "No threads yet") : String(localized: "No matching threads"))
+                    .isEmpty ? (self.sessionStatus == .archived ? String(localized: "No archived threads") :
+                        String(localized: "No threads yet")) : String(localized: "No matching threads"))
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, 12)
@@ -131,9 +98,19 @@ struct ChatSessionSidebar: View {
             placement: .sidebar,
             prompt: String(localized: "Search threads"))
         .safeAreaInset(edge: .bottom, spacing: 0) { self.connectionFooter }
-        .onChange(of: self.viewModel.sessions.map(\.key), initial: true) { _, keys in
+        .onChange(of: (self.rosterData?.rows ?? self.viewModel.sessions).map(\.key), initial: true) { _, keys in
             self.observedOrder.observe(keys)
         }
+        .onChange(of: self.query, initial: true) { _, value in
+            self.viewModel.updateSidebarQuery(
+                search: value, showAutomation: self.showAutomationSessions, showSystem: self.showSystemSessions)
+        }
+        .onChange(of: self.filterOptions, initial: true) { self.applySidebarFilters() }
+        // Agent discovery can admit the roster after the first render; apply the profile's choices at admission.
+        .onChange(of: self.rosterData.map(ObjectIdentifier.init)) { self.applySidebarFilters() }
+        .onChange(of: self.rosterData?.owners, initial: true) { self.reconcileOwnerFacet() }
+        .onChange(of: self.sidebarPeople?.selfKey) { self.reconcileOwnerFacet() }
+        .onChange(of: self.viewModel.selectedAgentID) { self.applySidebarFilters() }
         .task(id: previewRequest) {
             let model = self.viewModel
             let cache = model.transcriptCache
@@ -141,11 +118,18 @@ struct ChatSessionSidebar: View {
             guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == previewRequest.modelID else { return }
             await self.previews.refresh(previewRequest, cache: cache)
         }
+        .task(id: nextWake) {
+            guard let nextWake else { return }
+            do {
+                try await Task.sleep(for: .seconds(max(0, nextWake.timeIntervalSinceNow)))
+                try Task.checkCancellation()
+                self.lastSnoozeWake = max(nextWake, .now)
+            } catch {}
+        }
         .task(id: self.groupRefreshID) {
             self.viewModel.refreshSessions(limit: 200)
             do {
-                let groups = try await self.viewModel.fetchSessionGroups()
-                self.groups = groups
+                try await self.loadSidebarGroups()
                 self.groupLoadFailed = false
             } catch {
                 self.groupLoadFailed = true
@@ -156,6 +140,7 @@ struct ChatSessionSidebar: View {
                 self.viewModel.refreshSessions(limit: 200)
             }
         }
+        .sheet(item: self.$menuPresentation) { self.menuSheet($0) }
         .sheet(item: self.$inspectedSession) { session in
             ChatSessionInspectorSheet(viewModel: self.viewModel, session: session)
         }
@@ -255,26 +240,29 @@ struct ChatSessionSidebar: View {
         return "\(self.viewModel.healthOK)|\(categories)|\(revision)|\(self.groupRefreshNonce)"
     }
 
-    private func rows(
+    func rows(
         _ nodes: [ChatSessionSidebarModel.Node],
         now: Date,
+        ownership: ChatSidebarOwnership,
         previewRequest: ChatSessionSidebarPreviews.Request) -> some View
     {
         let rootIDs = Set(nodes.map(\.id))
-        return OutlineGroup(nodes, children: \.outlineChildren) { node in
+        let outline = nodes.map { ChatSidebarOutlineNode(node: $0, ownerID: self.filterOptions.ownerID) }
+        return OutlineGroup(outline, children: \.children) { item in
             self.row(
-                for: node,
-                isChild: !rootIDs.contains(node.id),
+                for: item.node,
+                isChild: !rootIDs.contains(item.id),
                 now: now,
+                ownership: ownership,
                 previewRequest: previewRequest)
         }
     }
 
-    private func isGroupCollapsed(_ name: String) -> Bool {
+    func isGroupCollapsed(_ name: String) -> Bool {
         self.collapsedSessionGroups.split(separator: "\u{1F}").contains(Substring(name))
     }
 
-    private func toggleGroupCollapsed(_ name: String) {
+    func toggleGroupCollapsed(_ name: String) {
         var names = Set(self.collapsedSessionGroups.split(separator: "\u{1F}").map(String.init))
         if !names.insert(name).inserted {
             names.remove(name)

@@ -176,7 +176,7 @@ Code Mode; `readSkillFiles` supplies a bundle for worker delivery. Gateway-owned
 bundled, plugin, Library, Workshop and user-level sources keep their Gateway paths.
 Workspace-owned sources use the remote provider. Gateway preserves source precedence
 and uses existing resource delivery for workers. Discovery assigns file ownership; a provider cannot
-request Gateway-local reads by returning a source label or `fileHost` value.
+request Gateway-local reads by returning source or path metadata.
 Stopping the binding revokes retained host readers.
 
 The Skills worker also runs install and ClawHub operations. Install/remove use

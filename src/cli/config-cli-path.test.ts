@@ -5,6 +5,7 @@ import {
   mergeAtPath,
   parseConfigSetPath,
   parseConfigSetValue,
+  setAtPath,
 } from "./config-cli-path.js";
 
 function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<string, unknown> {
@@ -16,6 +17,15 @@ function nestedRecord(depth: number, leaf: Record<string, unknown>): Record<stri
 }
 
 describe("parseConfigSetValue", () => {
+  it.each([
+    { member: "fallbacks", value: ["backup"] },
+    { member: "timeoutMs", value: 5000 },
+  ])("does not promote unrelated plugin strings when setting $member", ({ member, value }) => {
+    const root = { plugins: { entries: { demo: { config: { model: "opaque" } } } } };
+    setAtPath(root, ["plugins", "entries", "demo", "config", "model", member], value);
+    expect(root.plugins.entries.demo.config.model).toEqual({ [member]: value });
+  });
+
   it.each([
     { raw: "42", expected: 42 },
     { raw: "true", expected: true },

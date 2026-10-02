@@ -2,12 +2,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { moveArrayEntry } from "../array-order.ts";
+import { pathDisplayName } from "../path-display.ts";
 import { resolveSessionDisplayKind } from "../session-display.ts";
-import {
-  checkoutDisplayName,
-  foldWorktreeCheckoutPath,
-  sessionActorGroupId,
-} from "./catalog-project-grouping.ts";
+import { foldWorktreeCheckoutPath, sessionActorGroupId } from "./catalog-project-grouping.ts";
 import { normalizeSessionSectionOrderTokens } from "./custom-groups.ts";
 import { parseAgentSessionKey, parseSessionKeyParts } from "./session-key.ts";
 
@@ -298,7 +295,7 @@ export function groupSidebarSessionRows<Row extends SidebarGroupableRow>(
       } else {
         projects.set(projectPath, {
           id: `project:${projectPath}`,
-          project: { name: checkoutDisplayName(projectPath), path: projectPath },
+          project: { name: pathDisplayName(projectPath), path: projectPath },
           rows: [row],
         });
       }

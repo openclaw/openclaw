@@ -4,6 +4,7 @@ import type { StatementSync } from "node:sqlite";
 import { beforeEach, expect, test, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
   replaceSessionEntrySync,
@@ -80,7 +81,24 @@ test("projects.list coalesces concurrent observed Git discovery and refreshes la
     const onePass = gitSpawns();
     expect(onePass).toBeGreaterThan(0);
     spawns.mockClear();
-    const concurrent = await Promise.all(Array.from({ length: 10 }, list));
+    const requestCount = 10;
+    const admitted = Promise.withResolvers<void>();
+    let remaining = requestCount;
+    const resolveIdentities = managedWorktrees.resolveRepositoryIdentities.bind(managedWorktrees);
+    // SQLite preparation can stagger RPCs past a pending-only Git pass's lifetime.
+    using discovery = vi
+      .spyOn(managedWorktrees, "resolveRepositoryIdentities")
+      .mockImplementation(async (roots) => {
+        if (--remaining === 0) {
+          admitted.resolve();
+        }
+        await admitted.promise;
+        return resolveIdentities(roots);
+      });
+    const concurrent = await Promise.all(
+      Array.from({ length: requestCount }, () => list().finally(() => admitted.resolve())),
+    );
+    discovery.mockRestore();
     for (const result of concurrent) {
       expect(result).toEqual(single);
     }

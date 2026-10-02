@@ -24,10 +24,6 @@ type QaDockerUpResult = {
   stopCommand: string;
 };
 
-function resolveDefaultQaDockerDir(repoRoot: string) {
-  return path.resolve(repoRoot, ".artifacts/qa-docker");
-}
-
 async function isQaLabDockerHealthReachable(url: string, fetchImpl: FetchLike) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
@@ -100,7 +96,7 @@ export async function runQaDockerUp(
 ): Promise<QaDockerUpResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
   const resolveHostPortImpl = deps?.resolveHostPortImpl ?? resolveHostPort;
-  const outputDir = path.resolve(params.outputDir ?? resolveDefaultQaDockerDir(repoRoot));
+  const outputDir = path.resolve(params.outputDir ?? path.join(repoRoot, ".artifacts/qa-docker"));
   const gatewayPort = await resolveHostPortImpl(
     params.gatewayPort ?? 18789,
     params.gatewayPort != null,

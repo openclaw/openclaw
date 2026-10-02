@@ -9,10 +9,10 @@ import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import type { NewSessionDraftController } from "./draft-controller.ts";
 import type { PaletteSessionPreferences } from "./palette-session-preferences.ts";
-import { folderDisplayName } from "./path.ts";
 import { resolveProjectChip } from "./project-chip.ts";
 import { renderAgentSelect } from "./target-controls.ts";
 import { resolveWhereChip } from "./where-chip.ts";
@@ -228,7 +228,7 @@ export class PaletteSessionSettings {
             id: "",
             label: machine.remote
               ? t("newSession.newWorkspace")
-              : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+              : pathDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
           },
           ...draft.browser.projects.map((project) => ({
             id: project.id,

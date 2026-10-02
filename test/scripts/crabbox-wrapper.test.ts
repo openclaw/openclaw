@@ -40,6 +40,7 @@ import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { spawnTerminalPty } from "../../src/process/terminal-pty.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { withShimFixture } from "./direct-run-entrypoints.test-support.js";
 
@@ -69,7 +70,9 @@ const azureProviderHelp =
   "provider: hetzner, aws, azure, local-container, blacksmith-testbox, or cloudflare\n";
 const fakeRunValueOptionHelp = [
   "artifact-glob value",
+  "blacksmith-job string",
   "blacksmith-ref string",
+  "blacksmith-workflow string",
   "capture-stderr string",
   "capture-stdout string",
   "download value",
@@ -647,6 +650,24 @@ async function waitForProcessClose(
   ]);
 }
 
+async function waitForOwnedPidsToExit(pids: Iterable<number | undefined>, signal: AbortSignal) {
+  // These foreign owners can outlive pnpm/the shim, and the escaped leaf deliberately
+  // loses its parent. No retained ChildProcess can certify their extinction.
+  const ownedPids = [...pids];
+  while (ownedPids.some((pid) => pid && isProcessAlive(pid))) {
+    try {
+      await withinTest(delay(10), signal);
+    } catch (cause) {
+      throw new Error(
+        `test aborted waiting for fixture processes to exit: ${ownedPids.join(", ")}`,
+        {
+          cause,
+        },
+      );
+    }
+  }
+}
+
 type WrapperCleanupProof =
   | { kind: "signal"; entrypoint: "node" | "pnpm"; repeated: boolean; cooperative?: boolean }
   | { kind: "readiness" }
@@ -734,7 +755,10 @@ function expectIdleSourceMirror(source: string, repository: string, syncRoot: st
   );
 }
 
-async function runWrapperCleanupProof(proof: WrapperCleanupProof): Promise<void> {
+async function runWrapperCleanupProof(
+  proof: WrapperCleanupProof,
+  testSignal: AbortSignal,
+): Promise<void> {
   const entrypoint = proof.kind === "signal" ? proof.entrypoint : "node";
   const cooperative = proof.kind === "signal" && proof.cooperative;
   const scriptRemoval = proof.kind === "removal" && proof.target === "script";
@@ -1146,7 +1170,7 @@ child.once("exit", (code, signal) => {
         const phases: WrapperReadinessPhase[] = JSON.parse(readFileSync(phasesPath, "utf8"));
         const wrapperPid = phases.find(({ phase }) => phase === "loading wrapper")!.pid!;
         // A pnpm interruption status is not the implementation's cleanup receipt.
-        await waitForCondition(() => !isProcessAlive(wrapperPid), 12_000);
+        await waitForOwnedPidsToExit([wrapperPid], testSignal);
         expect(JSON.parse(readFileSync(wrapperExitPath, "utf8")), output).toEqual({
           code: expectedStatus,
         });
@@ -1190,7 +1214,7 @@ child.once("exit", (code, signal) => {
           expect(readFileSync(path.join(identity!.cwd, capturePath))).toEqual(captureBytes);
           expect(existsSync(retained)).toBe(false);
           writeFileSync(releasePath, "release");
-          await waitForCondition(() => !isProcessAlive(descendantPid));
+          await waitForOwnedPidsToExit([descendantPid], testSignal);
           expect(readFileSync(releasePath + ".read", "utf8")).toBe("original source\n");
         } else {
           identity ??= JSON.parse(readFileSync(identityPath, "utf8"));
@@ -1337,7 +1361,7 @@ child.once("exit", (code, signal) => {
           }
         }
         await entrypointClosed;
-        await waitForCondition(() => [...ownedPids].every((pid) => !pid || !isProcessAlive(pid)));
+        await waitForOwnedPidsToExit(ownedPids, testSignal);
         const runReceiptRequired =
           hasDescendant || proof.kind === "removal" || existsSync(runSpawnedPath);
         if (
@@ -2366,6 +2390,7 @@ describe("scripts/crabbox-wrapper", () => {
         "blacksmith-testbox",
         "--id",
         id,
+        "--blacksmith-ref=main",
         "--reclaim",
         "--shell",
         "--",
@@ -3807,9 +3832,9 @@ esac
 
   it.each([
     {
-      scenario: "Blacksmith feature ref",
+      scenario: "Blacksmith maintained workflow",
       provider: "blacksmith-testbox",
-      args: ["--blacksmith-ref", "feature-branch"],
+      args: ["--blacksmith-ref", "main"],
       command: ["corepack", "pnpm", "check:changed"],
     },
     { scenario: "local container", provider: "local-container", args: [], command: ["echo ok"] },
@@ -3833,6 +3858,61 @@ esac
       if (reclaim) {
         expect(output.args).toContain("--reclaim");
       }
+    },
+  );
+
+  it.each([
+    ["warmup", "--blacksmith-ref=main", "--blacksmith-ref", "feature-branch"],
+    ["run", "-blacksmith-ref=feature-branch", "--sync-only"],
+  ])("refuses historical Testbox workflow allocation before delegation: %s", (...args) => {
+    const invocationLog = makeInvocationLog();
+    const result = runDefaultWrapper([...args, "--provider", "blacksmith-testbox"], {
+      env: { OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG: invocationLog },
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("Testbox workflow ref must be main");
+    expect(
+      readInvocations(invocationLog).some(
+        (invocation) =>
+          ["run", "warmup"].includes(invocation[0] ?? "") && !invocation.includes("--help"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
+    "pins Testbox policy independently of configured refs and payload arguments: %j",
+    (...refs) => {
+      const { output } = runSuccessfulDefaultWrapper(
+        [
+          "run",
+          "--provider",
+          "blacksmith-testbox",
+          ...refs,
+          "--blacksmith-workflow",
+          ".github/workflows/ci-check-high-memory-testbox.yml",
+          "--blacksmith-job",
+          "check",
+          "--",
+          "echo",
+          "--blacksmith-ref",
+          "historical-source",
+        ],
+        {
+          configJson: { provider: "blacksmith-testbox", blacksmith: { ref: "old-workflow" } },
+          env: { CRABBOX_BLACKSMITH_REF: "old-environment-ref" },
+        },
+      );
+      const optionEnd = output.args.indexOf("--");
+      expect(output.args.slice(0, optionEnd)).toContain("--blacksmith-ref=main");
+      expect(output.args.slice(0, optionEnd)).toEqual(
+        expect.arrayContaining([
+          "--blacksmith-workflow",
+          ".github/workflows/ci-check-high-memory-testbox.yml",
+          "--blacksmith-job",
+          "check",
+        ]),
+      );
+      expect(output.args.at(-1)).toContain("historical-source");
     },
   );
 
@@ -4662,7 +4742,11 @@ process.on("exit", () => {
         const copyOptions = { recursive: true, verbatimSymlinks: true };
         cpSync(selectedSource, producer, copyOptions);
         mkdirSync(path.dirname(path.join(producer, installOwner)), { recursive: true });
-        writeFileSync(path.join(producer, installOwner), installer);
+        writeFileSync(
+          path.join(producer, installOwner),
+          // Older selected installers can invoke pnpm before applying their install-only flag.
+          'test "${PNPM_CONFIG_FROZEN_LOCKFILE:-}" = true || exit 73\n' + installer,
+        );
         writeFileSync(
           path.join(producer, sourceCommand),
           [
@@ -6008,10 +6092,10 @@ cp.spawnSync = (command, args, options) => {
 
   it.skipIf(process.platform === "win32")(
     "reports the readiness deadline and last phase without inventing a writer failure",
-    async () => {
+    async ({ signal }) => {
       let failure: Error | undefined;
       try {
-        await runWrapperCleanupProof({ kind: "readiness" });
+        await runWrapperCleanupProof({ kind: "readiness" }, signal);
       } catch (error) {
         if (!(error instanceof Error)) {
           throw error;
@@ -6049,68 +6133,71 @@ cp.spawnSync = (command, args, options) => {
     25_000,
   );
 
-  (process.platform === "win32" ? it.skip : it).each(["node", "pnpm"] as const)(
+  (process.platform === "win32" ? it.skip : it).for(["node", "pnpm"] as const)(
     "keeps cleanup active after repeated parent signals through %s",
-    async (entrypoint) => {
-      await runWrapperCleanupProof({ kind: "signal", entrypoint, repeated: true });
+    { timeout: 25_000 },
+    async (entrypoint, { signal }) => {
+      await runWrapperCleanupProof({ kind: "signal", entrypoint, repeated: true }, signal);
     },
-    25_000,
   );
 
   (process.platform === "win32" ? it.skip : it)(
     "preserves graceful cancellation artifacts through pnpm terminal",
-    async () => {
-      await runWrapperCleanupProof({
-        kind: "signal",
-        entrypoint: "pnpm",
-        repeated: false,
-        cooperative: true,
-      });
+    async ({ signal }) => {
+      await runWrapperCleanupProof(
+        {
+          kind: "signal",
+          entrypoint: "pnpm",
+          repeated: false,
+          cooperative: true,
+        },
+        signal,
+      );
     },
     25_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "cleans preparation cancellation after staging allocation without starting a run",
-    async () => {
-      await runWrapperCleanupProof({ kind: "preparation" });
+    async ({ signal }) => {
+      await runWrapperCleanupProof({ kind: "preparation" }, signal);
     },
     25_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "reports capsule cleanup failure during preparation cancellation without starting a run",
-    async () => {
-      await runWrapperCleanupProof({ kind: "preparation", cleanupFails: true });
+    async ({ signal }) => {
+      await runWrapperCleanupProof({ kind: "preparation", cleanupFails: true }, signal);
     },
     25_000,
   );
 
-  it.skipIf(process.platform === "win32").each(["macos", "capsule"] as const)(
+  it.skipIf(process.platform === "win32").for(["macos", "capsule"] as const)(
     "cancels blocked wrapper stdin for %s without starting a run",
-    async (target) => {
-      await runWrapperCleanupProof({ kind: "stdin", target });
+    { timeout: 25_000 },
+    async (target, { signal }) => {
+      await runWrapperCleanupProof({ kind: "stdin", target }, signal);
     },
-    25_000,
   );
 
   it.skipIf(process.platform === "win32")(
     "retains source, claim and artifacts for escaped stderr until its writer is rescued",
-    async () => {
-      await runWrapperCleanupProof({ kind: "escaped" });
+    async ({ signal }) => {
+      await runWrapperCleanupProof({ kind: "escaped" }, signal);
     },
     25_000,
   );
 
-  it.skipIf(process.platform === "win32").each([
+  it.skipIf(process.platform === "win32").for([
     { target: "script", exitCode: 0 },
     { target: "source", exitCode: 23 },
   ] as const)(
     "reports $target removal failure without skipping independent cleanup (exit=$exitCode)",
-    async ({ target, exitCode }) => {
-      await runWrapperCleanupProof({ kind: "removal", target, exitCode });
+    { timeout: 25_000 },
+    async ({ target, exitCode }, { signal }) => {
+      await runWrapperCleanupProof({ kind: "removal", target, exitCode }, signal);
     },
-    25_000,
   );
 
   (process.platform === "win32" ? it.skip : it)(
@@ -6438,14 +6525,7 @@ cp.spawnSync = (command, args, options) => {
 
   it("uses the temporary full checkout for sparse sync-only runs", () => {
     const { output, result } = runSuccessfulDefaultWrapper(
-      [
-        "run",
-        "--provider",
-        "blacksmith-testbox",
-        "--blacksmith-ref",
-        "feature-branch",
-        "--sync-only",
-      ],
+      ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--sync-only"],
       cleanSparseSyncOptions,
     );
 

@@ -4,7 +4,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import * as liveGatewayDistFence from "../../scripts/lib/live-gateway-dist-fence.mts";
 import { readProcessMemoryCapacity } from "../../scripts/lib/process-memory.mts";
 import {
@@ -35,12 +45,12 @@ import {
 } from "../../scripts/tsdown-build.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForFile,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { createSourcePluginDependenciesFixture } from "./source-plugin-dependencies-fixture.js";
 
 beforeEach(() => {
@@ -55,6 +65,79 @@ const { createTempDir } = fixture;
 afterEach(() => fixture.cleanup());
 const runTsdownBuildInvocation = (...args: Parameters<typeof runTsdownBuildInvocationImpl>) =>
   fixture.track(runTsdownBuildInvocationImpl(...args));
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+function receiptFixtureScript(lines: string[]) {
+  return [
+    fixtureReceiptClientSource(receipts.endpoint),
+    "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+    ...lines,
+  ].join("\n");
+}
+
+async function fixtureEventBeforeSettlement(
+  record: string,
+  text: string,
+  operation: Promise<unknown>,
+  signal: AbortSignal,
+) {
+  await withinTest(
+    Promise.race([
+      receipts.waitFor(record, text),
+      operation.then(() => {
+        // Receipt and process output use separate pipes. The fixture writes this
+        // record before it can exit or let the owning operation settle.
+        if (
+          !fs.existsSync(record) ||
+          !(text === ""
+            ? Number(fs.readFileSync(record, "utf8")) > 0
+            : fs.readFileSync(record, "utf8").includes(text))
+        ) {
+          throw new Error(
+            text === "" ? `timeout waiting for pid in ${record}` : `timeout waiting for ${record}`,
+          );
+        }
+      }),
+    ]),
+    signal,
+  );
+}
+
+function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  // The product owns these child handles, and deliberate parent death or rescue
+  // SIGKILL leaves no test-owned exit event. Only test cancellation bounds reaping.
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
+    const check = () => {
+      if (!isProcessAlive(pid)) {
+        finish();
+      } else if (signal.aborted) {
+        abort();
+      } else {
+        timer = setTimeout(check, 5);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
+}
+
 const MiB = 1024 ** 2;
 const GiB = 1024 ** 3;
 const TEST_PHYSICAL_MEMORY_BYTES = 16 * GiB;
@@ -1445,7 +1528,7 @@ describe("runTsdownBuildInvocation", () => {
               await completion;
               if (pid !== undefined && isProcessAlive(pid)) {
                 process.kill(pid, "SIGKILL");
-                await waitForDead(pid, 2_000);
+                await waitForForeignProcessExit(pid, signal);
               }
             } finally {
               signal.removeEventListener("abort", abort);
@@ -1551,17 +1634,18 @@ describe("runTsdownBuildInvocation", () => {
 
   it.skipIf(process.platform === "win32")(
     "reports cleanup rejecting a successful compiler with a remaining descendant",
-    () =>
+    ({ signal }) =>
       fixture.run(async () => {
         const rootDir = createTempDir("openclaw-tsdown-close-");
         const childPidPath = path.join(rootDir, "child.pid");
-        const childScript = [
+        const childScript = receiptFixtureScript([
           `require('node:fs').writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
           "process.send('ready');",
-        ].join("");
+        ]);
         const parentScript = [
-          `const child = require('node:child_process').spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
+          `const child = require('node:child_process').spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
           // Readiness owns the race: the compiler exits only once its same-group
           // descendant is running, without that descendant holding output pipes.
           "child.once('message', () => { child.disconnect(); child.unref(); process.exit(0); });",
@@ -1573,8 +1657,9 @@ describe("runTsdownBuildInvocation", () => {
         });
         let childPid: number | undefined;
         try {
-          childPid = await waitForPidFile(childPidPath, 2_000);
-          expect(await completion).toMatchObject({
+          await fixtureEventBeforeSettlement(childPidPath, "", completion, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+          expect(await withinTest(completion, signal)).toMatchObject({
             status: 1,
             signal: null,
             timedOut: false,
@@ -1592,7 +1677,7 @@ describe("runTsdownBuildInvocation", () => {
               finalStatus: 1,
             }),
           );
-          await waitForDead(childPid, 2_000);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await fixture.verifyCleanup(async () => {
             try {
@@ -1603,7 +1688,7 @@ describe("runTsdownBuildInvocation", () => {
                 : undefined;
               if (childPid !== undefined && isProcessAlive(childPid)) {
                 process.kill(childPid, "SIGKILL");
-                await waitForDead(childPid, 2_000);
+                await waitForForeignProcessExit(childPid, signal);
               }
             }
           });
@@ -1696,18 +1781,19 @@ describe("runTsdownBuildInvocation", () => {
         const parentPidPath = path.join(rootDir, "parent.pid");
         const termPath = path.join(rootDir, "child.term");
         // Allocate the marker before readiness; filesystem setup must not consume termination grace.
-        const childScript = [
+        const childScript = receiptFixtureScript([
           "const fs = require('node:fs');",
           `const termFd = fs.openSync(${JSON.stringify(termPath)}, 'wx');`,
-          "process.on('SIGTERM', () => fs.writeSync(termFd, 'SIGTERM', 0));",
+          `process.on('SIGTERM', () => { fs.writeSync(termFd, 'SIGTERM', 0); sendReceipt(${JSON.stringify(termPath)}, "SIGTERM"); });`,
           `fs.writeFileSync(${JSON.stringify(parentPidPath)}, String(process.ppid));`,
           `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
-        ].join("");
+        ]);
         const parentScript = [
           "const { spawn } = require('node:child_process');",
           "process.on('SIGTERM', () => process.exit(0));",
-          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
           "setInterval(() => {}, 1000);",
         ].join("");
         const output = createWriteSink();
@@ -1716,28 +1802,26 @@ describe("runTsdownBuildInvocation", () => {
 
         try {
           // The descendant publishes its PID only after installing its SIGTERM handler.
-          childPid = await waitForPidFile(childPidPath, 2_000);
+          await fixtureEventBeforeSettlement(childPidPath, "", supervisor.completion, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
           expect(isProcessAlive(childPid)).toBe(true);
           supervisor.advance(250);
-          await vi.waitUntil(() => fs.readFileSync(termPath, "utf8") === "SIGTERM", {
-            timeout: 2_000,
-            interval: 5,
-          });
+          await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await vi.waitUntil(() => !isProcessAlive(parentPid), { timeout: 2_000, interval: 5 });
+          await waitForForeignProcessExit(parentPid, signal);
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
           supervisor.advance(1);
           supervisor.resume();
-          const result = await supervisor.completion;
+          const result = await withinTest(supervisor.completion, signal);
 
           expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
           expect(fs.readFileSync(termPath, "utf8")).toBe("SIGTERM");
           expect(output.chunks.join("")).toContain("timeout after 250ms");
           expect(output.chunks.join("")).toContain('"cleanup":"timeout"');
           expect(output.chunks.join("")).toContain("forcing SIGKILL");
-          await waitForDead(childPid, 2_000);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await supervisor.dispose(childPid);
         }
@@ -1755,26 +1839,31 @@ describe("runTsdownBuildInvocation", () => {
         const childPidPath = path.join(rootDir, "child.pid");
         const parentPidPath = path.join(rootDir, "parent.pid");
         // Allocate markers before readiness; their contents record signal and released cleanup.
-        const childScript = [
+        const childScript = receiptFixtureScript([
           "const fs = require('node:fs');",
           `const termFd = fs.openSync(${JSON.stringify(termPath)}, 'wx');`,
           `const cleanupFd = fs.openSync(${JSON.stringify(cleanupPath)}, 'wx');`,
           "process.on('SIGTERM', () => {",
           "  fs.writeSync(termFd, 'SIGTERM', 0);",
-          "  setInterval(() => {",
+          `  const release = fs.watch(${JSON.stringify(rootDir)}, () => {`,
           `    if (!fs.existsSync(${JSON.stringify(releasePath)})) return;`,
+          "    release.close();",
           "    fs.writeSync(cleanupFd, 'clean', 0);",
           "    process.exit(0);",
-          "  }, 5);",
+          "  });",
+          // Install the release observer before acknowledging TERM, so the test's
+          // subsequent file creation cannot outrun watcher registration.
+          `  sendReceipt(${JSON.stringify(termPath)}, "SIGTERM");`,
           "});",
           `fs.writeFileSync(${JSON.stringify(parentPidPath)}, String(process.ppid));`,
           `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
-        ].join("");
+        ]);
         const parentScript = [
           "const { spawn } = require('node:child_process');",
           "process.on('SIGTERM', () => process.exit(0));",
-          `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+          `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
           "setInterval(() => {}, 1000);",
         ].join("");
         const output = createWriteSink();
@@ -1783,20 +1872,18 @@ describe("runTsdownBuildInvocation", () => {
 
         try {
           // The descendant publishes its PID only after installing its SIGTERM handler.
-          childPid = await waitForPidFile(childPidPath, 2_000);
+          await fixtureEventBeforeSettlement(childPidPath, "", supervisor.completion, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
           supervisor.advance(250);
-          await vi.waitUntil(() => fs.readFileSync(termPath, "utf8") === "SIGTERM", {
-            timeout: 2_000,
-            interval: 5,
-          });
+          await fixtureEventBeforeSettlement(termPath, "SIGTERM", supervisor.completion, signal);
           const parentPid = Number(fs.readFileSync(parentPidPath, "utf8"));
-          await vi.waitUntil(() => !isProcessAlive(parentPid), { timeout: 2_000, interval: 5 });
+          await waitForForeignProcessExit(parentPid, signal);
           supervisor.advance(249);
           expect(isProcessAlive(childPid)).toBe(true);
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("");
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
           fs.writeFileSync(releasePath, "release");
-          const result = await supervisor.completion;
+          const result = await withinTest(supervisor.completion, signal);
 
           expect(result).toMatchObject({ timedOut: true, status: 0, signal: null, error: null });
           expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
@@ -1805,7 +1892,7 @@ describe("runTsdownBuildInvocation", () => {
           supervisor.advance(1);
           expect(output.chunks.join("")).not.toContain("forcing SIGKILL");
           supervisor.resume();
-          await waitForDead(childPid, 2_000);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await supervisor.dispose(childPid);
         }
@@ -1814,7 +1901,7 @@ describe("runTsdownBuildInvocation", () => {
 
   it.skipIf(process.platform === "win32")(
     "cleans process-group descendants before forwarding parent SIGTERM",
-    () =>
+    ({ signal }) =>
       fixture.run(async () => {
         const rootDir = createTempDir("openclaw-tsdown-parent-signal-");
         const childPidPath = path.join(rootDir, "child.pid");
@@ -1822,26 +1909,28 @@ describe("runTsdownBuildInvocation", () => {
         const scriptUrl = pathToFileURL(path.resolve("scripts/tsdown-build.mts")).href;
         let childPid = 0;
         let runner: ReturnType<typeof spawn> | undefined;
-        let runnerClosed: Promise<unknown> | undefined;
+        let runnerClosed: Promise<unknown[]> | undefined;
 
         try {
-          const childScript = [
+          const childScript = receiptFixtureScript([
             "const fs = require('node:fs');",
             "process.on('SIGTERM', () => {});",
             `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+            `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
             "setInterval(() => {}, 1000);",
-          ].join("");
-          const parentScript = [
+          ]);
+          const parentScript = receiptFixtureScript([
             "const { spawn } = require('node:child_process');",
-            `spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
+            `spawn(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(childScript)}], { stdio: 'ignore' });`,
             `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
+            `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
             "process.on('SIGTERM', () => process.exit(0));",
             "setInterval(() => {}, 1000);",
-          ].join("");
+          ]);
           const runnerScript = [
             `import { runTsdownBuildInvocation } from ${JSON.stringify(scriptUrl)};`,
             "const result = await runTsdownBuildInvocation(",
-            `  { command: process.execPath, args: ['-e', ${JSON.stringify(parentScript)}], options: { stdio: ['ignore', 'pipe', 'pipe'], shell: false, env: process.env } },`,
+            `  { command: process.execPath, args: ['--input-type=module', '-e', ${JSON.stringify(parentScript)}], options: { stdio: ['ignore', 'pipe', 'pipe'], shell: false, env: process.env } },`,
             "  { env: { ...process.env, OPENCLAW_TSDOWN_HEARTBEAT_MS: '0' } },",
             "); process.exitCode = result.status ?? 1;",
           ].join("\n");
@@ -1852,17 +1941,15 @@ describe("runTsdownBuildInvocation", () => {
           });
 
           runnerClosed = fixture.track(once(runner, "close"));
-          await waitForFile(readyPath, 2_000);
-          childPid = await waitForPidFile(childPidPath, 2_000);
+          await fixtureEventBeforeSettlement(readyPath, "ready", runnerClosed, signal);
+          await fixtureEventBeforeSettlement(childPidPath, "", runnerClosed, signal);
+          childPid = Number(fs.readFileSync(childPidPath, "utf8"));
           expect(isProcessAlive(childPid)).toBe(true);
 
           runner.kill("SIGTERM");
 
-          await expect(waitForChildClose(runner)).resolves.toEqual({
-            code: 143,
-            signal: null,
-          });
-          await waitForDead(childPid, 2_000);
+          await expect(withinTest(runnerClosed, signal)).resolves.toEqual([143, null]);
+          expect(isProcessAlive(childPid)).toBe(false);
         } finally {
           await fixture.verifyCleanup(async () => {
             if (runner?.pid && isProcessAlive(runner.pid)) {
@@ -1871,7 +1958,7 @@ describe("runTsdownBuildInvocation", () => {
             await runnerClosed;
             if (childPid && isProcessAlive(childPid)) {
               process.kill(childPid, "SIGKILL");
-              await waitForDead(childPid, 2_000);
+              await waitForForeignProcessExit(childPid, signal);
             }
           });
         }

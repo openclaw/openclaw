@@ -1,3 +1,4 @@
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EmbeddedRunTrigger } from "../agents/run-trigger.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
@@ -63,17 +64,10 @@ function normalizeTaskNames(taskNames: readonly string[]): string[] {
 }
 
 function parseTaskNames(value: string | null): string[] {
-  if (!value) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed)
-      ? normalizeTaskNames(parsed.filter((item): item is string => typeof item === "string"))
-      : [];
-  } catch {
-    return [];
-  }
+  const parsed = safeParseJson(value ?? "");
+  return Array.isArray(parsed)
+    ? normalizeTaskNames(parsed.filter((item): item is string => typeof item === "string"))
+    : [];
 }
 
 function rowToOutcome(row: HeartbeatOutcomeRow): PersistedHeartbeatOutcome | undefined {

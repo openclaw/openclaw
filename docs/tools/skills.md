@@ -55,7 +55,13 @@ snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
 Managed worktree sessions keep their recorded canonical workspace as the skill
-source. The configured agent workspace remains the primary skill source even when
+source. That source is read and watched on the Gateway, even when a File Transfer
+plugin serves the agent workspace from a paired node. The node reads its configured
+agent skill roots; it does not receive Gateway source paths. Selected skill files
+and supporting resources are delivered from their owning host. Model-facing
+workspace-hosted entries use `workspace-skill://` read locations, so an identical
+Gateway path cannot redirect the read to the node.
+The configured agent workspace remains the primary skill source even when
 the session executes in a worktree; only selecting that worktree as the agent's
 workspace gives its skills primary precedence. A selected nested workspace stays
 nested: discovery does not walk up to its parent repository. Installing OpenClaw
@@ -559,10 +565,12 @@ Fresh dependency checks detect binaries installed into directories already on
 </ParamField>
 
 <Note>
-  Legacy `metadata.clawdbot` blocks are still accepted when
-  `metadata.openclaw` is absent, so older installed skills keep their
-  dependency gates and installer hints. New skills should use
-  `metadata.openclaw`.
+  The pre-July 2026 `metadata.clawdbot` format is no longer read. To update an
+  older skill, edit its `SKILL.md` frontmatter and rename that block to
+  `metadata.openclaw`, preserving its requirements and installer fields. If
+  both blocks exist, keep the current block and merge only the legacy fields
+  you still want. OpenClaw does not rewrite the file; the old block's dependency
+  gates and installer hints are ignored until you update it.
 </Note>
 
 ### Installer specs
@@ -836,10 +844,18 @@ The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
 
-- `skills_search({ query, limit? })` searches eligible installed names and
-  descriptions. The default limit is 5; the maximum is 20. Queries must contain
-  1-1,000 characters. Results contain names, locations, and shortened descriptions, not
-  instructions. `hasMore` indicates that additional matches exist.
+When search is available, the agent is instructed to check for a relevant skill
+before work involving files, specialized tools, or a reusable workflow.
+An omitted directory is identified explicitly; the agent searches by task goal
+instead of trying to scan a list that is not present. Known names and clear
+directory matches can go directly to a complete skill read. Simple conversation
+and self-contained answers do not require discovery.
+
+- `skills_search({ query, limit? })` searches eligible installed names,
+  descriptions, and bounded instruction text. The default limit is 5; the maximum
+  is 20. Queries must contain 1-1,000 characters. Results contain names, locations,
+  and shortened descriptions, not instructions. `hasMore` indicates that additional
+  matches exist.
 - `skills_read({ name })` loads the complete `SKILL.md` for an exact name.
   Search is not required when the name is already known. Instructions omitted
   from the prompt directory are limited to 256 KiB and rejected if larger, not
@@ -850,6 +866,11 @@ Both tools use the current session's eligible catalog. Disabled, filtered,
 ineligible, and model-hidden skills are not added by search. Existing explicit
 user references remain separate. Search does not query ClawHub, install a
 skill, or grant permission to execute its commands.
+
+Instruction-body indexing requires the effective native `skills_read` tool.
+When reads are denied or shadowed, search uses metadata only and performs no
+instruction-body reads. Revocation also excludes cached body matches and rejects
+in-flight indexing started under the previous grant.
 
 In OpenClaw Code Mode, use `await skills.search(query, limit)` and
 `await skills.read(name)`. These calls dispatch through the same tools and
@@ -864,6 +885,25 @@ An existing `read` policy grant also permits `skills_read`. An explicit
 Search uses an in-memory lexical index of the prepared catalog. It follows the
 existing [snapshot and refresh rules](/tools/skills#snapshots-and-refresh), with
 no embedding service or persistent search index.
+The first search reads bodies through the admitted filesystem owner.
+Concurrent first searches share one build; cancelling a waiter does not cancel
+its owner. Later searches reuse the completed index for that prepared catalog
+and still check current run authority. Names and descriptions have twice the lexical
+weight of body text; exact names rank first.
+
+Body indexing reads at most 1,024 skills in name order, four at a time. Each body
+contributes at most 16 KiB, reduced equally across the selected skills
+to keep their total at most 4 MiB. Local files contribute a bounded prefix, with
+one extra byte read to detect truncation. Owners that reject oversized bounded
+reads or do not support bounded search reads retain metadata only.
+Remote workspace owners with whole-skill reads only do not use their document
+bridge for indexing. Already-delivered inline bodies can contribute a bounded
+prefix. Metadata remains searchable for the full eligible catalog.
+If bodies are unreadable, omitted, or shortened,
+`coverage` reports `bodyIndexed`, `metadataOnly`, and `truncatedBodies`.
+An empty result with partial coverage does not prove that no applicable skill exists.
+Indexing never executes skill content, and index limits do not truncate `skills_read`.
+
 Sandbox search includes only readable, delivered skills. Discovery does not
 expand the existing worker transfer selection or its 8 MiB total resource limit.
 Dedicated remote workers retain their existing tool protocol; the new search

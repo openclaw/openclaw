@@ -148,10 +148,11 @@ export function createOpenClawSwarmToolGroups(params: {
             schema: params.swarmOutputSchema,
             initialState: collectorEntry?.structuredOutput,
             onStateChange: (state) => {
-              // Throwing here rolls the in-memory state back and surfaces a tool
-              // error, so a revoked authority writes nothing anywhere.
-              params.assertCollectorWriteAuthority?.();
-              recordSwarmStructuredOutput({ runId: structuredOutputRunId, childSessionKey }, state);
+              return recordSwarmStructuredOutput(
+                { runId: structuredOutputRunId, childSessionKey },
+                state,
+                params.assertCollectorWriteAuthority,
+              );
             },
           }),
         ]

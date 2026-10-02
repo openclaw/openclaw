@@ -4,12 +4,11 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ModelCostConfig } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import * as usageFormat from "../utils/usage-format.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
@@ -26,7 +25,6 @@ import {
   loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
-  resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
@@ -67,11 +65,11 @@ async function writeEntries(file: string, entries: unknown[]): Promise<void> {
 }
 
 describe("session cost usage", () => {
-  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-session-cost-" });
+  const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cost-");
   let root: string;
   let sessionsDir: string;
   beforeEach(async () => {
-    root = await suiteRootTracker.make("case");
+    root = tempDirs.make();
     sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -87,55 +85,6 @@ describe("session cost usage", () => {
       ].join("\n"),
       "utf-8",
     );
-
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
-
-  it("resolves legacy markers only for the requested owner and session", async () => {
-    const sessionId = "session";
-    const storePath = path.join(root, "sessions.json");
-    const marker = `sqlite:main:${sessionId}:${storePath}`;
-    const stale = `sqlite:main:stale:${storePath}`;
-    const foreign = `sqlite:other:${sessionId}:${storePath}`;
-    const legacyJsonl = path.join(root, `${sessionId}.jsonl`);
-    const entry = (sessionFile: string) => ({ sessionFile, sessionId, updatedAt: 1 });
-    const resolve = (
-      params: Omit<Parameters<typeof resolveExistingUsageSessionFile>[0], "agentId"> & {
-        agentId?: string;
-      },
-    ) => resolveExistingUsageSessionFile({ agentId: "main", sessionId, ...params });
-    await fs.writeFile(legacyJsonl, "stale artifact");
-
-    expect(resolve({ sessionEntry: entry(marker), sessionFile: legacyJsonl })).toBe(marker);
-    const preferred = `sqlite:main:${sessionId}:${path.join(root, "entry-store.json")}`;
-    expect(resolve({ sessionEntry: entry(preferred), sessionFile: marker })).toBe(preferred);
-    expect(resolve({ sessionFile: foreign })).toBeUndefined();
-    expect(resolve({ sessionEntry: entry(foreign) })).toBeUndefined();
-    expect(resolve({ sessionFile: stale })).toBeUndefined();
-    expect(resolve({ sessionEntry: entry(stale), sessionFile: marker })).toBe(marker);
-    expect(resolve({ sessionEntry: entry(stale), sessionFile: legacyJsonl })).toBe(legacyJsonl);
-    expect(resolve({ sessionEntry: entry(stale) })).toBeUndefined();
-    const sessionTarget = {
-      agentId: "main",
-      sessionId,
-      sessionKey: "agent:main:cost",
-      storePath,
-    };
-    expect(
-      resolve({ sessionTarget: { ...sessionTarget, sessionKey: "agent:other:cost" } }),
-    ).toBeUndefined();
-    const mismatchedTarget = { ...sessionTarget, sessionKey: "agent:main:other-cost" };
-    await upsertSessionEntryCore(mismatchedTarget, { sessionId: "other-session", updatedAt: 1 });
-    expect(resolve({ sessionTarget: mismatchedTarget })).toBeUndefined();
-    expect(resolve({ sessionId: "other-session", sessionTarget })).toBeUndefined();
-    expect(resolve({ agentId: "other", sessionTarget })).toBeUndefined();
-    expect(resolve({ sessionId: "   ", sessionTarget })).toContain("sqlite:main:");
-  });
-
-  afterAll(async () => {
-    await suiteRootTracker.cleanup();
-  });
 
   it("aggregates daily totals with log cost and pricing fallback", async () => {
     const sessionFile = path.join(sessionsDir, "sess-1.jsonl");
@@ -1102,4 +1051,3 @@ describe("session cost usage", () => {
     expect(logs?.map((log) => log.content)).toEqual(["third", "fourth"]);
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -23,6 +23,27 @@ export async function readSessionHistoryRequest(
     deferProfileDisplay: true,
     resolveCronJobName: () => undefined,
   };
+  if (request.kind === "active-accounting") {
+    return {
+      kind: "active-accounting",
+      result: options.readers.readTranscriptAccounting(request.params.options),
+    };
+  }
+  if (request.kind === "bounded-tail") {
+    return {
+      kind: "bounded-tail",
+      result: options.readers.readBoundedMessageTail(request.params.options),
+    };
+  }
+  if (request.kind === "summary") {
+    return {
+      kind: "summary",
+      result: await options.readers.readSessionTranscriptSummaryAsync(
+        request.params.target,
+        request.params.query,
+      ),
+    };
+  }
   if (request.kind === "artifacts") {
     const { selectSessionArtifacts } = await import("./session-artifact-read.js");
     const query = request.params.query;
@@ -132,6 +153,21 @@ export async function readSessionHistoryRequest(
       ...prepareSessionHistoryDelta(
         options.readers.readTranscriptDisplayDelta(request.params.limits),
         options.readers.subagentCoordination,
+      ),
+    };
+  }
+  if (request.kind === "inline-visibility") {
+    const { prepareSessionHistorySubagentFacts } =
+      await import("./session-history-delta-visibility.js");
+    const { lookup } = request.params;
+    return {
+      kind: "inline-visibility",
+      subagentCoordination: prepareSessionHistorySubagentFacts(
+        options.readers.subagentCoordination,
+        (recording) =>
+          lookup.kind === "session"
+            ? recording.isSubagentSession(lookup.sessionKey)
+            : recording.isSubagentRunMessage(lookup.runId, lookup.messageSeq),
       ),
     };
   }

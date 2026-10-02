@@ -15,6 +15,7 @@ import {
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillKey } from "../loading/frontmatter.js";
+import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { resolveSkillSource } from "../loading/source.js";
 import {
   loadWorkspaceSkills,
@@ -355,7 +356,7 @@ export async function prepareWorkspaceSkillStatus(
   const localEntries = sources.status
     ? [
         ...loadSkillLibrarySelection(opts?.librarySelections ?? []),
-        ...sources.entries.filter((entry) => entry.skill.fileHost === "gateway"),
+        ...sources.entries.filter((entry) => resolveSkillFileHost(entry.skill) === "gateway"),
       ]
     : sources.entries;
   const localFacts =
@@ -369,7 +370,7 @@ export async function prepareWorkspaceSkillStatus(
       : undefined;
   const hostPaths = new Set(
     sources.entries
-      .filter((entry) => entry.skill.fileHost === "workspace")
+      .filter((entry) => resolveSkillFileHost(entry.skill) === "workspace")
       .map((entry) => entry.skill.filePath),
   );
   const files = [

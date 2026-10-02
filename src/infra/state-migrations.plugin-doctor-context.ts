@@ -11,7 +11,6 @@ import {
   type ChannelIngressQueue,
 } from "../channels/message/ingress-queue.js";
 import { importLegacyChannelIngressEntries } from "../channels/message/ingress-queue.migration.js";
-import { resolveStateDir } from "../config/paths.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { readSessionIdentityEvidenceBatch } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -63,25 +62,20 @@ function hasUnimportedSessionIdentity(params: {
     env: params.env,
   });
   const defaultStore = resolveSessionStorePathCore(undefined, { agentId, env: params.env });
-  const legacyRootStore = path.join(resolveStateDir(params.env), "sessions", "sessions.json");
-  const sources = new Map([
-    [configuredStore, configuredStore],
-    [defaultStore, defaultStore],
-    [legacyRootStore, configuredStore],
-  ]);
+  const sources = new Set([configuredStore, defaultStore]);
   let importedIdentity = false;
   let unimportedIdentity = false;
-  for (const [storePath, destination] of sources) {
+  for (const storePath of sources) {
     if (storePath.endsWith(".sqlite")) {
       continue;
     }
-    const key = `${agentId}\0${storePath}\0${destination}`;
+    const key = `${agentId}\0${storePath}`;
     let sourceEvidence = params.cache.get(key);
     if (sourceEvidence === undefined) {
       const before = fs.statSync(storePath, { throwIfNoEntry: false, bigint: true });
       sourceEvidence = { imported: false, sessionIds: new Set() };
       if (before) {
-        const sqlitePath = resolveSqliteTargetFromSessionStorePath(destination, {
+        const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, {
           agentId,
           env: params.env,
         }).path;
@@ -90,7 +84,6 @@ function hasUnimportedSessionIdentity(params: {
           target: {
             agentId,
             storePath,
-            ...(storePath === legacyRootStore ? { sqlitePath } : {}),
           },
           sqlitePath,
           env: params.env,
@@ -344,7 +337,7 @@ export function createPluginDoctorStateMigrationContext(params: {
   if (params.trustedForDurableStores) {
     context.inspectCronJobs = async () => {
       params.repairAuthority?.assertCurrent();
-      const { inspectCronJobsForDoctor } = await import("../cron/store/doctor.js");
+      const { inspectCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
       params.repairAuthority?.assertCurrent();
       const inventory = await inspectCronJobsForDoctor(params);
       params.repairAuthority?.assertCurrent();
@@ -354,7 +347,7 @@ export function createPluginDoctorStateMigrationContext(params: {
       const authority = params.repairAuthority;
       context.repairCronJobs = async (inventory, changes) => {
         authority.assertCurrent();
-        const { repairCronJobsForDoctor } = await import("../cron/store/doctor.js");
+        const { repairCronJobsForDoctor } = await import("../commands/doctor/cron/store-repair.js");
         authority.assertCurrent();
         return repairCronJobsForDoctor(params, authority, inventory, changes);
       };

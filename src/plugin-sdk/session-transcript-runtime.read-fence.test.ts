@@ -1,6 +1,5 @@
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, assert, beforeEach, describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
 import {
@@ -19,6 +18,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/sessi
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
@@ -28,7 +28,7 @@ import {
   type SessionTranscriptReadParams,
 } from "./session-transcript-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-transcript-fence-");
 describe("session transcript runtime read fence", () => {
   let scope: SessionTranscriptReadParams & { agentId: string; storePath: string };
   beforeEach(async () => {
@@ -36,7 +36,7 @@ describe("session transcript runtime read fence", () => {
       agentId: "main",
       sessionId: "fenced",
       sessionKey: "agent:main:fenced",
-      storePath: path.join(tempDirs.make("openclaw-sdk-transcript-fence-"), "sessions.json"),
+      storePath: path.join(tempDirs.make(), "sessions.json"),
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   });

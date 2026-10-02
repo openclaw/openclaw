@@ -77,10 +77,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
   gatewayContextResolver?: GatewayContextResolver;
   assertCurrent: () => SessionEntry | undefined;
 }): Promise<void> {
-  const childSessionKey = params.childSessionKey.trim();
-  if (!childSessionKey) {
-    return;
-  }
+  const { childSessionKey } = params;
   const ownerSessionKey = resolveAgentMainSessionKey({
     cfg: params.cfg,
     agentId: resolveAgentIdFromSessionKey(childSessionKey),
@@ -93,12 +90,13 @@ export async function registerPluginSubagentRunFromGateway(params: {
   // a requester and therefore owns a separate delivery.
   if (
     !params.requester &&
-    adoptPausedSubagentRunForFollowUp({
+    (await adoptPausedSubagentRunForFollowUp({
       childSessionKey,
       runId: params.runId,
       task: params.task,
       gatewayContextResolver: params.gatewayContextResolver,
-    })
+      assertCurrent: params.assertCurrent,
+    }))
   ) {
     return;
   }

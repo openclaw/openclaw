@@ -6,15 +6,18 @@ import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
 // These suites exercise the plugin loader's own native require()/import()
 // semantics on fixture packages. The shared tsx/esm worker preload rewrites
-// .ts and ambiguous .js loading in-process and would replace the runtime under
-// test, so they run in Node workers without it.
+// .ts and ambiguous .js loading in-process. Bun's shared tsconfig override also
+// resolves denied fixture aliases into the checkout. Keep both runtimes native.
+// Missing fixture packages must stay missing instead of being auto-installed.
 export const nativeLoaderPluginTestFiles = [
   "src/plugins/bundled-plugin-metadata.public-surfaces.test.ts",
   "src/plugins/capability-provider-runtime.generation.test.ts",
+  "src/plugins/loader.lazy-alias.test.ts",
   "src/plugins/manifest-registry.test.ts",
   "src/plugins/plugin-module-generation.interop.test.ts",
   "src/plugins/plugin-module-generation.test.ts",
   "src/plugins/plugin-runtime-artifact-resolution.test.ts",
+  "src/plugins/plugin-sdk-native-resolver.test.ts",
   "src/plugins/public-surface-loader.test.ts",
   "src/plugins/stage-bundled-plugin-runtime.test.ts",
 ];
@@ -39,7 +42,7 @@ export function createPluginsVitestConfig(env?: Record<string, string | undefine
   });
   const nativeLoader = createScopedVitestConfig(nativeLoaderPluginTestFiles, {
     ...options,
-    execArgv: [],
+    execArgv: process.versions.bun ? ["--no-install"] : [],
     intersectIncludeFile: true,
     name: "plugins-native-loader",
   });

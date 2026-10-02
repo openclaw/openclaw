@@ -6,6 +6,7 @@ import {
 import type { SkillInstallSpecMetadata } from "../../plugins/install-security-scan.js";
 import { prepareSkillBundle } from "../library/bundle.js";
 import type { Skill } from "../loading/skill-contract.js";
+import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { materializeSkillResources } from "../runtime/resources.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 
@@ -15,7 +16,7 @@ export async function withSkillInstallPolicySource<T>(
   access: AgentWorkspaceAccess | undefined,
   inspect: (sourceDir: string) => Promise<T>,
 ): Promise<T> {
-  if (!access || skill.fileHost === "gateway") {
+  if (!access || resolveSkillFileHost(skill) === "gateway") {
     return await inspect(path.resolve(skill.baseDir));
   }
   if (!access.skillResources) {

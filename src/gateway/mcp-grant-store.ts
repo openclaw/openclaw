@@ -11,6 +11,7 @@ import type { ExecPolicyOverrides, ExecSessionDefaults } from "../agents/exec-de
 import type { PreparedQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
+import type { TrustedSubagentCompletionHandoff } from "../agents/subagents/announce/subagent-announce-handoff.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -21,12 +22,16 @@ import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-polic
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 
 export type McpLoopbackRequestContext = {
+  /** Host-verified completion context; never read from MCP request headers. */
+  trustedInternalHandoff?: Omit<TrustedSubagentCompletionHandoff, "settleBatch">;
+  inputProvenance?: InputProvenance;
   sessionKey: string;
   runtimePolicySessionKey?: string;
   /** Agent whose execution policy applies when it differs from the durable session owner. */

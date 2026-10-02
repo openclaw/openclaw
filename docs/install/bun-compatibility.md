@@ -61,6 +61,8 @@ Candidates must meet the WAL safety floor and support extension loading before s
 
 SQLite storage workers inherit the main process's selected library. Opening another database or restarting a storage worker reuses that selection without repeating Bun's one-shot library initialization.
 
+Package-update recovery retains the library selected during Bun admission. On macOS, copy the printed recovery command including its `OPENCLAW_SQLITE_LIBRARY` prefix; it works from a fresh shell without the service environment or custom `HOMEBREW_PREFIX`. If recovery cannot meet the SQLite safety floor, it refuses before opening the journal and names the recorded library input to restore. The version-1 recovery journal format is unchanged.
+
 Set `OPENCLAW_SQLITE_LIBRARY` in the process environment before starting OpenClaw to override discovery:
 
 ```sh
@@ -94,10 +96,18 @@ The browser plugin starts its helper processes with the Bun executable that runs
 
 ## Bun-only installs
 
-Pin the Gateway service to your Bun executable so updates and Doctor retain it. Without Node, the `openclaw` launcher cannot start, so run the package entry point with Bun:
+Trusted Bun-only global installs on macOS and Linux install an `openclaw` shell
+launcher in Bun's existing global bin directory (`bun pm bin -g`). It records the
+absolute Bun executable from `OPENCLAW_PACKAGE_BUN_LAUNCHER` and the installed
+package entry point, so `openclaw --version`, `openclaw status --json`, and Gateway
+commands work without Node. Add that bin directory to PATH. The npm package's
+Node shebang and Node installs remain unchanged; Windows Bun launchers are not
+supported yet.
+
+Pin the Gateway service to your Bun executable so updates and Doctor retain it:
 
 ```sh
-<bun> <package-root>/openclaw.mjs gateway install --runtime bun --runtime-path <bun> --force
+openclaw gateway install --runtime bun --runtime-path <bun> --force
 ```
 
 Update, repair, and Doctor maintenance children use the running Bun executable.
@@ -124,6 +134,45 @@ installation.
 
 First installs and updater staging without a persistent Node require `OPENCLAW_PACKAGE_BUN_LAUNCHER` set to the absolute Bun executable that launches the CLI. The updater sets it automatically when running under Bun; an app must set it for its first `bun add -g --trust openclaw@<version>`. Preinstall validates that launcher as Bun 1.4+ without spawning absent or nonexecutable Node candidates. Without the marker, preinstall still requires a persistent Node; a Node found on PATH must satisfy the package's Node requirements even when the marker is set.
 
+The trusted package lifecycle creates the launcher only when Bun's existing global
+bin points to that package and no persistent Node is present. Updates create it in
+the private staging bin, then relocate and publish it with the package; rollback
+restores the previous launcher. Reinstalling the package refreshes the recorded
+Bun path. A lifecycle warning does not abort an otherwise usable package update.
+
+Launcher paths are literal data: spaces, apostrophes, double quotes, dollar signs,
+backticks, backslashes, and globs work in both staged and final installation paths.
+Released updaters can relocate the raw path bytes without turning them into shell
+code. The launcher uses shell builtins to read its own data lines, then `exec` to
+preserve arguments, stdin, exit status, and signals without a wrapper process,
+subprocess, or temporary file.
+
+The renderer requires absolute paths without NUL, newline, or carriage return.
+For unsupported paths, installation leaves Bun's original symlink unchanged and
+Doctor reports the reason without offering launcher repair. Invoke
+`<bun> <package-root>/openclaw.mjs` directly, with shell quoting as needed, or use
+single-line paths. If a released updater introduces a newline into a final path,
+the split data is never executed: the launcher exits 127 with a target-not-found
+message. Carriage-return paths remain unsupported even if a released updater
+inserts one; the strict launcher parser does not adopt that modified launcher.
+
+If the launcher is missing, relinked, or still names a moved Bun executable, run
+`<bun> <package-root>/openclaw.mjs doctor --fix` from that installation. Doctor
+reports the problem and uses its existing repair consent rules. It preserves
+commands belonging to another installation. Custom Bun global-bin settings must
+be available to the installing process and Doctor; a one-off `bun --config`
+argument is not inherited by package lifecycle children. `bunx --bun openclaw`
+selects Bun for that invocation only, not for the plain shell command.
+
+`install-cli.sh` still provisions Node and uses its existing npm or Git install
+path. The macOS app owns its own launcher separately. It can reuse this POSIX
+data-line launcher contract, executable mode, and atomic publication at its
+existing CLI location. The app must regenerate the launcher when its runtime or
+package root changes.
+
+Bun's uninstall cleanup removes dangling symlinks but can leave a generated shell
+launcher behind; see [Remove the CLI](/install/uninstall#remove-the-cli).
+
 Published updaters through 2026.9.6 cannot update a Bun-only install. They do not set this marker, so the new package's preinstall stops staging (`global-install-failed`). If the caller sets the marker, their own bare `node` probe fails to start instead (`update-executor-settlement-failed`). Both refusals happen before the Gateway stops, and it keeps running. A fixed version must drive the update; installing a fixed candidate cannot change the updater already running.
 
 The installed updater runs first. In a Linux split-root fixture, published
@@ -134,7 +183,7 @@ healthy while leaving the invoking CLI unchanged. The routing and explicit
 Bun selection described above apply from the first updater containing the fix;
 a newer candidate cannot change the installed updater's first-hop behavior.
 
-Npm-sourced plugins use OpenClaw's bundled npm 11.20.0 CLI under Bun and do not require a separate Node or npm installation.
+Npm-sourced plugins use OpenClaw's bundled npm 12.1.0 CLI under Bun and do not require a separate Node or npm installation.
 
 ## SQLite worker lifecycle
 
@@ -177,6 +226,7 @@ config or state. Gateway startup logs include the decision and its reason.
 
 ## Known limitations
 
+- **Text boundaries:** OpenClaw works around a [JSC segment lookup bug](https://github.com/oven-sh/WebKit/pull/753) that can include the preceding cluster when a lookup starts on an emoji's high surrogate. Message chunking and terminal cells preserve the intended grapheme boundaries on Bun without runtime configuration changes.
 - **Desktop WebSockets:** OpenClaw uses the installed `ws` transport for desktop observers and paired-node desktop/portal streams. Bun 1.4.2's built-in `ws` server adapter lacks pause/resume and the Duplex stream bridge; the installed transport preserves backpressure, payload limits, and cleanup when a desktop disconnects.
 - **Lifecycle scripts:** Bun blocks dependency lifecycle scripts unless explicitly trusted with `bun pm trust`.
 - **Package scripts:** Some scripts hardcode pnpm, so `bun run` still invokes pnpm internally.
@@ -201,7 +251,7 @@ See [Bun](/install/bun) for the workflow and lifecycle trust commands.
 | Unreleased (main)                  | Updates owned split-root Bun Gateway installations in place, retains their runtime pins, and uses explicit Bun executables for package-manager probes and installs.                                   |
 | Unreleased (main)                  | Keeps Bun maintenance children and service runtime selection, and adds `OPENCLAW_PACKAGE_BUN_LAUNCHER` for preinstall validation of Bun-only installs and updater staging.                            |
 | Unreleased (main)                  | Headless node update checks read the npm registry in-process under Bun instead of running `npm view`. #160154                                                                                         |
-| Unreleased (main)                  | Runs the bundled npm 11.20.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                         |
+| Unreleased (main)                  | Runs the bundled npm 12.1.0 CLI under Bun for npm-sourced plugin installs, updates, and removal without a separate Node or npm installation.                                                          |
 | Unreleased (main)                  | Implicit Gateway and managed node host reinstalls, update refresh, and Doctor's unloaded-service reinstall retain a supported recorded Bun executable without creating a runtime pin.                 |
 | Unreleased (main)                  | Tool Search code mode (`tool_search_code`) is retired; structured Tool Search needs no Node under Bun.                                                                                                |
 | Unreleased (main)                  | Starts the packaged Chrome DevTools MCP server with the current runtime, so existing-session browser profiles no longer require a Node installation under Bun.                                        |

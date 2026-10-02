@@ -117,6 +117,11 @@ vi.mock("../../daemon/launchd-system.js", async (importOriginal) => ({
 vi.mock("../../infra/restart-stale-pids.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/restart-stale-pids.js")>()),
   cleanStaleGatewayProcessesSync: () => [],
+  // Simulated service platforms must not read the host's native ancestry.
+  inspectSelfAndAncestorPidsSync: () => ({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  }),
   terminateStaleGatewayPids: mocks.terminateStale,
 }));
 vi.mock("../../infra/ports-inspect.js", () => ({
@@ -838,7 +843,7 @@ describe("preserved update activation with real version guards", () => {
       const state = nativeRunning ? "running" : "stopped";
       return {
         code: 0,
-        stdout: args[0] === "print" ? `state = ${state}\n` : "",
+        stdout: args[0] === "print" ? `${args[1]} = {\n\tstate = ${state}\n}` : "",
         stderr: "",
         termination: "exit",
       };

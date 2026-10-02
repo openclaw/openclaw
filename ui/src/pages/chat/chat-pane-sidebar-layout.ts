@@ -40,7 +40,7 @@ type LazyPanelRuntime = {
   pending?: Promise<void>;
 };
 
-type LazyElementKey = "region" | SidebarSlotId;
+type LazyElementKey = "region" | "detail-panel" | SidebarSlotId;
 type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>];
 
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
@@ -48,6 +48,9 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
     "openclaw-chat-sidebar-region",
     () => import("./components/chat-sidebar-region.runtime.ts"),
   ],
+  // Not a slot key: the detail slot also renders tool output and status
+  // templates synchronously, so only its panel branch waits for this element.
+  "detail-panel": ["openclaw-chat-detail-panel", () => import("./components/chat-detail-panel.ts")],
   terminal: [
     "openclaw-terminal-panel",
     () => import("../../components/terminal/terminal-panel-registration.ts"),
@@ -68,7 +71,7 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
 
 const lazyRuntimes = new Map<LazyElementKey, LazyPanelRuntime>();
 
-function ensureLazyElement(
+export function ensureLazySidebarElement(
   key: LazyElementKey,
   requestUpdate: () => void,
 ): TemplateResult | null | undefined {
@@ -175,10 +178,12 @@ export function renderSidebarRegion(params: {
   const panelDefinitions = params.panelDefinitions ?? sidebarPanelDefinitions();
   const panelOpen = params.layout.open === true;
   const hasPanels = params.layout.columns.length > 0;
-  const regionError = hasPanels ? ensureLazyElement("region", params.requestUpdate) : undefined;
+  const regionError = hasPanels
+    ? ensureLazySidebarElement("region", params.requestUpdate)
+    : undefined;
   let panelTemplates: SidebarPanelTemplates | null = null;
   for (const panel of params.layout.columns[0]?.panels ?? []) {
-    const lazyState = ensureLazyElement(panel.slot, params.requestUpdate);
+    const lazyState = ensureLazySidebarElement(panel.slot, params.requestUpdate);
     if (lazyState !== undefined) {
       panelTemplates ??= { ...params.panelTemplates };
       panelTemplates[panel.slot] =

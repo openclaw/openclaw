@@ -22,6 +22,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
+  VideoGenerationModeCapabilities,
   VideoGenerationProvider,
   VideoGenerationRequest,
   VideoGenerationSourceAsset,
@@ -296,6 +297,31 @@ function extractPixVerseVideo(payload: PixVerseVideoResultResponse): GeneratedVi
   };
 }
 
+function buildPixVerseModeCapabilities(imageToVideo = false): VideoGenerationModeCapabilities {
+  return {
+    maxVideos: 1,
+    ...(imageToVideo ? { maxInputImages: 1 } : {}),
+    maxDurationSeconds: MAX_DURATION_SECONDS,
+    supportedDurationSeconds: Array.from({ length: MAX_DURATION_SECONDS }, (_, index) => index + 1),
+    ...(!imageToVideo ? { aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS] } : {}),
+    resolutions: ["360P", "540P", "720P", "1080P"],
+    ...(!imageToVideo ? { supportsAspectRatio: true } : {}),
+    supportsResolution: true,
+    supportsAudio: true,
+    providerOptions: {
+      seed: "number",
+      negative_prompt: "string",
+      negativePrompt: "string",
+      quality: "string",
+      ...(imageToVideo ? { motion_mode: "string" as const, motionMode: "string" as const } : {}),
+      camera_movement: "string",
+      cameraMovement: "string",
+      template_id: "number",
+      templateId: "number",
+    },
+  };
+}
+
 export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: PIXVERSE_PROVIDER_ID,
@@ -305,53 +331,10 @@ export function buildPixVerseVideoGenerationProvider(): VideoGenerationProvider 
     models: [...PIXVERSE_VIDEO_MODELS],
     isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: PIXVERSE_PROVIDER_ID, ...ctx }),
     capabilities: {
-      generate: {
-        maxVideos: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        aspectRatios: [...PIXVERSE_TEXT_ASPECT_RATIOS],
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsAspectRatio: true,
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
-      },
+      generate: buildPixVerseModeCapabilities(),
       imageToVideo: {
         enabled: true,
-        maxVideos: 1,
-        maxInputImages: 1,
-        maxDurationSeconds: MAX_DURATION_SECONDS,
-        supportedDurationSeconds: Array.from(
-          { length: MAX_DURATION_SECONDS },
-          (_, index) => index + 1,
-        ),
-        resolutions: ["360P", "540P", "720P", "1080P"],
-        supportsResolution: true,
-        supportsAudio: true,
-        providerOptions: {
-          seed: "number",
-          negative_prompt: "string",
-          negativePrompt: "string",
-          quality: "string",
-          motion_mode: "string",
-          motionMode: "string",
-          camera_movement: "string",
-          cameraMovement: "string",
-          template_id: "number",
-          templateId: "number",
-        },
+        ...buildPixVerseModeCapabilities(true),
       },
       videoToVideo: {
         enabled: false,

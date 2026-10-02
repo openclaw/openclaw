@@ -3,7 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   loadExactSessionEntryCandidates,
@@ -52,6 +54,7 @@ export function readChatDirectiveConfig(
 }
 
 export function createChatDirectiveSuiteResources() {
+  const fixtureLifetime = createFixtureLifetime();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
@@ -60,6 +63,9 @@ export function createChatDirectiveSuiteResources() {
     root,
     databasePath,
     env,
+    runFixture: fixtureLifetime.run,
+    verifyFixtureCleanup: fixtureLifetime.verifyCleanup,
+    settleFixtures: () => fixtureLifetime.cleanup(),
     // The caller retains cleanup ownership before opening can fail.
     open() {
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
@@ -96,14 +102,8 @@ export function createChatDirectiveSuiteResources() {
         env,
         sessionKeys: [canonicalKey],
         readOnly: true,
-        onReadSource: (source, physical) => {
-          if (physical) {
-            captured = {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            };
-          }
+        onReadSource: (source) => {
+          captured = source;
         },
       });
       const capturedReadSource = expectDefined(captured, "chat directive fixture database source");
@@ -214,4 +214,49 @@ export function createChatDirectiveReplyBackend(params: {
           },
         }),
   };
+}
+
+export function createUnconfirmedTranscriptDelivery() {
+  const queueLifetime = createFixtureLifetime();
+  const delivery = createDeferred<{
+    transcriptCommit: "unconfirmed";
+    errorMessage: string;
+  }>();
+  const persisted = createDeferred();
+  void persisted.promise.catch(() => {});
+  const queueMessage = vi.fn<NonNullable<ReplyBackendHandle["queueMessage"]>>((_text, options) =>
+    queueLifetime.track(
+      (async () => {
+        options?.onQueueAccepted?.(true);
+        try {
+          await options?.userTurnTranscriptRecorder?.persistApproved();
+          persisted.resolve();
+        } catch (error) {
+          persisted.reject(error);
+          throw error;
+        }
+        return await delivery.promise;
+      })(),
+    ),
+  );
+  return {
+    ...delivery,
+    persisted: persisted.promise,
+    queueMessage,
+    settle: () => queueLifetime.cleanup(),
+  };
+}
+
+export function createChatDirectiveUserMessageReader(
+  readEntries: () => Array<Record<string, unknown>>,
+) {
+  return () =>
+    readEntries()
+      .map((entry) => entry.message)
+      .filter(
+        (candidate): candidate is Record<string, unknown> =>
+          typeof candidate === "object" &&
+          candidate !== null &&
+          (candidate as { role?: unknown }).role === "user",
+      );
 }

@@ -20,7 +20,7 @@ export function registerFreshDoctorDiagnosticTests({
 }: {
   mocks: {
     resolveEntrypoint: Mock;
-    runExec: Mock;
+    command: Mock;
     runUtf8: Mock<typeof import("../../process/exec.js").runUtf8CommandWithTimeout>;
   };
   tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
@@ -43,7 +43,7 @@ export function registerFreshDoctorDiagnosticTests({
     mocks.resolveEntrypoint.mockResolvedValue(script);
     const { runExec } =
       await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
-    mocks.runExec.mockImplementation(runExec);
+    mocks.command.mockImplementation(runExec);
     const { pluginUpdate: result } = await completePostCorePluginUpdate({
       ...updateOptions,
       root,
@@ -116,7 +116,7 @@ export function registerFreshDoctorDiagnosticTests({
     "retains a later public cause from %s without exposing multiline private details",
     async (stream) => {
       const secret = "sk-test-validation-secret-1234567890";
-      mocks.runExec.mockRejectedValueOnce(
+      mocks.command.mockRejectedValueOnce(
         Object.assign(new Error("private argv"), {
           failed: true,
           exitCode: 1,
@@ -159,7 +159,7 @@ export function registerFreshDoctorDiagnosticTests({
 
   it("keeps the bounded redacted diagnostic when output has no recognized public cause", async () => {
     const secret = "sk-test-validation-secret-1234567890";
-    mocks.runExec.mockRejectedValueOnce(
+    mocks.command.mockRejectedValueOnce(
       Object.assign(new Error("private argv"), {
         failed: true,
         exitCode: 1,
