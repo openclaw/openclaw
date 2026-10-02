@@ -6,7 +6,7 @@ import {
   NODE_WORKER_WORKSPACE_EXEC_COMMAND,
 } from "../../infra/node-commands.js";
 import {
-  formatNodeRunnerInventoryIssue,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
@@ -469,8 +469,9 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           const signal = AbortSignal.timeout(DEFAULT_COMMAND_TIMEOUT_MS);
           const { transport, node } = await findNode(entry, signal);
           if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
-            throw new Error(
-              formatNodeRunnerInventoryIssue(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
+            throw createNodeRunnerInventoryIssueError(
+              node.nodeId,
+              NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
             );
           }
           // Retirement retains only authority to stop this exact old scope, including after

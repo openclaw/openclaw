@@ -1546,13 +1546,11 @@ describe("initSessionState RawBody", () => {
             },
             cfg: { session: { store: storePath } } as OpenClawConfig,
           });
-          expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
-            expect.objectContaining({
-              kind: "created",
-              actorType: "human",
-              actorId: "profile-ada",
-            }),
-          );
+          const { events } = await listSessionStateEventsSince(sessionKey, "main", 0, 20);
+          expect(events.find((event) => event.kind === "created")).toMatchObject({
+            actorType: "human",
+            actorId: "profile-ada",
+          });
           expect(
             listSessionParticipantsReadOnly({ agentId: "main", storePath }).get(sessionKey),
           ).toBeUndefined();

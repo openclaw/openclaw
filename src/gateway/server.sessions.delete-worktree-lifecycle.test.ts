@@ -354,7 +354,7 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
       },
     });
     expect(
-      listSessionStateEventsSince(key, "main", 0, 20).events.filter(
+      (await listSessionStateEventsSince(key, "main", 0, 20)).events.filter(
         (event) => event.kind === "created",
       ),
     ).toEqual([

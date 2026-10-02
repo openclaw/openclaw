@@ -422,7 +422,11 @@ export async function resolveMedia(params: {
     contentType: saved.contentType,
     ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
     kind:
-      nativeKind !== "sticker" && saved.contentType?.startsWith("audio/") ? "audio" : nativeKind,
+      nativeKind !== "sticker" && saved.contentType?.startsWith("audio/")
+        ? "audio"
+        : nativeKind === "document" && saved.contentType?.startsWith("image/")
+          ? "image"
+          : nativeKind,
     fileUniqueId: metadata.fileRef.file_unique_id,
     savedAt: Date.now(),
     ...(stickerMetadata ? { stickerMetadata } : {}),

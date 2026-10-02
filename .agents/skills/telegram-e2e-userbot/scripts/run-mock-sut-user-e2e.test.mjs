@@ -170,6 +170,22 @@ test("forwardBurst rejects a non-DM scenario before acquiring credentials", asyn
   assert.doesNotMatch(result.stderr, /unexpected credential acquisition/);
 });
 
+test("gateway readiness budget rejects non-positive values before acquiring credentials", async () => {
+  for (const value of ["0", "-1", "1.5", "soon"]) {
+    const result = await runCommand(
+      process.execPath,
+      [
+        new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname,
+        "--gateway-ready-timeout-ms",
+        value,
+      ],
+      { env: {} },
+    );
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--gateway-ready-timeout-ms takes a positive integer/);
+  }
+});
+
 test("config patches restart before releasing their scenario barrier", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-config-patch-"));
   context.after(() => fs.rmSync(temp, { recursive: true, force: true }));

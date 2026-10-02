@@ -1,8 +1,5 @@
-import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   closeDeletedAgentDatabases,
@@ -15,7 +12,7 @@ import { retirePreparedModelRuntimeAgent } from "./prepared-model-runtime.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, readCatalogWorkers } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
 // Leaving WAL needs an exclusive lock, which any connection in this process still refuses.
@@ -31,67 +28,57 @@ function leaveWalMode(databasePath: string): unknown {
 describe("Gateway catalog worker agent database readers", () => {
   it("closes one agent's database readers without retiring the shared worker", async () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
-    const spawned: Worker[] = [];
-    const workerChannel = channel("worker_threads");
-    const recordWorker = (message: unknown) => {
-      if (isRecord(message) && message.worker instanceof Worker) {
-        spawned.push(message.worker);
-      }
-    };
+    const fixture = await createFleetFixture();
+    await Promise.all(
+      fixture.snapshots.map((snapshot) =>
+        loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
+      ),
+    );
+    const catalogWorkers = readCatalogWorkers();
+    expect(catalogWorkers).toHaveLength(1);
+    const [deleted, survivor] = fixture.agentIds.map((agentId) =>
+      path.join(fixture.entries[agentId]!.agentDir, "openclaw-agent.sqlite"),
+    );
+    await retirePreparedModelRuntimeAgent({
+      agentId: fixture.agentIds[0]!,
+      agentDirs: [path.dirname(deleted!)],
+    });
+    closeOpenClawAgentDatabasesForTest();
+
     try {
-      const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker));
-      await Promise.all(
-        fixture.snapshots.map((snapshot) =>
-          loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
-        ),
-      );
-      expect(spawned).toHaveLength(1);
-      const [deleted, survivor] = fixture.agentIds.map((agentId) =>
-        path.join(fixture.entries[agentId]!.agentDir, "openclaw-agent.sqlite"),
-      );
-      await retirePreparedModelRuntimeAgent({
-        agentId: fixture.agentIds[0]!,
-        agentDirs: [path.dirname(deleted!)],
-      });
-      closeOpenClawAgentDatabasesForTest();
+      await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
 
+      expect(leaveWalMode(deleted!)).toBe("delete");
+      const survivorProfileId = `fleet:${fixture.agentIds[1]!}`;
+      const survivorProfile = {
+        type: "api_key",
+        provider: "fleet-proof",
+        key: "synthetic-survivor-after-deletion",
+      };
+      const writer = new DatabaseSync(survivor!, { timeout: 0 });
       try {
-        await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
-
-        expect(leaveWalMode(deleted!)).toBe("delete");
-        const survivorProfileId = `fleet:${fixture.agentIds[1]!}`;
-        const survivorProfile = {
-          type: "api_key",
-          provider: "fleet-proof",
-          key: "synthetic-survivor-after-deletion",
-        };
-        const writer = new DatabaseSync(survivor!, { timeout: 0 });
-        try {
-          // A foreign commit must remain readable by the survivor's existing worker.
-          writer.exec("BEGIN IMMEDIATE");
-          expect(
-            writer
-              .prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?")
-              .run(
-                JSON.stringify({ version: 1, profiles: { [survivorProfileId]: survivorProfile } }),
-                "primary",
-              ).changes,
-          ).toBe(1);
-          writer.exec("COMMIT");
-        } finally {
-          writer.close();
-        }
-        const survivorAuth = await loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {
-          providerIds: [survivorProfile.provider],
-        });
-        expect(survivorAuth?.authStore.profiles[survivorProfileId]).toEqual(survivorProfile);
-        expect(spawned).toHaveLength(1);
-        expect(spawned[0]!.threadId).not.toBe(-1);
+        // A foreign commit must remain readable by the survivor's existing worker.
+        writer.exec("BEGIN IMMEDIATE");
+        expect(
+          writer
+            .prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?")
+            .run(
+              JSON.stringify({ version: 1, profiles: { [survivorProfileId]: survivorProfile } }),
+              "primary",
+            ).changes,
+        ).toBe(1);
+        writer.exec("COMMIT");
       } finally {
-        await reviveAgentDatabases([fixture.agentIds[0]!]);
+        writer.close();
       }
+      const survivorAuth = await loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {
+        providerIds: [survivorProfile.provider],
+      });
+      expect(survivorAuth?.authStore.profiles[survivorProfileId]).toEqual(survivorProfile);
+      expect(readCatalogWorkers()).toHaveLength(1);
+      expect(catalogWorkers[0]!.threadId).not.toBe(-1);
     } finally {
-      workerChannel.unsubscribe(recordWorker);
+      await reviveAgentDatabases([fixture.agentIds[0]!]);
     }
   });
 });

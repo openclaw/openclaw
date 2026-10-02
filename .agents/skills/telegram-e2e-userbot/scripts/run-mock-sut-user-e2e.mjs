@@ -127,6 +127,7 @@ function parseArgs(argv) {
     scenarioPath: "",
     scenario: null,
     sourceGateway: false,
+    gatewayReadyTimeoutMs: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -161,7 +162,13 @@ function parseArgs(argv) {
     else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
     else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
     else if (arg === "--source-gateway") args.sourceGateway = true;
-    else if (arg === "--help" || arg === "-h") {
+    else if (arg === "--gateway-ready-timeout-ms") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
+      }
+      args.gatewayReadyTimeoutMs = value;
+    } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
     } else {
@@ -223,6 +230,9 @@ function printHelp() {
 
 Runtime:
   --source-gateway     run the exact TypeScript checkout without building dist
+  --gateway-ready-timeout-ms N
+                       Gateway startup budget (default 45000 built, 300000 source);
+                       raise it on a heavily loaded host
 
 Chat selection:
   --dm                direct chat with the leased SUT
@@ -1182,7 +1192,11 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
         : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {
-        await waitForGatewayReady(child, args.gatewayPort, args.sourceGateway ? 300_000 : 45_000);
+        await waitForGatewayReady(
+          child,
+          args.gatewayPort,
+          args.gatewayReadyTimeoutMs ?? (args.sourceGateway ? 300_000 : 45_000),
+        );
         return child;
       } catch (error) {
         await stopChild(child);

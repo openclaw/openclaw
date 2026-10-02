@@ -10,7 +10,10 @@ import {
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  disposeSessionReadContexts,
+  initializeSessionReadContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
 import {
   activeRunContext,
   identifiedClient,
@@ -215,6 +218,7 @@ test("identity changes fence archive before cancellation and force fresh authori
     const reclaim = vi.fn();
     requestContext.workerSessionPlacementService = placementReader(() => placement);
     requestContext.workerPlacementDispatchService = { dispatch: vi.fn(), reclaim };
+    await initializeSessionReadContext(requestContext);
     const authorized = resolveSessionMutationAuthorization({
       client: archiver,
       method: "sessions.patch",
@@ -258,7 +262,7 @@ test("identity changes fence archive before cancellation and force fresh authori
         sharingSettled = true;
       }),
     );
-    await racePromiseWithAbortSignal(sharingCommitted.promise, signal);
+    await waitForArchivePhase(sharingCommitted.promise, sharing, signal);
     expect(isSessionLifecycleMutationActive(sharingTarget.storePath, [sessionKey, sessionId])).toBe(
       true,
     );
@@ -346,6 +350,7 @@ test.for(["creator", "changed identity"] as const)(
       });
       requestContext.workerSessionPlacementService = placementReader(() => placement);
       requestContext.workerPlacementDispatchService = { dispatch: vi.fn(), reclaim };
+      await initializeSessionReadContext(requestContext);
       const authorized = resolveSessionMutationAuthorization({
         client: archiver,
         method: "sessions.patch",

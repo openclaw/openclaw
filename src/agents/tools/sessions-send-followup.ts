@@ -13,6 +13,7 @@ import type { AgentStepSession } from "./agent-step.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  prepareGatewayToolCallerAssertion,
 } from "./gateway-caller-context.js";
 import { runWithGatewayToolCleanupContext } from "./in-process-gateway.js";
 import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
@@ -276,19 +277,24 @@ export async function dispatchSessionsSendFollowup(
   const targetSessionKey = start.ok
     ? (start.a2aSessionKey ?? params.sessionStoreTarget.canonicalKey)
     : undefined;
-  const watched =
+  let watched = false;
+  if (
     start.ok &&
     options.watch &&
     !params.expectedSessionId &&
     replyContext.requesterSessionKey &&
     targetSessionKey &&
     replyContext.requesterSessionKey !== targetSessionKey
-      ? registerSessionStateWatch({
-          watcherSessionKey: replyContext.requesterSessionKey,
-          targetSessionKey,
-          targetAgentId: params.sendParams.agentId,
-        })
-      : false;
+  ) {
+    watched = await registerSessionStateWatch(
+      {
+        watcherSessionKey: replyContext.requesterSessionKey,
+        targetSessionKey,
+        targetAgentId: params.sendParams.agentId,
+      },
+      { prepareCurrent: prepareGatewayToolCallerAssertion },
+    );
+  }
   return {
     start,
     completion,

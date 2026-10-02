@@ -67,6 +67,7 @@ import {
   readSubagentOutput,
   readSubagentTimeoutProgress,
 } from "./subagent-announce-output.js";
+import type { PreparedAnnounceResult } from "./subagent-announce-result.js";
 import {
   callSubagentLifecycleGateway,
   dispatchGatewayMethodInProcess,
@@ -197,11 +198,11 @@ async function runSubagentAnnounceFlowBound(
     childSessionEffectsAllowed() &&
     (await params.prepareChildSessionEffects?.()) !== false &&
     childSessionEffectsAllowed();
-  let isOwnResultCurrent: (() => boolean) | undefined;
+  let ownResult: PreparedAnnounceResult | undefined;
   let isChildResultsCurrent = () => true;
   const completionDeliveryAllowed = () =>
     params.isCompletionDeliveryAllowed?.() !== false &&
-    (isOwnResultCurrent?.() ?? true) &&
+    (ownResult?.isCurrent() ?? true) &&
     isChildResultsCurrent();
   let childSessionId: string | undefined;
   let childSessionLifecycleRevision: string | undefined;
@@ -368,9 +369,8 @@ async function runSubagentAnnounceFlowBound(
 
     const childRun = subagentRuns.get(params.childRunId);
     if (childRun?.childSessionKey === params.childSessionKey && completionDeliveryAllowed()) {
-      const prepared = await readSubagentRunAnnounceResult(childRun);
-      reply = prepared.text;
-      isOwnResultCurrent = prepared.isCurrent;
+      ownResult = await readSubagentRunAnnounceResult(childRun);
+      reply = ownResult.text;
     }
 
     if (params.terminalReply?.disposition === "silent") {
@@ -441,7 +441,7 @@ async function runSubagentAnnounceFlowBound(
     }
 
     const childSessionCurrent = await prepareChildSessionEffects();
-    if (!isOwnResultCurrent && (!childSessionCurrent || !childSessionEffectsAllowed())) {
+    if (!ownResult && (!childSessionCurrent || !childSessionEffectsAllowed())) {
       reply = params.roundOneReply ?? params.fallbackReply;
       if (
         expectsCompletionMessage &&

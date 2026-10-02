@@ -147,10 +147,10 @@ import {
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
 import { cliBackendLog } from "./log.js";
-import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "./mcp-grant-context.js";
+import { buildCliMcpGrantContext } from "./mcp-grant-context.js";
 import { resolveCliCatalogCapabilities } from "./model-capabilities.js";
 import { CLAUDE_CLI_CONTEXT_MODEL_ALIASES, detectNodeClaudePlacement } from "./prepare-claude.js";
-import { prepareCliMcpToolProjection } from "./prepare-mcp.js";
+import * as mcp from "./prepare-mcp.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
   buildCliTurnAppendContext,
@@ -949,11 +949,14 @@ async function prepareCliRunContextWithinReadFence(
     );
   }
   const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
-  const nodeWorkshopEnabled =
-    nodeClaudePlacement &&
-    !skipsTurnPreparation &&
-    params.disableTools !== true &&
-    params.skillLibraryAuthoring !== undefined;
+  const { nodeWorkshopEnabled, hostOwnedTools } = mcp.resolveCliMcpToolOwnership(params, {
+    backend: backendResolved,
+    enabled: mcpDeliveryCaptureEnabled,
+    nodePlacement: nodeClaudePlacement,
+    rooted: Boolean(rootedExecution),
+    skipPreparation: skipsTurnPreparation,
+    sideQuestion: isSideQuestion,
+  });
   const shouldMaterializeRuntimePolicy =
     runtimeToolsAllowPolicy !== undefined &&
     !nodeClaudePlacement &&
@@ -988,11 +991,12 @@ async function prepareCliRunContextWithinReadFence(
   params.assertCurrent?.();
   const mcpProjection =
     (bundleMcpEnabled || shouldMaterializeRuntimePolicy || nodeWorkshopEnabled) && mcpContextBase
-      ? await prepareCliMcpToolProjection(params, {
+      ? await mcp.prepareCliMcpToolProjection(params, {
           agentId: workspaceResolution.agentId,
           context: mcpContextBase,
           runtimeToolsAllowPolicy,
           rootedToolsAllow,
+          defaultMediatedToolNames: hostOwnedTools,
           scope: {
             cfg: runConfig,
             rootedExecution,
@@ -1101,25 +1105,14 @@ async function prepareCliRunContextWithinReadFence(
       tool.resultContentSource ? [[tool.name, tool.resultContentSource] as const] : [],
     ),
   );
-  // A restricted selectable tool surface must also bound the MCP bundle:
-  // CLI-side --allowedTools is advisory under bypass permission modes, so
-  // user/plugin MCP servers must not be merged into the run's config at all.
-  // The loopback server (scoped by the grant allowlist) becomes the complete
-  // tool universe for the run.
-  const restrictedLoopbackToolsAllow =
-    params.cliToolAvailability?.openClaw ??
-    (promptBuildRestrictsTools ? projectedTools.map((tool) => tool.name) : undefined);
-  // Native tools on nodes stay local.
-  const projectNativeToolAuthority =
-    !skipsTurnPreparation && params.disableTools !== true && !nodeClaudePlacement
-      ? backendResolved.projectNativeToolAuthority
-      : undefined;
-  const mcpGrant = finalizeCliMcpGrant(
-    mcpContextBase,
-    restrictedLoopbackToolsAllow,
-    Boolean(projectNativeToolAuthority),
-    params,
-  );
+  const { mcpGrant, projectNativeToolAuthority, exclusiveTools } = mcp.prepareCliMcpGrant(params, {
+    context: mcpContextBase,
+    tools: projectedTools,
+    promptBuildRestrictsTools,
+    hostOwnedTools,
+    nativeAuthorityAllowed: !skipsTurnPreparation && !nodeClaudePlacement,
+    projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
+  });
   const toolBoundExtraSystemPromptHash = params.cliToolAvailability
     ? hashCliSessionText(
         JSON.stringify([
@@ -1312,10 +1305,10 @@ async function prepareCliRunContextWithinReadFence(
       // MCP servers would let the run reach tools outside its allowlist.
       ...(systemAgentMcpConfig
         ? { exclusiveConfig: systemAgentMcpConfig }
-        : restrictedLoopbackToolsAllow && loopbackServerConfig
+        : exclusiveTools && loopbackServerConfig
           ? { exclusiveConfig: loopbackServerConfig }
           : {}),
-      additionalConfig: restrictedLoopbackToolsAllow ? undefined : loopbackServerConfig,
+      additionalConfig: exclusiveTools ? undefined : loopbackServerConfig,
       env:
         mcpLoopbackRuntime && mcpClientGrant
           ? {
@@ -1324,7 +1317,7 @@ async function prepareCliRunContextWithinReadFence(
             }
           : undefined,
       warn: (message) => cliBackendLog.warn(message),
-      ...(!systemAgentMcpConfig && !restrictedLoopbackToolsAllow
+      ...(!systemAgentMcpConfig && !exclusiveTools
         ? {
             nativeMcpPolicy: {
               sessionId: params.sessionId,
@@ -1894,6 +1887,7 @@ async function prepareCliRunContextWithinReadFence(
       workspaceDir,
       cwd,
       backendResolved,
+      hostOwnedTools,
       preparedBackend: preparedBackendFinal,
       ...(loopbackServerConfig &&
       !systemAgentMcpConfig &&

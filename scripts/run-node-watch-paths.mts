@@ -51,6 +51,8 @@ export const normalizeRunNodePath = (filePath: unknown): string =>
 export const isIgnoredRunNodeSourcePath = (relativePath: string): boolean =>
   relativePath.endsWith(".test.ts") ||
   relativePath.endsWith(".test.tsx") ||
+  relativePath.endsWith(".test-utils.ts") ||
+  relativePath.endsWith(".test-utils.tsx") ||
   relativePath.endsWith("test-helpers.ts");
 
 const isBuildRelevantSourcePath = (relativePath: string): boolean =>

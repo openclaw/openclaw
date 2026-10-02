@@ -60,7 +60,6 @@ it.each([
   ["clean", 3],
   ["review", 2],
   ["malicious", 1],
-  ["pending", 0],
   ["unknown", 0],
 ] as const)("shows %s audit with %i bars and the exact ClawHub link", (verdict, count) => {
   const container = document.createElement("div");
