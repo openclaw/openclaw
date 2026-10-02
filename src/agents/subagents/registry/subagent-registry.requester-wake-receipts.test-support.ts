@@ -435,6 +435,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         );
         const database = openOpenClawStateDatabase();
         // Beta's queued metadata write and the later settled outcome remain allowed.
+        // The isolated test database owns trigger cleanup after its workers drain.
         database.db.exec(
           "CREATE TRIGGER reject_wake_replay BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'run-alpha' AND json_extract(NEW.payload_json, '$.requesterSettleWake.status') = 'dispatching' BEGIN SELECT RAISE(ABORT, 'requester wake write replayed'); END",
         );
@@ -451,7 +452,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
           expect(heldReceipts.executions.filter((phase) => phase === "transition")).toHaveLength(1);
           expect(heldReceipts.executions).not.toContain("reconcile");
         } finally {
-          database.db.exec("DROP TRIGGER reject_wake_replay");
           heldReceipts.transition.release.resolve();
           await Promise.allSettled([successor]);
         }
@@ -470,7 +470,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
       const successor = driftCompletionCleanup(member.entry);
       void successor.catch(() => {});
       const database = openOpenClawStateDatabase();
-      // The committed whole-wave outcome must not be replayed while Beta's cleanup advances.
+      // Guard the committed outcome through cleanup; database teardown removes the trigger.
       database.db.exec(
         "CREATE TRIGGER reject_outcome_replay BEFORE UPDATE ON subagent_runs WHEN NEW.run_id = 'run-alpha' BEGIN SELECT RAISE(ABORT, 'requester outcome write replayed'); END",
       );
@@ -483,7 +483,6 @@ export function registerRequesterWakeReceiptBoundaryTests({
         expect(heldReceipts.executions.filter((phase) => phase === "outcome")).toHaveLength(1);
         expect(heldReceipts.executions).not.toContain("reconcile");
       } finally {
-        database.db.exec("DROP TRIGGER reject_outcome_replay");
         heldReceipts.releaseAll();
         await Promise.allSettled([successor]);
       }

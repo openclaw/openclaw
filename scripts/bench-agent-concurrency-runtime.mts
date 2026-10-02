@@ -1,9 +1,7 @@
 import { mock } from "node:test";
-import type {
-  SubagentRunMutation,
-  SubagentRunMutationOptions,
-  SubagentRunRecord,
-} from "../src/agents/subagents/registry/subagent-registry.types.js";
+import type { SubagentRunMutation } from "../src/agents/subagents/registry/subagent-registry-mutation.types.js";
+import type { SubagentRunMutationOptions } from "../src/agents/subagents/registry/subagent-registry-persistence.types.js";
+import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import type { callGateway } from "../src/gateway/call.js";
 
 /** Install before the worker imports the registry; keep these bindings across its samples. */
@@ -44,8 +42,10 @@ export async function installBenchmarkRegistryRuntime(mode: "memory" | "durable"
     const persistence =
       await import("../src/agents/subagents/registry/subagent-registry-persistence.js");
     if (mode === "memory") {
-      const { bindSubagentRunRecord, subagentRunRowVersion } =
+      const { bindSubagentRunRecord } =
         await import("../src/agents/subagents/registry/subagent-registry.store.codec.js");
+      const { subagentRunRowVersion } =
+        await import("../src/agents/subagents/registry/subagent-registry.store.row.js");
       const mutate = async <P extends SubagentRunMutation<unknown>>(
         runIds: readonly string[],
         plan: (rows: ReadonlyMap<string, SubagentRunRecord>) => P,
