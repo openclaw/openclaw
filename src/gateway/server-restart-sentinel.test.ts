@@ -19,7 +19,7 @@ import {
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../infra/update-run-ledger.js";
-import { renderUpdateRunNotice, renderUpdateRunReport } from "../infra/update-run-report.js";
+import { renderUpdateRunNotice, renderUpdateRunSummary } from "../infra/update-run-notice.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -846,13 +846,7 @@ describe("scheduleRestartSentinelWake", () => {
       if (terminal) {
         expect(result.finishedAtMs).toBe(existing.finishedAtMs);
       }
-      const message = renderUpdateRunReport(
-        result,
-        terminal ? { currentHealth: { kind: "unavailable" } } : {},
-      ).markdown;
-      if (terminal) {
-        expect(message).toContain("Current health unavailable");
-      }
+      const message = renderUpdateRunSummary(result);
       if (channel === "webchat") {
         expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
           expect.objectContaining({ text: message }),
@@ -916,7 +910,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: `🔁 Back on v${resolveRuntimeServiceVersion()}, verifying…`,
+          text: "🔁 Checking that OpenClaw is ready…",
         }),
       );
       if (cliFinished) {
@@ -966,7 +960,7 @@ describe("scheduleRestartSentinelWake", () => {
       expect(completed.verification.noticeDelivered).toBe(true);
       expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: renderUpdateRunReport(completed).markdown,
+          text: renderUpdateRunSummary(completed),
           idempotencyKey: `update-run-finished:${record.runId}`,
         }),
       );
@@ -1071,7 +1065,7 @@ describe("scheduleRestartSentinelWake", () => {
       await Promise.all(publications);
       expect(publicationErrors).toEqual([]);
       const finishedRun = getUpdateRun(updateRun.runId)!;
-      const report = renderUpdateRunReport(finishedRun).markdown;
+      const report = renderUpdateRunSummary(finishedRun);
       expect.soft(finishedRun?.verification.noticeDelivered).toBe(true);
       expect.soft(mocks.enqueueSessionDelivery).not.toHaveBeenCalled();
       expect.soft(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -2644,7 +2638,11 @@ describe("scheduleRestartSentinelWake", () => {
         to: "123",
         accountId: "bot",
         threadId: "7",
-        payloads: [{ text: "✅ OpenClaw updated." }],
+        payloads: [
+          {
+            text: "✅ OpenClaw updated.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+          },
+        ],
       }),
     );
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];
