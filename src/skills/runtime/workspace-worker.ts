@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createFileWatchNotifier } from "../../infra/file-watch-notifier.js";
 import type { applyExtractedSkillRoot } from "../lifecycle/archive-install.js";
 import type * as Uninstall from "../lifecycle/clawhub-uninstall.js";
@@ -59,11 +60,11 @@ export async function serveWorkspaceSkills(options: {
           request.publicationCheckpoints === true
             ? async () => {
                 await write({ type: "prepared", phase: "apply" });
-                const reply = (await lines.read()) as Decision;
+                const reply = await lines.read();
                 if (reply.decision === null) {
                   return;
                 }
-                if (typeof reply.decision?.error !== "string") {
+                if (!isRecord(reply.decision) || typeof reply.decision.error !== "string") {
                   throw new Error("Invalid Gateway publication decision");
                 }
                 throw new Error(reply.decision.error);

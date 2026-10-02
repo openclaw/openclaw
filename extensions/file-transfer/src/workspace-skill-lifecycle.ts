@@ -40,6 +40,7 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
     if (!envelope || !("result" in envelope)) {
       throw new Error("Invalid Skill tracking response");
     }
+    // SAFETY: The same-version workspace.skills worker serializes the selected native ClawHub result; the envelope is checked above.
     return envelope.result as T;
   }
   async function interactive<T>(
@@ -48,8 +49,7 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
     decide: (event: Record<string, unknown>) => Promise<unknown>,
     beforeStart?: () => Promise<void>,
   ): Promise<T> {
-    let result: T | undefined;
-    let completed = false;
+    let completed: { result: T } | undefined;
     await runNodeWorkspaceWorker(
       options,
       "workspace.skills",
@@ -74,8 +74,8 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
           }
           await reply({ decision: decision ?? null });
         } else if (event?.type === "result" && !completed) {
-          result = event.result as T;
-          completed = true;
+          // SAFETY: Same-version applyRoot/removeSkill emit their native owner's result; the event discriminator is checked above.
+          completed = { result: event.result as T };
         } else {
           throw new Error("Invalid Skill lifecycle response");
         }
@@ -85,7 +85,7 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
     if (!completed) {
       throw new Error("Skill lifecycle ended without a result");
     }
-    return result as T;
+    return completed.result;
   }
   const tracking = <T>(operation: string, params: { workspaceDir: string }) =>
     call<T>(operation, { ...params, workspaceDir: workspace(params.workspaceDir) });
@@ -164,8 +164,12 @@ export function createNodeSkillLifecycle(options: NodeWorkspaceWorkerOptions): L
           { plan, reportChange: Boolean(callbacks.onCommittedChange) },
           async (event) => {
             if (event.phase === "committed") {
+              // SAFETY: removeSkill forwards the native uninstall owner's committed event; only its workspace path is translated for the hook.
+              const committed = event.event as Parameters<
+                NonNullable<typeof callbacks.onCommittedChange>
+              >[0];
               await callbacks.onCommittedChange?.({
-                ...(event.event as Parameters<NonNullable<typeof callbacks.onCommittedChange>>[0]),
+                ...committed,
                 workspaceDir: options.workspaceDir,
               });
             } else if (event.phase === "rollback") {
