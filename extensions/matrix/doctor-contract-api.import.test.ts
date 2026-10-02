@@ -37,6 +37,7 @@ it("completes absent legacy-state checks without loading client runtimes", async
   };
   for (const id of [
     "matrix-account-sqlite-schema",
+    "matrix-crypto-unsafe-state",
     "matrix-storage-meta-json-to-plugin-state",
     "matrix-sync-cache-json-to-plugin-state",
     "matrix-legacy-crypto-migration-json-to-plugin-state",

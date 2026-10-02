@@ -268,6 +268,35 @@ const legacyCryptoMigration = defineMatrixLegacyFileMigration({
 });
 
 export const stateMigrations: PluginDoctorStateMigration[] = [
+  {
+    id: "matrix-crypto-unsafe-state",
+    label: "Matrix crypto unsafe final state",
+    async detectLegacyState(params) {
+      const { listMatrixCryptoUnsafeState } =
+        await import("./src/matrix/crypto-unsafe-state-doctor.js");
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir);
+      return roots.length > 0
+        ? {
+            preview: roots.map(
+              (root) =>
+                `Matrix crypto store is blocked after unsafe final save: ${root}. Run openclaw matrix doctor inspect; recovery is never automatic.`,
+            ),
+          }
+        : null;
+    },
+    async migrateLegacyState(params) {
+      const { listMatrixCryptoUnsafeState } =
+        await import("./src/matrix/crypto-unsafe-state-doctor.js");
+      const roots = await listMatrixCryptoUnsafeState(params.stateDir);
+      return {
+        changes: [],
+        warnings: roots.map(
+          (root) =>
+            `Matrix crypto store remains blocked: ${root}. Inspect with openclaw matrix doctor inspect; explicit recovery may roll back keys.`,
+        ),
+      };
+    },
+  },
   matrixAccountStateSchemaMigration,
   {
     id: "matrix-credentials-json-to-plugin-state",

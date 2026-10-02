@@ -1,6 +1,7 @@
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { toStringifiedError as toRetirementError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { getMatrixRuntimeLifecycle, type MatrixRuntimeLifecycle } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
@@ -70,8 +71,15 @@ type SharedMatrixClientParams = {
   role?: MatrixClientLeaseRole;
 };
 
-const sharedClientStates = new Map<string, SharedMatrixClientState>();
-const sharedClientPromises = new Map<string, Promise<SharedMatrixClientState>>();
+const sharedClientRegistry = resolveGlobalSingleton(
+  Symbol.for("openclaw.matrix.shared-client-registry"),
+  () => ({
+    states: new Map<string, SharedMatrixClientState>(),
+    promises: new Map<string, Promise<SharedMatrixClientState>>(),
+  }),
+);
+const sharedClientStates = sharedClientRegistry.states;
+const sharedClientPromises = sharedClientRegistry.promises;
 
 function buildSharedClientKey(auth: MatrixAuth): string {
   // Serialize the tuple as a whole: Matrix URLs and credentials may contain `|`,

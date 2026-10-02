@@ -175,6 +175,18 @@ async function dumpIndexedDatabases(databasePrefix?: string): Promise<IdbDatabas
   return snapshot;
 }
 
+async function clearAccountIndexedDatabases(databasePrefix?: string): Promise<void> {
+  if (!databasePrefix) {
+    return;
+  }
+  const names = await fakeIndexedDB.databases();
+  for (const { name } of names) {
+    if (name?.startsWith(`${databasePrefix}::`)) {
+      await idbReq(fakeIndexedDB.deleteDatabase(name));
+    }
+  }
+}
+
 async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise<void> {
   const idb = fakeIndexedDB;
   for (const dbSnap of snapshot) {
@@ -256,6 +268,7 @@ async function readCanonicalSnapshotJson(
 export async function restoreIdbFromDisk(
   snapshotPath?: string,
   stateRuntime?: MatrixSnapshotStateRuntime,
+  databasePrefix?: string,
 ): Promise<boolean> {
   const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
   let callbackStarted = false;
@@ -269,12 +282,15 @@ export async function restoreIdbFromDisk(
         snapshotStateRuntime,
       );
       if (!storedSnapshotJson) {
+        await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
       const snapshot = parseSnapshotPayload(storedSnapshotJson);
       if (!snapshot) {
+        await clearAccountIndexedDatabases(databasePrefix);
         return false;
       }
+      await clearAccountIndexedDatabases(databasePrefix);
       await restoreIndexedDatabases(snapshot);
       LogService.info(
         "IdbPersistence",
@@ -290,6 +306,9 @@ export async function restoreIdbFromDisk(
       throwLegacySnapshotMigrationRequired();
     }
     LogService.warn("IdbPersistence", "Failed to restore IndexedDB snapshot from SQLite:", err);
+    if (databasePrefix) {
+      throw err;
+    }
     return false;
   }
 }

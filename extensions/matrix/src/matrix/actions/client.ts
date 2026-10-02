@@ -11,7 +11,7 @@ const loadMatrixActionClientRuntime = createLazyRuntimeModule(
 export async function withResolvedActionClient<T>(
   opts: MatrixActionClientOpts,
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
-  mode: MatrixClientReleaseMode = "stop",
+  mode: MatrixClientReleaseMode = "persist",
 ): Promise<T> {
   const { withResolvedRuntimeMatrixClient } = await loadMatrixActionClientRuntime();
   return await withResolvedRuntimeMatrixClient(opts, run, mode);

@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { authFor, createMockClient } from "./shared.test-support.js";
 import type { MatrixAuth } from "./types.js";
@@ -154,6 +155,29 @@ describe("shared Matrix client generations", () => {
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
 
     await Promise.all([main.release(), secondMain.release(), ops.release()]);
+  });
+
+  it("shares one client generation across duplicate module identities", async () => {
+    const moduleA = await importFreshModule<typeof import("./shared.js")>(
+      import.meta.url,
+      "./shared.js?scope=duplicate-a",
+    );
+    const moduleB = await importFreshModule<typeof import("./shared.js")>(
+      import.meta.url,
+      "./shared.js?scope=duplicate-b",
+    );
+    const auth = authFor("main");
+    const client = createMockClient("shared");
+    createMatrixClientMock.mockResolvedValue(client);
+
+    const first = await moduleA.acquireSharedMatrixClient({ auth, startClient: false });
+    const second = await moduleB.acquireSharedMatrixClient({ auth, startClient: false });
+
+    expect(first.client).toBe(client);
+    expect(second.client).toBe(client);
+    expect(createMatrixClientMock).toHaveBeenCalledOnce();
+    await Promise.all([first.release(), second.release()]);
+    expect(client.stopAndPersist).toHaveBeenCalledOnce();
   });
 
   it("retires only the requested account through the owner", async () => {
