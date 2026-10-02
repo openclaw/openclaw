@@ -1093,6 +1093,77 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   });
 
   it.each([
+    {
+      config: "test/vitest/vitest.plugins.config.ts",
+      dir: "src/plugins",
+      targets: ["src/plugins/plugin-module-generation.interop.test.ts"],
+      sibling: "src/plugins/plugin-module-generation.test.ts",
+      glob: "plugin-module-generation*.test.ts",
+    },
+    {
+      config: "test/vitest/vitest.tooling.config.ts",
+      dir: "",
+      targets: [
+        "test/scripts/oxlint-config.test.ts",
+        "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
+      ],
+      sibling: "test/scripts/oxlint-report-memory.test.ts",
+      glob: "test/scripts/*.test.ts",
+    },
+  ])("admits only the qualified complete selections in $config", (row) => {
+    for (const policy of ["node", "bun-compatible", "dual"] as const) {
+      const expected =
+        policy === "node"
+          ? [{ runtime: "node" }]
+          : policy === "dual"
+            ? [{ runtime: "node" }, { runtime: "bun" }]
+            : [{ runtime: "bun" }];
+      for (const targets of [row.targets, ...row.targets.map((target) => [target])]) {
+        for (const selection of [
+          { targets },
+          { configs: [row.config], includePatterns: targets },
+          {
+            configs: [row.config],
+            includePatterns: targets.map((target) =>
+              row.dir ? target.slice(row.dir.length + 1) : target,
+            ),
+          },
+        ]) {
+          expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual(expected);
+          expect(ciTestShardRequiresBun(selection, policy)).toBe(policy !== "node");
+          expect(
+            resolveCiTestRuntimeSelections({ ...selection, vitestArgs: ["--shard=1/2"] }, policy),
+          ).toEqual([{ runtime: "node" }]);
+        }
+      }
+      for (const includePatterns of [undefined, [], [row.glob]]) {
+        const selection = { configs: [row.config], includePatterns };
+        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([
+          { runtime: "node" },
+          ...(policy === "dual" ? [{ runtime: "bun", includePatterns: row.targets }] : []),
+        ]);
+        expect(ciTestShardRequiresBun(selection, policy)).toBe(policy === "dual");
+      }
+      for (const target of row.targets) {
+        const selection = { configs: [row.config], includePatterns: [target, row.sibling] };
+        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([
+          { runtime: "node" },
+          ...(policy === "dual" ? [{ runtime: "bun", includePatterns: [target] }] : []),
+        ]);
+        expect(ciTestShardRequiresBun(selection, policy)).toBe(policy === "dual");
+      }
+      for (const selection of [
+        { targets: [row.sibling] },
+        { targets: [...row.targets, row.sibling] },
+        { configs: [row.config], includePatterns: [row.sibling] },
+        { configs: [row.config], includePatterns: ["src/infra/worker-task-pool.memory.test.ts"] },
+      ]) {
+        expect(resolveCiTestRuntimeSelections(selection, policy)).toEqual([{ runtime: "node" }]);
+      }
+    }
+  });
+
+  it.each([
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--shard=1/2"]' } },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--root=another-root"]' } },
     { env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--project=another-project"]' } },

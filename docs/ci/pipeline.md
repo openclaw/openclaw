@@ -190,11 +190,14 @@ test-project planner to find their owners. The runtime owner admits only qualifi
 configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
-Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`)
-also supports Bun when it is the entire exact selection in `agents-support`.
-Mixed and broad PR selections retain their original Node invocation. Dual-runtime
-validation keeps that complete Node selection and adds only the qualified recovery
-file when the original include patterns select it.
+Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
+plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
+oxlint configuration (`test/scripts/oxlint-config.test.ts`), and update timeout
+diagnostics (`test/scripts/upgrade-survivor-timeout-diagnostics.test.ts`) also
+support Bun when qualified files make up the entire exact selection in their
+existing scoped owner. Mixed and broad PR selections retain their original Node
+invocation. Dual-runtime validation keeps that complete Node selection and adds
+only the qualified files selected by the original include patterns.
 
 The gateway-client leaf config also supports Bun. Its existing ordered
 gateway-core/gateway-client stripes run the core portion on Node and the client
@@ -267,12 +270,16 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `fc90aa4d9c5dac37f7a63a04f8bd2e25df930c60` with WebKit
+The pinned build pairs Bun `b3684189fe1f3592dfc5f9774060b405a243d9a6` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261001-fc90aa4d9c-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `17c9ecf9eb` pin. The build adds fixes for
-compile-cache idle wakeups, `v8.queryObjects`, idempotent native readable
-`ref`/`unref`, the default `module-sync` condition, and `process.once` wrapper identity.
+`openclaw-v1.4.3-20261002-b3684189fe-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `fc90aa4d9c` pin. The build fixes post-script
+`--` argument separators, hidden CommonJS data exports, and truncated large writes
+through native standard I/O pipes. It also switches Darwin file watches to kqueue;
+that change does not affect Linux CI.
+It retains fixes for compile-cache idle wakeups, `v8.queryObjects`, idempotent
+native readable `ref`/`unref`, the default `module-sync` condition, and
+`process.once` wrapper identity.
 It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
