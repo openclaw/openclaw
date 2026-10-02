@@ -5,6 +5,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import type { DatabaseSync } from "node:sqlite";
 import { finished } from "node:stream/promises";
+import { stripPluginModelCatalogCredentials } from "../agents/plugin-model-catalog-repair.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
@@ -165,6 +166,7 @@ async function serializeGitBackupTable(
   table: string,
   outputPath?: string,
   rowFilter?: (row: Record<string, unknown>) => boolean,
+  redactCatalogCredentials = false,
 ): Promise<GitBackupTableDigest> {
   const columns = readTableColumns(database, table);
   if (columns.length === 0) {
@@ -206,6 +208,17 @@ async function serializeGitBackupTable(
       }
       if (rowFilter && !rowFilter(source)) {
         continue;
+      }
+      if (
+        redactCatalogCredentials &&
+        (source.scope === "plugin-model-catalog-v1" ||
+          source.scope === "plugin-model-catalog-migration-v1") &&
+        typeof source.value_json === "string"
+      ) {
+        source.value_json = stripPluginModelCatalogCredentials(source.value_json);
+        if (source.value_json === null) {
+          continue;
+        }
       }
       const encoded: Record<string, unknown> = {};
       for (const column of columns) {
@@ -308,6 +321,7 @@ export async function dumpGitBackupDatabase(params: {
         table,
         path.join(tablesPath, `${table}.jsonl`),
         rowFilter,
+        identity.role === "agent" && params.excludeSecrets === true && table === "cache_entries",
       );
     }
     const manifest: GitBackupManifest = {

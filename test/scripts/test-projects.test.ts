@@ -1522,8 +1522,9 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     "src/gateway/health/collector.queue-health.test.ts",
+    "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
     "src/gateway/server-methods/server-methods.test.ts",
-  ])("routes health SQLite consumer %s exactly once to its broker owner", (testFile) => {
+  ])("routes Gateway SQLite consumer %s exactly once to its broker owner", (testFile) => {
     expectSingleVitestRunPlan(buildVitestRunPlans([testFile]), {
       config: "test/vitest/vitest.gateway-database-workers.config.ts",
       includePatterns: [testFile],
@@ -1591,6 +1592,14 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each([
     "src/agents/command/session-store.test.ts",
+    "src/agents/models-config.providers.endpoint.test.ts",
+    "src/agents/models-config.root-authorship.test.ts",
+    "src/agents/models-config.runtime-source-snapshot.test.ts",
+    "src/agents/models-config.write-serialization.test.ts",
+    "src/agents/plugin-model-catalog-auth.test.ts",
+    "src/agents/plugin-model-catalog.test.ts",
+    "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
     "src/state/openclaw-state-db.test.ts",
     "src/worker/worker.runtime.test.ts",
   ])("routes native shared-state consumer %s exactly once to its broker owner", (testFile) => {

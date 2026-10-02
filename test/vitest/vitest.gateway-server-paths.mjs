@@ -106,6 +106,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-store.worker.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
+  "src/gateway/provider-auth-account-relogin.persistence.integration.test.ts",
   "src/gateway/server-methods/agent.create-event.test.ts",
   "src/gateway/server-methods/approval.legacy-authority.test.ts",
   "src/gateway/server-methods/approval.request-authority.test.ts",
