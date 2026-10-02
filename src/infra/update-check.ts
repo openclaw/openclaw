@@ -1,6 +1,7 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { UpdateImmutableInstall } from "../../packages/gateway-protocol/src/schema/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectPackageManager } from "./detect-package-manager.js";
 import { isMissingPathError } from "./errno.js";
@@ -65,6 +66,7 @@ type GitUpdateStatus = {
 
 export type UpdateInstallIdentity = {
   installKind: UpdateInstallKind;
+  immutable?: UpdateImmutableInstall;
   installOwner?: InstallOwner;
   git?: Pick<GitUpdateStatus, "branch" | "tag" | "error">;
 };
@@ -112,6 +114,7 @@ type NpmTagStatus = {
 export type UpdateCheckResult = {
   root: string | null;
   installKind: UpdateInstallKind;
+  immutable?: UpdateImmutableInstall;
   installOwner?: InstallOwner;
   packageManager: PackageManager;
   git?: GitUpdateStatus;
@@ -249,6 +252,11 @@ async function resolveUpdateInstallOwnership(
   options.signal?.throwIfAborted();
   if (installOwner) {
     return { installKind: "host", installOwner };
+  }
+  const { inspectImmutableInstall } = await import("./update-immutable-install.js");
+  const immutable = await inspectImmutableInstall(root);
+  if (immutable) {
+    return { installKind: "immutable", immutable };
   }
   // An exact checkout root needs a marker unless Git ownership is supplied
   // explicitly. Avoid spawning Git for packages nested inside another checkout.
@@ -659,13 +667,16 @@ export async function checkUpdateStatus(params: {
     };
   }
 
-  const { installKind, installOwner } = await resolveUpdateInstallOwnership(root, {
+  const { installKind, installOwner, immutable } = await resolveUpdateInstallOwnership(root, {
     signal: params.signal,
     timeoutMs: params.timeoutMs,
     onGitProbeTimeout: params.onGitProbeTimeout,
   });
   if (installKind === "host") {
     return { root, installKind, installOwner, packageManager: "unknown" };
+  }
+  if (installKind === "immutable") {
+    return { root, installKind, immutable, packageManager: "unknown" };
   }
   const isGit = installKind === "git";
   if (installKind === "unknown") {

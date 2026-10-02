@@ -45,6 +45,12 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
   if (updateStatus.installKind === "host") {
     reportHostOwnedUpdate(updateStatus.installOwner ?? null, {});
   }
+  if (updateStatus.installKind === "immutable") {
+    defaultRuntime.log(
+      "Use openclaw update to prepare official main, or openclaw update --sha <full-sha> for an exact revision. Immutable activation is not available yet.",
+    );
+    return;
+  }
 
   const configChannel = configSnapshot.valid
     ? normalizeUpdateChannel(configSnapshot.config.update?.channel)

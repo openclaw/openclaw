@@ -202,6 +202,56 @@ and leaves the installed package in place. Close processes holding that installa
 and check its permissions before retrying. This protection belongs to the installed
 updater; a newer candidate cannot add it to an older updater already running.
 
+## Immutable release installations
+
+An explicitly adopted Linux installation can prepare sealed releases with
+`openclaw update`. Its root contains `releases/<full-commit-sha>` and a `current`
+symlink selecting the running generation. A matching directory layout alone does
+not grant update ownership.
+
+This first slice prepares only: it resolves official `main` once, or accepts an
+exact `--sha <40-hex-commit>`, builds off-path, verifies and seals the candidate,
+and records its preparation. It never publishes `current`, stops or restarts the
+service, runs live migrations, or removes retained generations. Preparation
+failure leaves the serving generation in place. An already-current target skips
+the build. JSON distinguishes `prepared`, `already-current`, `dry-run`, and
+`error`; `prepared` does not mean activated.
+
+`openclaw update --dry-run` reports the immutable target without adoption,
+preparation, or publication. `openclaw update status` includes the current and
+prepared generation identities. Immutable preparation does not switch stored
+channels and rejects package targets such as `--tag`. `--sha` is available only
+for adopted immutable installations. Gateway `update.run` and `update repair`
+refuse activation or post-update maintenance in this slice and direct the
+installation owner to preparation through the CLI.
+
+Explicit adoption belongs to the existing updater CLI:
+
+```bash
+openclaw update adopt-immutable \
+  --root /opt/example \
+  --service example.service \
+  --account openclaw \
+  --state-dir /var/lib/example \
+  --config /etc/example/openclaw.json \
+  --runtime /usr/bin/node \
+  --previous-updater-stopped
+```
+
+Run adoption as root only after the previous updater has settled and stopped
+scheduling. The acknowledgement does not stop another updater for you. Adoption
+verifies the existing systemd unit, fixed nonroot service account, explicit
+effective state/configuration paths and optional `--profile`, external Node
+executable, and sealed current generation before recording ownership. Existing
+systemd environment files are read through the native service reader. Services
+with a different filesystem root, dynamic accounts, or command-line profile
+overrides are not supported. Adoption never edits or restarts the service.
+
+The [immutable update design](/reference/team-immutable-update-design#three-proposed-prs)
+separates preparation from the later activation and recovery work. Existing
+published updaters need explicit adoption after installing an immutable-capable
+release; candidate code cannot change the behavior of an older installed updater.
+
 ## Candidate-owned admission
 
 For package-manager updates, `openclaw update` privately stages the selected

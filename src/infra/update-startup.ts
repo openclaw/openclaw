@@ -44,7 +44,11 @@ import {
 } from "./update-check.js";
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { resolveDevGitCommits } from "./update-git-metadata.js";
-import { resolveStartupInstallStatus, withUpdateInstallStatus } from "./update-install-status.js";
+import {
+  prepareStartupUpdateInstall,
+  resolveStartupInstallStatus,
+  withUpdateInstallStatus,
+} from "./update-install-status.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import { scheduleGatewayRemoteCatalogChecks } from "./update-startup-catalog.js";
 import {
@@ -284,34 +288,17 @@ async function runGatewayUpdateCheckOwned(
     return;
   }
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
-  const initializedInstallStatus = await lifecycle.initialize();
-  params.signal?.throwIfAborted();
-  if (initializedInstallStatus.status.error) {
-    throw new Error(initializedInstallStatus.status.error.message);
-  }
-  const potentialChannel = resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    installKind: initializedInstallStatus.status.installKind,
-    git: initializedInstallStatus.status.git,
-  }).channel;
-  if (initializedInstallStatus.status.installKind === "host") {
+  const {
+    installStatus,
+    channel: configuredChannel,
+    readOnlySchedule,
+  } = await prepareStartupUpdateInstall(lifecycle, configChannel, params.signal);
+  if (readOnlySchedule) {
     updateCampaign.clear();
     setAvailable(null);
-    setSchedule({ channel: potentialChannel, autoEnabled: false });
+    setSchedule(readOnlySchedule);
     return;
   }
-  let installStatus = initializedInstallStatus;
-  if (potentialChannel === "dev" && installStatus.status.installKind === "git") {
-    installStatus = await resolveStartupInstallStatus(true, params.signal);
-    params.signal?.throwIfAborted();
-  }
-  const configuredChannel = resolveEffectiveUpdateChannel({
-    configChannel,
-    currentVersion: VERSION,
-    installKind: installStatus.status.installKind,
-    git: installStatus.status.git,
-  }).channel;
   const autoDesired =
     (configuredChannel === "stable" ||
       configuredChannel === "beta" ||

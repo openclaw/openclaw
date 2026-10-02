@@ -264,11 +264,13 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const installLabel =
     update.installKind === "host"
       ? (update.installOwner?.displayName ?? "host-managed")
-      : update.installKind === "git"
-        ? `git (${update.root ?? "unknown"})`
-        : update.installKind === "package"
-          ? update.packageManager
-          : "unknown";
+      : update.installKind === "immutable"
+        ? `immutable (${update.immutable?.root ?? update.root ?? "unknown"})`
+        : update.installKind === "git"
+          ? `git (${update.root ?? "unknown"})`
+          : update.installKind === "package"
+            ? update.packageManager
+            : "unknown";
 
   const rows = [
     { Item: "Install", Value: installLabel },

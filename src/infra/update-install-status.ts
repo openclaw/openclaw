@@ -1,10 +1,13 @@
 import type { UpdateScheduleState } from "../../packages/gateway-protocol/src/index.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
+import { VERSION } from "../version.js";
 import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage } from "./errors.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { readVerifiedGitUpdateReceipt, type VerifiedGitUpdateReceipt } from "./restart-sentinel.js";
+import { resolveEffectiveUpdateChannel, type UpdateChannel } from "./update-channels.js";
+import type { UpdateCheckLifecycle } from "./update-check-lifecycle.js";
 import { checkUpdateStatus, type UpdateCheckResult } from "./update-check.js";
 import { updateInstallRootsMatch } from "./update-install-root.js";
 
@@ -71,6 +74,42 @@ export async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signa
     };
     return { root, status, installReceipt };
   }
+}
+
+export async function prepareStartupUpdateInstall(
+  lifecycle: UpdateCheckLifecycle,
+  configChannel: UpdateChannel | null,
+  signal: AbortSignal,
+) {
+  let installStatus = await lifecycle.initialize();
+  signal.throwIfAborted();
+  if (installStatus.status.error) {
+    throw new Error(installStatus.status.error.message);
+  }
+  const resolveChannel = () =>
+    resolveEffectiveUpdateChannel({
+      configChannel,
+      currentVersion: VERSION,
+      ...installStatus.status,
+    }).channel;
+  let channel = resolveChannel();
+  if (channel === "dev" && installStatus.status.installKind === "git") {
+    installStatus = await resolveStartupInstallStatus(true, signal);
+    signal.throwIfAborted();
+    channel = resolveChannel();
+  }
+  const { status, installReceipt, root } = installStatus;
+  const readOnlySchedule =
+    status.installKind === "host" || status.installKind === "immutable"
+      ? withUpdateInstallStatus(
+          { channel, autoEnabled: false },
+          status,
+          false,
+          installReceipt,
+          root,
+        )
+      : undefined;
+  return { installStatus, channel, readOnlySchedule };
 }
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
@@ -157,6 +196,14 @@ export function withUpdateInstallStatus(
     // Host ownership is not a package/Git update target in the Gateway protocol.
     const { install: _install, target: _target, campaign: _campaign, ...rest } = schedule;
     return { ...rest, autoEnabled: false };
+  }
+  if (update.installKind === "immutable") {
+    const { target: _target, campaign: _campaign, ...rest } = schedule;
+    return {
+      ...rest,
+      autoEnabled: false,
+      install: { kind: "immutable", ...(update.immutable ? { immutable: update.immutable } : {}) },
+    };
   }
   const git = includeGitStatus ? resolveGitScheduleStatus(update, installReceipt, root) : undefined;
   return {

@@ -634,6 +634,10 @@ const cliModules = new Map([
     "src/claws/provenance-adopted.ts",
     "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",
   ],
+  [
+    "src/infra/package-update-activation-immutable.ts",
+    "Adoption/preparation writers are called only by update-command-immutable.ts through update-immutable-install.ts; Gateway inspection dispatches immutableInstall.read through the SQLite read-only worker",
+  ],
 ]);
 
 function classify(file, operation, binding) {
