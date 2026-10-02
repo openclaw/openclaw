@@ -40,6 +40,76 @@ afterEach(async () => {
   }
 });
 
+it.skipIf(process.platform === "win32").each(["unchanged", "previous", "candidate"] as const)(
+  "reuses settled preparation digests while refusing changed publication bytes (%s)",
+  (changed) =>
+    fixture.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
+      const anchor = resolvePackageActivationAnchor(f.packageRoot);
+      const previousRoot = path.join(anchor, "previous");
+      const candidateRoot = path.join(anchor, "candidate");
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6_000);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        const reader = integrity.createPackageIntegrityReader();
+        const prepared = await preparePackageActivation({
+          options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+          installTarget: f.params.installTarget,
+          liveRoot: f.packageRoot,
+          stageRoot: f.params.stage.packageRoot,
+          launcherRoot: f.params.stage.layout.binDir,
+          binDir: path.dirname(f.launcher),
+          previous: await reader.tree(f.packageRoot),
+          launchers: [
+            {
+              name: "openclaw",
+              previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
+            },
+          ],
+        });
+        expect(prepared).toBeDefined();
+        const tampered = path.join(
+          changed === "previous" ? f.packageRoot : candidateRoot,
+          "dist/index.js",
+        );
+        if (changed !== "unchanged") {
+          await fsp.writeFile(tampered, `changed ${changed} package content\n`);
+        }
+        const packageOpens: string[] = [];
+        const open = fsp.open.bind(fsp);
+        vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+          const file = String(args[0]);
+          if (
+            [f.packageRoot, previousRoot, candidateRoot].some((directory) =>
+              file.startsWith(`${directory}${path.sep}`),
+            ) &&
+            fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()
+          ) {
+            packageOpens.push(file);
+          }
+          return open(...args);
+        });
+        const publishing = prepared!.publish(false);
+        if (changed !== "unchanged") {
+          await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
+          expect(packageOpens).toContain(tampered);
+          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+          return;
+        }
+        await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
+        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
+        // Each of the four remaining content walks still reads its manifest version.
+        expect(packageOpens).toHaveLength(4);
+        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        await expect(prepared!.retire()).resolves.toMatchObject({ phase: "complete" });
+        expect(packageOpens).toHaveLength(5);
+        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+        expect(fs.existsSync(anchor)).toBe(false);
+      });
+    }),
+);
+
 it.skipIf(process.platform === "win32").each([
   ["displace", "anchor"],
   ["displace", "installation"],
