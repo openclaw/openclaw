@@ -202,6 +202,7 @@ export const responsesServiceTierObserver = {
     Reflect.set(options, SERVICE_TIER_OBSERVER, observer);
   },
   get(options: object) {
+    // SAFETY: Only set() writes this private symbol, with a typed service-tier observer.
     return Reflect.get(options, SERVICE_TIER_OBSERVER) as ResponsesServiceTierObserver | undefined;
   },
   copy(source: object | undefined, target: object): void {
