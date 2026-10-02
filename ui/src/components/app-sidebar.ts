@@ -589,7 +589,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             }
           </div>
           <div class="sidebar-shell__invite">
-            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite) : nothing}
+            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite, this.context?.theme.resolvedMode ?? "dark") : nothing}
           </div>
           <div class="sidebar-shell__footer">
             ${
