@@ -4,16 +4,15 @@ import {
   resolveIsolatedCompletionRuntime,
   resolveIsolatedCompletionProvider,
 } from "./isolated-completion-route.js";
+import { hasAvailableAuthForProvider } from "./model-auth.js";
 import {
   createModelCatalogDecisions,
   type ModelCatalogDecisionParams,
 } from "./model-catalog-decisions.js";
-import { hasAvailableAuthForProvider } from "./model-auth.js";
 import { resolveSimpleCompletionSelectionForAgent } from "./simple-completion-runtime.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "./utility-model.js";
 
-/** Keep visible-text retry/fallback in callers; the runtime owns authentication. */
-export async function prepareUtilityCompletionForAgent(
+function resolveUtilityCompletionForAgent(
   params: Parameters<typeof resolveSimpleCompletionSelectionForAgent>[0] & {
     preferredProfile?: string;
   },
@@ -38,30 +37,38 @@ export async function prepareUtilityCompletionForAgent(
           : {}),
       })
     : undefined;
-  const authProfileId = selection.profileId ?? params.preferredProfile;
-  // Preserve working HTTP routes and their billing. Only probe credentials when
-  // automatic selection could borrow the primary's model-scoped runtime.
-  const agentHarnessRuntimeOverride =
-    inheritedRuntime &&
-    !(await hasAvailableAuthForProvider({
-      provider: selection.provider,
-      cfg: params.cfg,
-      modelId: selection.modelId,
-      agentDir: selection.agentDir,
-      preferredProfile: authProfileId,
-    }))
-      ? inheritedRuntime
-      : undefined;
   return {
     config: params.cfg,
     provider: selection.provider,
     model: selection.modelId,
-    authProfileId,
+    authProfileId: selection.profileId ?? params.preferredProfile,
     outputTextPolicy: "strict-visible" as const,
     agentId: params.agentId,
     agentDir: selection.agentDir,
-    ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+    ...(inheritedRuntime ? { agentHarnessRuntimeOverride: inheritedRuntime } : {}),
   };
+}
+
+/** Keep visible-text retry/fallback in callers; the runtime owns authentication. */
+export async function prepareUtilityCompletionForAgent(
+  params: Parameters<typeof resolveUtilityCompletionForAgent>[0],
+) {
+  const prepared = resolveUtilityCompletionForAgent(params);
+  // Execution may refresh credentials. A prepared catalog projection must use
+  // its own captured readiness instead, or an unrelated store can change its label.
+  if (
+    prepared.agentHarnessRuntimeOverride &&
+    (await hasAvailableAuthForProvider({
+      provider: prepared.provider,
+      cfg: params.cfg,
+      modelId: prepared.model,
+      agentDir: prepared.agentDir,
+      preferredProfile: prepared.authProfileId,
+    }))
+  ) {
+    delete prepared.agentHarnessRuntimeOverride;
+  }
+  return prepared;
 }
 
 /** Provider-neutral route of a utility completion, as the Gateway reports it. */
@@ -98,21 +105,12 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (params.isCurrent?.() === false) {
         return undefined;
       }
-      const prepared = await prepareUtilityCompletionForAgent({
+      const prepared = resolveUtilityCompletionForAgent({
         cfg: params.cfg,
         agentId: params.agentId,
         manifestPlugins: params.metadataSnapshot,
         useUtilityModel: true,
       });
-      const runtime = resolveIsolatedCompletionRuntime({
-        ...prepared,
-        agentDir: params.agentDir ?? prepared.agentDir,
-        workspaceDir: params.workspaceDir,
-        preparedAuth: params,
-      });
-      if (!runtime) {
-        return undefined;
-      }
       const { provider } = resolveIsolatedCompletionProvider(prepared);
       const entry = [...params.snapshot.entries, ...(params.snapshot.staticEntries ?? [])].find(
         (candidate) => candidate.provider === provider && candidate.id === prepared.model,
@@ -126,6 +124,25 @@ export async function resolveUtilityCompletionRuntimeForAgent(
         pinnedProfileId: prepared.authProfileId,
         profileProvider: provider,
       });
+      if (prepared.agentHarnessRuntimeOverride) {
+        const direct = await decisions.evaluateEntry(
+          entry,
+          params.snapshot.routeVariants,
+          "openclaw",
+        );
+        if (direct.availability === true) {
+          delete prepared.agentHarnessRuntimeOverride;
+        }
+      }
+      const runtime = resolveIsolatedCompletionRuntime({
+        ...prepared,
+        agentDir: params.agentDir ?? prepared.agentDir,
+        workspaceDir: params.workspaceDir,
+        preparedAuth: params,
+      });
+      if (!runtime) {
+        return undefined;
+      }
       const host = await decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
       const available = decisions.evaluateNative(entry, host, runtime.id).availability;
       // A selected engine is not evidence that its prepared account is usable.
