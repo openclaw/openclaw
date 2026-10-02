@@ -20,7 +20,6 @@ vi.mock("../../agents/auth-profiles/store.js", () => ({
 }));
 vi.mock("./model-auth-agent-scope.js", () => ({
   resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
-  modelAuthAgentScopeError: vi.fn(),
 }));
 vi.mock("../../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent: () => ({ provider: "custom", model: "model" }),

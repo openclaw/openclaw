@@ -627,24 +627,12 @@ export function buildGatewayCronService(params: {
       });
       const summaryIsSilent =
         typeof result.summary === "string" && isSilentReplyText(result.summary, SILENT_REPLY_TOKEN);
-      if (summaryIsSilent) {
-        const { summary: _summary, ...silentResult } = result;
-        const completion = await finalizeCronCompletionAnnouncement({
-          deliveryAttemptFence,
-          job,
-          suppressionReason: "silent",
-          deps: params.deps,
-          resolveCronAgent,
-          logger: cronLogger,
-          label: "command",
-        });
-        return { ...silentResult, ...completion };
-      }
       const completion = await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
+        suppressionReason: summaryIsSilent ? "silent" : undefined,
         text:
-          typeof result.summary === "string" && result.summary.trim()
+          !summaryIsSilent && typeof result.summary === "string" && result.summary.trim()
             ? redactCronCommandSummaryForExternalDelivery(result.summary)
             : undefined,
         runStartedAtMs: job.state.runningAtMs,
@@ -655,6 +643,10 @@ export function buildGatewayCronService(params: {
         label: "command",
         traceResolvedFailure: true,
       });
+      if (summaryIsSilent) {
+        const { summary: _summary, ...silentResult } = result;
+        return { ...silentResult, ...completion };
+      }
       return { ...result, ...completion };
     },
     sendCronWebhook: async ({ job, event, abortSignal, onDeliveryState, assertCurrent }) => {

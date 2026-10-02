@@ -28,6 +28,7 @@ import {
   registerAgentRunContext,
 } from "../../../infra/agent-run-registry.js";
 import { acquireGatewayLock } from "../../../infra/gateway-lock.js";
+import type { SubsystemLogger } from "../../../logging/subsystem.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -74,6 +75,26 @@ import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 vi.mock("../../../gateway/session-utils.fs.js", () => ({
   readSessionMessagesAsync: vi.fn(async () => []),
 }));
+
+const registryLog = vi.hoisted<{ info?: SubsystemLogger["info"] }>(() => ({}));
+vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "agents/subagent-registry"
+        ? {
+            ...logger,
+            info: (message: string, meta?: Record<string, unknown>) => {
+              logger.info(message, meta);
+              registryLog.info?.(message, meta);
+            },
+          }
+        : logger;
+    },
+  };
+});
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1_000;
 
@@ -325,9 +346,21 @@ describe("subagent orphan recovery — faithful restart path", () => {
             rotateAgentEventLifecycleGeneration();
           }
           if (source === "retired wait retry") {
+            const retryScheduled = createDeferred();
+            registryLog.info = (message, meta) => {
+              if (
+                message ===
+                  "subagent wait timed out; deferring terminal state until session reconciliation" &&
+                meta?.runId === runId &&
+                meta.childSessionKey === childSessionKey
+              ) {
+                retryScheduled.resolve();
+              }
+            };
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
             oldWait.reject(new Error("gateway request timeout"));
-            await vi.advanceTimersByTimeAsync(0);
+            // Advancing fake time does not join the session-store worker reads.
+            await retryScheduled.promise;
             expect(vi.getTimerCount()).toBeGreaterThan(0);
             rotateAgentEventLifecycleGeneration();
             await vi.advanceTimersByTimeAsync(1_000);
@@ -383,6 +416,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       } finally {
         stopObservingTerminal();
         if (source === "retired wait retry") {
+          delete registryLog.info;
           vi.useRealTimers();
         }
         oldWait.resolve(waitResult);

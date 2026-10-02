@@ -4,7 +4,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
-import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -146,9 +145,6 @@ export async function ensureLoaded(
     const rawConfigJob = loaded.configJobs[index] ?? structuredClone(raw);
     const sourceIndex = loaded.configJobIndexes[index] ?? index;
     const runtimeEntry = loaded.configJobRuntimeEntries[index];
-    // Accept old `jobId` rows at the raw boundary only; the in-memory store
-    // uses canonical `id` before validation and scheduling.
-    normalizeCronJobIdentityFields(raw);
     const rawInvalidReason = getInvalidPersistedCronJobReason(raw);
     let normalized: Record<string, unknown> | null;
     try {

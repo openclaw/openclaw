@@ -19,6 +19,16 @@ const DIAGNOSTIC_METHODS = new Set<string>([
   "experimentalFeature/list",
 ]);
 const MAX_METHODS = 8;
+type InitializeSnapshot = ReturnType<CodexAppServerClient["getInitializeDiagnostic"]>;
+
+type ReadInitializeSnapshot = (beforeClientClose?: boolean) => InitializeSnapshot;
+function readInitializeSnapshot(read: ReadInitializeSnapshot | undefined, beforeClose = false) {
+  try {
+    return read?.(beforeClose);
+  } catch {
+    return undefined;
+  }
+}
 
 /** Counts awaited APIs, not native execution or proof that a request was written. */
 export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
@@ -35,6 +45,9 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
     acquireBoundaryBeforeCleanup: CodexAppServerAcquireObservation["boundary"] | undefined;
     acquireStartup: CodexAppServerAcquireObservation["startup"];
     lastStartedClientInstanceId: string | undefined;
+    initializeSnapshot: ReadInitializeSnapshot | undefined;
+    initializeBeforeCleanup: InitializeSnapshot;
+    initializeBeforeCleanupSource: "at-cleanup" | "before-client-close" | undefined;
     started: number;
     pending: number;
     methods: Map<string, number>;
@@ -47,6 +60,9 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
       acquireBoundaryBeforeCleanup: undefined,
       acquireStartup: undefined,
       lastStartedClientInstanceId: undefined,
+      initializeSnapshot: undefined,
+      initializeBeforeCleanup: undefined,
+      initializeBeforeCleanupSource: undefined,
       started: 0,
       pending: 0,
       methods: new Map<string, number>(),
@@ -66,9 +82,20 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           if (observation.boundary === "cleanup") {
             if (current.acquireLastObservedBoundary !== "cleanup") {
               current.acquireBoundaryBeforeCleanup = current.acquireLastObservedBoundary;
+              const snapshot = readInitializeSnapshot(current.initializeSnapshot);
+              current.initializeBeforeCleanup = snapshot?.clientClosed
+                ? readInitializeSnapshot(current.initializeSnapshot, true)
+                : snapshot;
+              current.initializeBeforeCleanupSource = current.initializeBeforeCleanup
+                ? snapshot?.clientClosed
+                  ? "before-client-close"
+                  : "at-cleanup"
+                : undefined;
             }
           } else {
             current.acquireBoundaryBeforeCleanup = undefined;
+            current.initializeBeforeCleanup = undefined;
+            current.initializeBeforeCleanupSource = undefined;
           }
           current.acquireLastObservedBoundary = observation.boundary;
           if (observation.startup) {
@@ -81,8 +108,13 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           }
           // Fallback can replace this client; this identity is an observation, not a lease.
           current.lastStartedClientInstanceId = undefined;
+          current.initializeSnapshot = undefined;
+          current.initializeBeforeCleanup = undefined;
+          current.initializeBeforeCleanupSource = undefined;
           try {
             current.lastStartedClientInstanceId = client.getInstanceId();
+            current.initializeSnapshot = (beforeClose) =>
+              client.getInitializeDiagnostic(beforeClose);
           } catch {
             // A diagnostic identity cannot invalidate startup.
           }
@@ -122,6 +154,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           return;
         }
         const methods = [...attempt.methods].toSorted(([a], [b]) => a.localeCompare(b));
+        const initialize = readInitializeSnapshot(attempt.initializeSnapshot);
         embeddedAgentLog.warn("codex app-server scope timed out", {
           phase:
             attempt.phase === "callback" && attempt.pending > 0 ? "client-request" : attempt.phase,
@@ -139,6 +172,13 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
             ? { lastStartedClientInstanceId: attempt.lastStartedClientInstanceId }
             : {}),
           ...(attempt.clientInstanceId ? { clientInstanceId: attempt.clientInstanceId } : {}),
+          ...(initialize ? { initializeSnapshot: JSON.stringify(initialize) } : {}),
+          ...(attempt.initializeBeforeCleanup
+            ? {
+                initializeBeforeCleanup: JSON.stringify(attempt.initializeBeforeCleanup),
+                initializeBeforeCleanupSource: attempt.initializeBeforeCleanupSource,
+              }
+            : {}),
           requestStartedCount: attempt.started,
           currentRequestCount: attempt.pending,
           // Scalar log attributes retain the bounded method/count tuples.

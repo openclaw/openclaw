@@ -44,6 +44,47 @@ afterEach(() => {
 });
 
 describe("stored outbox summaries", () => {
+  it("enumerates metadata-only badges for every stored session", () => {
+    const target = storageTargetForGateway("ws://sidebar-facts.test", "summary-owner");
+    sessionStorage.setItem(
+      target.key,
+      JSON.stringify({
+        version: 4,
+        gatewayOwner: target.gatewayOwner,
+        recovery: {},
+        sessions: {
+          "agent:main:a\u0000agent:main": { draft: "private draft", updatedAt: 1 },
+          "agent:work:b\u0000agent:work": {
+            updatedAt: 2,
+            queue: ownedQueue(target.gatewayOwner, [
+              { id: "held", text: "private queue", createdAt: 1, sendState: "held" },
+              { id: "failed", text: "private queue", createdAt: 2, sendState: "failed" },
+              {
+                id: "unconfirmed",
+                text: "private queue",
+                createdAt: 3,
+                sendState: "unconfirmed",
+              },
+            ]),
+          },
+        },
+      }),
+    );
+    expect(createStoredChatOutboxReader().read(ownedState(target.gatewayOwner)).sessions).toEqual([
+      {
+        agentId: "main",
+        sessionKey: "agent:main:a",
+        hasComposerDraft: true,
+        outboxAttentionCount: 0,
+      },
+      {
+        agentId: "work",
+        sessionKey: "agent:work:b",
+        hasComposerDraft: false,
+        outboxAttentionCount: 3,
+      },
+    ]);
+  });
   it.each(["raw", "cleared"])(
     "keeps newer legacy bytes published during %s source retirement",
     (input) => {

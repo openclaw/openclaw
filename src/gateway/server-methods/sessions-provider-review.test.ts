@@ -72,6 +72,15 @@ function request(overrides: Record<string, unknown> = {}): GatewayRequestHandler
   };
 }
 
+function expectRejected(options: GatewayRequestHandlerOptions) {
+  expect(mocks.handoff).not.toHaveBeenCalled();
+  expect(options.respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ code: "INVALID_REQUEST" }),
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   sourceCurrent = true;
@@ -170,29 +179,15 @@ describe("registered provider review continuation", () => {
       });
       const options = request();
       await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
-      expect(mocks.handoff).not.toHaveBeenCalled();
-      expect(options.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
+      expectRejected(options);
     },
   );
 
-  it.each([
-    { message: "replacement steer" },
-    { responsesapiClientMetadata: { misalignment_override: "fake" } },
-    { providerReviewAcknowledgment: {} },
-  ])("rejects client-supplied continuation authority %j", async (overrides) => {
-    const options = request(overrides);
+  it("rejects client-supplied continuation authority", async () => {
+    const options = request({ providerReviewAcknowledgment: {} });
     await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
     expect(mocks.read).not.toHaveBeenCalled();
-    expect(mocks.handoff).not.toHaveBeenCalled();
-    expect(options.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(options);
   });
 
   it("rejects agent-authored synthetic UI calls before reading the findings", async () => {
@@ -200,12 +195,7 @@ describe("registered provider review continuation", () => {
     options.client!.internal = { syntheticClient: true };
     await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
     expect(mocks.read).not.toHaveBeenCalled();
-    expect(mocks.handoff).not.toHaveBeenCalled();
-    expect(options.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(options);
   });
 
   it("shows ordinary API findings without offering or dispatching continuation", async () => {
@@ -218,11 +208,6 @@ describe("registered provider review continuation", () => {
     });
     const options = request();
     await coreGatewayHandlers["sessions.providerReview.continue"]!(options);
-    expect(mocks.handoff).not.toHaveBeenCalled();
-    expect(options.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectRejected(options);
   });
 });

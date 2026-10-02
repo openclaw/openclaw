@@ -8,7 +8,7 @@ extension ChatSessionSidebar {
 
     func rosterSections(observedOrder: ChatSessionSidebarModel.ObservedOrder) -> [ChatSessionSidebarModel.Section] {
         let data = self.rosterData
-        let rows = data?.rows ?? self.viewModel.sessions
+        let rows = data?.rowsIncludingLoadedDescendants ?? self.viewModel.sessions
         return ChatSessionSidebarModel.sections(
             sessions: rows,
             currentSessionKey: self.viewModel.sessionKey,
@@ -20,12 +20,11 @@ extension ChatSessionSidebar {
             rankedSearch: data?.query.search.isEmpty == false,
             sessionRoutingContract: self.viewModel.agentCatalog?.sessionRoutingContract ??
                 self.viewModel.sessionRoutingContract,
-            viewOptions: .init(
-                sort: self.sessionSort,
-                showAutomation: self.showAutomationSessions,
-                showSystem: self.showSystemSessions,
-                showArchived: (data?.query.status ?? .active) != .active),
-            observedOrder: observedOrder)
+            viewOptions: self.filterOptions,
+            observedOrder: observedOrder,
+            owners: data?.owners,
+            selfOwnerID: self.ownership().selfID,
+            sectionOrder: self.sectionOrder)
     }
 }
 

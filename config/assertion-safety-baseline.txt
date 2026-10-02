@@ -126,7 +126,7 @@ extensions/codex/src/app-server/attempt-notifications.ts	1
 extensions/codex/src/app-server/attempt-startup.ts	1
 extensions/codex/src/app-server/auth-bridge.ts	1
 extensions/codex/src/app-server/client-runtime.ts	1
-extensions/codex/src/app-server/client.ts	3
+extensions/codex/src/app-server/client.ts	2
 extensions/codex/src/app-server/compact.ts	1
 extensions/codex/src/app-server/computer-use-cache.ts	1
 extensions/codex/src/app-server/context-engine-projection.ts	1
@@ -2019,7 +2019,6 @@ src/config/runtime-overrides.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
 src/config/sessions/cleanup-service.ts	3
-src/config/sessions/conversation-delivery-store.ts	2
 src/config/sessions/group.ts	1
 src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
@@ -2224,7 +2223,7 @@ src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
 src/gateway/server-methods/task-suggestions.ts	5
 src/gateway/server-methods/web.ts	1
-src/gateway/server-node-events.ts	2
+src/gateway/server-node-events.ts	1
 src/gateway/server-plugin-in-process-dispatch.ts	3
 src/gateway/server-plugin-subagent-runtime.ts	1
 src/gateway/server-plugins-node-runtime.ts	1

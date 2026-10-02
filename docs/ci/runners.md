@@ -24,6 +24,13 @@ still incur runner startup cost. This does not remove the queued job immediately
 Once the request passes that check, checkout and hydration do not recheck queue
 age. They remain bounded by the job timeout and idle limit.
 Stop an abandoned lease by its exact ID instead of leaving a warmup pending.
+For a queued lease, also verify that its backing Actions run is terminal;
+Blacksmith's `completed` lease status alone does not prove that the queued run
+was canceled. Match the exact `TESTBOX_ID` in the admission job log before
+canceling an abandoned run; its title or creation time is not enough. If that
+task-owned run remains pending, use `gh run cancel <run-id> --repo openclaw/openclaw`
+and confirm its terminal state. If the lease-to-run match is unavailable, report
+the unresolved cleanup instead of canceling a guessed run.
 Do not retry in a loop when the pool is full.
 
 Idle requests are capped at 15 minutes. The existing Testbox monitor continues

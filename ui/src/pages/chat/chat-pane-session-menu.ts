@@ -36,6 +36,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
+import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ChatPaneContext } from "./chat-pane-context.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { headerPlatformByClient } from "./chat-pane-shared.ts";
@@ -170,6 +171,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected async handleHeaderSessionAction(action: HeaderMenuAction, row: GatewaySessionRow) {
+    if (action.kind === "stop-cloud-worker") {
+      return this.reclaimHeaderPlacement(row);
+    }
     if (action.kind === "toggle-archived" && !row.archived && !this.canArchiveHeaderSession(row)) {
       return;
     }
@@ -211,6 +215,24 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     const owner = this.headerOutcomeOwner;
+    if (action.kind === "plugin") {
+      const current = this.state ? selectedChatSessionRow(this.state) : undefined;
+      try {
+        await runControlUiPluginAction({
+          runtime: this.context.plugins,
+          id: action.id,
+          placement: "session",
+          sessionKey: row.key,
+          agentId: row.agentId,
+          session:
+            current?.key === row.key && current.sessionId === row.sessionId ? current : undefined,
+          signal: scope.signal,
+        });
+      } catch (error) {
+        this.publishHeaderError(error, owner);
+      }
+      return;
+    }
     const toActionSession = (candidate: GatewaySessionRow) => ({
       key: candidate.key,
       sessionId: candidate.sessionId,
@@ -446,7 +468,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     return result.command;
   }
 
-  private captureHeaderSessionActionScope(): SidebarSessionMutationScope | null {
+  private captureHeaderSessionActionScope():
+    | (SidebarSessionMutationScope & { signal: AbortSignal })
+    | null {
     const gateway = this.context.gateway;
     const client = gateway.snapshot.client;
     if (gateway.snapshot.phase !== "connected" || !client) {

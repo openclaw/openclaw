@@ -169,6 +169,9 @@ describe("stored draft projection", () => {
     expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
     await changes.changed;
     expect(reader.read(host).hasSessionDraft(key("b"))).toBe(true);
+    expect(reader.read(host).sessions).toEqual([
+      { agentId: "main", sessionKey: key("b"), hasComposerDraft: true, outboxAttentionCount: 0 },
+    ]);
     expect(globalListener).not.toHaveBeenCalled();
 
     const written = changes.next();
@@ -183,6 +186,7 @@ describe("stored draft projection", () => {
     await list.mock.results[2]?.value;
     expect(changes.listener).not.toHaveBeenCalled();
     expect(reader.read(host).hasSessionDraft(key("c"))).toBe(false);
+    expect(reader.read(host).sessions).toEqual([]);
   });
 
   it("merges revision fences and all tab input kinds while excluding Incognito keys", async () => {
@@ -213,6 +217,14 @@ describe("stored draft projection", () => {
     ]) {
       expect(summary.hasSessionDraft(key(name)), name).toBe(false);
     }
+    expect(summary.sessions).toEqual(
+      ["goal", "reply"].map((name) => ({
+        agentId: "main",
+        sessionKey: key(name),
+        hasComposerDraft: true,
+        outboxAttentionCount: 0,
+      })),
+    );
   });
 
   it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {

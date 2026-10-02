@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   clearConfigCache,
@@ -77,40 +78,20 @@ async function writeWorkspacePlugin(params: {
   await fs.writeFile(path.join(pluginDir, "index.cjs"), params.body, "utf8");
 }
 
-async function readCounterWithRetry(filePath: string): Promise<number> {
-  let counter: number | undefined;
-  try {
-    await expect
-      .poll(
-        async () => {
-          try {
-            const raw = await fs.readFile(filePath, "utf8");
-            const parsed = Number.parseInt(raw.trim(), 10);
-            if (Number.isFinite(parsed)) {
-              counter = parsed;
-              return true;
-            }
-          } catch {
-            // Wait briefly for gateway startup to finish plugin registration.
-          }
-          return false;
-        },
-        { timeout: 1_000, interval: 50 },
-      )
-      .toBe(true);
-  } catch {
-    throw new Error(`timed out waiting for counter file: ${filePath}`);
-  }
-  if (counter === undefined) {
-    throw new Error(`timed out waiting for counter file: ${filePath}`);
-  }
-  return counter;
-}
-
 describe("gateway e2e", () => {
+  let workspacePluginCleanup: Promise<void> | undefined;
+
   beforeEach(resetGatewayTestState);
 
-  afterEach(resetGatewayTestState);
+  afterEach(async () => {
+    try {
+      // Vitest starts hooks on timeout without joining the body's async finally.
+      await workspacePluginCleanup;
+    } finally {
+      workspacePluginCleanup = undefined;
+      resetGatewayTestState();
+    }
+  });
 
   beforeAll(async () => {
     ({ createConfigIO } = await import("../config/config.js"));
@@ -693,7 +674,7 @@ describe("gateway e2e", () => {
   it(
     "does not reload workspace plugins when POST /tools/invoke rebuilds tools for the same workspace",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
         prefix: "openclaw-gw-http-tools-home-",
       });
@@ -735,9 +716,14 @@ module.exports = {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
       const { port, server } = await startLoopbackTokenGateway(token);
+      const cleanupSettled = createDeferred();
+      workspacePluginCleanup = cleanupSettled.promise;
+      void workspacePluginCleanup.catch(() => {});
 
       try {
-        const beforeCount = await readCounterWithRetry(registerCountPath);
+        // Startup settles after the fixture's synchronous registration write.
+        await withinTest(server.startupSettled, signal);
+        const beforeCount = Number.parseInt(await fs.readFile(registerCountPath, "utf8"), 10);
         expect(beforeCount).toBeGreaterThan(0);
 
         const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -759,12 +745,16 @@ module.exports = {
         const body = await res.json();
         expect(body.ok).toBe(true);
 
-        const afterCount = await readCounterWithRetry(registerCountPath);
+        const afterCount = Number.parseInt(await fs.readFile(registerCountPath, "utf8"), 10);
         expect(afterCount).toBe(beforeCount);
       } finally {
-        await server.close({ reason: "http tools workspace test complete" });
-        await removeGatewayTempHome(tempHome);
-        envSnapshot.restore();
+        const cleanup = (async () => {
+          await server.close({ reason: "http tools workspace test complete" });
+          await removeGatewayTempHome(tempHome);
+          envSnapshot.restore();
+        })();
+        cleanupSettled.resolve(cleanup);
+        await cleanup;
       }
     },
   );
@@ -849,18 +839,9 @@ module.exports = {
         );
         expect(next.status).toBe("done");
 
-        await expect
-          .poll(
-            async () => {
-              const parsed = JSON.parse(await fs.readFile(configPath, "utf8"));
-              const token = (parsed as Record<string, unknown>)?.gateway as
-                | Record<string, unknown>
-                | undefined;
-              return (token?.auth as { token?: string } | undefined)?.token;
-            },
-            { timeout: 5_000 },
-          )
-          .toBe(wizardToken);
+        // The wizard writes config before its outro and terminal done response.
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+        expect(persisted.gateway?.auth?.token).toBe(wizardToken);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard e2e complete" });

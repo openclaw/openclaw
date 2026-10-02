@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -875,7 +876,13 @@ describe("hasCompletedBootstrapTurn", () => {
     sessionManager.appendCompaction("trimmed", firstEntryId, 10);
     sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
 
-    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+    const hostExec = vi.spyOn(DatabaseSync.prototype, "exec");
+    try {
+      expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
+      expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+    } finally {
+      hostExec.mockRestore();
+    }
   });
 
   it("invalidates a completion marker after a session reset", async () => {

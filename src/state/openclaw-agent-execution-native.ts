@@ -36,7 +36,7 @@ import {
 } from "./openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import type {
-  AgentDatabaseExecutionIdentity,
+  AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionOpen,
   AgentDatabaseGenerationClaim,
@@ -117,7 +117,7 @@ export function createAgentDatabaseNativeGeneration(
   let openedStore: Store | undefined;
   let openingFailed = false;
   let closing: Promise<void> | undefined;
-  let nativeIdentity: AgentDatabaseExecutionIdentity | undefined;
+  let nativeIdentity: AgentDatabaseFileExecutionIdentity | undefined;
   let nativeStopped: Promise<void> | undefined;
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
@@ -151,7 +151,7 @@ export function createAgentDatabaseNativeGeneration(
         context.admission.databasePath,
         context.admission.identity.canonicalPath,
       ];
-      const assertSourceCurrent = (identity?: AgentDatabaseExecutionIdentity) => {
+      const assertSourceCurrent = (identity?: AgentDatabaseFileExecutionIdentity) => {
         source.assertCurrent();
         assertCurrent();
         // The reference checks its captured constraints; this owner checks the path last.
@@ -166,7 +166,7 @@ export function createAgentDatabaseNativeGeneration(
       };
       const authorizeNative = (
         request: SqliteWorkerAdmissionRequest,
-      ): AgentDatabaseExecutionIdentity | undefined => {
+      ): AgentDatabaseFileExecutionIdentity | undefined => {
         const facts = request.facts;
         if (
           request.stage === "prepare" &&
@@ -289,7 +289,7 @@ export function createAgentDatabaseNativeGeneration(
           ) {
             throw new Error("Agent database operation belongs to another native owner");
           }
-          const receivedIdentity: AgentDatabaseExecutionIdentity =
+          const receivedIdentity: AgentDatabaseFileExecutionIdentity =
             nativeIdentity ??
             Object.freeze({
               kind: "file",

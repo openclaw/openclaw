@@ -81,6 +81,7 @@ export async function recoverSessionEntryFromRestartTombstone(
               databaseIdentity,
               published.previous,
               published.current,
+              published.prepared,
             );
           }
           if (unknown) {

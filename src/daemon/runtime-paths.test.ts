@@ -150,6 +150,23 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
   });
 });
 
+it("rejects a Bun node shim even when its emulated Node and SQLite versions are supported", async () => {
+  mockNodePathPresent("/usr/bin/node");
+  const metadata = JSON.parse(nodeRuntime("26.8.1").stdout);
+  const result = await resolveSystemNodeInfo({
+    env: {},
+    platform: "linux",
+    execFile: async () => ({
+      stdout: JSON.stringify({ ...metadata, bunVersion: "1.4.3" }),
+      stderr: "",
+    }),
+  });
+  expect(result).toMatchObject({
+    status: "unsupported",
+    capabilityError: "The executable is Bun, not Node.",
+  });
+});
+
 it("treats an unparseable Node version as a probe failure", async () => {
   mockNodePathPresent("/usr/bin/node");
   const result = await resolveSystemNodeInfo({

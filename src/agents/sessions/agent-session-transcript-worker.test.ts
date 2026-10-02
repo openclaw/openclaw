@@ -7,6 +7,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { appendAttemptCacheTtlIfNeeded } from "../embedded-agent-runner/run/attempt-thread-helpers.js";
+import { createToolResultPromptProjectionState } from "../embedded-agent-runner/session-prompt-state.js";
 import type { AgentEvent } from "../runtime/index.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import {
@@ -99,6 +101,35 @@ it("commits streamed messages off the host thread before adopting guard state an
       expect(manager.getBranch().some((entry) => entry.id === descendantId)).toBe(true);
       expect(loadTranscriptEventsSync(target)).toEqual(manager.getPersistedEntries());
       expect(committed).toEqual(["assistant", "toolResult", "assistant"]);
+
+      hostExec.mockClear();
+      await appendAttemptCacheTtlIfNeeded({
+        sessionManager: manager,
+        timedOutDuringCompaction: false,
+        compactionOccurredThisAttempt: false,
+        config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+        provider: "anthropic",
+        modelId: "test-model",
+        isCacheTtlEligibleProvider: () => true,
+        toolResultPromptProjectionState: createToolResultPromptProjectionState(),
+      });
+      expect(hostExec.mock.calls.filter(([sql]) => /^BEGIN\b/iu.test(sql))).toEqual([]);
+      expect(manager.getLeafEntry()).toMatchObject({
+        type: "custom",
+        customType: "openclaw.cache-ttl",
+      });
+      await assertWorkerCommit({
+        role: "custom",
+        customType: "completion-note",
+        content: "A background task completed",
+        display: true,
+        timestamp: 3,
+      });
+      expect(manager.getLeafEntry()).toMatchObject({
+        type: "custom_message",
+        customType: "completion-note",
+      });
+      expect(loadTranscriptEventsSync(target)).toEqual(manager.getPersistedEntries());
 
       SessionManager.open(target).appendMessage({
         role: "user",

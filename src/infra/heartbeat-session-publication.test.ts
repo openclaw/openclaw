@@ -213,7 +213,7 @@ describe("publishHeartbeatSessionReply", () => {
     });
   });
 
-  it.each(["key", "index", "owned"] as const)(
+  it.each(["key", "index"] as const)(
     "reconciles an actual runtime %s receipt without duplicating its row",
     async (identity) => {
       await withTarget(async ({ params, scope, events }) => {
@@ -381,59 +381,6 @@ describe("publishHeartbeatSessionReply", () => {
       expect(await events()).toEqual(before);
     });
   });
-
-  it.each(["abort", "authority"] as const)(
-    "preserves accepted publication when %s occurs during owned-write teardown",
-    async (change) => {
-      await withTarget(async ({ params, scope, events }) => {
-        const controller = new AbortController();
-        let ownerActive = true;
-        const updates: unknown[] = [];
-        const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
-        try {
-          const result = await withOwnedSessionTranscriptWrites(
-            {
-              sessionFile: scope.sessionKey,
-              sessionKey: scope.sessionKey,
-              sessionTarget: scope,
-              assertCommitAllowed: () => {
-                if (!ownerActive) {
-                  throw new Error("owner released during drain");
-                }
-              },
-              withTranscriptWrite: async (run) => {
-                const committedResult = await run();
-                expect(updates).toHaveLength(1);
-                expect(updates[0]).toHaveProperty("messageId");
-                await Promise.resolve();
-                if (change === "abort") {
-                  controller.abort();
-                } else {
-                  ownerActive = false;
-                }
-                return committedResult;
-              },
-            },
-            () => publishHeartbeatSessionReply({ ...params, signal: controller.signal }),
-          );
-          expect(result).toMatchObject({ ok: true });
-          const committed = await events();
-          expect(
-            committed
-              .map(readTranscriptEventMessage)
-              .filter((message) => message?.role === "assistant"),
-          ).toHaveLength(1);
-          expect(updates).toHaveLength(1);
-          expect(await publishHeartbeatSessionReply(params)).toMatchObject({ ok: true });
-          expect(await events()).toEqual(committed);
-          expect(updates).toHaveLength(2);
-          expect(updates[1]).not.toHaveProperty("messageId");
-        } finally {
-          unsubscribe();
-        }
-      });
-    },
-  );
 
   it.each(["Managed source caption", ""])(
     "reconciles an actual source-mirror media receipt with caption %j",

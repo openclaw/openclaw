@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
+import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
@@ -57,6 +58,7 @@ export type Row = {
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
+  publishedSource?: SessionEntryPublicationSource;
   /** Category uncertainty keeps identity resident; earlier structural uncertainty dominates. */
   unresolvedDatabaseFacts?: true | "category";
   /** Current committed sharing facts remain usable while display materialization is dirty. */
@@ -262,6 +264,7 @@ export function renewGeneration(row: Row): Row {
     retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
     unresolvedDatabaseFacts: undefined,
+    publishedSource: undefined,
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
@@ -443,20 +446,6 @@ export function index(
   }
 }
 
-export function changesRowStructure(row: Row, entry: Row["storedEntry"]): boolean {
-  const previous = row.storedEntry;
-  return (
-    !previous ||
-    !entry ||
-    previous.sessionId !== entry.sessionId ||
-    previous.lifecycleRevision !== entry.lifecycleRevision ||
-    previous.parentSessionKey !== entry.parentSessionKey ||
-    previous.spawnedBy !== entry.spawnedBy ||
-    previous.incognito !== entry.incognito ||
-    previous.archivedAt !== entry.archivedAt
-  );
-}
-
 export function isCurrentGeneration(row: Row, current: Row | undefined): boolean {
   return (
     current?.generation === row.generation &&
@@ -590,8 +579,12 @@ export function acquireSessionRowEntry(params: {
   const changed =
     !sameParents(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
-    !isDeepStrictEqual(storedEntry, row.storedEntry);
-  const includeChildren = changesSessionRowDependents(row.storedEntry, storedEntry);
+    !isDeepStrictEqual(storedEntry, row.storedEntry) ||
+    !isDeepStrictEqual(entry, row.entry);
+  // Archive custody can retain new stored metadata before its lineage is acquired.
+  const includeChildren =
+    changesSessionRowDependents(row.storedEntry, storedEntry) ||
+    changesSessionRowDependents(row.entry, entry);
   if (changed) {
     params.markRelated(row, includeChildren);
   }
@@ -610,9 +603,11 @@ export function acquireSessionRowEntry(params: {
     ...lineage,
     sharingEntry: storedEntry,
     generation,
-    fallbackModel: sameFallbackModelFacts(row.storedEntry, storedEntry)
-      ? row.fallbackModel
-      : undefined,
+    fallbackModel:
+      sameFallbackModelFacts(row.storedEntry, storedEntry) &&
+      sameFallbackModelFacts(row.entry, entry)
+        ? row.fallbackModel
+        : undefined,
     ...(generation !== row.generation
       ? {
           lastMessagePreview: undefined,

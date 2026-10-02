@@ -10,6 +10,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import {
   advanceFixtureRemote,
+  assertCandidateCommandEnvironment,
   expectNoGitRuntimeStagingPaths,
   expectRuntime,
   prepareDeletedTrackedRuntimeAsset,
@@ -348,27 +349,16 @@ describe("Git candidate activation", () => {
   );
 
   it("keeps build and exposure source selection in the admitted candidate", async () => {
-    vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
-    await advanceRemote();
-    const execute = runCommand;
-    let built = false;
-    let exposed = false;
-    runCommand = async (argv, options) => {
-      if (argv[0] === "pnpm" && argv[1] === "build") {
-        built = true;
-        expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
-      }
-      return execute(argv, options);
-    };
-    const result = await update({
-      prepareGitExposure: async (candidateRoot, _sha, env) => {
-        exposed = true;
-        expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+    await assertCandidateCommandEnvironment({
+      root,
+      directory,
+      advanceRemote,
+      runCommand,
+      update,
+      setRunCommand: (command) => {
+        runCommand = command;
       },
     });
-    expect(result.status).toBe("ok");
-    expect(built && exposed).toBe(true);
-    expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
   });
 
   it("falls back when only the latest dev candidate requires an incompatible Node runtime", async () => {

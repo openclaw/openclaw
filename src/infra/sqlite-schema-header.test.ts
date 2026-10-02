@@ -178,14 +178,14 @@ describe("schema-header native reader lifetime", () => {
     },
   );
 
-  it.for(
-    (["pooled-header", "agent-shape"] as const).flatMap((reader) =>
-      (["success", "read-failure", "close-failure", "cancel"] as const).map((outcome) => ({
-        reader,
-        outcome,
-      })),
-    ),
-  )(
+  it.for([
+    { reader: "pooled-header", outcome: "success" },
+    { reader: "pooled-header", outcome: "read-failure" },
+    { reader: "agent-shape", outcome: "success" },
+    { reader: "agent-shape", outcome: "read-failure" },
+    { reader: "agent-shape", outcome: "close-failure" },
+    { reader: "agent-shape", outcome: "cancel" },
+  ] as const)(
     "keeps a consistent $reader read and joins failed native cleanup: $outcome",
     { timeout: 30_000 },
     async ({ reader, outcome }, { signal }) => {

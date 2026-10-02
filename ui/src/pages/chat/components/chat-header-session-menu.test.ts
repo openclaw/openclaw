@@ -29,8 +29,9 @@ import type {
 } from "./chat-header-session-menu.ts";
 import "./chat-header-session-menu.ts";
 import type { ChatSessionSharingProps } from "./chat-session-sharing.ts";
+import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
 
-type HeaderMenuElement = HTMLElement & { updateComplete: Promise<boolean> };
+type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
 type MenuItemElement = HTMLElement & { checked: boolean; disabled: boolean; submenuOpen?: boolean };
 
 const containers: HTMLElement[] = [];
@@ -167,6 +168,43 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it.each(["shown", "selected", "aborted", "retargeted"] as const)(
+    "settles native opening only at the current popup boundary: %s",
+    async (outcome) => {
+      const menu = await mountMenu();
+      const abort = new AbortController();
+      let current = true;
+      const settled = vi.fn();
+      const opening = openNativeSessionMenu({
+        menu,
+        signal: abort.signal,
+        isCurrent: () => current,
+      });
+      void opening.then(settled);
+      await menu.updateComplete;
+      await Promise.resolve();
+      const dropdown = menu.querySelector("wa-dropdown")!;
+      expect(dropdown.open).toBe(true);
+      expect(settled).not.toHaveBeenCalled();
+      if (outcome === "selected") {
+        dropdown.dispatchEvent(
+          new CustomEvent("wa-select", { cancelable: true, detail: { item: { value: "rename" } } }),
+        );
+        dropdown.open = false;
+        dropdown.dispatchEvent(new Event("wa-hide"));
+      } else if (outcome === "aborted") {
+        abort.abort();
+      } else {
+        current = outcome === "shown";
+        dropdown.dispatchEvent(new Event("wa-after-show"));
+      }
+      expect(await opening).toBe(outcome === "shown" || outcome === "selected");
+      expect(dropdown.open).toBe(outcome === "shown");
+      abort.abort();
+      expect(dropdown.open).toBe(outcome === "shown");
+    },
+  );
+
   it.each(["MacIntel", "Win32"])(
     "shows the direct Archive hint only for the current unarchived chat on %s",
     async (platform) => {
@@ -652,6 +690,11 @@ describe("chat header session menu", () => {
       kind: "assign-owner",
       owner: { type: "human", id: "profile-ada" },
     });
+    menu.querySelector("wa-dropdown")!.dispatchEvent(new Event("wa-show"));
+    await menu.updateComplete;
+    expect(
+      Array.from(menu.querySelectorAll(":scope > wa-dropdown > wa-dropdown-item")).map(itemLabel),
+    ).toEqual(rootLabels);
   });
 
   it("drills into session sharing only from the compact menu", async () => {

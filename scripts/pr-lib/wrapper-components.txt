@@ -177,7 +177,7 @@ scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
 scripts/lib/vitest-worker-run.mts
-scripts/lib/watch-pr-ci-dependencies.mjs
+scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
@@ -306,6 +306,7 @@ src/channels/plugins/legacy-state-migration-preview.ts
 src/channels/plugins/merge-plugin-section.ts
 src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
+src/channels/plugins/optional-public-artifact.ts
 src/channels/plugins/package-state-probes.ts
 src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/registry-loaded.ts
@@ -1419,6 +1420,7 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-request.ts

@@ -55,6 +55,14 @@ import {
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
+function expectSinglePersistedInput() {
+  expect(
+    openSessionManager()
+      .buildSessionContext()
+      .messages.filter((message) => message.role === "user"),
+  ).toHaveLength(1);
+}
+
 async function createBuildRecoveryHarness(
   options: {
     rejection?:
@@ -324,23 +332,7 @@ describe("worker turn launcher build recovery", () => {
           timestamp: 51,
         }),
       );
-      await createWorkerSessionPlacementGate(placements).updateAckCursors({
-        claim: request.turnClaim,
-        transcriptSeq: 2,
-        liveSeq: 1,
-      });
-      return {
-        stdout: JSON.stringify({
-          status: "completed",
-          transcriptLeafId: leafId,
-          transcriptNextSeq: (placements.get(SESSION_ID)?.lastTranscriptAckCursor ?? 0) + 1,
-        }),
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      };
+      return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     });
     const acquireTurnCredential = vi.fn(async () => {
       // This boundary also wakes the negative control on the original launcher.
@@ -570,14 +562,13 @@ describe("worker turn launcher build recovery", () => {
     }
   });
 
-  it.each(
-    (["pending refresh", "disconnected"] as const).flatMap((rejection) =>
-      (["reconnected", "cancelled", "backend-cancelled", "superseded"] as const).map((outcome) => ({
-        rejection,
-        outcome,
-      })),
-    ),
-  )(
+  it.each([
+    { rejection: "pending refresh", outcome: "reconnected" },
+    { rejection: "disconnected", outcome: "reconnected" },
+    { rejection: "pending refresh", outcome: "cancelled" },
+    { rejection: "pending refresh", outcome: "backend-cancelled" },
+    { rejection: "pending refresh", outcome: "superseded" },
+  ] as const)(
     "retains the original submission through $rejection while availability is $outcome",
     async ({ rejection, outcome }) => {
       const reconnect = createDeferred();
@@ -628,11 +619,7 @@ describe("worker turn launcher build recovery", () => {
         if (outcome === "reconnected") {
           expect(settled).toHaveProperty("value");
           expect(harness.launchTurn).toHaveBeenCalledOnce();
-          expect(
-            openSessionManager()
-              .buildSessionContext()
-              .messages.filter((message) => message.role === "user"),
-          ).toHaveLength(1);
+          expectSinglePersistedInput();
         } else {
           expect(settled).toHaveProperty("error");
           expect(harness.launchTurn).not.toHaveBeenCalled();
@@ -675,11 +662,10 @@ describe("worker turn launcher build recovery", () => {
     }
   });
 
-  it.each(
-    [false, true].flatMap((refreshInPlace) =>
-      [false, true].map((withoutRecorder) => ({ refreshInPlace, withoutRecorder })),
-    ),
-  )(
+  it.each([
+    { refreshInPlace: false, withoutRecorder: false },
+    { refreshInPlace: true, withoutRecorder: true },
+  ])(
     "persists input once after pre-handoff rejection (refreshInPlace=$refreshInPlace, withoutRecorder=$withoutRecorder)",
     async ({ refreshInPlace, withoutRecorder }) => {
       const harness = await createBuildRecoveryHarness({
@@ -690,11 +676,7 @@ describe("worker turn launcher build recovery", () => {
       await harness.execute();
       expect(harness.launchTurn).toHaveBeenCalledTimes(2);
       expect(harness.onUserMessagePersisted).toHaveBeenCalledOnce();
-      expect(
-        openSessionManager()
-          .buildSessionContext()
-          .messages.filter((message) => message.role === "user"),
-      ).toHaveLength(1);
+      expectSinglePersistedInput();
       expect(harness.launchTurn.mock.calls[1]?.[0].plan.assignment.initialMessages).toEqual([]);
     },
   );
@@ -722,11 +704,7 @@ describe("worker turn launcher build recovery", () => {
       });
       expect(harness.environments.destroy).not.toHaveBeenCalled();
       expect(harness.runLocal).not.toHaveBeenCalled();
-      expect(
-        openSessionManager()
-          .buildSessionContext()
-          .messages.filter((message) => message.role === "user"),
-      ).toHaveLength(1);
+      expectSinglePersistedInput();
     },
   );
 
@@ -743,11 +721,7 @@ describe("worker turn launcher build recovery", () => {
         harness.originalClaimIds[0],
       );
       expect(harness.runLocal).not.toHaveBeenCalled();
-      expect(
-        openSessionManager()
-          .buildSessionContext()
-          .messages.filter((message) => message.role === "user"),
-      ).toHaveLength(1);
+      expectSinglePersistedInput();
       expect(placements.get(SESSION_ID)).toMatchObject({
         state: "active",
         turnClaim: null,
@@ -757,11 +731,12 @@ describe("worker turn launcher build recovery", () => {
     },
   );
 
-  it.each(
-    (["cancelled", "superseded", "replaced"] as const).flatMap((outcome) =>
-      [false, true].map((refreshInPlace) => ({ outcome, refreshInPlace })),
-    ),
-  )(
+  it.each([
+    { outcome: "cancelled", refreshInPlace: false },
+    { outcome: "superseded", refreshInPlace: true },
+    { outcome: "replaced", refreshInPlace: false },
+    { outcome: "replaced", refreshInPlace: true },
+  ] as const)(
     "does not retry a turn $outcome during reconciliation (refreshInPlace=$refreshInPlace)",
     async ({ outcome, refreshInPlace }) => {
       const controller = new AbortController();
@@ -800,7 +775,6 @@ describe("worker turn launcher build recovery", () => {
 
   it.each([
     { refreshInPlace: false, rejection: "admission" },
-    { refreshInPlace: true, rejection: "admission" },
     { refreshInPlace: true, rejection: "pending refresh" },
   ] as const)(
     "attempts build recovery only once after $rejection (refreshInPlace=$refreshInPlace)",

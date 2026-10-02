@@ -176,7 +176,7 @@ export function createDoctorMaintenanceState(options: {
         await enterResources(owner!);
       }
       if (migration) {
-        const result = await resources!.run(() => migration.complete());
+        const result = migration.result;
         for (const change of [...result.changes, ...(result.notices ?? [])]) {
           params.runtime.log(sanitizeDoctorNote(change));
         }

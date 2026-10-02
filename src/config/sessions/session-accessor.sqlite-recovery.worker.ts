@@ -153,12 +153,15 @@ export function recoverRestartTombstoneInDatabase(
   };
   return {
     result,
-    publication: prepareSessionEntryReplacementPublication({
-      pendingArchiveRecovery: false,
-      previous: previousIdentity,
-      current: currentIdentity,
-      maintenancePlans: [],
-      membershipInvalidatedKeys: [],
-    }),
+    publication: prepareSessionEntryReplacementPublication(
+      {
+        pendingArchiveRecovery: false,
+        previous: previousIdentity,
+        current: currentIdentity,
+        maintenancePlans: [],
+        membershipInvalidatedKeys: [],
+      },
+      database,
+    ),
   };
 }

@@ -24,6 +24,7 @@ import {
   createConversationDeliveryTestStore,
   holdConversationWriterForTest,
   queueConversationDeliveryForTest,
+  readConversationDeliveryStateForTest,
 } from "./conversation-delivery.test-support.js";
 import {
   ConversationInputError,
@@ -98,8 +99,9 @@ describe("runGatewayConversationSend", () => {
       );
       try {
         await setImmediate();
-        expect(deps.getOperation.mock.calls.length).toBe(0);
-        expect(deps.beginOperation.mock.calls.length).toBe(0);
+        expect(
+          readConversationDeliveryStateForTest(deps.scope, "send-admitted-lookup"),
+        ).toBeUndefined();
         expect(deps.runMessageAction).not.toHaveBeenCalled();
         if (aborted) {
           controller.abort(reason);
@@ -107,7 +109,9 @@ describe("runGatewayConversationSend", () => {
         await writer.release();
         if (aborted) {
           expect(await outcome).toEqual({ error: reason });
-          expect(deps.beginOperation.mock.calls.length).toBe(0);
+          expect(
+            readConversationDeliveryStateForTest(deps.scope, "send-admitted-lookup"),
+          ).toBeUndefined();
           expect(deps.runMessageAction).not.toHaveBeenCalled();
         } else {
           expect(await outcome).toMatchObject({ value: { status: "sent" } });
@@ -171,13 +175,17 @@ describe("runGatewayConversationSend", () => {
       currentConfig = replacement.config;
       await setImmediate();
       expect(settled).toBe(false);
-      expect(deps.markSent.mock.calls.length).toBe(0);
+      expect(readConversationDeliveryStateForTest(deps.scope, "send-settlement")?.status).toBe(
+        "queued",
+      );
       await writer.release();
       expect(await outcome).toMatchObject({
         value: { status: "sent", messageId: "reef-outbound-1" },
       });
-      expect(deps.getOperation(deps.scope, "send-settlement")).toMatchObject({ status: "sent" });
-      expect(replacement.getOperation(replacement.scope, "send-settlement")).toBeUndefined();
+      expect(await deps.getOperation(deps.scope, "send-settlement")).toMatchObject({
+        status: "sent",
+      });
+      expect(await replacement.getOperation(replacement.scope, "send-settlement")).toBeUndefined();
       expect(deps.runMessageAction).toHaveBeenCalledOnce();
     } finally {
       const writer = await writerReady;
@@ -219,35 +227,35 @@ describe("runGatewayConversationSend", () => {
     async ({ status, preparedMessageId, platformMessageId, messageId }) => {
       const deps = createDeps();
       const operationId = "send-completed";
-      beginConversationDeliveryOperation(deps.scope, {
+      await beginConversationDeliveryOperation(deps.scope, {
         operationId,
         operationKind: "send",
         conversationRef: conversation.conversationRef,
         message: "hello",
         preparedMessageId,
       });
-      markConversationDeliveryQueued(deps.scope, operationId, "queue-existing");
+      await markConversationDeliveryQueued(deps.scope, operationId, "queue-existing");
       switch (status) {
         case "queued":
           break;
         case "sent":
         case "replied":
-          markConversationDeliverySent(deps.scope, operationId, platformMessageId);
+          await markConversationDeliverySent(deps.scope, operationId, platformMessageId);
           if (status === "replied") {
-            markConversationDeliveryReplied(deps.scope, {
+            await markConversationDeliveryReplied(deps.scope, {
               operationId,
               reply: { messageId: "reply-existing", text: "ack", timestamp: 300 },
             });
           }
           break;
         case "suppressed":
-          markConversationDeliverySuppressed(deps.scope, operationId);
+          await markConversationDeliverySuppressed(deps.scope, operationId);
           break;
         case "unknown":
-          markConversationDeliveryUnknown(deps.scope, operationId);
+          await markConversationDeliveryUnknown(deps.scope, operationId);
           break;
         case "rejected":
-          markConversationDeliveryRejected(deps.scope, operationId, "permanent rejection");
+          await markConversationDeliveryRejected(deps.scope, operationId, "permanent rejection");
           break;
       }
       deps.resolveConversation.mockReturnValue({
@@ -294,7 +302,7 @@ describe("runGatewayConversationSend", () => {
     async (existing) => {
       const deps = createDeps();
       if (existing) {
-        beginConversationDeliveryOperation(deps.scope, {
+        await beginConversationDeliveryOperation(deps.scope, {
           operationId: "send-unfinished",
           operationKind: "send",
           conversationRef: conversation.conversationRef,
@@ -367,13 +375,13 @@ describe("runGatewayConversationSend", () => {
 
   it("does not reveal completed send state after the route owner changes", async () => {
     const deps = createDeps();
-    beginConversationDeliveryOperation(deps.scope, {
+    await beginConversationDeliveryOperation(deps.scope, {
       operationId: "send-reassigned",
       operationKind: "send",
       conversationRef: conversation.conversationRef,
       message: "hello",
     });
-    markConversationDeliverySent(deps.scope, "send-reassigned", "reef-private-message");
+    await markConversationDeliverySent(deps.scope, "send-reassigned", "reef-private-message");
 
     await expect(
       runGatewayConversationSend({
@@ -420,7 +428,7 @@ describe("runGatewayConversationSend", () => {
         message: "hello",
       }),
     ).rejects.toBeInstanceOf(ConversationInputError);
-    expect(deps.beginOperation.mock.calls.length).toBe(0);
+    expect(readConversationDeliveryStateForTest(deps.scope, "send-sibling-route")).toBeUndefined();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
@@ -452,11 +460,10 @@ describe("runGatewayConversationSend", () => {
       }),
     ).resolves.toMatchObject({ status: "queued", queueId: "queue-revoked-route" });
 
-    expect(deps.getOperation(deps.scope, "send-revoked-route")).toMatchObject({
+    expect(await deps.getOperation(deps.scope, "send-revoked-route")).toMatchObject({
       status: "queued",
       queueId: "queue-revoked-route",
     });
-    expect(deps.markSent.mock.calls.length).toBe(0);
   });
 
   it("namespaces stable queue intents across agents", async () => {
@@ -508,19 +515,19 @@ describe("runGatewayConversationSend", () => {
         message: "hello",
       }),
     ).rejects.toBeInstanceOf(ConversationInputError);
-    expect(deps.beginOperation.mock.calls.length).toBe(0);
+    expect(readConversationDeliveryStateForTest(deps.scope, "send-missing")).toBeUndefined();
     expect(deps.runMessageAction).not.toHaveBeenCalled();
   });
 
   it("preserves durable operation conflicts for Gateway identity recovery", async () => {
     const deps = createDeps();
-    beginConversationDeliveryOperation(deps.scope, {
+    await beginConversationDeliveryOperation(deps.scope, {
       operationId: "send-reused",
       operationKind: "send",
       conversationRef: conversation.conversationRef,
       message: "original",
     });
-    markConversationDeliverySent(deps.scope, "send-reused");
+    await markConversationDeliverySent(deps.scope, "send-reused");
     deps.resolveConversation.mockReturnValue(undefined);
 
     await expect(

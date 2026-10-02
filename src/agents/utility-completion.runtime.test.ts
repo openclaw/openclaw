@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import * as modelAuth from "./model-auth.js";
 import {
   resolveUtilityCompletionRuntimeForAgent,
   type UtilityCompletionRuntimeParams,
@@ -116,4 +117,49 @@ describe("resolveUtilityCompletionRuntimeForAgent", () => {
     params.isCurrent = vi.fn().mockReturnValueOnce(true).mockReturnValue(false);
     await expect(resolveUtilityCompletionRuntimeForAgent(params)).resolves.toBeUndefined();
   });
+});
+
+describe("automatic utility runtime prepared-generation composition", () => {
+  it.each([false, true])(
+    "uses only prepared API credential availability (%s)",
+    async (hasApiCredential) => {
+      const params = prepared();
+      params.cfg.models = undefined;
+      params.cfg.agents!.defaults!.utilityModel = undefined;
+      params.cfg.agents!.defaults!.models = {
+        "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
+      };
+      const plugin = params.metadataSnapshot.plugins[0];
+      if (!plugin) {
+        throw new Error("Expected the Anthropic metadata fixture.");
+      }
+      plugin.modelCatalog = {
+        providers: {
+          anthropic: {
+            defaultUtilityModel: "claude-haiku-4-5",
+            models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-4-6" }],
+          },
+        },
+      };
+      if (hasApiCredential) {
+        params.preparedAuthStore.profiles["anthropic:test"] = {
+          type: "api_key",
+          provider: "anthropic",
+          key: "synthetic-prepared-key",
+        };
+      }
+      const credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
+      try {
+        const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
+        expect(runtime).toEqual(
+          hasApiCredential
+            ? { id: "openclaw", kind: "api", label: "OpenClaw Default" }
+            : { id: "claude-cli", kind: "cli", label: "Claude CLI" },
+        );
+        expect(credentialLookup).not.toHaveBeenCalled();
+      } finally {
+        credentialLookup.mockRestore();
+      }
+    },
+  );
 });

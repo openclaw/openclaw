@@ -53,7 +53,7 @@ import {
   registerTalkRealtimeRelayAgentRun,
   sendTalkRealtimeRelayAudio,
   steerTalkRealtimeRelayAgentRun,
-  stopTalkRealtimeRelaySession as stopTalkRealtimeRelaySessionRaw,
+  stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "./index.js";
 import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
@@ -117,13 +117,6 @@ function createTalkRealtimeRelaySession(
   });
   activeRelaySessions.set(session.relaySessionId, connId);
   return session;
-}
-
-function stopTalkRealtimeRelaySession(
-  params: Parameters<typeof stopTalkRealtimeRelaySessionRaw>[0],
-): void {
-  void stopTalkRealtimeRelaySessionRaw(params);
-  activeRelaySessions.delete(params.relaySessionId);
 }
 
 function createOwnedTalkRunControllers() {
@@ -635,7 +628,7 @@ describe("talk realtime gateway relay", () => {
         audioBase64: "AQI=",
       });
       expect(bridgeAudioSends[2]).toHaveBeenCalledOnce();
-      stopTalkRealtimeRelaySession({
+      void stopTalkRealtimeRelaySession({
         relaySessionId: unrelated.relaySessionId,
         connId: "conn-other",
       });
@@ -680,7 +673,7 @@ describe("talk realtime gateway relay", () => {
       expect(replacement.activeAgentRuns.size).toBe(0);
     } finally {
       relaySessions.set(session.relaySessionId, original);
-      stopTalkRealtimeRelaySession({
+      void stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
         connId: "conn-replaced-runner",
       });
@@ -853,7 +846,7 @@ describe("talk realtime gateway relay", () => {
             model: "realtime-voice",
           },
         });
-        stopTalkRealtimeRelaySession({
+        void stopTalkRealtimeRelaySession({
           relaySessionId: session.relaySessionId,
           connId: "conn-voice",
         });
@@ -1020,7 +1013,7 @@ describe("talk realtime gateway relay", () => {
         status: "open",
         consultRunIds: ["run-before-transcript", "run-other-session"],
       });
-      stopTalkRealtimeRelaySession({
+      void stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
         connId: "conn-consult",
       });
@@ -1072,7 +1065,7 @@ describe("talk realtime gateway relay", () => {
         connId: "conn-owner-pin",
         sessionKey: "main",
       });
-      stopTalkRealtimeRelaySession({
+      void stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
         connId: "conn-owner-pin",
       });
@@ -1176,7 +1169,7 @@ describe("talk realtime gateway relay", () => {
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("realtime relay transcript append failed"),
       );
-      stopTalkRealtimeRelaySession({
+      void stopTalkRealtimeRelaySession({
         relaySessionId: session.relaySessionId,
         connId: "conn-voice-failure",
       });
@@ -2137,7 +2130,7 @@ describe("talk realtime gateway relay", () => {
       reason: "barge-in",
       turnId: ensureActiveRelayTurnId(session.relaySessionId),
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    void stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.sendUserMessage).not.toHaveBeenCalledWith("hello");
@@ -2595,7 +2588,7 @@ describe("talk realtime gateway relay", () => {
       name: "openclaw_agent_consult",
       args: { question: "Can you check something else?" },
     });
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    void stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
   });
 
   it.each([
@@ -2941,7 +2934,7 @@ describe("talk realtime gateway relay", () => {
         );
       }),
     ).toBe(false);
-    stopTalkRealtimeRelaySession({
+    await stopTalkRealtimeRelaySession({
       relaySessionId: nativeSession.relaySessionId,
       connId: "conn-1",
     });
@@ -2972,7 +2965,7 @@ describe("talk realtime gateway relay", () => {
         );
       }),
     ).toBe(false);
-    stopTalkRealtimeRelaySession({
+    await stopTalkRealtimeRelaySession({
       relaySessionId: unicodeSession.relaySessionId,
       connId: "conn-1",
     });
@@ -3036,7 +3029,7 @@ describe("talk realtime gateway relay", () => {
       let drain: Promise<void> | undefined;
       try {
         if (start === "explicit-close") {
-          closing = stopTalkRealtimeRelaySessionRaw({
+          closing = stopTalkRealtimeRelaySession({
             relaySessionId: session.relaySessionId,
             connId: "conn-relay-drain",
           });
@@ -3570,7 +3563,7 @@ describe("talk realtime gateway relay", () => {
         );
         await expect(voiceChange.changing).rejects.toThrow("stopped");
         expect(abortController.signal.aborted).toBe(true);
-        stopTalkRealtimeRelaySession(target);
+        void stopTalkRealtimeRelaySession(target);
         await cancellation;
         await expect(
           completeTalkVoiceChange({
@@ -4662,7 +4655,7 @@ describe("talk realtime gateway relay", () => {
       mode: "cancel",
     });
     await vi.waitFor(() => expect(submitToolResult).toHaveBeenCalledTimes(1));
-    stopTalkRealtimeRelaySession({
+    void stopTalkRealtimeRelaySession({
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
     });
@@ -5077,7 +5070,10 @@ describe("talk realtime gateway relay", () => {
         const lateReply = vi.fn();
         const handleInput = bridgeRequest?.handleDelegationInput;
         expect(handleInput?.(text, lateReply)).toBe("control");
-        stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+        void stopTalkRealtimeRelaySession({
+          relaySessionId: session.relaySessionId,
+          connId: "conn-1",
+        });
         expect(handleInput?.("Check another task.", lateReply)).toBe("control");
         await nextEventLoopTurn();
         expect(lateReply).not.toHaveBeenCalled();
@@ -5089,7 +5085,7 @@ describe("talk realtime gateway relay", () => {
   it("aborts linked agent consult runs when the relay session closes", () => {
     const { abortController, broadcast, nodeSendToSession, chatRunState, session } =
       createAbortableRelayRunFixture();
-    stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
+    void stopTalkRealtimeRelaySession({ relaySessionId: session.relaySessionId, connId: "conn-1" });
 
     expect(abortController.signal.aborted).toBe(true);
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
@@ -5126,7 +5122,7 @@ describe("talk realtime gateway relay", () => {
       const voiceChange = startRelayVoiceChange(session.relaySessionId);
       try {
         if (ending === "client-stop") {
-          stopTalkRealtimeRelaySession({
+          void stopTalkRealtimeRelaySession({
             relaySessionId: session.relaySessionId,
             connId: "conn-1",
           });

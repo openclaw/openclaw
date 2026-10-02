@@ -8,7 +8,6 @@ import {
 import {
   resolveConversation,
   resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
   type ConversationRecord,
   type ConversationRegistryScope,
 } from "../config/sessions/conversation-registry.js";
@@ -47,7 +46,7 @@ function hasConversationSessionBinding(
 }
 
 function resultForCompletedOperation(
-  operation: ReturnType<typeof beginConversationDeliveryOperation>["record"],
+  operation: Awaited<ReturnType<typeof beginConversationDeliveryOperation>>["record"],
 ): ConversationTurnResult | undefined {
   const messageId = operation.platformMessageId ?? operation.preparedMessageId;
   if (operation.status === "replied" && operation.reply && messageId) {
@@ -229,17 +228,15 @@ export async function runGatewayConversationTurn(params: {
     scope,
     sourceSessionKey: params.sourceSessionKey,
   });
-  let begun: ReturnType<typeof beginConversationDeliveryOperation> | undefined;
+  let begun: Awaited<ReturnType<typeof beginConversationDeliveryOperation>> | undefined;
   try {
-    begun = await runConversationDatabaseWrite(scope, (writeScope) => {
-      const prior = getConversationDeliveryOperation(writeScope, params.turnId, {
-        operationKind: "turn",
-        conversationRef: params.conversationRef,
-        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-        message: params.message,
-      });
-      return prior ? { created: false, record: prior } : undefined;
+    const prior = await getConversationDeliveryOperation(scope, params.turnId, {
+      operationKind: "turn",
+      conversationRef: params.conversationRef,
+      ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+      message: params.message,
     });
+    begun = prior ? { created: false, record: prior } : undefined;
   } catch (error) {
     if (error instanceof ConversationDeliveryInputError) {
       throw new ConversationOperationConflictError(error.message);
@@ -315,17 +312,19 @@ export async function runGatewayConversationTurn(params: {
   };
   if (!begun) {
     try {
-      begun = await runConversationDatabaseWrite(scope, (writeScope) => {
-        assertCurrent();
-        return beginConversationDeliveryOperation(writeScope, {
+      begun = await beginConversationDeliveryOperation(
+        scope,
+        {
           operationId: params.turnId,
           operationKind: "turn",
           conversationRef: conversation.conversationRef,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           message: params.message,
           preparedMessageId: candidatePreparedMessageId,
-        });
-      });
+        },
+        assertCurrent,
+      );
+      assertCurrent();
     } catch (error) {
       if (error instanceof ConversationDeliveryInputError) {
         throw new ConversationOperationConflictError(error.message);
