@@ -32,15 +32,16 @@ function createAuthorityAbortFixture(runId: string) {
   });
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   registration.bindAgentRunDelegatedAuthority(authority);
+  const chatRunState = createChatRunState();
   const ops: ChatAbortOps = {
     chatAbortControllers,
-    chatRunState: createChatRunState(),
+    chatRunState,
     removeChatRun: vi.fn(() => undefined),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     nodeSendToSession: vi.fn(),
   };
-  return { authority, operationalRunInstance, ops, registration, runId, sessionKey };
+  return { authority, operationalRunInstance, chatRunState, ops, registration, runId, sessionKey };
 }
 
 it("binds delegated authority only to the exact operational instance object", () => {
@@ -92,19 +93,38 @@ it("leaves sessionless authority with the outer admission owner", () => {
 });
 
 it("revokes exact delegated authority before abort callbacks and controller listeners", () => {
-  const { authority, ops, registration, runId, sessionKey } =
+  const { authority, chatRunState, ops, registration, runId, sessionKey } =
     createAuthorityAbortFixture("run-authority-abort");
   const entry = registration.entry!;
+  const onAbortCommitted = vi.fn(() => {
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+    expect(entry.controller.signal.aborted).toBe(false);
+    expect(chatRunState.hasAbortMarker(runId)).toBe(true);
+  });
   ops.onRunAborted = vi.fn(() => {
     expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
     expect(entry.controller.signal.aborted).toBe(false);
   });
 
-  expect(abortChatRunById(ops, { runId, sessionKey, stopReason: "user" })).toEqual({
+  entry.isAbortable = () => false;
+  expect(abortChatRunById(ops, { runId, sessionKey, onAbortCommitted })).toEqual({
+    aborted: false,
+  });
+  expect(onAbortCommitted).not.toHaveBeenCalled();
+  expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+  entry.isAbortable = undefined;
+
+  expect(
+    abortChatRunById(ops, { runId, sessionKey, stopReason: "user", onAbortCommitted }),
+  ).toEqual({
     aborted: true,
   });
   expect(ops.onRunAborted).toHaveBeenCalledOnce();
   expect(entry.controller.signal.aborted).toBe(true);
+  expect(abortChatRunById(ops, { runId, sessionKey, onAbortCommitted })).toEqual({
+    aborted: false,
+  });
+  expect(onAbortCommitted).toHaveBeenCalledOnce();
 });
 
 it("does not revoke a same-id successor from a stale abort controller", () => {

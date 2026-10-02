@@ -107,6 +107,17 @@ describe("cli program (smoke)", () => {
     });
   });
 
+  it.each(["agent:ops:main", "https://gateway.example/chat/stale/movies-a1166b81"])(
+    "preserves the resolved global owner when launching tui from %s",
+    async (target) => {
+      programGatewayCallMock.mockResolvedValue({ ok: true, key: "global", agentId: "ops" });
+
+      await runProgram(["tui", target]);
+
+      expect(firstMockArg(tuiRunMock)).toMatchObject({ session: "global", agentId: "ops" });
+    },
+  );
+
   it("leaves tui agent inference unchanged without a URL agent", async () => {
     await runProgram(["tui"]);
 

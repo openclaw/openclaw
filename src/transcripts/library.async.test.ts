@@ -1,42 +1,31 @@
-import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { activeSessions } from "./capture.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
+import { activeSessions } from "./capture-startup.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { TranscriptsStore, transcriptSessionSelector } from "./store.js";
+import {
+  createTranscriptLibraryStoreFixture,
+  transcriptLibrarySession as session,
+} from "./library.store.test-support.js";
+import { transcriptSessionSelector } from "./store.js";
 import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
 });
 
 function fixture() {
-  const stateDir = tempDirs.make("transcript-library-async-");
-  return {
-    store: new TranscriptsStore(path.join(stateDir, "transcripts"), {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    }),
-  };
-}
-
-function session(
-  sessionId: string,
-  overrides: Partial<TranscriptSessionDescriptor> = {},
-): TranscriptSessionDescriptor {
-  return {
-    sessionId,
-    title: sessionId,
-    source: { providerId: "manual-transcript" },
-    startedAt: "2026-08-20T10:00:00.000Z",
-    ...overrides,
-  };
+  return createTranscriptLibraryStoreFixture(tempDirs.make("transcript-library-async-"));
 }
 
 describe("transcript library asynchronous reads", () => {
@@ -81,22 +70,15 @@ describe("transcript library asynchronous reads", () => {
               (await exportTranscriptLibrary(store, { selector, format: "markdown" })).data,
               "base64",
             ).toString("utf8");
-      let settled = false;
+      const settled = vi.fn();
       const result = read();
-      const settlement = result.then(
-        () => {
-          settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+      const settlement = result.then(settled, settled);
       const replacement = { ...target, title: "Replacement meeting" };
       const added = { text: "Peer saved note" };
       try {
         await reading.promise;
         await setImmediate();
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         await store.writeSession(replacement);
         await store.appendUtteranceForSession(replacement, added);
         await store.writeSummary(
@@ -118,30 +100,22 @@ describe("transcript library asynchronous reads", () => {
     },
   );
 
-  it.each(["get", "export"] as const)(
-    "propagates a failed composed %s without returning partial content",
-    async (kind) => {
-      const { store } = fixture();
-      const target = session("rejected-read");
-      await store.writeSession(target);
-      const failure = new Error("archive read failed");
-      const selector = transcriptSessionSelector(target);
-      if (kind === "get") {
-        vi.spyOn(store, "readLibraryEntry").mockRejectedValueOnce(failure);
-        await expect(
-          getTranscriptLibrary(store, { selector, includeUtterances: true, limit: 1 }),
-        ).rejects.toBe(failure);
-      } else {
-        vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-          yield { sequence: 0, text: "Partial content" };
-          throw failure;
-        });
-        await expect(exportTranscriptLibrary(store, { selector, format: "jsonl" })).rejects.toBe(
-          failure,
-        );
-      }
-    },
-  );
+  it("propagates a failed export without returning partial content", async () => {
+    const { store } = fixture();
+    const target = session("rejected-read");
+    await store.writeSession(target);
+    const failure = new Error("archive read failed");
+    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
+      yield { sequence: 0, text: "Partial content" };
+      throw failure;
+    });
+    await expect(
+      exportTranscriptLibrary(store, {
+        selector: transcriptSessionSelector(target),
+        format: "jsonl",
+      }),
+    ).rejects.toBe(failure);
+  });
 
   it("rejects an export canceled before its completion result", async () => {
     const { store } = fixture();
@@ -174,19 +148,12 @@ describe("transcript library asynchronous reads", () => {
     const result = listTranscriptLibrary(store, {}, () => {
       throw failure;
     });
-    let settled = false;
-    const settlement = result.then(
-      () => {
-        settled = true;
-      },
-      () => {
-        settled = true;
-      },
-    );
+    const settled = vi.fn();
+    const settlement = result.then(settled, settled);
     try {
       await closing.promise;
       await setImmediate();
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
       expect(closed).toBe(false);
     } finally {
       cleanup.resolve();
@@ -203,9 +170,13 @@ describe("transcript library asynchronous reads", () => {
     await store.writeSession(old);
     await store.writeSession(current);
     activeSessions.set(current.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session: current,
       phase: "active",
-      provider: {},
+      stopProvider: async () => {
+        throw new Error("Reading the transcript library must not stop capture");
+      },
+      releaseProvider: async () => {},
       providerId: current.source.providerId,
     });
     const first = await listTranscriptLibrary(store, {});

@@ -22,12 +22,15 @@ import {
 } from "../../../config/sessions/transcript-write-context.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import type { AgentSession } from "../../sessions/index.js";
+import { convertToLlm as convertHarnessMessages } from "../../sessions/messages.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { beginPromptCacheObservation } from "../prompt-cache-observability.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
@@ -59,6 +62,7 @@ function createSessionManager(
     getHeader: () => ({ version: 3 }),
     getLeafEntry: () => undefined,
     getSessionTarget: () => undefined,
+    getSessionId: () => "session-boundary",
     ...overrides,
   } as unknown as ReturnType<typeof guardSessionManager>;
 }
@@ -90,7 +94,7 @@ async function withPersistedOrphanBoundary(
     await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const orphanId = seed.appendMessage({
       role: "user",
@@ -103,8 +107,8 @@ async function withPersistedOrphanBoundary(
         : {}),
     });
     if (options.metadata) {
-      seed.appendThinkingLevelChange("low");
-      seed.appendModelChange("openai", "gpt-5.5");
+      await seed.appendThinkingLevelChange("low");
+      await seed.appendModelChange("openai", "gpt-5.5");
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {
@@ -122,6 +126,7 @@ async function withPersistedOrphanBoundary(
       input: {
         activeSession,
         attempt: {
+          sessionId: target.sessionId,
           ...(options.restartRecovery
             ? {
                 inputProvenance: {
@@ -132,7 +137,6 @@ async function withPersistedOrphanBoundary(
             : {}),
           prompt: "new request",
           suppressNextUserMessagePersistence: options.suppressNextUserMessagePersistence,
-          trigger: "user",
         },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
@@ -161,7 +165,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       appendOnlyRuntimeContext: false,
-      attempt: { prompt: "next question", trigger: "user" },
+      attempt: { sessionId: "session-boundary", prompt: "next question" },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -178,78 +182,139 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
   it.each([false, true])(
     "replays turn and tool-loop prefixes with append-only runtime context %s",
+    async (appendOnlyRuntimeContext) =>
+      withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, async () => {
+        const { activeSession } = createActiveSession();
+        activeSession.agent.convertToLlm = convertHarnessMessages;
+        const sessionId = `boundary-cache-${appendOnlyRuntimeContext}`;
+        const observe = (messages: Parameters<typeof beginPromptCacheObservation>[0]["messages"]) =>
+          beginPromptCacheObservation({
+            sessionId,
+            provider: "test-provider",
+            modelId: "test-model",
+            streamStrategy: "test",
+            systemPrompt: "Stable system prompt",
+            tools: [],
+            messages,
+          });
+        await prepareEmbeddedAttemptSessionBoundary({
+          activeSession,
+          appendOnlyRuntimeContext,
+          attempt: {
+            sessionId,
+            config: { agents: { defaults: { userTimezone: "UTC" } } },
+            prompt: "first question",
+          },
+          getUserTranscriptContexts: () => undefined,
+          isRawModelRun: false,
+          preparedUserTurnMessage: undefined,
+          sessionManager: createSessionManager(),
+          setActiveSessionSystemPrompt: vi.fn(),
+        });
+        const user = {
+          role: "user" as const,
+          content: [
+            {
+              type: "text" as const,
+              text: `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\nfirst question`,
+            },
+          ],
+          timestamp: 1_717_570_800_000,
+        };
+        const carrier = buildRuntimeContextCustomMessage("first turn context")!;
+        const messages: AgentMessage[] = appendOnlyRuntimeContext
+          ? [user, carrier]
+          : [carrier, user];
+        const first = await activeSession.agent.convertToLlm(messages);
+        expect(observe(first).changes).toBeNull();
+        expect(first).toHaveLength(2);
+        expect(first[1]).toMatchObject({
+          role: "user",
+          content: [{ type: "text", text: carrier.content }],
+        });
+        messages.push(
+          makeAssistantMessageFixture({
+            content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
+            stopReason: "toolUse",
+          }),
+          {
+            role: "toolResult",
+            toolCallId: "call_read",
+            toolName: "read",
+            content: [{ type: "text", text: "result" }],
+            isError: false,
+            timestamp: user.timestamp + 1,
+          },
+        );
+        const toolLoop = await activeSession.agent.convertToLlm(messages);
+        expect(observe(toolLoop).changes).toEqual(
+          appendOnlyRuntimeContext
+            ? null
+            : [expect.objectContaining({ code: "runtimeContextCarrier" })],
+        );
+        if (appendOnlyRuntimeContext) {
+          expect(JSON.stringify(toolLoop.slice(0, first.length))).toBe(JSON.stringify(first));
+        } else {
+          expect(toolLoop.at(-1)).toEqual(first[1]);
+        }
+        expect(observe(await activeSession.agent.convertToLlm(messages)).changes).toBeNull();
+        const nextUser = {
+          role: "user" as const,
+          content: "next question",
+          timestamp: user.timestamp + 60_000,
+        };
+        const nextCarrier = buildRuntimeContextCustomMessage("second turn context")!;
+        messages.push(makeAssistantMessageFixture({ content: [{ type: "text", text: "done" }] }));
+        messages.push(
+          ...(appendOnlyRuntimeContext ? [nextUser, nextCarrier] : [nextCarrier, nextUser]),
+        );
+        const next = await activeSession.agent.convertToLlm(messages);
+        expect(observe(next).changes).toEqual(
+          appendOnlyRuntimeContext
+            ? null
+            : [expect.objectContaining({ code: "runtimeContextCarrier" })],
+        );
+        if (appendOnlyRuntimeContext) {
+          expect(JSON.stringify(next.slice(0, toolLoop.length))).toBe(JSON.stringify(toolLoop));
+          expect(next[1]).toEqual(first[1]);
+          expect(next[0]!.content).toContain("Conversation info:");
+        } else {
+          expect(next).not.toContainEqual(first[1]);
+          expect(next[0]!.content).not.toContain("Conversation info:");
+        }
+        expect(next.at(-1)).toMatchObject({
+          role: "user",
+          content: [{ type: "text", text: nextCarrier.content }],
+        });
+      }),
+  );
+
+  it.each([false, true])(
+    "records runtime-context cache retention at the LLM boundary (%s)",
     async (appendOnlyRuntimeContext) => {
       const { activeSession } = createActiveSession();
+      activeSession.agent.convertToLlm = convertHarnessMessages;
       await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         appendOnlyRuntimeContext,
-        attempt: {
-          config: { agents: { defaults: { userTimezone: "UTC" } } },
-          prompt: "first question",
-          trigger: "user",
-        },
+        attempt: { sessionId: "session-boundary", prompt: "question" },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
         preparedUserTurnMessage: undefined,
         sessionManager: createSessionManager(),
         setActiveSessionSystemPrompt: vi.fn(),
       });
-      const user = {
-        role: "user" as const,
-        content: [
-          {
-            type: "text" as const,
-            text: `${markInboundContextLabel("Conversation info:")}\n\`\`\`json\n{"channel":"discord"}\n\`\`\`\n\nfirst question`,
-          },
-        ],
-        timestamp: 1_717_570_800_000,
-      };
-      const carrier = buildRuntimeContextCustomMessage("first turn context")!;
-      const messages: AgentMessage[] = appendOnlyRuntimeContext ? [user, carrier] : [carrier, user];
-      const first = await activeSession.agent.convertToLlm(messages);
-      expect(first).toHaveLength(2);
-      expect(first[1]).toBe(carrier);
-      messages.push(
-        makeAssistantMessageFixture({
-          content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
-          stopReason: "toolUse",
-        }),
-        {
-          role: "toolResult",
-          toolCallId: "call_read",
-          toolName: "read",
-          content: [{ type: "text", text: "result" }],
-          isError: false,
-          timestamp: user.timestamp + 1,
-        },
+
+      const user = { role: "user" as const, content: "question", timestamp: 1 };
+      const carrier = buildRuntimeContextCustomMessage("context")!;
+      const converted = await activeSession.agent.convertToLlm(
+        appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
       );
-      const toolLoop = await activeSession.agent.convertToLlm(messages);
-      if (appendOnlyRuntimeContext) {
-        expect(JSON.stringify(toolLoop.slice(0, first.length))).toBe(JSON.stringify(first));
-      } else {
-        expect(toolLoop.at(-1)).toBe(carrier);
-      }
-      const nextUser = {
-        role: "user" as const,
-        content: "next question",
-        timestamp: user.timestamp + 60_000,
-      };
-      const nextCarrier = buildRuntimeContextCustomMessage("second turn context")!;
-      messages.push(makeAssistantMessageFixture({ content: [{ type: "text", text: "done" }] }));
-      messages.push(
-        ...(appendOnlyRuntimeContext ? [nextUser, nextCarrier] : [nextCarrier, nextUser]),
-      );
-      const next = await activeSession.agent.convertToLlm(messages);
-      if (appendOnlyRuntimeContext) {
-        expect(JSON.stringify(next.slice(0, toolLoop.length))).toBe(JSON.stringify(toolLoop));
-        expect(next[1]).toBe(carrier);
-        expect(next.at(-1)).toBe(nextCarrier);
-        expect(next[0]!.content).toContain("Conversation info:");
-      } else {
-        expect(next).not.toContain(carrier);
-        expect(next.at(-1)).toBe(nextCarrier);
-        expect(next[0]!.content).not.toContain("Conversation info:");
-      }
+      const message = converted.at(-1);
+      expect(message).toMatchObject({ role: "user", runtimeContextCarrier: true });
+      expect(
+        (message as { runtimeContextCarrierRetained?: boolean }).runtimeContextCarrierRetained,
+      ).toBe(appendOnlyRuntimeContext);
     },
   );
 
@@ -415,7 +480,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "exact probe" },
+      attempt: { sessionId: "session-boundary", prompt: "exact probe" },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: true,
       preparedUserTurnMessage: undefined,
@@ -456,9 +521,9 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: {
+        sessionId: "session-boundary",
         operation: "settled-tool-finalization",
         prompt: "finalize exactly",
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -490,9 +555,9 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: {
+        sessionId: "session-boundary",
         config: { agents: { defaults: { userTimezone: "UTC" } } },
         prompt: "Current ask",
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -533,7 +598,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [{ runtimeMessage, transcriptMessage }],
       isRawModelRun: false,
       preparedUserTurnMessage: undefined,
@@ -560,7 +625,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "The launch is Friday", trigger: "user" },
+      attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: initialRuntime,
@@ -607,7 +672,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const { activeSession } = createActiveSession();
     await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
-      attempt: { prompt: "same", trigger: "user" },
+      attempt: { sessionId: "session-boundary", prompt: "same" },
       getUserTranscriptContexts: () => [
         {
           runtimeMessage: secondRuntime,
@@ -650,13 +715,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: 1,
       };
       const { activeSession } = createActiveSession([currentUser]);
-      const branch = vi.fn();
-      const resetLeaf = vi.fn();
+      const branchAsync = vi.fn(async () => undefined);
+      const resetLeafAsync = vi.fn(async () => undefined);
       const clearNextUserMessagePersistenceSuppression = vi.fn();
       const onUserMessagePersistenceInvalidated = vi.fn();
       const sessionManager = createSessionManager({
-        branch,
-        resetLeaf,
+        branchAsync,
+        resetLeafAsync,
         clearNextUserMessagePersistenceSuppression,
         getLeafEntry: () => ({
           id: "current-user",
@@ -677,10 +742,10 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const boundary = await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: {
+          sessionId: "session-boundary",
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
           suppressNextUserMessagePersistence,
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -692,8 +757,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
       expect(boundary.orphanRepair).toBeUndefined();
       expect(activeSession.agent.state.messages).toEqual([]);
-      expect(branch).not.toHaveBeenCalled();
-      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(branchAsync).not.toHaveBeenCalled();
+      expect(resetLeafAsync).not.toHaveBeenCalled();
       expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
       expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
     },
@@ -723,13 +788,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: 1,
       };
       const { activeSession } = createActiveSession([]);
-      const branch = vi.fn();
-      const resetLeaf = vi.fn();
+      const branchAsync = vi.fn(async () => undefined);
+      const resetLeafAsync = vi.fn(async () => undefined);
       const clearNextUserMessagePersistenceSuppression = vi.fn();
       const onUserMessagePersistenceInvalidated = vi.fn();
       const sessionManager = createSessionManager({
-        branch,
-        resetLeaf,
+        branchAsync,
+        resetLeafAsync,
         clearNextUserMessagePersistenceSuppression,
         getLeafEntry: () => ({
           id: "current-user",
@@ -750,9 +815,9 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const boundary = await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: {
+          sessionId: "session-boundary",
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -763,8 +828,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       });
       expect(boundary.orphanRepair).toBeUndefined();
       expect(activeSession.agent.state.messages).toEqual([]);
-      expect(branch).not.toHaveBeenCalled();
-      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(branchAsync).not.toHaveBeenCalled();
+      expect(resetLeafAsync).not.toHaveBeenCalled();
       expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
       expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
     },
@@ -782,7 +847,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       };
       const repairedMessages: AgentMessage[] = [currentUser];
       const { activeSession } = createActiveSession([]);
-      const branch = vi.fn();
+      const branchAsync = vi.fn(async () => undefined);
       const clearNextUserMessagePersistenceSuppression = vi.fn();
       const onUserMessagePersistenceInvalidated = vi.fn();
       const sessionManager = createSessionManager({
@@ -798,7 +863,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
             timestamp: 1,
           },
         }),
-        branch,
+        branchAsync,
         clearNextUserMessagePersistenceSuppression,
         buildSessionContext: () => ({ messages: repairedMessages }),
       });
@@ -814,9 +879,9 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       const boundary = await prepareEmbeddedAttemptSessionBoundary({
         activeSession,
         attempt: {
+          sessionId: "session-boundary",
           onUserMessagePersistenceInvalidated,
           prompt: "current prompt",
-          trigger: "user",
           userTurnTranscriptRecorder: recorder,
         },
         getUserTranscriptContexts: () => undefined,
@@ -828,13 +893,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
       if (excludeFromContext) {
         expect(boundary.orphanRepair).toBeUndefined();
-        expect(branch).not.toHaveBeenCalled();
+        expect(branchAsync).not.toHaveBeenCalled();
         expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
         expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
         expect(activeSession.agent.state.messages).toEqual([]);
       } else {
         expect(boundary.orphanRepair?.removeLeaf).toBe(true);
-        expect(branch).toHaveBeenCalledWith("previous-assistant");
+        expect(branchAsync).toHaveBeenCalledWith("previous-assistant");
         expect(clearNextUserMessagePersistenceSuppression).toHaveBeenCalledOnce();
         expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
         expect(activeSession.agent.state.messages).toEqual(repairedMessages);
@@ -856,7 +921,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       },
     ];
     const { activeSession } = createActiveSession([...contextMessages]);
-    const branch = vi.fn();
+    const branchAsync = vi.fn(async () => undefined);
     const clearNextUserMessagePersistenceSuppression = vi.fn();
     const onUserMessagePersistenceInvalidated = vi.fn();
     const sessionManager = createSessionManager({
@@ -867,7 +932,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: "2026-07-13T00:00:00.000Z",
         message: { role: "user", content: "old" },
       }),
-      branch,
+      branchAsync,
       clearNextUserMessagePersistenceSuppression,
       buildSessionContext: () => ({ messages: contextMessages }),
     });
@@ -875,6 +940,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     const boundary = await prepareEmbeddedAttemptSessionBoundary({
       activeSession,
       attempt: {
+        sessionId: "session-boundary",
         inputProvenance: {
           kind: "internal_system",
           sourceTool: MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL,
@@ -882,7 +948,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         onUserMessagePersistenceInvalidated,
         prompt: "new",
         suppressNextUserMessagePersistence: true,
-        trigger: "user",
       },
       getUserTranscriptContexts: () => undefined,
       isRawModelRun: false,
@@ -892,7 +957,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     });
 
     expect(boundary.orphanRepair?.removeLeaf).toBe(false);
-    expect(branch).not.toHaveBeenCalled();
+    expect(branchAsync).not.toHaveBeenCalled();
     expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
     expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
     expect(activeSession.agent.state.messages).toMatchObject([

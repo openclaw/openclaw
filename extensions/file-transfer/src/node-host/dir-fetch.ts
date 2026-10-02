@@ -1,9 +1,9 @@
-// File Transfer plugin module implements dir fetch behavior.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import { inspectDirFetchArchive } from "../shared/dir-fetch-archive.js";
@@ -64,13 +64,6 @@ type DirFetchErr = {
 
 type DirFetchResult = DirFetchOk | DirFetchErr;
 
-function clampMaxBytes(input: unknown): number {
-  if (typeof input !== "number" || !Number.isFinite(input) || input <= 0) {
-    return DIR_FETCH_DEFAULT_MAX_BYTES;
-  }
-  return Math.min(Math.floor(input), DIR_FETCH_HARD_MAX_BYTES);
-}
-
 function classifyFsError(err: unknown): DirFetchErrCode {
   const safeCode = classifyFsSafeReadError(err);
   if (safeCode) {
@@ -113,19 +106,19 @@ async function listTreeEntries(
       code: "CANONICAL_PATH_CHANGED",
     });
   }
+  // Root.walk is core-only; plugins enumerate through the rooted list contract.
   async function visit(relativeDir: string): Promise<boolean> {
     const entries = await rootHandle.list(relativeDir, { withFileTypes: true });
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const rel = path.posix.join(relativeDir === "." ? "" : relativeDir, entry.name);
-      results.push(rel);
+    for (const entry of entries.toSorted(
+      (left, right) => left.name.localeCompare(right.name) || (left.name < right.name ? -1 : 1),
+    )) {
+      const relativePath = path.posix.join(relativeDir, entry.name);
+      results.push(relativePath);
       if (results.length > maxEntries) {
         return false;
       }
-      if (entry.isDirectory) {
-        const ok = await visit(rel);
-        if (!ok) {
-          return false;
-        }
+      if (entry.isDirectory && !(await visit(relativePath))) {
+        return false;
       }
     }
     return true;
@@ -139,7 +132,10 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     return requestedPath;
   }
 
-  const maxBytes = clampMaxBytes(params.maxBytes);
+  const maxBytes = Math.min(
+    Math.floor(asPositiveFiniteNumber(params.maxBytes) ?? DIR_FETCH_DEFAULT_MAX_BYTES),
+    DIR_FETCH_HARD_MAX_BYTES,
+  );
   const followSymlinks = params.followSymlinks === true;
   const preflightOnly = params.preflightOnly === true;
 

@@ -1,11 +1,7 @@
-// Ollama plugin module implements discovery shared behavior.
 import { isIPv4 } from "node:net";
 import type { ProviderCatalogResult } from "openclaw/plugin-sdk/plugin-entry";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import type {
-  ModelProviderConfig,
-  ModelDefinitionConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,11 +12,6 @@ import {
 } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
-
-/** Provider config input type — partial config without required `models`. */
-type OllamaProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
-  models?: ModelDefinitionConfig[];
-};
 
 export const OLLAMA_PROVIDER_ID = "ollama";
 export { OLLAMA_DEFAULT_API_KEY } from "./defaults.js";
@@ -38,7 +29,7 @@ type OllamaDiscoveryContext = {
   providerIds?: readonly string[];
   config: {
     models?: {
-      providers?: Record<string, OllamaProviderConfigInput | undefined>;
+      providers?: Record<string, Partial<ModelProviderConfig> | undefined>;
     };
   };
   env: NodeJS.ProcessEnv;
@@ -49,7 +40,7 @@ type OllamaDiscoveryContext = {
   };
 };
 
-function readOllamaStringValue(value: unknown): string | undefined {
+export function readOllamaStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
     return normalizeOptionalString(value);
   }
@@ -144,15 +135,9 @@ export function isLocalOllamaBaseUrl(baseUrl: string | undefined | null): boolea
   if (!baseUrl) {
     return true;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
+  const host = readOllamaHostname(baseUrl);
+  if (host === undefined) {
     return false;
-  }
-  let host = parsed.hostname.toLowerCase();
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
   }
   return (
     LOCAL_OLLAMA_HOSTNAMES.has(host) ||
@@ -168,21 +153,17 @@ function isLoopbackOllamaBaseUrl(baseUrl: string | undefined | null): boolean {
   if (!baseUrl) {
     return true;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(baseUrl);
-  } catch {
-    return false;
-  }
-  let host = parsed.hostname.toLowerCase();
-  if (host.startsWith("[") && host.endsWith("]")) {
-    host = host.slice(1, -1);
-  }
-  return LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host);
+  const host = readOllamaHostname(baseUrl);
+  return host !== undefined && (LOOPBACK_OLLAMA_HOSTNAMES.has(host) || isLoopbackHost(host));
+}
+
+function readOllamaHostname(baseUrl: string): string | undefined {
+  const host = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return host?.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
 }
 
 function hasExplicitRemoteOllamaApiProvider(
-  providers: Record<string, OllamaProviderConfigInput | undefined> | undefined,
+  providers: Record<string, Partial<ModelProviderConfig> | undefined> | undefined,
 ): boolean {
   if (!providers) {
     return false;
@@ -203,7 +184,7 @@ function hasExplicitRemoteOllamaApiProvider(
 }
 
 export function shouldUseSyntheticOllamaAuth(
-  providerConfig: OllamaProviderConfigInput | undefined,
+  providerConfig: Partial<ModelProviderConfig> | undefined,
 ): boolean {
   // Explicit literal credentials and refs belong to configured auth, not the
   // synthetic local no-auth path.
@@ -219,7 +200,7 @@ export function shouldUseSyntheticOllamaAuth(
 }
 
 function hasMeaningfulExplicitOllamaConfig(
-  providerConfig: OllamaProviderConfigInput | undefined,
+  providerConfig: Partial<ModelProviderConfig> | undefined,
 ): boolean {
   if (!providerConfig) {
     return false;
@@ -231,29 +212,16 @@ function hasMeaningfulExplicitOllamaConfig(
   if (baseUrl) {
     return resolveOllamaApiBase(baseUrl) !== OLLAMA_DEFAULT_BASE_URL;
   }
-  if (readOllamaStringValue(providerConfig.apiKey)) {
-    return true;
-  }
-  if (providerConfig.auth) {
-    return true;
-  }
-  if (typeof providerConfig.authHeader === "boolean") {
-    return true;
-  }
-  if (
-    providerConfig.headers &&
-    typeof providerConfig.headers === "object" &&
-    Object.keys(providerConfig.headers).length > 0
-  ) {
-    return true;
-  }
-  if (providerConfig.request) {
-    return true;
-  }
-  if (typeof providerConfig.injectNumCtxForOpenAICompat === "boolean") {
-    return true;
-  }
-  return false;
+  return Boolean(
+    readOllamaStringValue(providerConfig.apiKey) ||
+    providerConfig.auth ||
+    typeof providerConfig.authHeader === "boolean" ||
+    (providerConfig.headers &&
+      typeof providerConfig.headers === "object" &&
+      Object.keys(providerConfig.headers).length > 0) ||
+    providerConfig.request ||
+    typeof providerConfig.injectNumCtxForOpenAICompat === "boolean",
+  );
 }
 
 export async function resolveOllamaDiscoveryResult(params: {

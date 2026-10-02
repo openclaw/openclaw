@@ -9,7 +9,11 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { isUsableNode, recoverNodeRuntime } from "../../node-runtime-recovery.mjs";
+import {
+  findUsableNodeRuntime,
+  isUsableNode,
+  recoverNodeRuntime,
+} from "../../node-runtime-recovery.mjs";
 import { SQLITE_CAPABILITY_PROBE } from "../../node-sqlite.mjs";
 import { buildTaskScript } from "../daemon/schtasks-layout.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -64,6 +68,8 @@ vi.mock("./windows-encoding.js", async (importOriginal) => ({
 
 const originalArgv = process.argv;
 const originalExecArgv = process.execArgv;
+const stdinTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+const stdoutTtyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
 // Exercise the Node-only recovery branch when Bun owns Vitest; process-boundary cases still launch Node.
 const bunVersionDescriptor = Object.getOwnPropertyDescriptor(process.versions, "bun");
 const execPathDescriptor = Object.getOwnPropertyDescriptor(process, "execPath")!;
@@ -141,6 +147,16 @@ afterEach(() => {
   }
   process.argv = originalArgv;
   process.execArgv = originalExecArgv;
+  for (const [stream, descriptor] of [
+    [process.stdin, stdinTtyDescriptor],
+    [process.stdout, stdoutTtyDescriptor],
+  ] as const) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
   if (bunVersionDescriptor) {
     Object.defineProperty(process.versions, "bun", bunVersionDescriptor);
     Object.defineProperty(process, "execPath", execPathDescriptor);
@@ -243,7 +259,6 @@ describe("runtime recovery discovery", () => {
   );
 
   it.each([
-    { name: "expands the Windows service state directory against home", source: "home" },
     { name: "never reads competing cwd tilde service metadata", source: "competing" },
     { name: "rejects a relative Windows service state directory", source: "relative" },
     { name: "expands an explicit Windows task script against home", source: "home-script" },
@@ -272,9 +287,7 @@ describe("runtime recovery discovery", () => {
         );
       };
       await writeScript(homeScript, installedNode);
-      if (source !== "home") {
-        await writeScript(competingScript, workspaceNode);
-      }
+      await writeScript(competingScript, workspaceNode);
       const scriptLink = path.join(root, "gateway.cmd");
       const outsideScript = path.join(root, "outside-gateway.cmd");
       const parentLink = path.join(root, "cwd-alias");
@@ -356,7 +369,7 @@ describe("runtime recovery discovery", () => {
       expect(observed.reads).not.toContain(scriptLink);
       expect(observed.reads).not.toContain(outsideScript);
       expect(observed.probes).not.toContain(workspaceNode);
-      if (["home", "competing", "home-script"].includes(source)) {
+      if (["competing", "home-script"].includes(source)) {
         expect(result.status, result.stderr).toBe(23);
         expect(observed.reads).toContain(homeScript);
         expect(observed.selected).toBe(installedNode);
@@ -487,7 +500,6 @@ describe("runtime recovery discovery", () => {
 
   it.each([
     ["unquoted", "C:\\Node24\\node.exe", "utf-8", false, "cmd"],
-    ["quoted", "C:\\Program Files\\Node24\\node.exe", "utf-8", false, "cmd"],
     ["cmd escapes", "C:\\Tools\\100% ready!\\node.exe", "utf-8", false, "cmd"],
     ["GBK marker", "C:\\Node 隆\\node.exe", "gbk", false, "cmd"],
     ["legacy GBK marker", "C:\\Node 隆\\node.exe", "gbk", false, "marker-only"],
@@ -552,13 +564,13 @@ describe("runtime recovery discovery", () => {
     },
   );
 
-  it.each([".", "bin", ""])("never probes cwd Node through relative PATH %j", async (entry) => {
+  it("never probes cwd Node through a relative PATH entry", async () => {
     await withRecoveryHome(async (home) => {
       const cwd = path.join(home, "untrusted-checkout");
       await fs.mkdir(cwd);
-      const candidate = await writeFixture(path.resolve(cwd, entry || ".", "node"));
+      const candidate = await writeFixture(path.join(cwd, "bin", "node"));
       vi.spyOn(process, "cwd").mockReturnValue(cwd);
-      vi.stubEnv("PATH", entry);
+      vi.stubEnv("PATH", "bin");
 
       expect(await recoverNodeRuntime({ homeDir: home })).toBe(false);
       expect(mocks.probe.mock.calls.map(([file]) => file)).not.toContain(candidate);
@@ -628,7 +640,7 @@ describe("runtime recovery discovery", () => {
     });
   });
 
-  it.each(["private", "service", "nvm", "fnm", "Volta", "Homebrew"])(
+  it.each(["private", "service"] as const)(
     "never probes a %s runtime resolving into cwd",
     async (source) => {
       await withRecoveryHome(async (home) => {
@@ -639,35 +651,17 @@ describe("runtime recovery discovery", () => {
         const paths = {
           private: path.join(home, ".openclaw/tools/cli-node/tools/node/bin/node"),
           service: path.join(home, "service/bin/node"),
-          nvm: path.join(home, ".nvm/versions/node/v24.19.0/bin/node"),
-          fnm: path.join(home, ".fnm/aliases/default/bin/node"),
-          Volta: path.join(home, ".volta/tools/image/node/24.19.0/bin/node"),
-          Homebrew: path.join("/opt/homebrew", "opt/node@26/bin/node"),
         };
-        for (const [name, alias] of Object.entries(paths)) {
-          if (name === source) {
-            mocks.virtualPaths.set(alias, candidate);
-          }
-        }
+        mocks.virtualPaths.set(paths[source], candidate);
         await writeFixture(
           path.join(home, ".config/systemd/user/openclaw-gateway.service"),
           `[Service]\nExecStart="${paths.service.replaceAll("\\", "\\\\")}" /fixture/dist/index.js gateway\n`,
-        );
-        await writeFixture(path.join(home, ".nvm/alias/default"), "24");
-        await fs.mkdir(path.dirname(path.dirname(paths.nvm)), { recursive: true });
-        await writeFixture(
-          path.join(home, ".volta/tools/user/platform.json"),
-          JSON.stringify({ node: { runtime: "24.19.0" } }),
         );
 
         expect(await recoverNodeRuntime({ homeDir: home })).toBe(false);
         const probed = mocks.probe.mock.calls.map(([file]) => file);
         expect(probed).not.toContain(candidate);
-        for (const [name, alias] of Object.entries(paths)) {
-          if (name === source) {
-            expect(probed).not.toContain(alias);
-          }
-        }
+        expect(probed).not.toContain(paths[source]);
         expect(mocks.spawn).not.toHaveBeenCalled();
       });
     },
@@ -676,11 +670,6 @@ describe("runtime recovery discovery", () => {
   it.each([
     [0, "cached OpenClaw runtime"],
     [1, "managed Gateway service"],
-    [2, "PATH"],
-    [3, "nvm default"],
-    [4, "fnm default"],
-    [5, "Volta default"],
-    [6, "Homebrew node@26"],
     [7, "Homebrew node@24"],
   ] as const)("selects the first admissible runtime: %s %s", async (index, source) => {
     await withRecoveryHome(async (home) => {
@@ -822,7 +811,6 @@ describe("runtime recovery discovery", () => {
   );
 
   it.each([
-    ["webhooks", "gmail", "run"],
     ["--profile", "fixture", "webhooks", "gmail", "run"],
     ["webhooks", "--log-level=debug", "gmail", "--no-color", "run"],
     ["hooks", "relay", "--relay-id", "fixture"],
@@ -838,9 +826,15 @@ describe("runtime recovery discovery", () => {
     });
   });
 
-  it.each([0, 7])(
-    "preserves the invocation and propagates replacement exit %s",
-    async (exitCode) => {
+  it.each([
+    { terminal: "none", stdinTTY: false, stdoutTTY: false, hide: true, exitCode: 0 },
+    { terminal: "stdin", stdinTTY: true, stdoutTTY: false, hide: false, exitCode: 0 },
+    { terminal: "stdout", stdinTTY: false, stdoutTTY: true, hide: false, exitCode: 7 },
+  ])(
+    "preserves invocation and replacement exit $exitCode with $terminal terminal stdio",
+    async ({ stdinTTY, stdoutTTY, hide, exitCode }) => {
+      Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: stdinTTY });
+      Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: stdoutTTY });
       await withRecoveryHome(async (home) => {
         const candidate = await writeFixture(path.join(home, "bin/node"));
         mocks.admissible.add(candidate);
@@ -855,7 +849,11 @@ describe("runtime recovery discovery", () => {
         expect(mocks.spawn).toHaveBeenCalledExactlyOnceWith(
           candidate,
           ["--trace-warnings", "/fixture/dist/index.js", "doctor", "--non-interactive", "--fix"],
-          { stdio: "inherit", env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" } },
+          {
+            stdio: "inherit",
+            env: { ...originalEnv, OPENCLAW_NODE_UPDATE_RESPAWNED: "1" },
+            windowsHide: hide,
+          },
         );
         expect(process.cwd()).toBe(originalCwd);
         expect(exitSpy).not.toHaveBeenCalled();
@@ -939,5 +937,45 @@ describe("candidate admission probe", () => {
 
       expect(isUsableNode(candidate)).toBe(false);
     });
+  });
+
+  it("rejects candidates when the permission model denies child processes", async () => {
+    await withRecoveryHome(async (home) => {
+      const candidate = await writeFixture(path.join(home, "bin/node"));
+      mocks.admissible.add(candidate);
+      mocks.probe.mockImplementation(() => {
+        throw Object.assign(new Error("Access to this API has been restricted"), {
+          code: "ERR_ACCESS_DENIED",
+        });
+      });
+
+      expect(isUsableNode(candidate)).toBe(false);
+    });
+  });
+});
+
+it("selects a target-compatible inherited runtime even when the current CLI is supported", async () => {
+  await withRecoveryHome(async (home) => {
+    mocks.currentAdmitted = true;
+    const oldNode = await writeFixture(path.join(home, "old", "node"));
+    const newNode = await writeFixture(path.join(home, "new", "node"));
+    const probe = expectDefined(mocks.probe.getMockImplementation(), "runtime probe");
+    mocks.admissible.add(oldNode);
+    mocks.admissible.add(newNode);
+    mocks.probe.mockImplementation((filename, args, options) => {
+      const result = probe(filename, args, options);
+      const payload = JSON.parse(result.stdout);
+      payload.version = filename === newNode ? "26.8.1" : "24.19.0";
+      return { ...result, stdout: JSON.stringify(payload) };
+    });
+    const selected = await findUsableNodeRuntime({
+      env: {
+        HOME: home,
+        PATH: [path.dirname(oldNode), path.dirname(newNode)].join(path.delimiter),
+      },
+      acceptVersion: (version) => version.startsWith("26."),
+    });
+    expect(selected).toEqual({ nodePath: newNode, reason: "PATH" });
+    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 });

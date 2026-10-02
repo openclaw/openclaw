@@ -9,12 +9,31 @@ source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="${OPENCLAW_TEST_STATE_SCRIPT_B64:-}"
 openclaw_skill_install_owns_home=0
+openclaw_skill_install_temp_root=""
+openclaw_node_module_path=""
 cleanup_clawhub_skill_install_home() {
+  if [ -n "$openclaw_node_module_path" ]; then
+    rm -f "$openclaw_node_module_path"
+  fi
   if [ "$openclaw_skill_install_owns_home" = "1" ] && [ -n "${HOME:-}" ]; then
     rm -rf "$HOME"
   fi
+  if [ -n "$openclaw_skill_install_temp_root" ]; then
+    rm -rf "$openclaw_skill_install_temp_root"
+  fi
 }
 trap cleanup_clawhub_skill_install_home EXIT
+
+# TODO: Use Node's stdin entrypoint again after Bun accepts `--input-type=module -`.
+run_node_module() {
+  local exit_code=0
+  openclaw_node_module_path="$(mktemp "$openclaw_skill_install_temp_root/node-module.XXXXXX.mjs")"
+  cat >"$openclaw_node_module_path"
+  node "$openclaw_node_module_path" "$@" || exit_code=$?
+  rm -f "$openclaw_node_module_path"
+  openclaw_node_module_path=""
+  return "$exit_code"
+}
 
 if [ -n "$OPENCLAW_TEST_STATE_SCRIPT_B64" ]; then
   openclaw_e2e_eval_test_state_from_b64 "$OPENCLAW_TEST_STATE_SCRIPT_B64"
@@ -27,18 +46,21 @@ else
   export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
   mkdir -p "$OPENCLAW_STATE_DIR"
 fi
+openclaw_skill_install_temp_root="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-skill-install.XXXXXX")"
+npm_log="$openclaw_skill_install_temp_root/npm.log"
+build_log="$openclaw_skill_install_temp_root/build.log"
 
 if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
   export NPM_CONFIG_PREFIX="${NPM_CONFIG_PREFIX:-$HOME/.npm-global}"
   export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
-  openclaw_e2e_install_package /tmp/openclaw-skill-install-npm.log
+  openclaw_e2e_install_package "$npm_log"
 fi
 
 if [ -n "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] && command -v openclaw >/dev/null 2>&1; then
   OPENCLAW_CMD=(openclaw)
 elif command -v pnpm >/dev/null 2>&1 && [ -f package.json ]; then
   if [ "${OPENCLAW_SKILL_INSTALL_E2E_BUILD_SOURCE:-0}" = "1" ]; then
-    pnpm build >/tmp/openclaw-skill-install-build.log 2>&1
+    pnpm build >"$build_log" 2>&1
   fi
   OPENCLAW_CMD=(pnpm --silent openclaw)
 elif command -v openclaw >/dev/null 2>&1; then
@@ -49,7 +71,7 @@ else
 fi
 
 mkdir -p "$(dirname "$OPENCLAW_CONFIG_PATH")"
-node --input-type=module - "$OPENCLAW_CONFIG_PATH" <<'NODE'
+run_node_module "$OPENCLAW_CONFIG_PATH" <<'NODE'
 import fs from "node:fs";
 const configPath = process.argv[2];
 let config = {};
@@ -73,15 +95,15 @@ if [ -z "${OPENCLAW_SKILL_INSTALL_E2E_QUERY:-}" ] &&
   query="gifgrep"
   requested_slug="gifgrep"
 fi
-search_json="/tmp/openclaw-skill-install-search.json"
-resolve_json="/tmp/openclaw-skill-install-resolved.json"
-install_log="/tmp/openclaw-skill-install.log"
-info_json="/tmp/openclaw-skill-install-info.json"
+search_json="$openclaw_skill_install_temp_root/search.json"
+resolve_json="$openclaw_skill_install_temp_root/resolved.json"
+install_log="$openclaw_skill_install_temp_root/install.log"
+info_json="$openclaw_skill_install_temp_root/info.json"
 
 echo "Searching live ClawHub skills for: $query"
 "${OPENCLAW_CMD[@]}" skills search "$query" --limit 8 --json >"$search_json"
 
-node --input-type=module - "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<'NODE'
+run_node_module "$search_json" "$resolve_json" "$requested_slug" "$preferred_slug" "$maintained_fixture" <<'NODE'
 import fs from "node:fs";
 const [searchPath, resolvePath, requestedSlug, preferredSlug, maintainedFixture] = process.argv.slice(2);
 const payload = JSON.parse(fs.readFileSync(searchPath, "utf8"));
@@ -155,17 +177,17 @@ while IFS=$'\t' read -r candidate_slug candidate_install_ref; do
     continue
   fi
   echo "Skill install failed" >&2
-  openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
+  openclaw_e2e_dump_logs "$npm_log" "$search_json" "$resolve_json" "$install_log"
   exit 1
 done < <(node -e '
-  const payload = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
+  const payload = JSON.parse(require("node:fs").readFileSync(process.argv.at(-1), "utf8"));
   for (const candidate of payload.candidates) {
     process.stdout.write(`${candidate.slug}\t${candidate.installRef}\n`);
   }
 ' "$resolve_json")
 if [ -z "$slug" ]; then
   echo "No live ClawHub search candidate passed current security checks" >&2
-  openclaw_e2e_dump_logs /tmp/openclaw-skill-install-npm.log "$search_json" "$resolve_json" "$install_log"
+  openclaw_e2e_dump_logs "$npm_log" "$search_json" "$resolve_json" "$install_log"
   exit 1
 fi
 
@@ -180,7 +202,7 @@ openclaw_e2e_assert_file "$lock_json"
 
 "${OPENCLAW_CMD[@]}" skills info "$slug" --json >"$info_json"
 
-node --input-type=module - "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<'NODE'
+run_node_module "$OPENCLAW_CONFIG_PATH" "$skill_dir" "$origin_json" "$lock_json" "$info_json" "$slug" "$maintained_fixture" <<'NODE'
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

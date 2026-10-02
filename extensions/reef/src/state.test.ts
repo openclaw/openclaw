@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
@@ -12,23 +12,25 @@ import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
 import {
   base64url,
   generateIdentity,
-  MemoryAuditStore,
-  MemoryReplayStore,
   signReceipt,
   verifyChain,
   verifyChainSegment,
   type ReviewRequest,
 } from "../protocol/index.js";
+import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
+import { handleReefCommand } from "./commands.js";
 import { ReefChannelConfigSchema } from "./config-schema.js";
 import { ReefMessageFlow } from "./flow.js";
 import { ReefFriendManager } from "./friends.js";
@@ -61,6 +63,28 @@ const auditKey = base64url(Uint8Array.from({ length: 32 }, (_, index) => index +
 const replayKey = base64url(Uint8Array.from({ length: 32 }, (_, index) => 255 - index));
 const receiptId = "01JZ0000000000000000000000";
 
+function reefKeys() {
+  return { ...generateIdentity(), auditKey, replayKey, keyEpoch: 1 };
+}
+
+function reviewRequest(id = receiptId, approvalDigest = "b".repeat(64)): ReviewRequest {
+  return {
+    id,
+    from: "alice#1",
+    to: "bob#1",
+    direction: "outbound",
+    bodyHash: "a".repeat(64),
+    approvalDigest,
+    verdict: {
+      decision: "review",
+      category: "ambiguous",
+      reason: "Owner review.",
+      model: "test-model",
+      policyVersion: "v1",
+    },
+  };
+}
+
 function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" = "worker") {
   const runtime = createPluginRuntimeMock();
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
@@ -68,7 +92,7 @@ function createRuntime(stateDir: string, registrationHost: "worker" | "legacy" =
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
-  runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) => {
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => {
     const store = createPluginStateKeyedStoreForTests<T>("reef", {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
@@ -187,8 +211,7 @@ describe("Reef SQLite state", () => {
   it("does not let an expired audit writer replace a committed successor link", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit.appendEvent(
       "initial",
       { id: 1 },
@@ -234,8 +257,7 @@ describe("Reef SQLite state", () => {
   it("retains expired audit cleanup state when takeover cleanup fails", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"));
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     await openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit.appendEvent(
       "initial",
       { id: 1 },
@@ -313,13 +335,8 @@ describe("Reef SQLite state", () => {
     const runtime = createRuntime(stateDir);
     const keys = await generateAndStoreKeys(runtime);
     expect(await loadKeys(createRuntime(stateDir))).toEqual(keys);
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const observation = observeHostDataSql();
+    const sql = observation.calls;
     await bindIdentity(runtime, "molty");
     await saveReefSetupSession(runtime, {
       session: "setup-secret",
@@ -471,7 +488,7 @@ describe("Reef SQLite state", () => {
       const runtime = createRuntime(stateDir);
       const failure = new Error("registration worker unavailable");
       const open = runtime.state.openKeyedStore;
-      runtime.state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) => ({
+      runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) => ({
         ...open<T>(options),
         [method]: async () => {
           throw failure;
@@ -489,8 +506,7 @@ describe("Reef SQLite state", () => {
   );
 
   it("appends and reopens a verified audit chain", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const first = openStores(createRuntime(stateDir), keys);
     await Promise.all(
       Array.from({ length: 20 }, (_, index) =>
@@ -504,8 +520,7 @@ describe("Reef SQLite state", () => {
   });
 
   it("retains a verifiable audit suffix after bounded eviction", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const store = openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit;
     await store.appendEvent("one", { id: 1 }, 10);
     await store.appendEvent("two", { id: 2 }, 11);
@@ -523,8 +538,7 @@ describe("Reef SQLite state", () => {
   });
 
   it("does not evict committed audit history when head advancement fails", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const initial = openStores(createRuntime(stateDir), keys, { auditMaxEntries: 2 }).audit;
     await initial.appendEvent("one", { id: 1 }, 10);
     await initial.appendEvent("two", { id: 2 }, 11);
@@ -579,8 +593,7 @@ describe("Reef SQLite state", () => {
   });
 
   it("roundtrips encrypted replay completions and durable dedupe state", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const stores = openStores(createRuntime(stateDir), keys);
     const receipt = signReceipt(
       {
@@ -589,7 +602,7 @@ describe("Reef SQLite state", () => {
         auditHead: "b".repeat(64),
         status: "accepted",
       },
-      identity.signing.secretKey,
+      keys.signing.secretKey,
     );
     const body = { text: "RECOVERABLE SECRET BODY" };
 
@@ -611,8 +624,7 @@ describe("Reef SQLite state", () => {
   });
 
   it("does not steal a live replay claim owned by another process", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const runtime = createRuntime(stateDir);
     const raw = createPluginStateSyncKeyedStoreForTests<{
       peer: string;
@@ -662,28 +674,31 @@ describe("Reef SQLite state", () => {
   });
 
   it("persists review decisions and delivered ids", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const stores = openStores(createRuntime(stateDir), keys);
-    const review: ReviewRequest = {
-      id: receiptId,
-      from: "alice#1",
-      to: "bob#1",
-      direction: "outbound",
-      bodyHash: "a".repeat(64),
-      approvalDigest: "b".repeat(64),
-      verdict: {
-        decision: "review",
-        category: "ambiguous",
-        reason: "Owner review.",
-        model: "test-model",
-        policyVersion: "v1",
-      },
-    };
+    const review = reviewRequest();
 
     await expect(stores.reviews.request(review)).resolves.toBeUndefined();
     await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
     await expect(stores.reviews.lookupDecision("c".repeat(64))).resolves.toBe("none");
+    const commandAuthority = createReefRuntimeAuthority();
+    activateReviewStore(commandAuthority, createRuntime(stateDir), stores.reviews);
+    try {
+      for (const action of ["approve", "deny"]) {
+        await expect(
+          handleReefCommand({
+            args: `review ${action} ${review.approvalDigest}`,
+            senderIsOwner: true,
+            assertOwnerCurrent: () => {
+              throw new Error("owner revoked");
+            },
+          }),
+        ).rejects.toThrow("owner revoked");
+        await expect(stores.reviews.lookupDecision(review.approvalDigest)).resolves.toBe("pending");
+      }
+    } finally {
+      commandAuthority.release();
+    }
     await expect(stores.reviews.decide(review.approvalDigest, true)).resolves.toMatchObject({
       id: review.id,
       direction: "outbound",
@@ -694,13 +709,8 @@ describe("Reef SQLite state", () => {
     const reopened = openStores(createRuntime(stateDir), keys);
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const observation = observeHostDataSql();
+    const sql = observation.calls;
     await expect(reopened.reviews.lookupDecision(review.approvalDigest)).resolves.toEqual({
       approved: true,
     });
@@ -727,10 +737,10 @@ describe("Reef SQLite state", () => {
       approved: true,
       approvalDigest: review.approvalDigest,
     });
-    await stores.delivered.add(receiptId);
-    await expect(openStores(createRuntime(stateDir), keys).delivered.has(receiptId)).resolves.toBe(
-      true,
-    );
+    await stores.delivered.confirm(receiptId);
+    await expect(
+      openStores(createRuntime(stateDir), keys).delivered.status(receiptId),
+    ).resolves.toBe("delivered");
   });
 
   it.each(["lookup", "entries"] as const)(
@@ -797,8 +807,7 @@ describe("Reef SQLite state", () => {
   );
 
   it("fails closed instead of evicting live replay and delivered state", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const stores = openStores(createRuntime(stateDir), keys, {
       replayMaxEntries: 1,
       deliveredMaxEntries: 1,
@@ -809,9 +818,9 @@ describe("Reef SQLite state", () => {
     await expect(stores.replay.claim("alice", "second", "b".repeat(64))).rejects.toThrow();
     await expect(stores.replay.claim("alice", "first", "a".repeat(64))).resolves.toBe("duplicate");
 
-    await stores.delivered.add("first");
-    await expect(stores.delivered.add("second")).rejects.toThrow();
-    await expect(stores.delivered.has("first")).resolves.toBe(true);
+    await stores.delivered.confirm("first");
+    await expect(stores.delivered.confirm("second")).rejects.toThrow();
+    await expect(stores.delivered.status("first")).resolves.toBe("delivered");
   });
 
   it("fails when a pending review claim does not persist", async () => {
@@ -825,21 +834,7 @@ describe("Reef SQLite state", () => {
         ? { ...store, registerIfAbsent: () => false }
         : store;
     };
-    const review: ReviewRequest = {
-      id: receiptId,
-      from: "alice#1",
-      to: "bob#1",
-      direction: "outbound",
-      bodyHash: "a".repeat(64),
-      approvalDigest: "b".repeat(64),
-      verdict: {
-        decision: "review",
-        category: "ambiguous",
-        reason: "Owner review.",
-        model: "test-model",
-        policyVersion: "v1",
-      },
-    };
+    const review = reviewRequest();
 
     await expect(new ReviewApprovalStore(runtime).request(review)).rejects.toThrow(
       "Failed persisting Reef pending review",
@@ -847,12 +842,11 @@ describe("Reef SQLite state", () => {
   });
 
   it("fails when a delivered marker claim does not persist", async () => {
-    const identity = generateIdentity();
-    const keys = { ...identity, auditKey, replayKey, keyEpoch: 1 };
+    const keys = reefKeys();
     const runtime = createRuntime(stateDir);
     const openKeyedStore = runtime.state.openKeyedStore;
     runtime.state.openKeyedStore = <T>(
-      options: OpenKeyedStoreOptions,
+      options: OpenAsyncKeyedStoreOptions,
     ): PluginStateKeyedStore<T> => {
       const store = openKeyedStore<T>(options);
       return options.namespace === REEF_DELIVERED_NAMESPACE
@@ -860,7 +854,7 @@ describe("Reef SQLite state", () => {
         : store;
     };
 
-    await expect(openStores(runtime, keys).delivered.add(receiptId)).rejects.toThrow(
+    await expect(openStores(runtime, keys).delivered.confirm(receiptId)).rejects.toThrow(
       "Failed persisting Reef delivered marker",
     );
   });
@@ -868,24 +862,10 @@ describe("Reef SQLite state", () => {
   it("evicts completed review decisions before rejecting new pending work", async () => {
     const runtime = createRuntime(stateDir);
     const store = new ReviewApprovalStore(runtime, 2);
-    const review = (id: string, digest: string): ReviewRequest => ({
-      id,
-      from: "alice#1",
-      to: "bob#1",
-      direction: "outbound",
-      bodyHash: "a".repeat(64),
-      approvalDigest: digest,
-      verdict: {
-        decision: "review",
-        category: "ambiguous",
-        reason: "Owner review.",
-        model: "test-model",
-        policyVersion: "v1",
-      },
-    });
-    const first = review("first", "1".repeat(64));
-    const second = review("second", "2".repeat(64));
-    const third = review("third", "3".repeat(64));
+
+    const first = reviewRequest("first", "1".repeat(64));
+    const second = reviewRequest("second", "2".repeat(64));
+    const third = reviewRequest("third", "3".repeat(64));
 
     await store.request(first);
     await store.decide(first.approvalDigest, false);
@@ -918,24 +898,19 @@ describe("Reef delivered markers", () => {
   }
 
   it("confirms delivered markers idempotently", async () => {
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(StatementSync.prototype, method),
-      ),
-    ];
+    const observation = observeHostDataSql();
+    const sql = observation.calls;
     const delivered = new ReefDeliveredStore(createRuntime(stateDir));
     await expect(delivered.status("m1")).resolves.toBeUndefined();
-    await expect(delivered.has("m1")).resolves.toBe(false);
     await delivered.confirm("m1");
     await expect(delivered.status("m1")).resolves.toBe("delivered");
-    await expect(delivered.has("m1")).resolves.toBe(true);
     await delivered.confirm("m1");
     await expect(delivered.status("m1")).resolves.toBe("delivered");
-    await delivered.add("m2");
+    await delivered.confirm("m2");
     await expect(delivered.status("m2")).resolves.toBe("delivered");
-    await expect(new ReefDeliveredStore(createRuntime(stateDir)).has("m2")).resolves.toBe(true);
+    await expect(new ReefDeliveredStore(createRuntime(stateDir)).status("m2")).resolves.toBe(
+      "delivered",
+    );
     for (const operation of sql) {
       expect(operation).not.toHaveBeenCalled();
     }
@@ -945,7 +920,7 @@ describe("Reef delivered markers", () => {
     const stores = openStores(createRuntime(stateDir), testKeys(), {
       deliveredMaxEntries: 1,
     });
-    await stores.delivered.add("first"); // delivered namespace full
+    await stores.delivered.confirm("first"); // delivered namespace full
     // Confirming into a full delivered namespace fails closed. No marker is
     // retained, so the re-poll re-ingresses before retrying confirmation.
     await expect(stores.delivered.confirm("second")).rejects.toMatchObject({
@@ -954,30 +929,6 @@ describe("Reef delivered markers", () => {
     await expect(stores.delivered.status("second")).resolves.toBeUndefined();
     await expect(stores.delivered.status("first")).resolves.toBe("delivered");
     await expect(stores.delivered.status("third")).resolves.toBeUndefined();
-  });
-
-  it("parks confirm at the plugin-wide aggregate limit without retaining bookkeeping", async () => {
-    const stores = openStores(createRuntime(stateDir), testKeys(), {
-      deliveredMaxEntries: REEF_DELIVERED_MAX_ENTRIES,
-    });
-    // Fill the plugin-wide aggregate limit from another namespace's row. The
-    // parked entry keeps no separate bookkeeping and retries at-least-once.
-    setMaxPluginStateEntriesPerPluginForTests(1);
-    try {
-      const other = createRuntime(stateDir).state.openSyncKeyedStore<{ id: string }>({
-        namespace: "reef-test-other",
-        maxEntries: REEF_DELIVERED_MAX_ENTRIES,
-        overflowPolicy: "reject-new",
-      });
-      other.registerIfAbsent("row-1", { id: "row-1" });
-      await expect(stores.delivered.status("aggregate-1")).resolves.toBeUndefined();
-      await expect(stores.delivered.confirm("aggregate-1")).rejects.toMatchObject({
-        code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-      });
-      await expect(stores.delivered.status("aggregate-1")).resolves.toBeUndefined();
-    } finally {
-      setMaxPluginStateEntriesPerPluginForTests();
-    }
   });
 
   it("reads legacy delivered markers without a state as delivered", async () => {
@@ -991,6 +942,5 @@ describe("Reef delivered markers", () => {
     });
     legacy.registerIfAbsent("legacy-1", { id: "legacy-1" });
     await expect(stores.delivered.status("legacy-1")).resolves.toBe("delivered");
-    await expect(stores.delivered.has("legacy-1")).resolves.toBe(true);
   });
 });

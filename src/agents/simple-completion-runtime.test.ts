@@ -125,6 +125,7 @@ beforeEach(() => {
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     activeProjectKeys: [],
     createStores: () => ({ authStorage, modelRegistry }),
@@ -828,6 +829,7 @@ describe("prepareSimpleCompletionModel", () => {
 
 describe("acquireSimpleCompletionModelForAgent", () => {
   it("materializes a derived utility model on the Platform route for API-key auth", async () => {
+    const signal = new AbortController().signal;
     hoisted.ensureAuthProfileStoreMock.mockReturnValue({
       version: 1,
       profiles: {
@@ -865,6 +867,7 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       useUtilityModel: true,
       skipAgentDiscovery: true,
       modelResolver,
+      signal,
     });
 
     try {
@@ -885,6 +888,8 @@ describe("acquireSimpleCompletionModelForAgent", () => {
       // resolveDefaultAgentId, which throws on a multi-agent config.
       expect(modelResolver.mock.calls[0]?.[4]).toMatchObject({ agentId: "main" });
       expect(modelResolver.mock.calls[1]?.[4]).toMatchObject({ agentId: "main" });
+      expect(modelResolver.mock.calls[0]?.[4]?.abortSignal).toBe(signal);
+      expect(modelResolver.mock.calls[1]?.[4]?.abortSignal).toBe(signal);
     } finally {
       if (!("error" in result)) {
         await result[Symbol.asyncDispose]();

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isReportableUpdateRun } from "../shared/update-outcome.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import * as reportHealth from "./update-run-report-health.js";
 import {
-  renderUpdateRunNotice,
   renderUpdateRunReport,
   updateRunReportInputFromResult,
   updateRunReportInputFromSentinel,
@@ -35,14 +35,281 @@ function run(patch: Partial<UpdateRunRecord> = {}): UpdateRunRecord {
 afterEach(() => vi.restoreAllMocks());
 
 describe("update run report", () => {
-  it.each(["private-customer-build", "2026.9.4-private-customer"])(
-    "redacts the private current version %s in public reports",
-    async (version) => {
+  it.each([
+    {
+      reason: "preflight-node-runtime-incompatible",
+      detail: "Node 24.15.0; requires engines.node >=24.16.0",
+    },
+    { reason: "node-runtime-preflight", detail: "Runtime capability probe failed" },
+    {
+      reason: "node-runtime-preflight",
+      detail: "Cannot inspect the installed runtime requirement",
+    },
+  ])("separates the runtime check failure from its $detail diagnostics", ({ reason, detail }) => {
+    const record = run({
+      status: "failed",
+      reason,
+      steps: [
+        { step: "staging", status: "completed" },
+        {
+          step: "preflight-node-runtime",
+          status: "failed",
+          detail,
+          failureFacts: [{ check: "node-runtime", code: reason, affectedKey: "engines.node" }],
+        },
+      ],
+    });
+    const saved = structuredClone(record);
+    const nextAction = "Run `openclaw --profile work triage` to repair this installation.";
+    const report = renderUpdateRunReport(record, { nextAction });
+
+    expect(report.headline).toBe(
+      "⚠️ OpenClaw could not complete the update. A required system check failed.",
+    );
+    expect(report.lines.slice(0, 4)).toEqual([
+      nextAction,
+      "",
+      "Details:",
+      `Reason code: ${reason}`,
+    ]);
+    expect(report.markdown).toContain(`${report.headline}\n${nextAction}\n\nDetails:`);
+    expect(report.markdown).toContain(`Failed: preflight-node-runtime — ${detail}`);
+    expect(report.markdown).toContain(`Failing check node-runtime (${reason}); key engines.node`);
+    expect(report.markdown).toContain("Phases: staging");
+    expect(record).toEqual(saved);
+  });
+
+  it.each([true, false])("preserves runtime failure action ownership (OCM=%s)", (managed) => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: "node-runtime-preflight",
+        target: { kind: "package", ...(managed ? { installationMethod: "ocm" as const } : {}) },
+      }),
+    );
+    expect(report.markdown.includes("Run openclaw triage")).toBe(!managed);
+    expect(report.markdown).toContain("Reason code: node-runtime-preflight");
+  });
+
+  it.each([true, false])("keeps runtime guidance within the chat budget (saved=%s)", (saved) => {
+    const action = `Keep the candidate installed and do not roll back code alone. ${"🦞".repeat(600)}`;
+    const record = run({
+      status: "failed",
+      reason: "node-runtime-preflight",
+      origin: saved ? { nextAction: action } : {},
+      steps: [{ step: "preflight-node-runtime", status: "failed", detail: "detail ".repeat(300) }],
+    });
+    const report = renderUpdateRunReport(record, saved ? {} : { nextAction: action });
+    expect(report.markdown.length).toBeLessThanOrEqual(1500);
+    expect(Buffer.from(report.markdown).toString("utf8")).toBe(report.markdown);
+    expect(report.markdown).toContain(
+      "Keep the candidate installed and do not roll back code alone.",
+    );
+    expect(report.markdown).toContain("Reason code: node-runtime-preflight");
+    expect(report.lines.join("\n")).toContain(action);
+    expect(report.markdown.includes("Historical recovery advice:")).toBe(saved);
+  });
+
+  it.each(
+    [true, false].flatMap((advice) => [true, false].map((responding) => ({ advice, responding }))),
+  )(
+    "separates recorded recovery from current observations (advice=$advice, responding=$responding)",
+    ({ advice, responding }) => {
+      const record = run({
+        status: "failed",
+        reason: "node-runtime-preflight",
+        origin: advice
+          ? {
+              nextAction:
+                "Keep the gateway stopped. Keep the candidate installed and do not roll back code alone.",
+            }
+          : {},
+        steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
+        verification: {
+          serviceRunning: true,
+          runningVersion: "2026.9.1",
+          versionMatch: true,
+          readyz: true,
+          channelsReady: false,
+          recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.1" },
+        },
+      });
+      const saved = structuredClone(record);
+      const currentHealth = responding
+        ? { kind: "responding" as const, version: "2026.9.2" }
+        : { kind: "unavailable" as const };
+      const report = renderUpdateRunReport(record, { currentHealth });
+      expect(report.markdown).toContain("Recorded recovery: verified serving 2026.9.1.");
+      expect(report.markdown).toContain(
+        "Recorded verification: service running (2026.9.1); version verified; channels not ready; HTTP ready.",
+      );
+      expect(report.markdown).toContain(
+        responding
+          ? "Current health: Gateway answered on the recorded port (2026.9.2)."
+          : "Current health unavailable; saved verification describes the update attempt only.",
+      );
+      expect(report.markdown.includes("Historical recovery advice:")).toBe(advice);
+      if (advice) {
+        expect(report.markdown).toContain(
+          "Keep the candidate installed and do not roll back code alone.",
+        );
+      }
+      expect(report.headline).not.toContain("gateway is running");
+      expect(report.markdown).not.toContain("chat");
+      expect(record).toEqual(saved);
+    },
+  );
+
+  it.each(
+    (["state-migration-started", "runtime-verification-failed"] as const).flatMap((reason) =>
+      [false, true].map((raw) => ({ reason, raw })),
+    ),
+  )("reports serving health with its $reason constraint (raw=$raw)", async ({ reason, raw }) => {
+    const record = run({
+      status: "failed",
+      reason: "post-update-plugins",
+      steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }],
+      verification: {
+        runningVersion: "2026.9.5",
+        versionMatch: true,
+        readyz: true,
+        settled: true,
+        recovery: { serviceRestartSafe: false, reason },
+      },
+    });
+    const expected = `verified serving 2026.9.5; restart remains unsafe (${reason})`;
+    expect(renderUpdateRunReport(record).markdown).toContain(expected);
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: record.runId,
+        recordedRun: record,
+        result: {
+          status: "error",
+          mode: "npm",
+          durationMs: 0,
+          ...(raw
+            ? {
+                verification: {
+                  runningVersion: "2026.9.5",
+                  versionMatch: true,
+                  readyz: true,
+                  settled: true,
+                },
+                recovery: {
+                  serviceRestartSafe: true as const,
+                  service: "healthy" as const,
+                  version: "2026.9.5",
+                },
+              }
+            : {}),
+          steps: raw
+            ? [
+                {
+                  name: "gateway recovery verification",
+                  command: "verify",
+                  cwd: "/fixture",
+                  durationMs: 0,
+                  exitCode: 0,
+                },
+              ]
+            : [],
+        },
+      },
+      { stateDir: "/fixture/state", env: {} },
+    );
+    expect(report.body).toContain(`Recovery outcome: ${expected}`);
+    expect(record.verification.recovery?.serviceRestartSafe).toBe(false);
+  });
+
+  it.each([
+    ["external-supervisor-update-required", "Use your server or deployment's update workflow"],
+    ["container-image-install", "Pull or build the target Docker/container image"],
+    ["unmanaged-package-install", "Reinstall using the original method"],
+    ["package-update-requires-cli", "through this install's npm, pnpm, or Bun global launcher"],
+  ])("explains %s without treating it as a failed install", (reason, nextAction) => {
+    const record = run({
+      status: "skipped",
+      reason,
+      origin: { doctorHint: "Run openclaw doctor --non-interactive" },
+      after: {},
+      steps: [],
+    });
+
+    const report = renderUpdateRunReport(record);
+    expect(report.markdown).toContain(nextAction);
+    expect(report.markdown).toContain("No package changes or Gateway restart were attempted");
+    expect(report.markdown).not.toContain("openclaw triage");
+    expect(report.markdown).not.toContain("openclaw doctor");
+    expect(isReportableUpdateRun(record)).toBe(false);
+  });
+
+  it.each(["abandoned", "legacy-driver-expired"])(
+    "shows acknowledged %s recovery without discarding historical failure facts",
+    (reason) => {
+      const record = run({
+        status: "failed",
+        reason,
+        origin: { doctorHint: "Run openclaw doctor --fix", nextAction: "Run openclaw triage" },
+        steps: [
+          { step: "reconcile:abandoned", status: "failed", detail: "inactive-driver-dead" },
+          { step: "reconcile:acknowledged", status: "completed", endedAtMs: 301 },
+        ],
+      });
+      const before = structuredClone(record);
+      const report = renderUpdateRunReport(record);
+
+      expect(report.headline).toBe("ℹ️ OpenClaw abandoned update reconciled.");
+      expect(report.lines).toContain("Failed: reconcile:abandoned — inactive-driver-dead");
+      expect(report.markdown).not.toContain("Run openclaw");
+      expect(report.markdown).not.toContain("to retry");
+      expect(record).toEqual(before);
+    },
+  );
+
+  it.each(["in_progress", "failed"] as const)(
+    "does not report an abandoned update as reconciled after %s acknowledgement",
+    (status) => {
+      const report = renderUpdateRunReport(
+        run({
+          status: "failed",
+          reason: "abandoned",
+          steps: [{ step: "reconcile:acknowledged", status }],
+        }),
+      );
+      expect(report.headline).toBe("⚠️ OpenClaw update failed: abandoned.");
+      expect(report.markdown).toContain("Run openclaw triage");
+    },
+  );
+
+  it.each(
+    ["private-customer-build", "2026.9.4-private-customer"].flatMap((version) =>
+      [false, true].map((observed) => ({ version, observed })),
+    ),
+  )(
+    "redacts the private current version $version in public reports (recovery=$observed)",
+    async ({ version, observed }) => {
       vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue({
         kind: "responding",
         version,
       });
-      const record = run({ status: "failed", verification: { versionMatch: false, port: 19123 } });
+      const record = run({
+        status: "failed",
+        ...(observed
+          ? { steps: [{ step: "gateway recovery verification", status: "completed", exitCode: 0 }] }
+          : {}),
+        verification: {
+          versionMatch: observed,
+          port: 19123,
+          ...(observed
+            ? {
+                runningVersion: version,
+                readyz: true,
+                settled: true,
+                recovery: { serviceRestartSafe: true, service: "healthy", version },
+              }
+            : {}),
+        },
+      });
       const report = await prepareUpdateFailureReport(
         {
           attemptId: record.runId,
@@ -51,7 +318,12 @@ describe("update run report", () => {
         },
         { stateDir: "/fixture/state", env: {} },
       );
-      expect(report.body).toContain("Recorded verification: service identity unavailable");
+      expect(report.body).toContain(
+        `Recorded verification: ${observed ? "version verified" : "service identity unavailable"}`,
+      );
+      if (observed) {
+        expect(report.body).toContain("Recovery outcome: verified serving [redacted-version]");
+      }
       expect(report.body).toContain(
         "Current health: Gateway answered on the recorded port ([redacted-version]).",
       );
@@ -76,10 +348,10 @@ describe("update run report", () => {
         verification: { ...observed, versionMatch: false },
       }),
     );
-    expect(report.lines).toContain(`Verification: ${expected}.`);
+    expect(report.lines).toContain(`Recorded verification: ${expected}.`);
   });
 
-  it.each(["report", "notice", "failure"])(
+  it.each(["report", "failure"])(
     "reports an unreadable identity as unavailable in the %s surface",
     async (surface) => {
       const record = run({
@@ -99,9 +371,7 @@ describe("update run report", () => {
                 { stateDir: "/fixture/state", env: {} },
               )
             ).body
-          : surface === "notice"
-            ? renderUpdateRunNotice(record, "finished")
-            : renderUpdateRunReport(record).markdown;
+          : renderUpdateRunReport(record).markdown;
       expect(text).toContain("identity unavailable");
       expect(text).not.toContain("version mismatch");
     },
@@ -177,19 +447,6 @@ describe("update run report", () => {
     expect(report.markdown).toContain(guidance);
   });
 
-  it("limits parking notices to the pre-updater milestone without loosening phase notices", () => {
-    const requested = run({ status: "running", phase: "requested" });
-    expect(renderUpdateRunNotice(requested, "parking")).toContain("Restarting the gateway now");
-    expect(renderUpdateRunNotice(requested, "activating")).toBeNull();
-    expect(renderUpdateRunNotice(requested, "verifying")).toBeNull();
-    for (const phase of ["staging", "activating", "verifying"] as const) {
-      const progressed = run({ status: "running", phase });
-      expect(renderUpdateRunNotice(progressed, "parking")).toBeNull();
-      expect(renderUpdateRunNotice(progressed, "ack")).toBeNull();
-    }
-    expect(renderUpdateRunNotice(run(), "parking")).toBeNull();
-  });
-
   it("reports changed git commits when the package version stays the same", () => {
     const report = renderUpdateRunReport(
       run({
@@ -216,9 +473,9 @@ describe("update run report", () => {
       [
         "✅ OpenClaw updated to 2026.9.2 (from 2026.9.1).
       Phases: staging (300ms)",
-        "⚠️ OpenClaw update failed: restart-unhealthy. The gateway is running 2026.9.1.
+        "⚠️ OpenClaw update failed: restart-unhealthy.
       Phases: staging (300ms)
-      Verification: service running.
+      Recorded verification: service running (2026.9.1).
       Run openclaw triage to diagnose and repair the failed update.",
         "ℹ️ OpenClaw update skipped: dry-run.
       Phases: staging (300ms)",
@@ -276,8 +533,6 @@ describe("update run report", () => {
   it.each([
     { reason: null, source: "origin" },
     { reason: "requester-revoked", source: "origin" },
-    { reason: "repair-requires-config-change", source: "origin" },
-    { reason: "requester-revoked", source: "options" },
     { reason: "repair-requires-config-change", source: "options" },
   ])("keeps $source recovery scoped to its profile after $reason", ({ reason, source }) => {
     const originAction = "Run `openclaw --profile work triage` to repair this installation.";
@@ -310,7 +565,10 @@ describe("update run report", () => {
     }
   });
 
-  it("keeps advisory steps out of failures and shows only the final diagnostic lines", () => {
+  it.each([
+    { label: "single-line", stderrTail: "last error diagnostic" },
+    { label: "multiline", stderrTail: "earlier error\nlast error diagnostic" },
+  ])("keeps advisory steps out of failures and retains $label diagnostics", ({ stderrTail }) => {
     const report = renderUpdateRunReport(
       updateRunReportInputFromResult({
         status: "error",
@@ -336,7 +594,10 @@ describe("update run report", () => {
             exitCode: 1,
             termination: "timeout",
             stdoutTail: "earlier output\nlast build diagnostic",
-            stderrTail: "earlier error\nlast error diagnostic",
+            stderrTail,
+            failureFacts: [
+              { check: "build", code: "build-failed", message: "last error diagnostic" },
+            ],
           },
         ],
       }),
@@ -376,6 +637,37 @@ describe("update run report", () => {
     expect(report.markdown).not.toContain("Installing manually via npm");
   });
 
+  it.each([
+    { message: "Failed", detail: "Permission denied", repeated: false },
+    { message: "package-swap", detail: "Permission denied", repeated: false },
+    { message: "Permission denied", detail: "Permission denied", repeated: true },
+    {
+      message: "Permission denied",
+      detail: `${"x".repeat(300)} Permission denied`,
+      repeated: false,
+    },
+  ])(
+    "keeps facts unless their complete message is visible in the detail ($message, $repeated)",
+    ({ message, detail, repeated }) => {
+      const report = renderUpdateRunReport(
+        run({
+          status: "failed",
+          steps: [
+            {
+              step: "package-swap",
+              status: "failed",
+              detail,
+              failureFacts: [{ check: "package-swap", code: "swap-failed", message }],
+            },
+          ],
+        }),
+      );
+      expect(report.lines).toContain(
+        `Failing check package-swap (swap-failed)${repeated ? "" : `: ${message}`}`,
+      );
+    },
+  );
+
   it("reports pending work, verification, and repair facts without inferring success", () => {
     const report = renderUpdateRunReport(
       run({
@@ -409,7 +701,7 @@ describe("update run report", () => {
       }),
     );
     expect(stopped.headline).not.toContain("The gateway is running");
-    expect(stopped.lines).toContain("Verification: service stopped.");
+    expect(stopped.lines).toContain("Recorded verification: service stopped.");
     const legacy = renderUpdateRunReport(
       updateRunReportInputFromSentinel({
         kind: "update",
@@ -432,5 +724,135 @@ describe("update run report", () => {
     );
     expect(legacy.markdown).toContain("Failed: build");
     expect(legacy.markdown).not.toContain("private legacy");
+  });
+
+  it("uses the failed finalize step instead of unknown reason when reason is missing", () => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: null,
+        steps: [
+          { step: "requested", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+          { step: "finalize:doctor", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+        ],
+      }),
+    );
+    expect(report.headline).toContain("finalize:doctor");
+    expect(report.headline).not.toContain("unknown reason");
+  });
+
+  it.each([
+    {
+      reason: " saved-doctor-error ",
+      failedSteps: ["finalize:doctor"],
+      expected: "saved-doctor-error",
+    },
+    { reason: null, failedSteps: [], expected: "unknown reason" },
+    { reason: null, failedSteps: ["requested"], expected: "unknown reason" },
+  ])("preserves the update status headline for $expected", ({ reason, failedSteps, expected }) => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason,
+        steps: [
+          { step: "staging", status: "completed" },
+          ...failedSteps.map((step) => ({ step, status: "failed" as const })),
+        ],
+      }),
+    );
+    expect(report.headline).toBe(`⚠️ OpenClaw update failed: ${expected}.`);
+  });
+
+  it.each(["skipped", "rolled-back"] as const)(
+    "keeps a missing reason unchanged for a %s update with a failed child",
+    (status) => {
+      const record = run({ status, reason: null });
+      const before = renderUpdateRunReport(record).headline;
+      const report = renderUpdateRunReport({
+        ...record,
+        steps: [{ step: "finalize:doctor", status: "failed" }],
+      });
+      expect(report.headline).toBe(before);
+      expect(report.headline).toContain("unknown reason");
+    },
+  );
+
+  describe("current-main failed-step fallback interactions", () => {
+    it("uses the first meaningful failure without changing saved JSON", () => {
+      const record = run({
+        status: "failed",
+        reason: "  ",
+        steps: [
+          { step: "requested", status: "failed" },
+          { step: "staging", status: "completed" },
+          { step: "finalize:doctor", status: "failed" },
+          { step: "finalize:plugins", status: "failed" },
+        ],
+      });
+      const saved = JSON.stringify(record);
+      record.steps.forEach(Object.freeze);
+      Object.freeze(record.steps);
+      Object.freeze(record);
+
+      const report = renderUpdateRunReport(record);
+      expect(report.headline).toBe("⚠️ OpenClaw update failed: finalize:doctor.");
+      expect(JSON.stringify(record)).toBe(saved);
+    });
+
+    it.each([
+      { reason: "abandoned", reconciled: true },
+      { reason: "legacy-driver-expired", reconciled: true },
+      { reason: null, reconciled: false },
+      { reason: "  ", reconciled: false },
+    ])("keeps acknowledgement tied to the saved reason $reason", ({ reason, reconciled }) => {
+      const record = run({
+        status: "failed",
+        reason,
+        origin: { doctorHint: "Run openclaw doctor --fix", nextAction: "Run openclaw triage" },
+        steps: [
+          { step: "requested", status: "failed" },
+          { step: "finalize:doctor", status: "failed" },
+          { step: "reconcile:acknowledged", status: "completed", endedAtMs: 301 },
+        ],
+      });
+      const saved = JSON.stringify(record);
+      const report = renderUpdateRunReport(record);
+      expect(report.headline).toBe(
+        reconciled
+          ? "ℹ️ OpenClaw abandoned update reconciled."
+          : "⚠️ OpenClaw update failed: finalize:doctor.",
+      );
+      expect(report.lines).toContain("Failed: finalize:doctor");
+      expect(report.markdown.includes("Run openclaw")).toBe(!reconciled);
+      expect(JSON.stringify(record)).toBe(saved);
+    });
+
+    it("bounds an inferred phase at a surrogate boundary without changing the record", () => {
+      const phase = `${"x".repeat(238)}🦞${"y".repeat(300)}`;
+      const record = run({ status: "failed", steps: [{ step: phase, status: "failed" }] });
+      const saved = JSON.stringify(record);
+      const report = renderUpdateRunReport(record);
+      expect(report.headline).toBe(`⚠️ OpenClaw update failed: ${"x".repeat(238)}….`);
+      expect(report.headline.length).toBeLessThanOrEqual(500);
+      expect(report.markdown.length).toBeLessThanOrEqual(1500);
+      expect(Buffer.from(report.markdown).toString("utf8")).toBe(report.markdown);
+      expect(JSON.stringify(record)).toBe(saved);
+    });
+
+    it.each([
+      { status: "succeeded" as const, reason: null },
+      { status: "running" as const, reason: null },
+      { status: "skipped" as const, reason: "gateway-readiness-unverified" },
+      { status: "skipped" as const, reason: "still-starting" },
+    ])("keeps the $status headline when a historical child failed", ({ status, reason }) => {
+      const record = run({ status, reason, phase: "verifying" });
+      const before = renderUpdateRunReport(record).headline;
+      const report = renderUpdateRunReport({
+        ...record,
+        steps: [{ step: "finalize:doctor", status: "failed" }],
+      });
+      expect(report.headline).toBe(before);
+      expect(report.headline).not.toContain("finalize:doctor");
+    });
   });
 });

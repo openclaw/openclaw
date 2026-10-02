@@ -20,6 +20,19 @@ export type PreparedSqliteAuditRecord = Omit<DiagnosticEventRow, "sequence">;
 
 const LEGACY_AUDIT_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
 
+export const diagnosticReadOperations = {
+  "diagnostic.latest": (
+    input: { scope: string; limit: number; beforeSequence?: number },
+    db: DatabaseSync,
+  ) => ({
+    type: "diagnostic.latest" as const,
+    entries: createSqliteAuditRecordKernel<unknown>(db, {
+      scope: input.scope,
+      maxEntries: 1,
+    }).latest(input),
+  }),
+};
+
 export type SqliteAuditRecordEntry<T> = {
   key: string;
   value: T;
@@ -194,12 +207,8 @@ export function createSqliteAuditRecordKernel<T>(
       // Keep the just-addressed key while pruning the oldest rows in this scope.
       pruneAuditRecords({ database, scope, maxEntries, protectedKey: record.event_key });
     },
-    upsert(record: PreparedSqliteAuditRecord): void {
-      upsertPreparedRecord(record);
-    },
-    delete(key: string): void {
-      deleteRecord(key);
-    },
+    upsert: upsertPreparedRecord,
+    delete: deleteRecord,
     compareAndSet(
       key: string,
       expectedPayloadJson: string | null | undefined,
@@ -230,9 +239,6 @@ export function createSqliteAuditRecordKernel<T>(
         sequence += 1;
       }
       pruneAuditRecords({ database, scope, maxEntries });
-    },
-    size(): number {
-      return countAuditRecords(database, scope);
     },
     entries(): SqliteAuditRecordEntry<T>[] {
       return executeSqliteQuerySync(

@@ -1,5 +1,5 @@
-// Logbook background service: snapshot capture loop, batch analysis, retention.
 import path from "node:path";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import type {
   OpenClawConfig,
@@ -312,7 +312,7 @@ export class LogbookService {
           this.failedNodeIds.add(this.cachedNode.nodeId);
         }
         this.cachedNode = null;
-        this.lastCaptureError = err instanceof Error ? err.message : String(err);
+        this.lastCaptureError = coerceErrorMessage(err);
         if (this.captureFailures >= CAPTURE_FAILURE_THRESHOLD) {
           this.captureBackoffTicks = CAPTURE_FAILURE_PAUSE_TICKS;
           this.deps.logger.warn(
@@ -457,9 +457,7 @@ export class LogbookService {
   private async enqueueElapsedWindow(store: LogbookStore): Promise<void> {
     // Windows close on elapsed wall-clock or on a capture gap; both cases are
     // resolved by selectBatchFrames against the oldest unbatched frame.
-    while (!this.stopping && (await this.enqueueNextBatch(store))) {
-      // Continue until all elapsed windows are queued.
-    }
+    while (!this.stopping && (await this.enqueueNextBatch(store))) {}
   }
 
   private async runBatch(store: LogbookStore, batch: LogbookBatch): Promise<void> {
@@ -513,7 +511,7 @@ export class LogbookService {
       await this.reviseCards(store, batch);
       await store.setBatchStatus(batch.id, "done");
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = coerceErrorMessage(err);
       await store.setBatchStatus(batch.id, "error", message);
       this.deps.logger.warn(`logbook: batch ${batch.id} failed: ${message}`);
     }
@@ -552,8 +550,6 @@ export class LogbookService {
       const parsed = parseCardsJson({
         raw,
         day: batch.day,
-        windowStartMs: window.startMs,
-        windowEndMs: window.endMs,
       });
       if (!parsed.ok) {
         return parsed;

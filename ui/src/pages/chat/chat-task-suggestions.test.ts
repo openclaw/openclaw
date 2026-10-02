@@ -70,7 +70,7 @@ describe("chat task suggestions", () => {
 
     container.querySelector<HTMLButtonElement>(".task-suggestion__start")?.click();
     container.querySelector<HTMLButtonElement>(".task-suggestion__dismiss")?.click();
-    expect(onAccept).toHaveBeenCalledWith(suggestion, "local");
+    expect(onAccept).toHaveBeenCalledWith(suggestion, "local", undefined);
     expect(onDismiss).toHaveBeenCalledWith(suggestion);
   });
 

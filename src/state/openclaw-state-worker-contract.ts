@@ -1,155 +1,174 @@
-import type { NativeHookRelayStoreWorkerOperations } from "../agents/harness/native-hook-relay-store.worker-contract.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
+import type {
+  SandboxRegistryInsert,
+  SandboxRegistryWrite,
+} from "../agents/sandbox/registry.kernel.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import type {
+  WorkspaceAttestation,
+  WorkspaceAttestationInput,
+} from "../agents/workspace-state-store.kernel.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
-import type { readSqliteDatabaseBloat } from "../commands/doctor-db-bloat.read.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
   ConfigHealthSnapshot,
   ConfigHealthEntryBasis,
 } from "../config/io.health-state.types.js";
-import type { CronStoreWorkerOperations } from "../cron/store/load-worker.types.js";
-import type { CronStoreSaveWorkerOperations } from "../cron/store/save-worker.types.js";
-import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
-import type { DeliveryQueueWorkerOperations } from "../infra/delivery-queue.worker-contract.js";
-import type { PreparedPromotionClaim } from "../infra/promotions-feed.kernel.js";
-import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker-contract.js";
-import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
+import type { SessionEntryCurrentSource } from "../config/sessions/session-entry-current.types.js";
+import type { CronStateWorkerOperations } from "../cron/store/worker-contract.js";
+import type {
+  RepositoryGitHubPublicationPendingQuery,
+  RepositoryGitHubPublicationStatusRow,
+} from "../gateway/github-repository-publication.kernel.js";
+import type {
+  SessionGroupCatalogMutation,
+  SessionGroupCatalogMutationResult,
+} from "../gateway/session-group-catalog.types.js";
+import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import type { DeviceIdentity } from "../infra/device-identity-store.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import type { readRemoteModelCatalog } from "../model-catalog/remote-store.js";
+import type {
+  SqliteWalPeriodicRequest,
+  SqliteWalPeriodicResult,
+} from "../infra/sqlite-wal-write-admission.js";
+import type { SqliteWorkerPreparedBackend } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerAdmissionFactory } from "../infra/sqlite-worker-operation-admission.js";
+import type {
+  InterruptedUpdateSettlement,
+  InterruptedUpdateSettlementResult,
+} from "../infra/update-run-interruption-contract.js";
+import type { UpdateRunWriteOperations } from "../infra/update-run-mutation.types.js";
+import type { UpdateRunReconciliationOperations } from "../infra/update-run-reconciliation.types.js";
 import type { PluginStateWorkerOperations } from "../plugin-state/plugin-state-worker-contract.js";
-import type { PluginBindingApprovalEntry } from "../plugins/conversation-binding-state.types.js";
 import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-index-row.js";
-import type { HostedCatalogSnapshotWorkerOperations } from "../plugins/official-external-plugin-catalog-snapshot-store.worker-contract.js";
-import type { TaskFlowView } from "../plugins/runtime/task-domain-types.js";
-import type {
-  ProjectRegistryIdentity,
-  ProjectRegistryInsert,
-  ProjectRegistryRecord,
-} from "../projects/project-registry.kernel.js";
-import type {
-  SessionStateEventInput,
-  SessionStateNotice,
-} from "../sessions/session-state-events.kernel.js";
-import type { ManagedTaskInFlowInput } from "../tasks/task-flow-managed-run-task.kernel.js";
-import type { RunTaskInFlowResult } from "../tasks/task-flow-managed-run-task.types.js";
-import type {
-  TaskFlowRegistryUpdate,
-  TaskFlowRegistryUpdateResult,
-} from "../tasks/task-flow-registry.store.types.js";
-import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
-import type { TaskRegistryStatusSnapshot } from "../tasks/task-registry.store.status.js";
-import type {
-  TaskRegistryMutationScope,
-  TaskRegistryStoreSnapshot,
-} from "../tasks/task-registry.store.types.js";
-import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
+import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
+import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
+import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
+import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
+import type { SessionUpstreamWorkerOperations } from "../sessions/session-upstream-links.worker-contract.js";
+import type { DeviceAuthEntry } from "../shared/device-auth.js";
+import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
+import type { TranscriptReadOperations } from "../transcripts/store-worker-contract.js";
+import type { TuiLastSessionWorkerOperations } from "../tui/tui-last-session.contract.js";
+import type { AgentProvenance } from "./agent-provenance.types.js";
 import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease-store.js";
+import type {
+  GitHubSessionReceiptGeneration,
+  GitHubSessionReceiptIdentities,
+} from "./github-publication-read.types.js";
+import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
+import type { RegisteredStateWorkerOperations } from "./openclaw-state-worker-registry.js";
 import type { UserPreferenceWorkerOperations } from "./user-preferences.types.js";
 
-type TaskLookupRecords = {
-  direct?: TaskRecord;
-  byRun?: TaskRecord;
-  related: TaskRecord[];
-};
-
-type TaskFlowRead = {
-  flow: TaskFlowRecord;
-  tasks: TaskRecord[];
-};
-
-type TaskFlowReadQuery = {
-  ownerKey: string;
-  lookup: "id" | "latest" | "resolve";
-  token?: string;
-};
+export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; identityKey: string };
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
-export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations &
-  HostedCatalogSnapshotWorkerOperations &
+export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  UpdateRunReconciliationOperations &
+  UpdateRunWriteOperations &
+  CaptureWorkerOperations &
+  TuiLastSessionWorkerOperations &
+  SessionStateWorkerOperations &
+  SessionUpstreamWorkerOperations &
   PluginStateWorkerOperations &
   UserPreferenceWorkerOperations &
-  CronStoreWorkerOperations &
-  CronStoreSaveWorkerOperations &
-  SessionDeliveryWorkerOperations &
-  DeliveryQueueWorkerOperations & {
-    "promotions.markNotified": { input: { slugs: string[]; now: number }; output: true };
-    "promotions.recordClaim": { input: PreparedPromotionClaim; output: void };
-    "sessionState.recordGoalChange": {
-      input: { event: SessionStateEventInput & { kind: "goal_changed" }; now: number };
-      output: SessionStateNotice[];
+  CronStateWorkerOperations &
+  TranscriptReadOperations &
+  OpenClawStateLeaseLifecycleOperations & {
+    "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
+    "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
+    "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
+    "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
+    "workspace.replaceAttestation": {
+      input: WorkspaceAttestationInput;
+      output: WorkspaceAttestation;
     };
-    "sessionState.prune": { input: { now: number }; output: void };
-    "doctor.databaseBloat": {
-      input: undefined;
-      output: ReturnType<typeof readSqliteDatabaseBloat>;
+    "updateRuns.reconcileInterrupted": {
+      input: InterruptedUpdateSettlement;
+      output: InterruptedUpdateSettlementResult;
     };
-    "subagents.sessionList": {
-      input: undefined;
-      output: Map<string, SubagentRunReadRecord> | undefined;
+    "githubPublication.prepareSessionReceiptDeletion": {
+      input: { agentId: string; sessionKeys: readonly string[] };
+      output: GitHubSessionReceiptIdentities;
     };
-    "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
-    "projects.findRoot": { input: { repoRoot: string }; output: string | undefined };
-    "projects.list": { input: undefined; output: ProjectRegistryRecord[] };
-    "projects.insert": {
-      input: { project: ProjectRegistryInsert; lease: OpenClawStateLeaseIdentity };
-      output: ProjectRegistryRecord;
-    };
-    "projects.remove": {
-      input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
-      output: boolean;
-    };
-    "projects.resolveRefreshOwner": {
-      input: { project: ProjectRegistryIdentity; lease: OpenClawStateLeaseIdentity };
-      output: ProjectRegistryRecord | undefined;
-    };
-    "modelCatalog.remote.read": {
-      input: { artifactPreservingReadOnly: boolean };
-      output: ReturnType<typeof readRemoteModelCatalog>;
-    };
-    "plugins.conversationBindingApprovals.read": {
-      input: undefined;
-      output: PluginBindingApprovalEntry[];
-    };
-    "plugins.conversationBindingApprovals.upsert": {
-      input: PluginBindingApprovalEntry;
+    "githubPublication.deleteSessionReceipts": {
+      input: {
+        agentId: string;
+        sessionKeys: readonly string[];
+        generations: readonly GitHubSessionReceiptGeneration[];
+        receipts: GitHubSessionReceiptIdentities;
+        sessionEntryCurrentSource?: SessionEntryCurrentSource;
+      };
       output: void;
+    };
+    "githubRepository.personalPending": {
+      input: RepositoryGitHubPublicationPendingQuery;
+      output: RepositoryGitHubPublicationStatusRow | undefined;
+    };
+    "deviceAuth.prepare": { input: undefined; output: void };
+    "deviceAuth.list": { input: { deviceId: string }; output: DeviceAuthEntry[] };
+    "deviceAuth.read": {
+      input: Parameters<typeof deviceAuth.readDeviceAuthTokenObservationFromDatabase>[1] & {
+        readOnly: boolean;
+      };
+      output: ReturnType<typeof deviceAuth.readDeviceAuthTokenObservationFromDatabase>;
+    };
+    "deviceAuth.readOrigin": {
+      input: Parameters<typeof deviceAuth.readOriginDeviceTokenObservationFromDatabase>[1] & {
+        readOnly: boolean;
+      };
+      output: ReturnType<typeof deviceAuth.readOriginDeviceTokenObservationFromDatabase>;
+    };
+    "deviceAuth.store": {
+      input: Parameters<typeof deviceAuth.storeDeviceAuthTokenInDatabase>[1];
+      output: ReturnType<typeof deviceAuth.storeDeviceAuthTokenInDatabase>;
+    };
+    "deviceAuth.storeOrigin": {
+      input: Parameters<typeof deviceAuth.storeOriginDeviceTokenInDatabase>[1];
+      output: ReturnType<typeof deviceAuth.storeOriginDeviceTokenInDatabase>;
+    };
+    "deviceAuth.clear": {
+      input: Parameters<typeof deviceAuth.clearDeviceAuthTokenFromDatabase>[1];
+      output: ReturnType<typeof deviceAuth.clearDeviceAuthTokenFromDatabase>;
+    };
+    "deviceAuth.clearOrigin": {
+      input: Parameters<typeof deviceAuth.clearOriginDeviceTokenInDatabase>[1];
+      output: ReturnType<typeof deviceAuth.clearOriginDeviceTokenInDatabase>;
+    };
+
+    "agentProvenance.readBatch": {
+      input: { agentIds: readonly string[] };
+      output: AgentProvenance[];
+    };
+    "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
+    "secrets.writeForConfigRef": {
+      input: SecretStoreConfigRefWrite;
+      output: { name: string };
+    };
+    "subagents.persistChanges": {
+      input: SubagentRegistryWrite;
+      output: SubagentRegistryWriteReceipt;
+    };
+    "sessionUpstream.listWatched": { input: undefined; output: SessionUpstreamLink[] };
+    "backup.recordOutcome": { input: PreparedBackupRunRecord; output: void };
+    "sessionGroups.mutate": {
+      input: SessionGroupCatalogMutation;
+      output: SessionGroupCatalogMutationResult;
     };
     "plugins.metadata.read": {
       input: { selector: PluginMetadataStateSelector; artifactPreservingReadOnly?: boolean };
       output: { value_json: string } | undefined;
     };
-    "plugins.deferredMigrations.read": {
-      input: undefined;
-      output: readonly DeferredPluginMigration[];
-    };
     "claws.install-schema-versions": {
-      input: undefined;
+      input: { artifactPreservingReadOnly: boolean };
       output: ClawInstallSchemaVersionRow[] | undefined;
     };
-    "tasks.statusSummary": {
-      input: { now: number; preserveSourceArtifacts: boolean };
-      output: TaskRegistryStatusSnapshot | undefined;
-    };
-    "flows.runTask": { input: ManagedTaskInFlowInput; output: RunTaskInFlowResult };
-    "tasks.mutationSnapshot": {
-      input: TaskRegistryMutationScope;
-      output: TaskRegistryStoreSnapshot;
-    };
-    "flows.createManaged": {
-      input: { flow: TaskFlowRecord };
-      output: TaskFlowRecord;
-    };
-    "flows.updateManaged": {
-      input: TaskFlowRegistryUpdate & {
-        ownerKey: string;
-      };
-      output:
-        | TaskFlowRegistryUpdateResult
-        | { applied: false; reason: "not_managed"; current: TaskFlowRecord }
-        | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
-    };
-    "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
     "config.health.read": { input: { artifactPreserving: boolean }; output: ConfigHealthSnapshot };
     "config.health.patch": {
       input: {
@@ -160,33 +179,51 @@ export type OpenClawStateWorkerOperations = NativeHookRelayStoreWorkerOperations
       };
       output: boolean;
     };
-    "diagnostic.register": {
-      input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
-      output: void;
-    };
-    "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
-    "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
-    "tasks.resolve": {
-      input: { ownerKey: string; token: string };
-      output: TaskLookupRecords;
-    };
-    "flows.list": { input: { ownerKey: string }; output: TaskFlowRecord[] };
-    "flows.views": { input: { ownerKey: string }; output: TaskFlowView[] };
-    "flows.summary": {
-      input: { ownerKey: string; flowId: string };
-      output: TaskRegistrySummary | undefined;
-    };
-    "flows.read": {
-      input: TaskFlowReadQuery;
-      output: TaskFlowRecord | undefined;
-    };
-    "flows.detail": {
-      input: TaskFlowReadQuery;
-      output: TaskFlowRead | undefined;
-    };
   };
 
 /** Internal inspection cannot open canonical state or execute a domain command. */
 export type OpenClawStateWorkerInspectionOperations = {
   "database.generationMatches": { input: { generation: SqliteFileGeneration }; output: boolean };
+  "database.inspectIdle": { input: undefined; output: "healthy" | "retire" };
+};
+
+/** Retiring owners dispatch only exact, physically bound cleanup receipts. */
+export type OpenClawStateWorkerCleanupOperations = Pick<
+  OpenClawStateLeaseLifecycleOperations,
+  "stateLease.release"
+> &
+  Pick<SkillUploadWorkerOperations, "skillUploads.release"> & {
+    "agentDatabases.releaseExitedLease": {
+      input: OpenClawAgentDatabaseWorkerLeaseReceipt;
+      output: void;
+    };
+  };
+
+export type OpenClawStateWorkerBackend = SqliteWorkerPreparedBackend<
+  OpenClawStateWorkerOperations &
+    OpenClawStateWorkerInspectionOperations &
+    OpenClawStateWorkerCleanupOperations
+>;
+
+/** Commands dispatched after the independently prepared backend paths. */
+export type OpenClawStateWorkerRuntimeCommand = Exclude<
+  Parameters<OpenClawStateWorkerBackend["execute"]>[0],
+  {
+    type:
+      | "plugins.metadata.read"
+      | "database.inspectIdle"
+      | "database.walMaintenance"
+      | "agentDatabases.releaseExitedLease"
+      | keyof CaptureWorkerOperations
+      | keyof PluginStateWorkerOperations
+      | keyof OpenClawStateLeaseLifecycleOperations;
+  }
+>;
+
+/** Host-only admission options; never serialized with a worker command. */
+export type OpenClawStateWorkerOperationOptions = {
+  preparation?: OpenClawStateWorkerOpenPreparation;
+  existingOnly?: boolean;
+  assertCurrent?: (commandType?: PropertyKey) => void;
+  createAdmission?: SqliteWorkerAdmissionFactory;
 };

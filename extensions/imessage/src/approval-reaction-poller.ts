@@ -1,4 +1,3 @@
-// Imessage plugin module implements approval reaction poller behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { asDateTimestampMs, asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
@@ -52,10 +51,6 @@ function listTargetChatIds(
 
 function hasUnscopedTarget(targets: readonly PendingIMessageApprovalReactionPollTarget[]): boolean {
   return targets.some((target) => normalizeChatId(target.conversation.chatId) === null);
-}
-
-function uniqueChatIds(chatIds: readonly number[]): number[] {
-  return [...new Set(chatIds)];
 }
 
 function enumerateMessageGuidCandidates(value: string): string[] {
@@ -203,9 +198,9 @@ export async function pollPendingIMessageApprovalReactions(params: {
   // Send-side DM registration may know only a handle, not a chat id. Scan recent chats
   // for those typed GUID targets or a watch-missed tapback would silently resolve nothing.
   const shouldDiscoverRecentChats =
-    params.allowRecentChatDiscovery === true && targets.length > 0 && hasUnscopedTarget(targets);
+    params.allowRecentChatDiscovery === true && hasUnscopedTarget(targets);
   const chatIds = shouldDiscoverRecentChats
-    ? uniqueChatIds([...explicitChatIds, ...(await listRecentChatIds(params.client))])
+    ? [...new Set([...explicitChatIds, ...(await listRecentChatIds(params.client))])]
     : explicitChatIds;
   if (chatIds.length === 0) {
     return;

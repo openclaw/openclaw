@@ -8,11 +8,7 @@ import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-cont
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
-import {
-  createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
-  SqliteCoordinatorError,
-} from "./sqlite-coordinator.js";
+import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
@@ -71,7 +67,7 @@ function readSqliteSchemaHeaderSnapshot(
 ): SqliteSchemaHeader {
   signal?.throwIfAborted();
   const database = openNodeSqliteDatabase(location, { readOnly: true });
-  return runWithSqliteCoordinator(
+  return runWithSqliteCleanup(
     { release: () => database.close() },
     "SQLite schema header read",
     () => {
@@ -87,7 +83,7 @@ export function readSqliteSchemaHeaderFromSnapshot(
   signal?: AbortSignal,
   agentSchemaVersionForOwnership?: number,
 ): SqliteSchemaHeader {
-  return runWithSqliteCoordinator(
+  return runWithSqliteCleanup(
     {
       release: () => {
         if (!prepared.cleanup()) {
@@ -98,46 +94,4 @@ export function readSqliteSchemaHeaderFromSnapshot(
     "SQLite schema header snapshot",
     () => readSqliteSchemaHeaderSnapshot(prepared.location, signal, agentSchemaVersionForOwnership),
   );
-}
-
-/** Async parents join private removal after the native snapshot reader closes. */
-export async function readSqliteSchemaHeaderFromSnapshotAsync(
-  prepared: PreparedSqliteReadOnlyLocation,
-  signal?: AbortSignal,
-  agentSchemaVersionForOwnership?: number,
-): Promise<SqliteSchemaHeader> {
-  let outcome: { value: SqliteSchemaHeader } | { error: unknown };
-  try {
-    outcome = {
-      value: readSqliteSchemaHeaderSnapshot(
-        prepared.location,
-        signal,
-        agentSchemaVersionForOwnership,
-      ),
-    };
-  } catch (error) {
-    outcome = { error };
-  }
-  try {
-    if (!(await prepared.cleanupAsync())) {
-      throw new Error(`SQLite read-only worker snapshot cleanup failed: ${prepared.location}`);
-    }
-  } catch (error) {
-    if ("error" in outcome) {
-      throw createSqliteLifecycleAggregateError(
-        [outcome.error, error],
-        "SQLite schema header snapshot and coordinator release both failed",
-        outcome.error,
-      );
-    }
-    throw new SqliteCoordinatorError(
-      "SQLite schema header snapshot completed, but releasing its coordinator failed",
-      error,
-    );
-  }
-  if ("error" in outcome) {
-    throw outcome.error;
-  }
-  signal?.throwIfAborted();
-  return outcome.value;
 }

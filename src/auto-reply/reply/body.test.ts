@@ -53,6 +53,7 @@ describe("applySessionHints", () => {
     expect(body).toContain("organize my sessions");
 
     const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
       admissionRunId: "new-input",
       lifecycleGeneration,
       getEntry: () => entry,

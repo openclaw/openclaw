@@ -4,6 +4,7 @@
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import type { ChannelStatusIssue } from "../../channels/plugins/types.core.js";
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
 import {
@@ -27,11 +28,9 @@ import {
   type PluginCompatibilityNotice,
 } from "../../plugins/status.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
-import {
-  hasMissingSkillRequirements,
-  type SkillStatusReport,
-} from "../../skills/discovery/status.js";
+import type { buildWorkspaceSkillReadiness } from "../../skills/discovery/status.js";
 import { formatDeliveryQueueHealthLine } from "../health-format.js";
+import { countActiveStatusAgents } from "../status-overview-values.js";
 import type {
   resolveStatusGatewayHealthSafe,
   StatusGatewayDiagnosticsResult,
@@ -56,14 +55,6 @@ type ConfigSnapshotLike = {
 
 type PortUsageLike = Pick<PortUsage, "listeners" | "port" | "status" | "hints">;
 
-type ChannelIssueLike = {
-  channel: string;
-  accountId: string;
-  kind: string;
-  message: string;
-  fix?: string;
-};
-
 type DeliveryDiagnosticsLike = {
   summary?: {
     byType?: Record<string, number>;
@@ -87,16 +78,10 @@ type AgentStatusLike = {
 
 const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
 
-function countRecentAgentSessions(agentStatus: AgentStatusLike, thresholdMs: number): number {
-  return agentStatus.agents.filter(
-    (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= thresholdMs,
-  ).length;
-}
-
 function countGatewayListenerPids(portUsage: PortUsageLike): number {
   const pids = new Set<number>();
   for (const listener of portUsage.listeners) {
-    if (classifyPortListener(listener, portUsage.port) !== "gateway") {
+    if (classifyPortListener(listener) !== "gateway") {
       continue;
     }
     if (typeof listener.pid === "number" && Number.isFinite(listener.pid)) {
@@ -134,7 +119,6 @@ function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | n
   return latestTs > 0 ? Date.now() - latestTs : null;
 }
 
-/** Appends config, gateway, channel, delivery, and log diagnostics to the status-all report. */
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -153,14 +137,15 @@ export async function appendStatusAllDiagnosis(params: {
   tailscaleMode: string;
   tailscaleDns: string | null;
   tailscaleHttpsUrl: string | null;
-  skillStatus: SkillStatusReport | null;
+  skillReadiness: ReturnType<typeof buildWorkspaceSkillReadiness> | null;
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
-  channelIssues: ChannelIssueLike[];
+  channelIssues: ChannelStatusIssue[];
   deliveryDiagnostics: StatusGatewayDiagnosticsResult | null;
   exporterDiagnostics: StatusGatewayDiagnosticsResult | null;
   agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
+  gatewayStartupPhase?: string;
   health: Awaited<ReturnType<typeof resolveStatusGatewayHealthSafe>> | null | undefined;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
 }) {
@@ -245,7 +230,7 @@ export async function appendStatusAllDiagnosis(params: {
 
   const lastErrClean = normalizeOptionalString(params.lastErr) ?? "";
   // Restart logs sometimes end with a single brace from truncated JSON; suppress that noise.
-  const isTrivialLastErr = lastErrClean.length < 8 || lastErrClean === "}" || lastErrClean === "{";
+  const isTrivialLastErr = lastErrClean.length < 8;
   if (lastErrClean && !isTrivialLastErr) {
     lines.push("");
     lines.push(muted("Gateway last log line:"));
@@ -292,11 +277,10 @@ export async function appendStatusAllDiagnosis(params: {
     lines.push(`  ${muted(`https: ${params.tailscaleHttpsUrl}`)}`);
   }
 
-  if (params.skillStatus) {
-    const eligible = params.skillStatus.skills.filter((s) => s.eligible).length;
-    const missing = params.skillStatus.skills.filter(hasMissingSkillRequirements).length;
+  if (params.skillReadiness) {
+    const { eligible, missing, workspaceDir } = params.skillReadiness;
     emitCheck(
-      `Skills: ${eligible} eligible · ${missing} missing · ${params.skillStatus.workspaceDir}`,
+      `Skills: ${eligible} eligible · ${missing} missing · ${workspaceDir}`,
       missing === 0 ? "ok" : "warn",
     );
   }
@@ -314,10 +298,10 @@ export async function appendStatusAllDiagnosis(params: {
   }
 
   if (params.agentStatus) {
-    const recentSessions = countRecentAgentSessions(
-      params.agentStatus,
-      AGENT_ACTIVITY_SOFT_WARNING_MS,
-    );
+    const recentSessions = countActiveStatusAgents({
+      agentStatus: params.agentStatus,
+      activeThresholdMs: AGENT_ACTIVITY_SOFT_WARNING_MS,
+    });
     const hasKnownSessions = params.agentStatus.totalSessions > 0;
     const shouldWarn = hasKnownSessions && recentSessions === 0;
     emitCheck(
@@ -470,6 +454,11 @@ export async function appendStatusAllDiagnosis(params: {
   } else if (params.nodeOnlyGateway) {
     emitCheck(
       `Channel issues skipped (node-only mode; query ${params.nodeOnlyGateway.gatewayTarget})`,
+      "ok",
+    );
+  } else if (params.gatewayStartupPhase) {
+    emitCheck(
+      `Channel issues skipped (gateway still starting (phase ${params.gatewayStartupPhase}))`,
       "ok",
     );
   } else {

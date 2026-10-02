@@ -60,7 +60,10 @@ type ManagedMutationOptions = Pick<
 async function callHandler(
   method: string,
   params: Record<string, unknown>,
-  invocation: Pick<GatewayRequestHandlerOptions, "signal" | "sessionMutationCommitGuard">,
+  invocation: Pick<
+    GatewayRequestHandlerOptions,
+    "signal" | "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
+  >,
 ) {
   let ok: boolean | null = null;
   let error: ErrorShape | undefined;
@@ -152,19 +155,24 @@ describe("plugin lifecycle invoker ownership", () => {
       await pending;
     }
   });
-  describe.each(["signal", "guard"] as const)("closed %s", (fence) => {
+  describe.each(["signal", "guard", "client"] as const)("closed %s", (fence) => {
     const createInvocation = () => {
       const controller = new AbortController();
       const failure = new Error(
-        fence === "signal" ? "plugin request aborted" : "plugin mutation owner closed",
+        fence === "signal"
+          ? "plugin request aborted"
+          : fence === "client"
+            ? "Plugin mutation authority is no longer active."
+            : "plugin mutation owner closed",
       );
       let open = true;
       return {
         failure,
         invocation: {
           signal: controller.signal,
+          hasCurrentClientAuthority: () => fence !== "client" || open,
           sessionMutationCommitGuard: () => {
-            if (!open) {
+            if (fence === "guard" && !open) {
               throw failure;
             }
           },
@@ -207,11 +215,13 @@ describe("plugin lifecycle invoker ownership", () => {
       "rejects retained $method $checkpoint work after an await",
       async ({ method, params, operation, checkpoint }) => {
         const owner = createInvocation();
+        const entered = createDeferred();
         const paused = createDeferred();
         const persist = vi.fn();
         if (checkpoint === "publication") {
           applyRuntime.mockImplementation(
             async (change: Parameters<NonNullable<ManagedMutationOptions["applyRuntime"]>>[0]) => {
+              entered.resolve();
               await paused.promise;
               change.assertInvokerOwned?.();
               persist();
@@ -221,6 +231,7 @@ describe("plugin lifecycle invoker ownership", () => {
         }
         operation.mockImplementation(async (options: ManagedMutationOptions) => {
           if (checkpoint !== "publication") {
+            entered.resolve();
             await paused.promise;
           }
           if (checkpoint === "persistence") {
@@ -241,6 +252,12 @@ describe("plugin lifecycle invoker ownership", () => {
         });
         const pending = callHandler(method, params, owner.invocation);
         try {
+          await Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error(`${method} completed before queued ${checkpoint}`);
+            }),
+          ]);
           expect(operation).toHaveBeenCalledOnce();
           owner.close();
           paused.resolve();

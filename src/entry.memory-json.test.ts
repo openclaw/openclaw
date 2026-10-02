@@ -245,7 +245,8 @@ describe("memory command failures at the root JSON boundary", () => {
           });
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain(cleanupError.message);
+          expect(stderr()).toContain("[openclaw] The CLI command failed.");
+          expect(stderr()).not.toContain(cleanupError.message);
           expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {
@@ -394,6 +395,7 @@ describe("registered memory_search through Gateway /tools/invoke (infra)", () =>
             const loaded = await loadSqliteVecExtension({ db });
             expect(loaded.ok, loaded.error).toBe(true);
             const insert = db.prepare(`INSERT INTO memory_index_chunks
+          (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
           SELECT ?, path, source, start_line, end_line, hash, model, text, embedding, updated_at
           FROM memory_index_chunks WHERE path = 'memory/background.md' LIMIT 1`);
             const insertVector = db.prepare(

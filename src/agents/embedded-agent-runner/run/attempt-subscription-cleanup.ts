@@ -1,4 +1,3 @@
-/** Cleans up embedded attempt subscription resources. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isFastTestRuntimeEnv } from "../../../infra/test-runtime-env.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -47,6 +46,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
   bundleMcpRuntime?: { dispose(): Promise<void> | void };
   bundleLspRuntime?: { dispose(): Promise<void> | void };
   aborted?: boolean;
+  abortSignal?: AbortSignal;
   abortSettlePromise?: Promise<unknown> | null;
   runId?: string;
   sessionId?: string;
@@ -68,6 +68,7 @@ export async function cleanupEmbeddedAttemptResources(params: {
       agent: params.session?.agent,
       sessionManager: params.sessionManager,
       ...(params.aborted ? { timeoutMs: 0 } : {}),
+      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     });
   } catch {
     recordAgentCleanupFailure();

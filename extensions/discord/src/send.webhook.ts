@@ -1,4 +1,3 @@
-// Discord plugin module implements send.webhook behavior.
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { recordOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -9,10 +8,10 @@ import {
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import { getDiscordEndpointRuntime } from "./endpoint-runtime.js";
+import { parseDiscordHttpErrorBody } from "./error-body.js";
 import {
   DiscordError,
   RateLimitError,
@@ -56,17 +55,6 @@ type DiscordWebhookSendOpts = {
   onDeliveryResult?: (result: DiscordSendResult) => Promise<void> | void;
 };
 
-function coerceWebhookErrorBody(raw: string): unknown {
-  if (!raw) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return { message: truncateUtf16Safe(raw, 200) };
-  }
-}
-
 function throwIfWebhookDeadlineExpired(signal: AbortSignal | undefined): void {
   if (!signal?.aborted) {
     return;
@@ -88,7 +76,7 @@ async function throwWebhookResponseError(
     throwIfWebhookDeadlineExpired(signal);
     return "";
   });
-  const parsed = coerceWebhookErrorBody(raw);
+  const parsed = parseDiscordHttpErrorBody(raw);
   if (response.status === 429) {
     throw new RateLimitError(response, {
       message: readDiscordMessage(parsed, "Rate limited"),

@@ -2,18 +2,38 @@
 // Suppresses internal auto-reply tokens before they leak to chat surfaces.
 import { isSilentReplyText, SILENT_REPLY_TOKEN, stripSilentToken } from "../auto-reply/tokens.js";
 
-const SUPPRESSED_CONTROL_REPLY_TOKENS = [
+export const SUPPRESSED_CONTROL_REPLY_TOKENS = [
   SILENT_REPLY_TOKEN,
+  // Suppress control replies persisted in transcripts or stored cron prompts by older versions.
   "ANNOUNCE_SKIP",
   "REPLY_SKIP",
 ] as const;
 
+// Long padding falls through to the full classifier without another unbounded scan.
+const POSSIBLE_CONTROL_REPLY_START = new RegExp(
+  `^(?:[\\s\\p{P}]{64}|[\\s\\p{P}]{0,63}(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")}))`,
+  "iu",
+);
+
+const CONTROL_REPLY_SEQUENCE_PREFIX = new RegExp(
+  `^(?:(?:${SUPPRESSED_CONTROL_REPLY_TOKENS.join("|")})\\s+)+([A-Z_]+)$`,
+  "i",
+);
+
 /**
- * Return true when a chat-visible reply is exactly an internal control token.
+ * Recognize control-only replies, including a repeated marker's unfinished tail.
  */
 export function isSuppressedControlReplyText(text: string): boolean {
+  if (!POSSIBLE_CONTROL_REPLY_START.test(text)) {
+    return false;
+  }
   const normalized = text.trim();
-  return SUPPRESSED_CONTROL_REPLY_TOKENS.some((token) => isSilentReplyText(normalized, token));
+  const repeatedFragment = CONTROL_REPLY_SEQUENCE_PREFIX.exec(normalized)?.[1]?.toUpperCase();
+  return SUPPRESSED_CONTROL_REPLY_TOKENS.some(
+    (token) =>
+      isSilentReplyText(normalized, token) ||
+      (repeatedFragment !== undefined && token.startsWith(repeatedFragment)),
+  );
 }
 
 /** Remove internal control tokens when a model appends one to visible reply text. */

@@ -1,12 +1,7 @@
 import { consume } from "@lit/context";
 import { Task, TaskStatus } from "@lit/task";
-import type {
-  CallToolResult,
-  ListToolsRequest,
-  ListToolsResult,
-} from "@modelcontextprotocol/client";
 import {
-  AppBridge,
+  type AppBridge,
   McpUiHostContextSchema,
   PostMessageTransport,
 } from "@modelcontextprotocol/ext-apps/app-bridge";
@@ -15,17 +10,29 @@ import { LitElement, css, html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
 import { I18nController, t } from "../i18n/index.ts";
+import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import {
   buildMcpAppHostCapabilities,
-  dispatchWidgetPrompt,
+  dispatchMcpAppMessage,
+  isWidgetFrameInteractable,
+  negotiateMcpAppDisplayModes,
+  MCP_APP_CONTEXT_EVENT,
+  type McpAppContextState,
+  type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
   resolveMcpAppSandboxUrl,
   type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
 import { collectMcpAppStyleVariables } from "./mcp-app-theme.ts";
+import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+
+registerMcpAppEnglish();
 
 type McpAppViewPayload = {
   sandboxUrl: string;
@@ -37,13 +44,20 @@ type McpAppViewPayload = {
   toolResult: unknown;
   messageSupported?: boolean;
   updateModelContextSupported?: boolean;
+  richModelContextSupported?: boolean;
+  fileResourcesSupported?: boolean;
+  openFilesSupported?: boolean;
+  hostContext?: { "openai/modelContext"?: McpAppContextState; "openai/deepLink"?: { url: string } };
+  displayMode?: "inline" | "fullscreen";
+  displayModes?: {
+    availableDisplayModes?: Array<"inline" | "fullscreen">;
+    preferredDisplayMode?: "inline" | "fullscreen";
+  };
 };
 
 type HostContext = NonNullable<
   NonNullable<ConstructorParameters<typeof AppBridge>[3]>["hostContext"]
 >;
-type ScheduleFrame = (callback: FrameRequestCallback) => number;
-type ScheduleFallback = (callback: () => void, delayMs: number) => number;
 type McpAppResources = {
   bridge: OpenClawAppBridge | null;
   cleanups: Set<() => void>;
@@ -51,32 +65,39 @@ type McpAppResources = {
   iframe: HTMLIFrameElement;
   transport: { close(): Promise<void> } | null;
   disposed: boolean;
+  updateHostContext?: () => void;
 };
 type McpAppBinding = {
   client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
   sessionKey: string;
   viewId: string;
+  agentId?: string;
+  connectionRevision: number | undefined;
+  hello: ApplicationContext["gateway"]["snapshot"]["hello"] | undefined;
 };
 
 const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
 
-async function waitForMcpAppHandlerRegistration(
-  scheduleFrame: ScheduleFrame = window.requestAnimationFrame.bind(window),
-  scheduleFallback: ScheduleFallback = window.setTimeout.bind(window),
-): Promise<void> {
+async function waitForMcpAppHandlerRegistration(): Promise<void> {
   await Promise.race([
     new Promise<void>((resolve) => {
-      scheduleFrame(() => {
-        scheduleFrame(() => resolve());
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => resolve());
       });
     }),
     new Promise<void>((resolve) => {
-      scheduleFallback(resolve, 1_000);
+      window.setTimeout(resolve, 1_000);
     }),
   ]);
 }
 
-function hostContext(element: Element | undefined, height: number): HostContext {
+function hostContext(
+  element: Element | undefined,
+  height: number,
+  fillContainer: boolean,
+  displayMode: "inline" | "fullscreen" = "inline",
+  availableDisplayModes: Array<"inline" | "fullscreen"> = ["inline", "fullscreen"],
+): HostContext {
   const rect = element?.getBoundingClientRect();
   const touch = navigator.maxTouchPoints > 0 || window.matchMedia?.("(pointer: coarse)").matches;
   const themeMode = document.documentElement.dataset.themeMode;
@@ -88,11 +109,11 @@ function hostContext(element: Element | undefined, height: number): HostContext 
         : window.matchMedia?.("(prefers-color-scheme: dark)").matches
           ? "dark"
           : "light",
-    displayMode: "inline",
-    availableDisplayModes: ["inline"],
+    displayMode,
+    availableDisplayModes,
     containerDimensions: {
       width: Math.max(1, Math.round(rect?.width || window.innerWidth)),
-      height,
+      height: fillContainer ? Math.max(0, Math.round(rect?.height ?? 0)) : height,
     },
     locale: navigator.language || undefined,
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -109,20 +130,6 @@ function hostContext(element: Element | undefined, height: number): HostContext 
   });
 }
 
-class OpenClawAppBridge extends AppBridge {
-  setMessageHandler(handler: NonNullable<AppBridge["onmessage"]>) {
-    Reflect.set(this, "onmessage", handler);
-  }
-
-  setUpdateModelContextHandler(handler: NonNullable<AppBridge["onupdatemodelcontext"]>) {
-    Reflect.set(this, "onupdatemodelcontext", handler);
-  }
-
-  setListToolsHandler(handler: (params: ListToolsRequest["params"]) => Promise<ListToolsResult>) {
-    this.replaceRequestHandler("tools/list", (request) => handler(request.params));
-  }
-}
-
 export class McpAppView extends LitElement {
   static override styles = css`
     :host {
@@ -136,11 +143,34 @@ export class McpAppView extends LitElement {
     .mount:empty {
       min-height: 0;
     }
+    :host([fill-container]),
+    :host([fill-container]) .mount {
+      height: 100%;
+      min-height: 0;
+    }
     iframe {
       display: block;
       width: 100%;
       border: 0;
       background: var(--board-surface, transparent);
+    }
+    :host([display-mode="fullscreen"]) {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      background: var(--bg);
+      padding-top: 40px;
+      margin: 0;
+      border: 0;
+      box-sizing: border-box;
+    }
+    :host([display-mode="fullscreen"]) .mount {
+      height: calc(100dvh - 40px);
+    }
+    .exit-fullscreen {
+      position: absolute;
+      top: 4px;
+      right: 8px;
     }
     .error {
       padding: 14px;
@@ -153,10 +183,14 @@ export class McpAppView extends LitElement {
   private context?: ApplicationContext;
 
   @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) agentId = "";
   @property({ attribute: false }) viewId = "";
   @property({ type: Number }) height = 600;
-  @property({ type: Boolean }) fixedHeight = false;
+  @property({ type: Boolean, attribute: "fill-container", reflect: true }) fillContainer = false;
   @property() override title = "";
+  @property({ attribute: false }) deepLink: string | undefined;
+  @property({ attribute: "display-mode", reflect: true }) displayMode: "inline" | "fullscreen" =
+    "inline";
   protected readonly i18nController = new I18nController(this);
   private readonly mount = createRef<HTMLDivElement>();
   private resources: McpAppResources | null = null;
@@ -165,8 +199,15 @@ export class McpAppView extends LitElement {
   private readonly setupTask = new Task(this, {
     autoRun: "afterUpdate",
     args: () =>
-      [this.context?.gateway.snapshot.client ?? null, this.sessionKey, this.viewId] as const,
-    task: async ([client, sessionKey, viewId], { signal }) => {
+      [
+        this.context?.gateway.snapshot.client ?? null,
+        this.sessionKey,
+        this.viewId,
+        this.agentId,
+        this.context?.gateway.connectionRevision,
+        this.context?.gateway.snapshot.hello,
+      ] as const,
+    task: async ([client, sessionKey, viewId, agentId, connectionRevision, hello], { signal }) => {
       await this.teardownResources(this.resources);
       if (!sessionKey || !viewId) {
         return null;
@@ -174,7 +215,10 @@ export class McpAppView extends LitElement {
       if (!client) {
         throw new Error(t("mcpApp.errors.gatewayUnavailable"));
       }
-      return this.setupResources({ client, sessionKey, viewId }, signal);
+      return this.setupResources(
+        { client, sessionKey, viewId, agentId: agentId || undefined, connectionRevision, hello },
+        signal,
+      );
     },
   });
 
@@ -184,15 +228,25 @@ export class McpAppView extends LitElement {
   }
 
   override updated(changedProperties: PropertyValues<this>) {
+    if (changedProperties.has("displayMode")) {
+      if (this.displayMode === "fullscreen") {
+        promoteToPopoverTopLayer(this);
+      } else {
+        this.removeAttribute("popover");
+      }
+    }
     if (this.resources) {
       this.resources.iframe.title = this.title || t("mcpApp.title");
       if (
         changedProperties.has("height") ||
-        (changedProperties.has("fixedHeight") && this.fixedHeight)
+        changedProperties.has("fillContainer") ||
+        changedProperties.has("displayMode") ||
+        changedProperties.has("deepLink")
       ) {
         this.resources.frameHeight = this.height;
-        this.resources.iframe.style.height = `${this.height}px`;
-        this.resources.bridge?.setHostContext(hostContext(this.mount.value, this.height));
+        this.resources.iframe.style.height =
+          this.fillContainer || this.displayMode === "fullscreen" ? "100%" : `${this.height}px`;
+        this.resources.updateHostContext?.();
       }
     }
   }
@@ -204,10 +258,12 @@ export class McpAppView extends LitElement {
     signal?: AbortSignal,
   ): Promise<unknown> {
     try {
+      const { agentId: _untrustedAgent, ...operationParams } = params;
       const requestParams = {
+        ...operationParams,
         sessionKey: binding.sessionKey,
         viewId: binding.viewId,
-        ...params,
+        ...(binding.agentId ? { agentId: binding.agentId } : {}),
       };
       return await (signal
         ? binding.client.request(method, requestParams, { signal })
@@ -231,13 +287,6 @@ export class McpAppView extends LitElement {
     };
   }
 
-  private runResourceCleanups(resources: McpAppResources) {
-    for (const cleanup of resources.cleanups) {
-      resources.cleanups.delete(cleanup);
-      cleanup();
-    }
-  }
-
   private async teardownResources(resources: McpAppResources | null | undefined) {
     if (!resources || resources.disposed) {
       await this.teardownPromise;
@@ -247,7 +296,10 @@ export class McpAppView extends LitElement {
     if (this.resources === resources) {
       this.resources = null;
     }
-    this.runResourceCleanups(resources);
+    for (const cleanup of resources.cleanups) {
+      resources.cleanups.delete(cleanup);
+      cleanup();
+    }
     const teardown = (async () => {
       if (resources.bridge) {
         let timeout: number | undefined;
@@ -291,11 +343,45 @@ export class McpAppView extends LitElement {
     void this.setupTask.run();
   }
 
+  private bindOpenLinkHandler(
+    bridge: OpenClawAppBridge,
+    binding: McpAppBinding,
+    resources: McpAppResources,
+    signal: AbortSignal,
+  ) {
+    bridge.onopenlink = async ({ url }) => {
+      if (!parseMcpAppLink(url)) {
+        return openExternalUrlSafe(url) ? {} : { isError: true };
+      }
+      const context = this.context;
+      // Recognized plugin links navigate this host, so a retired/background frame
+      // must not redirect a collaborator or a replacement connection.
+      if (
+        !context ||
+        signal.aborted ||
+        resources.disposed ||
+        this.resources !== resources ||
+        !this.isConnected ||
+        this.sessionKey !== binding.sessionKey ||
+        this.viewId !== binding.viewId ||
+        (this.agentId || undefined) !== binding.agentId ||
+        context.gateway.snapshot.phase !== "connected" ||
+        context.gateway.snapshot.client !== binding.client ||
+        context.gateway.connectionRevision !== binding.connectionRevision ||
+        context.gateway.snapshot.hello !== binding.hello ||
+        !isWidgetFrameInteractable(resources.iframe)
+      ) {
+        return { isError: true };
+      }
+      return navigateMcpAppLink(context, url) ? {} : { isError: true };
+    };
+  }
+
   private async setupResources(
     binding: McpAppBinding,
     signal: AbortSignal,
   ): Promise<McpAppResources> {
-    const { sessionKey, viewId } = binding;
+    const { sessionKey, viewId, agentId } = binding;
     let resources: McpAppResources | null = null;
     try {
       const payload = (await this.request(
@@ -314,7 +400,7 @@ export class McpAppView extends LitElement {
       // The isolated proxy binds its parent before accepting messages. Only the
       // Control UI origin is disclosed; path/query data remains suppressed.
       iframe.referrerPolicy = "origin";
-      iframe.style.height = `${this.height}px`;
+      iframe.style.height = this.fillContainer ? "100%" : `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
       // so Apps retain their required origin capabilities without reaching Control UI.
       iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
@@ -366,6 +452,45 @@ export class McpAppView extends LitElement {
         throw new Error(t("mcpApp.errors.sandboxUnavailable"));
       }
 
+      let modes = negotiateMcpAppDisplayModes(payload.displayModes);
+      this.displayMode =
+        payload.displayMode && modes.available.includes(payload.displayMode)
+          ? payload.displayMode
+          : modes.initial;
+      let modelContext = payload.hostContext?.["openai/modelContext"] ?? null;
+      let contextGeneration = 0;
+      const buildHostContext = () => {
+        const deepLink = this.deepLink
+          ? { url: this.deepLink }
+          : payload.hostContext?.["openai/deepLink"];
+        if (
+          deepLink &&
+          (!deepLink.url.startsWith("/") ||
+            deepLink.url.startsWith("//") ||
+            deepLink.url.includes("#"))
+        ) {
+          throw new Error("Invalid App deep link");
+        }
+        return {
+          ...hostContext(
+            mount,
+            createdResources.frameHeight,
+            this.fillContainer || this.displayMode === "fullscreen",
+            this.displayMode,
+            modes.available,
+          ),
+          "openai/modelContext": modelContext,
+          ...(deepLink ? { "openai/deepLink": deepLink } : {}),
+        };
+      };
+      const publishContext = () =>
+        this.dispatchEvent(
+          new CustomEvent<McpAppContextEventDetail>(MCP_APP_CONTEXT_EVENT, {
+            bubbles: true,
+            composed: true,
+            detail: { sessionKey, viewId, state: modelContext },
+          }),
+        );
       const bridge = new OpenClawAppBridge(
         null,
         { name: "OpenClaw", version: "1.0.0" },
@@ -374,12 +499,37 @@ export class McpAppView extends LitElement {
           payload.messageSupported === true,
           payload.updateModelContextSupported === true,
           payload.messageSupported === true,
+          {
+            richMessage: payload.messageSupported === true,
+            richModelContext: payload.richModelContextSupported === true,
+            fileResources: payload.fileResourcesSupported === true,
+            openFiles: payload.openFilesSupported === true,
+          },
         ),
-        { hostContext: hostContext(mount, this.height) },
+        { hostContext: buildHostContext() },
       );
       createdResources.bridge = bridge;
       const request = (method: string, params: Record<string, unknown>) =>
         this.request(binding, method, params);
+      const refreshModelContext = async () => {
+        const generation = ++contextGeneration;
+        try {
+          const response = (await request("mcp.app.modelContext", {})) as {
+            state: McpAppContextState;
+          };
+          if (createdResources.disposed || generation !== contextGeneration) {
+            return;
+          }
+          modelContext = response.state;
+        } catch {
+          if (createdResources.disposed || generation !== contextGeneration) {
+            return;
+          }
+          modelContext = null;
+        }
+        bridge.setHostContext(buildHostContext());
+        publishContext();
+      };
       const handleRequestTeardown = () => {
         void this.teardown();
       };
@@ -390,57 +540,78 @@ export class McpAppView extends LitElement {
         }
       });
       if (payload.messageSupported === true) {
-        const promptRateKey = `${sessionKey}\0${viewId}`;
-        bridge.setMessageHandler(async ({ content }) => {
-          const block = content.length === 1 ? content[0] : undefined;
-          const text = block?.type === "text" ? block.text : null;
-          const accepted = dispatchWidgetPrompt(iframe, text, promptRateKey, (prompt) =>
-            window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
+        bridge.setMessageHandler(async (params) => {
+          const accepted = await dispatchMcpAppMessage(
+            iframe,
+            { sessionKey, viewId },
+            params,
+            (prompt) => window.confirm(`${t("common.confirm")}:\n\n${prompt}`),
           );
           return accepted ? {} : { isError: true };
         });
       }
       if (payload.updateModelContextSupported === true) {
         bridge.setUpdateModelContextHandler(async (params) => {
-          await request("mcp.app.updateModelContext", { ...params });
-          return {};
+          const result = await request("mcp.app.updateModelContext", { ...params });
+          await refreshModelContext();
+          return result as { _meta?: Record<string, unknown> };
         });
       }
-      bridge.oncalltool = async (params) =>
-        (await request("mcp.app.callTool", {
-          toolName: params.name,
-          arguments: params.arguments,
-        })) as CallToolResult;
-      bridge.setListToolsHandler(
-        async (params) =>
-          (await request(
-            "mcp.app.listTools",
-            params?.cursor ? { cursor: params.cursor } : {},
-          )) as ListToolsResult,
-      );
-      bridge.onlistresources = async (params) =>
-        (await request(
-          "mcp.app.listResources",
-          params?.cursor ? { cursor: params.cursor } : {},
-        )) as never;
-      bridge.onlistresourcetemplates = async (params) =>
-        (await request(
-          "mcp.app.listResourceTemplates",
-          params?.cursor ? { cursor: params.cursor } : {},
-        )) as never;
-      bridge.onreadresource = async (params) =>
-        (await request("mcp.app.readResource", { uri: params.uri })) as never;
-      bridge.onopenlink = async ({ url }) => (openExternalUrlSafe(url) ? {} : { isError: true });
+      const startNotifications = bindMcpAppResourceHandlers({
+        bridge,
+        request,
+        sessionKey,
+        viewId,
+        iframe,
+        agentId,
+        fileResourcesSupported: payload.fileResourcesSupported,
+        openFilesSupported: payload.openFilesSupported,
+        isDisposed: () => createdResources.disposed,
+        addCleanup: (cleanup) => {
+          this.addResourceCleanup(createdResources, cleanup);
+        },
+        dispatchEvent: (event) => this.dispatchEvent(event),
+        onModelContextChanged: () => {
+          void refreshModelContext().catch(() => undefined);
+        },
+        onConversationInputRequested: () => {
+          this.displayMode = "inline";
+        },
+        subscribeEvents: (listener) => this.context?.gateway.subscribeEvents?.(listener),
+      });
+      bridge.onrequestdisplaymode = async ({ mode }) => {
+        if ((mode !== "inline" && mode !== "fullscreen") || !modes.available.includes(mode)) {
+          return { mode: this.displayMode };
+        }
+        this.displayMode = mode;
+        iframe.style.height =
+          mode === "fullscreen" || this.fillContainer
+            ? "100%"
+            : `${createdResources.frameHeight}px`;
+        bridge.setHostContext(buildHostContext());
+        return { mode };
+      };
+      this.bindOpenLinkHandler(bridge, binding, createdResources, signal);
       bridge.onsizechange = ({ height }) => {
-        if (height !== undefined && !this.fixedHeight) {
+        if (height !== undefined && !this.fillContainer && this.displayMode !== "fullscreen") {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
           createdResources.frameHeight = nextHeight;
           iframe.style.height = `${nextHeight}px`;
-          bridge.setHostContext(hostContext(mount, nextHeight));
+          bridge.setHostContext(buildHostContext());
         }
       };
       const initialized = new Promise<void>((resolve) => {
-        bridge.oninitialized = () => resolve();
+        bridge.oninitialized = () => {
+          modes = negotiateMcpAppDisplayModes(
+            payload.displayModes,
+            bridge.getAppCapabilities()?.availableDisplayModes,
+          );
+          this.displayMode =
+            payload.displayMode && modes.available.includes(payload.displayMode)
+              ? payload.displayMode
+              : modes.initial;
+          resolve();
+        };
       });
       const transport = new PostMessageTransport(iframe.contentWindow, iframe.contentWindow);
       createdResources.transport = transport;
@@ -470,8 +641,10 @@ export class McpAppView extends LitElement {
         cleanupInitializationTimeout();
       }
       signal.throwIfAborted();
-      const updateHostContext = () =>
-        bridge.setHostContext(hostContext(mount, createdResources.frameHeight));
+      const updateHostContext = () => bridge.setHostContext(buildHostContext());
+      createdResources.updateHostContext = updateHostContext;
+      publishContext();
+      startNotifications();
       const hostContextCleanup = this.context?.theme.subscribe(updateHostContext);
       if (hostContextCleanup) {
         this.addResourceCleanup(createdResources, hostContextCleanup);
@@ -507,7 +680,19 @@ export class McpAppView extends LitElement {
           error: formatUiError(error, t("mcpApp.errors.requestFailed")),
         })
       : null;
-    return html`<div ${ref(this.mount)} class="mount"></div>
+    return html`${
+        this.displayMode === "fullscreen"
+          ? html`<button
+              class="exit-fullscreen"
+              @click=${() => {
+                this.displayMode = "inline";
+              }}
+            >
+              ${t("common.close")}
+            </button>`
+          : nothing
+      }
+      <div ${ref(this.mount)} class="mount"></div>
       ${errorText ? html`<div class="error">${errorText}</div>` : nothing}`;
   }
 }

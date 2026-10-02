@@ -25,7 +25,6 @@ const DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES: WebPushNotificationPreferences 
     agentQuestion: false,
     humanMentioned: false,
     scheduledTaskFailed: false,
-    backgroundTaskFailed: false,
   },
   detailLevel: "private",
   quietHours: {
@@ -43,7 +42,6 @@ const CATEGORY_KEYS = [
   "agentQuestion",
   "humanMentioned",
   "scheduledTaskFailed",
-  "backgroundTaskFailed",
 ] as const;
 
 type CategoryKey = (typeof CATEGORY_KEYS)[number];
@@ -54,7 +52,6 @@ const CATEGORY_TO_KEY: Record<WebPushNotificationCategory, CategoryKey> = {
   "agent-question": "agentQuestion",
   "human-mentioned": "humanMentioned",
   "scheduled-task-failed": "scheduledTaskFailed",
-  "background-task-failed": "backgroundTaskFailed",
 };
 
 function detailLevel(value: unknown): WebPushDetailLevel | undefined {
@@ -110,16 +107,13 @@ function normalizeQuietHours(value: unknown) {
 
 function normalizeCategoryDefaults(value: unknown): WebPushNotificationPreferences["categories"] {
   const source = isRecord(value) ? value : {};
-  const categories = Object.fromEntries(
-    CATEGORY_KEYS.map((key) => [
-      key,
-      typeof source[key] === "boolean"
-        ? source[key]
-        : DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories[key],
-    ]),
-  );
-  // SAFETY: CATEGORY_KEYS exhaustively enumerates every required category boolean.
-  return categories as WebPushNotificationPreferences["categories"];
+  const categories = { ...DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories };
+  for (const key of CATEGORY_KEYS) {
+    if (typeof source[key] === "boolean") {
+      categories[key] = source[key];
+    }
+  }
+  return categories;
 }
 
 export function normalizeWebPushNotificationPreferences(

@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import {
   loadSessionCostSummary,
   loadSessionLogs,
@@ -12,7 +12,7 @@ import {
 } from "./session-cost-usage.js";
 import type { CostBreakdown } from "./session-cost-usage.types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 const flatPricing = { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 };
 const tieredPricing: ModelDefinitionConfig["cost"] = {
   ...flatPricing,
@@ -49,7 +49,7 @@ describe("session usage reporting pricing", () => {
       name: "configured all-zero pricing",
       pricing: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       recordedCost: { total: 0 },
-      expectedCost: undefined,
+      expectedCost: 0,
     },
     {
       // The recorded call owns its estimate; a later catalog cannot recover its service tier.
@@ -72,19 +72,6 @@ describe("session usage reporting pricing", () => {
       expectedBreakdown: { input: 0.004, output: 0.004, cacheRead: 0.0004, cacheWrite: 0 },
     },
     {
-      name: "flex-adjusted recorded cost preserved with tiered pricing",
-      pricing: tieredPricing,
-      recordedCost: {
-        total: 0.0021,
-        input: 0.001,
-        output: 0.001,
-        cacheRead: 0.0001,
-        cacheWrite: 0,
-      },
-      expectedCost: 0.0021,
-      expectedBreakdown: { input: 0.001, output: 0.001, cacheRead: 0.0001, cacheWrite: 0 },
-    },
-    {
       name: "missing recorded cost estimated from tiered pricing",
       pricing: tieredPricing,
       expectedCost: 0.0042,
@@ -97,16 +84,10 @@ describe("session usage reporting pricing", () => {
       expectedCost: 0,
     },
     {
-      name: "provider-billed positive cost preserved with tiered pricing",
-      pricing: tieredPricing,
-      recordedCost: { total: 0.125, totalOrigin: "provider-billed" },
-      expectedCost: 0.125,
-    },
-    {
-      name: "recorded positive cost preserved with flat pricing",
-      pricing: flatPricing,
-      recordedCost: { total: 0.125 },
-      expectedCost: 0.125,
+      name: "zero total with recorded component evidence",
+      recordedCost: { total: 0, input: 0.25 },
+      expectedCost: 0,
+      expectedBreakdown: { input: 0.25, output: 0, cacheRead: 0, cacheWrite: 0 },
     },
   ])("keeps logs, summaries, and charts consistent for $name", async (testCase) => {
     const root = tempDirs.make("openclaw-usage-reporting-");

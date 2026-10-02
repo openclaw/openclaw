@@ -43,7 +43,7 @@ const HANDOFF_SCOPES = [
   "operator.write",
 ];
 
-test("trusted-proxy QR issuance preserves admin authority and mobile bootstrap consumption", async () => {
+test.each(["mobile", "node"] as const)("trusted-proxy %s pairing", async (profile) => {
   const auth = {
     mode: "trusted-proxy" as const,
     trustedProxy: {
@@ -86,6 +86,7 @@ test("trusted-proxy QR issuance preserves admin authority and mobile bootstrap c
       const result = await rpcReq<DevicePairSetupCodeResult>(ws, "device.pair.setupCode", {
         includeQr: false,
         publicUrl: "wss://gateway.example.test",
+        ...(profile === "node" ? { bootstrapProfile: "node" } : {}),
       });
       if (!scopes.includes("operator.admin")) {
         expect(result.ok).toBe(false);
@@ -94,7 +95,10 @@ test("trusted-proxy QR issuance preserves admin authority and mobile bootstrap c
         continue;
       }
       expect(result.ok, JSON.stringify(result.error)).toBe(true);
-      expect(result.payload).toMatchObject({ auth: "trusted-proxy", access: "full" });
+      expect(result.payload).toMatchObject({
+        auth: "trusted-proxy",
+        access: profile === "node" ? "node" : "full",
+      });
       const setup = result.payload;
       if (!setup) {
         throw new Error("missing setup result");
@@ -106,13 +110,18 @@ test("trusted-proxy QR issuance preserves admin authority and mobile bootstrap c
       expect(payload.expiresAtMs).toBeLessThanOrEqual(Date.now() + 10 * 60_000);
       const phone = loadDeviceIdentity("trusted-proxy-setup-phone");
       const nodeClient = {
-        id: "openclaw-ios",
+        id: profile === "node" ? GATEWAY_CLIENT_NAMES.NODE_HOST : "openclaw-ios",
         version: "2026.9.1",
-        platform: "iOS 26.6.1",
-        deviceFamily: "iPhone",
+        platform: profile === "node" ? "linux" : "iOS 26.6.1",
+        ...(profile === "mobile" ? { deviceFamily: "iPhone" } : {}),
         mode: "node" as const,
       };
-      const node = await openTrackedWs(started.port, PROXY_HEADERS);
+      // Machine routes preserve proxy attribution but assert no operator identity.
+      const nodeHeaders: Record<string, string> = { ...PROXY_HEADERS };
+      if (profile === "node") {
+        delete nodeHeaders["x-forwarded-user"];
+      }
+      const node = await openTrackedWs(started.port, nodeHeaders);
       sockets.push(node);
       const connected = await connectReq(node, {
         skipDefaultAuth: true,
@@ -128,17 +137,40 @@ test("trusted-proxy QR issuance preserves admin authority and mobile bootstrap c
       if (!isRecord(handoff)) {
         throw new Error("missing bootstrap handoff");
       }
-      expect(handoff).toMatchObject({ role: "node", scopes: [], deviceToken: expect.any(String) });
-      expect(handoff.deviceTokens).toContainEqual(
-        expect.objectContaining({
-          role: "operator",
-          scopes: HANDOFF_SCOPES,
-          deviceToken: expect.any(String),
-        }),
-      );
-      expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator?.scopes).toEqual(
-        HANDOFF_SCOPES,
-      );
+      expect(handoff).toMatchObject({
+        role: "node",
+        scopes: [],
+        deviceToken: expect.any(String),
+      });
+      if (profile === "mobile") {
+        expect(handoff.deviceTokens).toContainEqual(
+          expect.objectContaining({
+            role: "operator",
+            scopes: HANDOFF_SCOPES,
+            deviceToken: expect.any(String),
+          }),
+        );
+        expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator?.scopes).toEqual(
+          HANDOFF_SCOPES,
+        );
+      } else {
+        expect((await getPairedDevice(phone.identity.deviceId))?.tokens?.operator).toBeUndefined();
+        expect(await rpcReq(node, "config.get", {})).toMatchObject({ ok: false });
+        // Reconnect with the issued node token, without proxy identity or setup code.
+        for (const role of ["node", "operator"] as const) {
+          const reconnect = await openTrackedWs(started.port, nodeHeaders);
+          sockets.push(reconnect);
+          const reconnected = await connectReq(reconnect, {
+            skipDefaultAuth: true,
+            deviceToken: String(handoff.deviceToken),
+            role,
+            scopes: role === "node" ? [] : ["operator.admin"],
+            client: nodeClient,
+            deviceIdentityPath: phone.identityPath,
+          });
+          expect(reconnected.ok, JSON.stringify(reconnected.error)).toBe(role === "node");
+        }
+      }
       expect((await listDevicePairing()).pending).toEqual([]);
       expect(Object.keys(loadDeviceBootstrapTokenRecords())).toEqual([]);
 

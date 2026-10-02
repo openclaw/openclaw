@@ -1,4 +1,3 @@
-// Bench Gateway Restart script supports OpenClaw repository automation.
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs, { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -250,7 +249,7 @@ function validateCliArgs(argv: string[]): void {
 function ensureSupportedRestartPlatform(platform: NodeJS.Platform = process.platform): void {
   if (platform === "win32") {
     throw new Error(
-      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR1 in-process restarts; run it on macOS or Linux.",
+      "Gateway restart benchmark is not supported on Windows because it requires SIGUSR2 in-process restarts; run it on macOS or Linux.",
     );
   }
 }
@@ -328,13 +327,6 @@ function isTraceMetricSummaryKey(name: string): boolean {
     lastSegment === "heapUsedMb" ||
     lastSegment === "externalMb" ||
     lastSegment === "arrayBuffersMb" ||
-    lastSegment === "activeHandlesCount" ||
-    lastSegment === "activeRequestsCount" ||
-    lastSegment === "activeTimersCount" ||
-    lastSegment === "processSigintListenersCount" ||
-    lastSegment === "processSigtermListenersCount" ||
-    lastSegment === "processSigusr1ListenersCount" ||
-    lastSegment === "restartExpectedMs" ||
     lastSegment?.endsWith("Count") === true ||
     lastSegment?.endsWith("Ms") === true
   );
@@ -401,6 +393,10 @@ function summarizeResourceSlope(
 
 function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSample[]): CaseResult {
   const iterations = samples.flatMap((sample) => sample.iterations);
+  const summarize = (read: (iteration: RestartIteration) => number | null) =>
+    summarizeNumbers(
+      iterations.map(read).filter((value): value is number => typeof value === "number"),
+    );
   const restartTrace = summarizeTraceStats(iterations, (iteration) => iteration.restartTrace);
   const failedIterations = iterations.filter((iteration) => iteration.failureCode !== null);
   const sampleOnlyFailures = samples.filter(
@@ -418,37 +414,19 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSampl
     name: benchCase.name,
     samples,
     summary: {
-      downtimeMs: summarizeNumbers(
-        iterations
-          .map((iteration) => iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs)
-          .filter((value): value is number => typeof value === "number"),
+      downtimeMs: summarize(
+        (iteration) => iteration.readyz.downtimeMs ?? iteration.healthz.downtimeMs,
       ),
       failureRate:
         failureUnits === 0
           ? 0
           : (failedIterations.length + sampleOnlyFailures.length) / failureUnits,
       firstFailureCode,
-      healthzRecoveryMs: summarizeNumbers(
-        iterations
-          .map((iteration) => iteration.healthz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      readyzRecoveryMs: summarizeNumbers(
-        iterations
-          .map((iteration) => iteration.readyz.ms)
-          .filter((value): value is number => typeof value === "number"),
-      ),
+      healthzRecoveryMs: summarize((iteration) => iteration.healthz.ms),
+      readyzRecoveryMs: summarize((iteration) => iteration.readyz.ms),
       resourceSlope: summarizeResourceSlope(samples),
-      restartReadyMs: summarizeNumbers(
-        iterations
-          .map((iteration) => traceValue(iteration, "restart.ready"))
-          .filter((value): value is number => typeof value === "number"),
-      ),
-      restartReadyTotalMs: summarizeNumbers(
-        iterations
-          .map((iteration) => traceValue(iteration, "restart.ready.total"))
-          .filter((value): value is number => typeof value === "number"),
-      ),
+      restartReadyMs: summarize((iteration) => traceValue(iteration, "restart.ready")),
+      restartReadyTotalMs: summarize((iteration) => traceValue(iteration, "restart.ready.total")),
       restartTrace,
     },
   };
@@ -723,42 +701,20 @@ function resolveSampleExitFailure(exit: StopChildResult): GatewayRestartFailureC
 }
 
 function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
+  const traceSlope = (field: string) =>
+    slope(
+      iterations.map((iteration) =>
+        traceValue(iteration, `restart.ready.${field}`, `restart.ready.memory.ready.${field}`),
+      ),
+    );
   return {
-    activeHandlesCountPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(
-          iteration,
-          "restart.ready.activeHandlesCount",
-          "restart.ready.memory.ready.activeHandlesCount",
-        ),
-      ),
-    ),
-    activeRequestsCountPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(
-          iteration,
-          "restart.ready.activeRequestsCount",
-          "restart.ready.memory.ready.activeRequestsCount",
-        ),
-      ),
-    ),
-    activeTimersCountPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(
-          iteration,
-          "restart.ready.activeTimersCount",
-          "restart.ready.memory.ready.activeTimersCount",
-        ),
-      ),
-    ),
+    activeHandlesCountPerRestart: traceSlope("activeHandlesCount"),
+    activeRequestsCountPerRestart: traceSlope("activeRequestsCount"),
+    activeTimersCountPerRestart: traceSlope("activeTimersCount"),
     fdCountPerRestart: slope(
       iterations.map((iteration) => lastSnapshotValue(iteration, "fdCount")),
     ),
-    heapUsedMbPerRestart: slope(
-      iterations.map((iteration) =>
-        traceValue(iteration, "restart.ready.heapUsedMb", "restart.ready.memory.ready.heapUsedMb"),
-      ),
-    ),
+    heapUsedMbPerRestart: traceSlope("heapUsedMb"),
     rssMbPerRestart: slope(
       iterations.map(
         (iteration) =>
@@ -828,15 +784,10 @@ async function runGatewaySample(options: {
   sampleRss();
   const rssTimer = setInterval(sampleRss, 100);
   rssTimer.unref?.();
-  const childExitPromise = new Promise<{ exitCode: number | null; signal: string | null }>(
-    (resolve) => {
-      child.once("exit", (exitCode, signal) => {
-        childExited = true;
-        events.push({ ms: performance.now() - sampleStartAt, type: "process.exit" });
-        resolve({ exitCode, signal });
-      });
-    },
-  );
+  child.once("exit", () => {
+    childExited = true;
+    events.push({ ms: performance.now() - sampleStartAt, type: "process.exit" });
+  });
 
   const onLine = (line: string, nowMs: number) => {
     if (!line) {
@@ -959,7 +910,7 @@ async function runGatewaySample(options: {
         type: "restart-intent-written",
       });
       try {
-        process.kill(targetPid, "SIGUSR1");
+        process.kill(targetPid, "SIGUSR2");
       } catch {
         iteration.failureCode = "restart_signal_failed";
         failureCode = iteration.failureCode;
@@ -971,29 +922,19 @@ async function runGatewaySample(options: {
       const iterationDeadlineAt = resolvePhaseDeadlineAt(signalSentAt, options.timeoutMs);
       events.push({ iteration: index, ms: iteration.signalSentMs, type: "restart-signal-sent" });
 
-      const healthzPromise = waitForRestartProbe({
-        deadlineAt: iterationDeadlineAt,
-        events,
-        isDone: () => hasRestartReadySignal(iteration),
-        isProcessDone: () => childExited,
-        iteration: index,
-        path: "/healthz",
-        port,
-        sampleStartAt,
-        signalSentAt,
-      });
-      const readyzPromise = waitForRestartProbe({
-        deadlineAt: iterationDeadlineAt,
-        events,
-        isDone: () => hasRestartReadySignal(iteration),
-        isProcessDone: () => childExited,
-        iteration: index,
-        path: "/readyz",
-        port,
-        sampleStartAt,
-        signalSentAt,
-      });
-      const [healthz, readyz] = await Promise.all([healthzPromise, readyzPromise]);
+      const probe = (probePath: string) =>
+        waitForRestartProbe({
+          deadlineAt: iterationDeadlineAt,
+          events,
+          isDone: () => hasRestartReadySignal(iteration),
+          isProcessDone: () => childExited,
+          iteration: index,
+          path: probePath,
+          port,
+          sampleStartAt,
+          signalSentAt,
+        });
+      const [healthz, readyz] = await Promise.all([probe("/healthz"), probe("/readyz")]);
       iteration.healthz = healthz;
       iteration.readyz = readyz;
       iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-next-ready"));
@@ -1032,8 +973,6 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
-  void childExitPromise.catch(() => null);
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
     flushPartial: true,
   });

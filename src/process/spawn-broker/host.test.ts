@@ -3,7 +3,9 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { withinTest } from "../../../test/helpers/promise.js";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
@@ -21,7 +23,168 @@ async function start() {
   return broker;
 }
 
-describe.skipIf(process.platform === "win32")("spawn broker native transport", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+type BootstrapFixtureMode = "native" | "stale-ambient" | "send-throw" | "send-callback";
+
+async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown> {
+  const script = `
+    import assert from 'node:assert/strict';
+    import childProcess from 'node:child_process';
+    import {once} from 'node:events';
+    import {syncBuiltinESMExports} from 'node:module';
+    import {mock} from 'node:test';
+    const mode = ${JSON.stringify(mode)};
+    const keys = ['OPENCLAW_SPAWN_RESOURCE_ENDPOINT', 'OPENCLAW_SPAWN_RESOURCE_SECRET', 'OPENCLAW_SPAWN_RESOURCE_GENERATION'];
+    for (const key of keys) delete process.env[key];
+    if (mode === 'stale-ambient') {
+      process.env[keys[0]] = '/synthetic/stale/resource.sock';
+      process.env[keys[1]] = 'synthetic-stale-value';
+      process.env[keys[2]] = 'not-a-generation';
+    }
+    const originalSpawn = childProcess.spawn;
+    let nativeChild;
+    let environmentKeys;
+    let bootstrapCalls = 0;
+    let refused = 0;
+    let ordinaryCommandClosed = false;
+    const events = [];
+    const sendHooks = [];
+    const observed = mock.method(childProcess, 'spawn', function(command, args, options) {
+      const names = Object.keys(options.env ?? process.env);
+      environmentKeys = keys.filter(key => names.includes(key));
+      const child = Reflect.apply(originalSpawn, this, [command, args, options]);
+      nativeChild = child;
+      child.once('spawn', () => events.push('spawn'));
+      child.once('exit', () => events.push('exit'));
+      child.once('close', () => events.push('close'));
+      const originalSend = child.send.bind(child);
+      sendHooks.push(mock.method(child, 'send', function(message, ...args) {
+        if (message?.type === 'bootstrap') {
+          bootstrapCalls++;
+          if (mode === 'stale-ambient') {
+            assert.equal(message.nativeResource === undefined, true);
+          }
+          if (mode === 'send-throw') {
+            refused++;
+            throw new Error('synthetic initial bootstrap refusal');
+          }
+          if (mode === 'send-callback') {
+            refused++;
+            const callback = args.at(-1);
+            assert.equal(typeof callback, 'function');
+            queueMicrotask(() => callback(new Error('synthetic initial bootstrap refusal')));
+            return false;
+          }
+        }
+        return originalSend(message, ...args);
+      }));
+      return child;
+    });
+    syncBuiltinESMExports();
+    process.stderr.write('bootstrap fixture pid=' + process.pid + '\\n');
+    const watchdog = setTimeout(() => {
+      nativeChild?.kill('SIGKILL');
+      console.error(JSON.stringify({failure: 'broker bootstrap lifecycle did not settle', events}));
+      process.exit(97);
+    }, 10000);
+    try {
+      const {createSpawnBrokerHost} = await import(${JSON.stringify(new URL("./host.js", import.meta.url).href)});
+      let host;
+      assert.doesNotThrow(() => { host = createSpawnBrokerHost(mode === 'stale-ambient' ? {} : {nativeResources: true}); });
+      assert.ok(nativeChild);
+      assert.ok(nativeChild.pid > 0);
+      assert.equal(observed.mock.calls.length, 1);
+      if (mode.startsWith('send-')) {
+        await assert.rejects(host.ready(), error => {
+          assert.equal(error.cause?.message, 'synthetic initial bootstrap refusal');
+          return true;
+        });
+        assert.equal(refused, 1);
+      } else {
+        await host.ready();
+      }
+      if (mode === 'stale-ambient') {
+        const command = host.spawn(process.execPath, ['-e', 'process.exit(0)'], {stdio: 'ignore'});
+        const commandClosed = once(command, 'close');
+        await command.ready();
+        const [code, signal] = await commandClosed;
+        assert.equal(code, 0);
+        assert.equal(signal, null);
+        ordinaryCommandClosed = true;
+      }
+      await host.close();
+      if (mode !== 'stale-ambient') {
+        assert.deepEqual(environmentKeys, []);
+        assert.deepEqual(events, ['spawn', 'exit', 'close']);
+      } else {
+        assert.ok(events.includes('exit'));
+      }
+      assert.equal(bootstrapCalls, 1);
+      console.log(JSON.stringify({mode, closed: true, refused,
+        ...(mode === 'stale-ambient' ? {ordinaryReady: true, ordinaryCommandClosed} : {nativeClose: true})}));
+    } finally {
+      clearTimeout(watchdog);
+      if (nativeChild?.exitCode === null && nativeChild.signalCode === null) nativeChild.kill('SIGKILL');
+      for (const hook of sendHooks) hook.mock.restore();
+      observed.mock.restore();
+      syncBuiltinESMExports();
+    }
+  `;
+  // A failing bootstrap or close stays outside the shared broker afterEach cleanup.
+  const fixture = spawn(
+    process.execPath,
+    ["--import", import.meta.resolve("tsx"), "--input-type=module", "-e", script],
+    { stdio: ["ignore", "pipe", "pipe"], timeout: 15_000, killSignal: "SIGKILL" },
+  );
+  let stdout = "";
+  let stderr = "";
+  fixture.stdout.on("data", (chunk) => {
+    stdout += chunk;
+  });
+  fixture.stderr.on("data", (chunk) => {
+    stderr += chunk;
+  });
+  const [code, signal] = await once(fixture, "close");
+  expect({ code, signal }, stderr).toEqual({ code: 0, signal: null });
+  return JSON.parse(stdout);
+}
+
+describe.skipIf(process.platform === "win32")("spawn broker private bootstrap", () => {
+  it("finishes native-resource Host.close after the broker's actual IPC close", async () => {
+    expect(await runBootstrapFixture("native")).toEqual({
+      mode: "native",
+      closed: true,
+      nativeClose: true,
+      refused: 0,
+    });
+  }, 20_000);
+
+  it("ignores stale ambient resource variables during ordinary broker startup", async () => {
+    expect(await runBootstrapFixture("stale-ambient")).toEqual({
+      mode: "stale-ambient",
+      closed: true,
+      ordinaryReady: true,
+      ordinaryCommandClosed: true,
+      refused: 0,
+    });
+  }, 20_000);
+
+  it.each(["send-throw", "send-callback"] as const)(
+    "retains and joins the actual child after initial bootstrap %s refusal",
+    async (mode) => {
+      expect(await runBootstrapFixture(mode)).toEqual({
+        mode,
+        closed: true,
+        nativeClose: true,
+        refused: 1,
+      });
+    },
+    20_000,
+  );
+});
+
+describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
   it("runs process commands outside the Gateway process", async () => {
     const host = await start();
     const argv0 = "openclaw-broker-command";
@@ -203,7 +366,58 @@ describe.skipIf(process.platform === "win32")("spawn broker native transport", (
     expect(child.connected).toBe(false);
   });
 
-  it("cleans a detached descendant after its root exits and the host disconnects", async () => {
+  it.each(["SIGTERM", "SIGINT"] as const)(
+    "keeps command completion and cleanup spawning available after a supervisor %s",
+    async (signal) => {
+      const host = await start();
+      const brokerPid = host.pid!;
+      const child = host.spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+          process.on('message', () => {
+            process.send('completed', () => process.disconnect());
+          });
+          process.send('ready');
+        `,
+        ],
+        { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+      );
+      await child.ready();
+      expect((await once(child, "message"))[0]).toBe("ready");
+
+      process.kill(brokerPid, signal);
+      const [message, closed] = await Promise.all([
+        once(child, "message"),
+        once(child, "close"),
+        new Promise<void>((resolve, reject) => {
+          child.send("finish", (error) => (error ? reject(error) : resolve()));
+        }),
+      ]);
+      expect(message[0]).toBe("completed");
+      expect(closed).toEqual([0, null]);
+
+      const cleanup = host.spawn(
+        process.execPath,
+        ["-e", "process.stdout.write(String(process.ppid))"],
+        { stdio: ["ignore", "pipe", "ignore"] },
+      );
+      await cleanup.ready();
+      let output = "";
+      cleanup.stdout!.on("data", (chunk) => {
+        output += chunk;
+      });
+      expect(await once(cleanup, "close")).toEqual([0, null]);
+      expect(Number(output)).toBe(brokerPid);
+      expect(host.pid).toBe(brokerPid);
+    },
+    15_000,
+  );
+
+  it("cleans a detached descendant after its root exits and the host disconnects", async ({
+    signal,
+  }) => {
     const host = await start();
     const child = host.spawn(
       process.execPath,
@@ -226,7 +440,7 @@ describe.skipIf(process.platform === "win32")("spawn broker native transport", (
     await Promise.all([once(child, "exit"), pidOutput]);
     const descendant = Number(stdout);
     try {
-      await host.close();
+      await withinTest(host.close(), signal);
       const running = async () => {
         try {
           process.kill(descendant, 0);
@@ -236,18 +450,17 @@ describe.skipIf(process.platform === "win32")("spawn broker native transport", (
           }
           return true;
         } catch (error) {
-          if (
-            (error as NodeJS.ErrnoException).code === "ESRCH" ||
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (hasErrnoCode(error, "ESRCH") || hasErrnoCode(error, "ENOENT")) {
             return false;
           }
           throw error;
         }
       };
-      const deadline = Date.now() + 1000;
-      while ((await running()) && Date.now() < deadline) {
-        await delay(25);
+      // Broker shutdown signals the orphaned group but cannot join this foreign PID.
+      while (await running()) {
+        await withinTest(delay(25), signal).catch((cause: unknown) => {
+          throw new Error(`Detached descendant ${descendant} is still running`, { cause });
+        });
       }
       expect(await running()).toBe(false);
     } finally {
@@ -260,23 +473,50 @@ describe.skipIf(process.platform === "win32")("spawn broker native transport", (
   it("fails in-flight commands on broker loss and restarts without local spawning", async () => {
     const host = await start();
     const previousPid = host.pid!;
-    const child = host.spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = host.spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+      let stopping = false;
+      process.on('SIGTERM', () => {
+        if (!stopping) {
+          stopping = true;
+          setTimeout(() => process.exit(0), 2000);
+        }
+      });
+      process.stdout.write('ready');
+      setInterval(() => {}, 1000);
+    `,
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
     await child.ready();
+    expect(String((await once(child.stdout!, "data"))[0])).toBe("ready");
+    const facts = {
+      childPid: child.pid!,
+      childStartIdentity: getFileLockProcessStartTime(child.pid!),
+      lossReason: "not observed",
+      cleanupSettled: false,
+    };
     const failure = new Promise<Error>((resolve) => {
       child.once("error", resolve);
     });
     try {
       process.kill(previousPid, "SIGKILL");
-      expect(await failure).toBeInstanceOf(SpawnBrokerError);
-      const stopDeadline = Date.now() + 1000;
-      while (!isPidDefinitelyDead(child.pid!) && Date.now() < stopDeadline) {
-        await delay(25);
-      }
-      expect(isPidDefinitelyDead(child.pid!)).toBe(true);
+      const loss = await failure;
+      facts.lossReason =
+        loss.cause instanceof Error ? `${loss.message}: ${loss.cause.message}` : loss.message;
+      expect(loss, JSON.stringify(facts)).toBeInstanceOf(SpawnBrokerError);
+      await expect(
+        host.waitForCleanup().then(() => {
+          facts.cleanupSettled = true;
+        }),
+        JSON.stringify(facts),
+      ).resolves.toBeUndefined();
+      expect(isPidDefinitelyDead(facts.childPid), JSON.stringify(facts)).toBe(true);
       await host.ready();
-      expect(host.pid).not.toBe(previousPid);
+      expect(host.pid, JSON.stringify(facts)).not.toBe(previousPid);
       const next = host.spawn(
         process.execPath,
         ["-e", "process.stdout.write(String(process.ppid))"],
@@ -288,7 +528,7 @@ describe.skipIf(process.platform === "win32")("spawn broker native transport", (
         stdout += chunk;
       });
       await once(next, "close");
-      expect(Number(stdout)).toBe(host.pid);
+      expect(Number(stdout), JSON.stringify(facts)).toBe(host.pid);
     } finally {
       try {
         process.kill(child.pid!, "SIGKILL");

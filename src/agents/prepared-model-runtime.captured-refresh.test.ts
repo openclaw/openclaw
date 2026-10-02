@@ -1,24 +1,17 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import {
-  cleanupPreparedModelRuntimeHarness,
-  getPreparedModelRuntimeMocks,
-  resetPreparedModelRuntimeHarness,
-} from "./prepared-model-runtime.test-harness.js";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
+import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import {
   getPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
 
-const mocks = getPreparedModelRuntimeMocks();
-let state: OpenClawTestState;
+const fixture = usePreparedModelRuntimeHarness({ label: "captured-model-runtime" });
+const { mocks } = fixture;
 async function prepareCatalogOwner(
   config: OpenClawConfig,
   catalogs: readonly ModelCatalogSnapshot[],
@@ -35,17 +28,40 @@ async function prepareCatalogOwner(
   return getPreparedModelRuntimeSnapshot({
     config,
     agentId: "pro",
-    agentDir: state.agentDir("pro"),
+    agentDir: fixture.state.agentDir("pro"),
   })!;
 }
 
 describe("captured startup inventory refresh", () => {
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ label: "captured-model-runtime" });
-    await resetPreparedModelRuntimeHarness(state);
-  });
-  afterEach(async ({ task }) => {
-    await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
+  it("reports redacted nested failures from the committed catalog refresh", async () => {
+    const warning = createDeferred<string>();
+    const token = "sk-abcdefghijklmnopqrstuv";
+    const failure = new AggregateError(
+      [
+        new Error("registry release failed", {
+          cause: new Error(`Authorization: Bearer ${token}`),
+        }),
+        new Error("donor close failed"),
+      ],
+      "Prepared plugin resources failed to close",
+    );
+    mocks.configuredAgentIds = ["pro"];
+    mocks.runPreparedModelCatalogWorker.mockRejectedValue(failure);
+    mocks.warn.mockImplementation((message: string) => warning.resolve(message));
+
+    await refreshPreparedModelRuntimeSnapshots(
+      { agents: { entries: { pro: {} } } },
+      { gatewayLifecycle: true, catalogMode: "static" },
+    );
+    const message = await warning.promise;
+
+    expect(message).toContain("provider catalog refresh failed:");
+    expect(message).toContain("Prepared plugin resources failed to close");
+    expect(message).toContain("registry release failed");
+    expect(message).toContain("donor close failed");
+    expect(message).toContain("Authorization: Bearer");
+    expect(message).not.toContain(token);
+    expect(mocks.warn).toHaveBeenCalledOnce();
   });
 
   it("does not refill a successful empty refresh from the captured startup registry", async () => {

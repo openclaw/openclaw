@@ -6,22 +6,27 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
+import { formatChatWorkContext } from "../chat/work-context.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSessionTranscriptDatabasePath } from "../config/sessions/session-accessor.transcript-target.js";
 import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
+import { stripEnvelopeFromMessage } from "../gateway/chat-sanitize.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
-import { buildChannelUserTurnSender } from "./user-turn-transcript.metadata.js";
+import {
+  buildChannelUserTurnSender,
+  restorePreparedUserTurnOperationalMetaForRuntime,
+} from "./user-turn-transcript.metadata.js";
 import {
   createSqliteTranscriptTarget,
   persistUserTurnTranscript,
@@ -30,7 +35,7 @@ import {
 import type { UserTurnOriginalInputCommit } from "./user-turn-transcript.types.js";
 
 describe("persistUserTurnTranscript", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-user-turn-append-");
 
   afterEach(() => {
     resetGlobalHookRunner();
@@ -39,7 +44,7 @@ describe("persistUserTurnTranscript", () => {
   it.each(["available", "missing"] as const)(
     "resumes a cold current transcript only when its archive is %s",
     async (archiveState) => {
-      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("user-turn-cold-resume-") });
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       await persistUserTurnTranscript({
         ...target,
@@ -108,8 +113,58 @@ describe("persistUserTurnTranscript", () => {
     },
   );
 
+  it.each([false, true])(
+    "round-trips captured context without undoing hook redaction (%s)",
+    async (redact) => {
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+      const snapshot = { page: "chat", title: "Parser work", workspace: "/projects/parser" };
+      const text = "Explain this task";
+      const modelText = text + "\n\n" + formatChatWorkContext(snapshot);
+      await persistUserTurnTranscript({
+        ...target,
+        input: { text: modelText, workContext: { snapshot, text }, timestamp: 123 },
+        updateMode: "none",
+        ...(redact
+          ? { beforeMessageWrite: ({ message }) => ({ ...message, content: "[redacted]" }) }
+          : {}),
+      });
+      const [stored] = await readTranscriptMessages(target);
+      expect(stored?.content).toBe(redact ? "[redacted]" : modelText);
+      expect(stripEnvelopeFromMessage(stored)).toMatchObject({
+        content: redact ? "[redacted]" : text,
+      });
+      if (redact) {
+        expect(stored).not.toHaveProperty("__openclaw.workContext");
+      } else {
+        expect(stored).toHaveProperty("__openclaw.workContext", { snapshot, text });
+      }
+      expect(stripEnvelopeFromMessage(stored)).not.toHaveProperty("__openclaw.workContext.text");
+    },
+  );
+
+  it("does not restore original display text after a runtime hook or continuation rewrites it", async () => {
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    const input = {
+      text: "original prompt",
+      workContext: { snapshot: { page: "chat" }, text: "original words" },
+    };
+    const recorder = createUserTurnTranscriptRecorder({ target, input, updateMode: "none" });
+    const prepared = recorder.message!;
+    const runtime = restorePreparedUserTurnOperationalMetaForRuntime({
+      preparedMessage: prepared,
+      runtimeMessage: { ...prepared, content: "[redacted]" },
+    });
+    expect(stripEnvelopeFromMessage(runtime)).toMatchObject({ content: "[redacted]" });
+    expect(runtime).not.toHaveProperty("__openclaw.workContext");
+    recorder.replaceTextBeforePersistence?.("approved continuation");
+    await recorder.persistApproved();
+    const [persisted] = await readTranscriptMessages(target);
+    expect(stripEnvelopeFromMessage(persisted)).toMatchObject({ content: "approved continuation" });
+    expect(persisted).not.toHaveProperty("__openclaw.workContext");
+  });
+
   it("appends a structured user turn through the shared transcript writer", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-");
+    const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
     const provenance = {
       kind: "inter_session" as const,
@@ -147,7 +202,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("round-trips a multi-attachment SQLite row byte-identically", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-media-");
+    const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
     const expected = {
       role: "user",
@@ -182,7 +237,7 @@ describe("persistUserTurnTranscript", () => {
   });
 
   it("persists sender metadata as __openclaw envelope", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-sender-");
+    const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
     // Deliberately attach runtime-only profile fields to prove durable sender
     // attribution is a whitelist, not a copy of the inbound sender object.
@@ -234,7 +289,7 @@ describe("persistUserTurnTranscript", () => {
   it.each(["profile", "observation"] as const)(
     "sender provenance round-trips %s without display inference",
     async (type) => {
-      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("sender-provenance-") });
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const identity =
         type === "profile"
           ? { type, id: "shared-id" }
@@ -267,7 +322,7 @@ describe("persistUserTurnTranscript", () => {
     "sender provenance hook %s respects original producer evidence",
     async (mode) => {
       const target = createSqliteTranscriptTarget({
-        dir: tempDirs.make("sender-provenance-hook-"),
+        dir: sessionDirs.make(),
       });
       const identity = { type: "profile", id: "original" };
       const recorder = createUserTurnTranscriptRecorder({
@@ -316,7 +371,7 @@ describe("persistUserTurnTranscript", () => {
   );
 
   it("omits __openclaw when no sender metadata is provided", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-nosender-");
+    const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
 
     const appended = await persistUserTurnTranscript({
@@ -331,33 +386,8 @@ describe("persistUserTurnTranscript", () => {
     expect(appended?.message).not.toHaveProperty("__openclaw");
   });
 
-  it("uses inline update mode by default", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-inline-");
-    const target = createSqliteTranscriptTarget({ dir });
-
-    const appended = await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "hello from runtime",
-      },
-    });
-
-    expect(appended?.message).toMatchObject({
-      role: "user",
-      content: "hello from runtime",
-      timestamp: expect.any(Number),
-    });
-    await expect(readTranscriptMessages(target)).resolves.toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "hello from runtime",
-        timestamp: expect.any(Number),
-      }),
-    ]);
-  });
-
   it("reports one original committed input, never staged custody or idempotent replay", async () => {
-    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("original-input-commit-") });
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const commits: UserTurnOriginalInputCommit[] = [];
     const input = {
       text: "Hello @Ada",
@@ -400,7 +430,7 @@ describe("persistUserTurnTranscript", () => {
   it.each([undefined, false, true])(
     "requires explicit runtime append freshness (%s), not an admission anchor",
     async (appended) => {
-      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("runtime-input-commit-") });
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const commits: UserTurnOriginalInputCommit[] = [];
       const input = { text: "Hello @Ada", idempotencyKey: "runtime-mention:user" };
       const result = await persistUserTurnTranscript({ ...target, input });
@@ -426,7 +456,7 @@ describe("persistUserTurnTranscript", () => {
     "placeholder",
     "late-media",
   ] as const)("does not report %s rows as original human input", async (kind) => {
-    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("non-original-input-") });
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const commits: UserTurnOriginalInputCommit[] = [];
     const message = {
       role: "user" as const,
@@ -453,7 +483,7 @@ describe("persistUserTurnTranscript", () => {
     "fans committed source mentions back to their own recorders only for an annotated collection (%s)",
     async (annotated) => {
       const target = createSqliteTranscriptTarget({
-        dir: tempDirs.make("collected-input-commit-"),
+        dir: sessionDirs.make(),
       });
       await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const commits: UserTurnOriginalInputCommit[] = [];
@@ -513,7 +543,7 @@ describe("persistUserTurnTranscript", () => {
   );
 
   it("does not fail or retry a committed input when notification and diagnostic callbacks throw", async () => {
-    const target = createSqliteTranscriptTarget({ dir: tempDirs.make("original-input-errors-") });
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
     const errors: unknown[] = [];
     let attempts = 0;
     const recorder = createUserTurnTranscriptRecorder({
@@ -538,7 +568,7 @@ describe("persistUserTurnTranscript", () => {
   it.each(["retain", "replace-text", "mutate-spans", "forge"] as const)(
     "keeps human selections bound to their original bytes through hook %s",
     async (mode) => {
-      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("mention-hook-") });
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const mentions = [{ profileId: "ada", start: 6, end: 10 }];
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "Hello @Ada", ...(mode === "forge" ? {} : { mentions }) },
@@ -567,7 +597,7 @@ describe("persistUserTurnTranscript", () => {
   );
 
   it("returns the existing user turn when the idempotency key was already persisted", async () => {
-    const dir = tempDirs.make("openclaw-user-turn-append-idempotent-");
+    const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
 
     const first = await persistUserTurnTranscript({
@@ -646,49 +676,32 @@ describe("persistUserTurnTranscript", () => {
         },
       ]),
     );
-    const dir = tempDirs.make("openclaw-user-turn-redacted-idempotent-");
+    const dir = sessionDirs.make();
     const target = createSqliteTranscriptTarget({ dir });
 
-    await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "secret prompt",
-        idempotencyKey: "chat-run-1:user",
-        replyToId: "transcript-reply-1",
-        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
-        senderIsOwner: true,
-        provenance,
-        sender: { id: "user-42", name: "Ada" },
-        transport: {
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "inbound-1",
-          replyToId: "outbound-1",
-          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+    const persist = () =>
+      persistUserTurnTranscript({
+        ...target,
+        input: {
+          text: "secret prompt",
+          idempotencyKey: "chat-run-1:user",
+          replyToId: "transcript-reply-1",
+          replyToPreview: { text: "Original reply", senderLabel: "Molty" },
+          senderIsOwner: true,
+          provenance,
+          sender: { id: "user-42", name: "Ada" },
+          transport: {
+            channel: "reef",
+            conversationRef: "conv_0123456789abcdef0123456789abcdef",
+            messageId: "inbound-1",
+            replyToId: "outbound-1",
+            clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
+          },
         },
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
-    await persistUserTurnTranscript({
-      ...target,
-      input: {
-        text: "secret prompt",
-        idempotencyKey: "chat-run-1:user",
-        replyToId: "transcript-reply-1",
-        replyToPreview: { text: "Original reply", senderLabel: "Molty" },
-        senderIsOwner: true,
-        provenance,
-        sender: { id: "user-42", name: "Ada" },
-        transport: {
-          channel: "reef",
-          conversationRef: "conv_0123456789abcdef0123456789abcdef",
-          messageId: "inbound-1",
-          replyToId: "outbound-1",
-          clients: [{ id: "cli", mode: "cli", displayName: "Original app" }],
-        },
-      },
-      beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-    });
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+    await persist();
+    await persist();
 
     await expect(readTranscriptMessages(target)).resolves.toEqual([
       expect.objectContaining({
@@ -717,7 +730,7 @@ describe("persistUserTurnTranscript", () => {
   it.each([true, false])(
     "protects internal Goal metadata across write hooks (Goal: %s)",
     async (isGoal) => {
-      const target = createSqliteTranscriptTarget({ dir: tempDirs.make("openclaw-goal-hook-") });
+      const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
       const intent = {
         kind: "session-goal-resume",
         version: 1,
@@ -804,7 +817,7 @@ describe("persistUserTurnTranscript", () => {
           },
         ]),
       );
-      const dir = tempDirs.make("openclaw-user-turn-steer-target-hook-");
+      const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
 
       const recorder = createUserTurnTranscriptRecorder({

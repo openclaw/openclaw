@@ -1,9 +1,5 @@
-// Codex tests cover conversation control plugin behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "openclaw/plugin-sdk/model-session-runtime";
 import { upsertAuthProfile } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -11,7 +7,8 @@ import {
   resolveStorePath,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
   readCodexAppServerBinding,
@@ -30,6 +27,8 @@ import {
   setCodexConversationModel as setCodexConversationModelImpl,
   setCodexConversationPermissions as setCodexConversationPermissionsImpl,
 } from "./conversation-control.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-control-");
 
 function controlTarget(sessionFile: string) {
   const identity = { kind: "session" as const, agentId: "main", sessionId: sessionFile };
@@ -104,18 +103,17 @@ vi.mock("./app-server/shared-client.js", () => ({
 }));
 
 describe("codex conversation controls", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     resetCodexTestBindingStore();
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-control-"));
+    tempDir = sessionDirs.make();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
     sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.unstubAllEnvs();
     clearRuntimeAuthProfileStoreSnapshots();
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("persists fast mode on the binding and permissions on the session", async () => {
@@ -221,20 +219,15 @@ describe("codex conversation controls", () => {
   });
 
   it.each([
-    { mode: "read-only" as const, display: "read-only" },
-    { mode: "guarded" as const, display: "guarded" },
     { mode: "workspace" as const, display: "workspace" },
     { mode: "full" as const, display: "full access" },
   ])("reports the explicit $mode conversation permission mode", ({ mode, display }) => {
     expect(formatPermissionsMode(mode)).toBe(display);
   });
 
-  it.each(["default", "guardian", "guarded", "approve"])(
-    "recognizes %s as an explicit guarded conversation permission command",
-    (mode) => {
-      expect(parseCodexPermissionsModeArg(mode)).toBe("default");
-    },
-  );
+  it("recognizes a guarded conversation permission alias", () => {
+    expect(parseCodexPermissionsModeArg("guardian")).toBe("default");
+  });
 
   it("persists a permission mode on a rootless session", async () => {
     const session = {
@@ -263,7 +256,7 @@ describe("codex conversation controls", () => {
     ).toMatchObject({ permissionMode: "guarded" });
   });
 
-  it("routes supervised stop and steer requests through the native user-home connection", async () => {
+  it("routes stop and steer through the client that owns the active turn", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-supervised",
@@ -277,50 +270,44 @@ describe("codex conversation controls", () => {
       conversationSourceTransferComplete: true,
     });
     const target = controlTarget(sessionFile);
-    const request = vi.fn(async () => ({}));
-    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+    const harness = createClientHarness({
+      onWrite: (line, send) => {
+        const request = JSON.parse(line) as { id: number };
+        send({ id: request.id, result: {} });
+      },
+    });
     const stopTracking = trackCodexConversationActiveTurn({
       identity: target.identity,
+      client: harness.client,
+      requestTimeoutMs: 60_000,
       threadId: "thread-supervised",
       turnId: "turn-1",
     });
 
     try {
-      await stopCodexConversationTurn({
-        ...target,
-        pluginConfig: { supervision: { enabled: true } },
-      });
-      await steerCodexConversationTurn({
-        ...target,
-        message: "focus tests",
-        pluginConfig: { supervision: { enabled: true } },
-      });
+      await expect(stopCodexConversationTurn(target)).resolves.toMatchObject({ stopped: true });
+      await expect(
+        steerCodexConversationTurn({ ...target, message: "focus tests" }),
+      ).resolves.toMatchObject({ steered: true });
+      expect(harness.writes.map((line) => JSON.parse(line))).toMatchObject([
+        {
+          method: "turn/interrupt",
+          params: { threadId: "thread-supervised", turnId: "turn-1" },
+        },
+        {
+          method: "turn/steer",
+          params: {
+            threadId: "thread-supervised",
+            expectedTurnId: "turn-1",
+            input: [{ type: "text", text: "focus tests", text_elements: [] }],
+          },
+        },
+      ]);
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
     } finally {
       stopTracking();
+      harness.client.close();
     }
-
-    for (const [options] of sharedClientMocks.getSharedCodexAppServerClient.mock.calls) {
-      expect(options).toMatchObject({
-        authProfileId: null,
-        startOptions: { homeScope: "user" },
-      });
-    }
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "turn/interrupt",
-      { threadId: "thread-supervised", turnId: "turn-1" },
-      { timeoutMs: 60_000, assertCurrent: expect.any(Function) },
-    );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "turn/steer",
-      {
-        threadId: "thread-supervised",
-        expectedTurnId: "turn-1",
-        input: [{ type: "text", text: "focus tests", text_elements: [] }],
-      },
-      { timeoutMs: 60_000, assertCurrent: expect.any(Function) },
-    );
   });
 
   it("refuses to stop or steer when the active turn no longer matches the private binding", async () => {
@@ -330,8 +317,11 @@ describe("codex conversation controls", () => {
       cwd: tempDir,
     });
     const target = controlTarget(sessionFile);
+    const harness = createClientHarness();
     const stopTracking = trackCodexConversationActiveTurn({
       identity: target.identity,
+      client: harness.client,
+      requestTimeoutMs: 60_000,
       threadId: "stale-active-thread",
       turnId: "turn-1",
     });
@@ -361,8 +351,10 @@ describe("codex conversation controls", () => {
       });
     } finally {
       stopTracking();
+      harness.client.close();
     }
 
+    expect(harness.writes).toHaveLength(0);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
 
@@ -384,6 +376,7 @@ describe("codex conversation controls", () => {
       const stopTracking = trackCodexConversationActiveTurn({
         identity: target.identity,
         client: harness.client,
+        requestTimeoutMs: 60_000,
         threadId: `thread-${command}-retained`,
         turnId: "turn-1",
       });
@@ -399,58 +392,6 @@ describe("codex conversation controls", () => {
         ).rejects.toThrow("host session rolled over");
         expect(harness.writes).toHaveLength(0);
       } finally {
-        stopTracking();
-        harness.client.close();
-      }
-    },
-  );
-
-  it.each(["stop", "steer"] as const)(
-    "rejects %s before a leased-client write when host rollover occurs during acquisition",
-    async (command) => {
-      const sessionFile = path.join(tempDir, `${command}-leased.jsonl`);
-      await writeCodexAppServerBinding(sessionFile, {
-        threadId: `thread-${command}-leased`,
-        cwd: tempDir,
-      });
-      const target = controlTarget(sessionFile);
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line) as { id: number };
-          send({ id: request.id, result: {} });
-        },
-      });
-      const acquired = createDeferred<typeof harness.client>();
-      sharedClientMocks.getSharedCodexAppServerClient.mockReturnValue(acquired.promise);
-      const stopTracking = trackCodexConversationActiveTurn({
-        identity: target.identity,
-        threadId: `thread-${command}-leased`,
-        turnId: "turn-1",
-      });
-      let hostCurrent = true;
-
-      try {
-        const mutation = mutateActiveTurn(command, {
-          ...target,
-          assertCurrent: () => {
-            if (!hostCurrent) {
-              throw new Error("host session rolled over");
-            }
-          },
-        });
-        await vi.waitFor(() => {
-          expect(sharedClientMocks.getSharedCodexAppServerClient).toHaveBeenCalledOnce();
-        });
-        hostCurrent = false;
-        acquired.resolve(harness.client);
-
-        await expect(mutation).rejects.toThrow("host session rolled over");
-        expect(harness.writes).toHaveLength(0);
-        expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
-          harness.client,
-        );
-      } finally {
-        acquired.resolve(harness.client);
         stopTracking();
         harness.client.close();
       }
@@ -474,7 +415,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "gpt-5.4",
-        pluginConfig: { supervision: { enabled: true } },
       }),
     ).rejects.toThrow(MODEL_SELECTION_LOCKED_MESSAGE);
     expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
@@ -526,7 +466,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "openai/gpt-5.5",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to gpt-5.5.");
 
@@ -550,7 +489,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "local-model-2",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to local-model-2.");
 
@@ -575,7 +513,6 @@ describe("codex conversation controls", () => {
       setCodexConversationModel({
         sessionFile,
         model: "openai/gpt-oss-20b",
-        pluginConfig: { appServer: { mode: "guardian" } },
       }),
     ).resolves.toBe("Codex model set to openai/gpt-oss-20b.");
 

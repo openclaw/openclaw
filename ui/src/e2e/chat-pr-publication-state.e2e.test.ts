@@ -5,6 +5,7 @@ import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gat
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import {
   publicationMethods,
   publicationOptions,
@@ -28,7 +29,12 @@ suite.define(() => {
       const href = "https://github.com/synthetic/publication-demo/pull/42";
       const gateway = await installMockGateway(page, {
         communityInvite: false,
-        featureMethods: [...publicationMethods, "controlUi.githubPreview"],
+        featureMethods: [
+          ...publicationMethods,
+          TEST_LINK_READER.linkReader.previewMethod!,
+          TEST_LINK_READER.linkReader.detailMethod,
+        ],
+        controlUiLinkReaders: [TEST_LINK_READER],
         deferredMethods: ["sessions.github.options"],
         historyMessages: [
           {
@@ -39,16 +45,13 @@ suite.define(() => {
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
           "sessions.github.options": publicationOptions,
-          "controlUi.githubPreview": {
-            kind: "pull",
-            number: 42,
-            owner: "synthetic",
-            repo: "publication-demo",
-            state: "closed",
-            mergedAt: "2026-09-12T00:00:00Z",
+          [TEST_LINK_READER.linkReader.previewMethod!]: {
+            url: href,
+            subtitle: "synthetic/publication-demo #42",
+            badge: { label: "Merged", tone: "accent" },
             createdAt: "2026-09-11T00:00:00Z",
             updatedAt: "2026-09-12T00:00:00Z",
-            login: "reviewer",
+            author: "reviewer",
             title: "Completed task in another worktree",
           },
         },
@@ -57,10 +60,10 @@ suite.define(() => {
       await showPublicationBranch(gateway, "openclaw/review-request");
       await gateway.waitForRequest("sessions.github.options");
       const chip = page.locator(`a.markdown-github-item[href="${href}"]`);
-      await expect.poll(() => chip.getAttribute("data-github-state")).toBe("merged");
+      await expect.poll(() => chip.getAttribute("data-link-reader-tone")).toBe("accent");
       await chip.focus();
       await expect
-        .poll(() => page.locator(".github-link-hovercard").textContent())
+        .poll(() => page.locator(".link-reader-hovercard").textContent())
         .toContain("Merged");
       await page.keyboard.press("Escape");
       if (captureUiProof) {
@@ -69,14 +72,14 @@ suite.define(() => {
           await takeControlUiViewportScreenshot(page, page.locator(".chat-prs"), [chip]),
         );
       }
-      expect(await chip.getAttribute("data-github-state")).toBe("merged");
+      expect(await chip.getAttribute("data-link-reader-tone")).toBe("accent");
       expect(await page.locator(".chat-prs").textContent()).not.toContain("Publishing");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.resolveDeferred("sessions.github.options");
       await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
       expect(await page.locator(".chat-prs").textContent()).toContain("openclaw/review-request");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-      expect(await gateway.getRequests("controlUi.githubPreview")).toHaveLength(1);
+      expect(await gateway.getRequests(TEST_LINK_READER.linkReader.previewMethod!)).toHaveLength(1);
       if (captureUiProof) {
         await writeFile(
           path.join(suite.artifactDir, "merged-pr-idle-workspace.png"),
@@ -153,6 +156,200 @@ suite.define(() => {
       expect(await row.textContent()).not.toContain("#43");
       expect(await row.locator("article").getAttribute("data-state")).toBe("branch");
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+    });
+  });
+
+  it("retires superseded publication failure after a merge without hiding new unpublished failures", async () => {
+    await suite.withPage(publicationContextOptions(), async ({ page }) => {
+      const failure = {
+        requestId: "3a9d86d9-87fb-4aa1-afc3-e98df3b2cb56",
+        status: "failed",
+        code: "unavailable",
+        publisher: { source: "agent-override", accountId: 3, login: "agent-bot" },
+        message: "GitHub publication failed.",
+        nextAction:
+          "The pull request base or its Git history could not be verified. Check repository read access, connectivity, and local Git objects before retrying publication.",
+      };
+      const gateway = await installMockGateway(page, {
+        communityInvite: false,
+        featureMethods: publicationMethods,
+        methodResponses: {
+          [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
+          "sessions.github.options": {
+            ...publicationOptions,
+            latestShared: { result: failure, confirmation: null },
+          },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const key = await waitForWatchedSessionKey(gateway);
+      await page.getByText(failure.message, { exact: true }).waitFor();
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [key]: {
+            pullRequests: [
+              {
+                owner: "synthetic",
+                repo: "publication-demo",
+                number: 45,
+                branch: "feature/finished-task",
+                title: "Completed task",
+                url: "https://github.com/synthetic/publication-demo/pull/45",
+                state: "merged",
+              },
+            ],
+            rateLimited: false,
+            status: "ready",
+          },
+        },
+      });
+      const surface = page.locator(".chat-prs");
+      const merged = surface.locator('article[data-state="merged"]');
+      await merged.waitFor();
+      // Capture the actual baseline before the regression assertion as well as the repaired state.
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "failed-publication-merged.png"),
+          await takeControlUiViewportScreenshot(page, surface, [merged]),
+        );
+      }
+      expect(await merged.textContent()).not.toContain(failure.message);
+      expect(await merged.locator("[data-publication-account]").count()).toBe(0);
+      const history = surface.locator("details.chat-pr__publication-history");
+      expect(await history.count()).toBe(1);
+      expect(await history.evaluate((element) => element.closest("article") === null)).toBe(true);
+      expect(await history.getAttribute("open")).toBeNull();
+      const summary = history.locator("summary").first();
+      expect((await summary.textContent())?.trim()).toBe("Publication attempt failed");
+      const guidance = history.getByText(failure.nextAction, { exact: true });
+      expect(await guidance.isVisible()).toBe(false);
+      await summary.click();
+      await guidance.waitFor();
+      expect(await history.getByText(failure.message, { exact: true }).isVisible()).toBe(true);
+      const account = history.locator("[data-publication-account]");
+      expect(await account.textContent()).toContain("Publish as @agent-bot");
+      expect(await account.textContent()).toContain("Agent override");
+      const refresh = history.getByRole("button", { name: "Refresh publication" });
+      const tokens = await history.evaluate((element) => {
+        const probe = document.createElement("span");
+        element.append(probe);
+        const resolve = (token: string) => {
+          probe.style.color = `var(${token})`;
+          return getComputedStyle(probe).color;
+        };
+        const colors = {
+          danger: resolve("--danger"),
+          muted: resolve("--muted"),
+          text: resolve("--text"),
+        };
+        probe.remove();
+        return colors;
+      });
+      expect(await summary.evaluate((element) => getComputedStyle(element).color)).toBe(
+        tokens.danger,
+      );
+      for (const neutral of [account, guidance, refresh]) {
+        const color = await neutral.evaluate((element) => getComputedStyle(element).color);
+        expect(color).not.toBe(tokens.danger);
+        expect([tokens.muted, tokens.text]).toContain(color);
+      }
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "failed-publication-expanded.png"),
+          await takeControlUiViewportScreenshot(page, surface, [merged, guidance, refresh]),
+        );
+      }
+      const readsBefore = (await gateway.getRequests("sessions.github.options")).length;
+      await refresh.click();
+      await gateway.waitForRequest("sessions.github.options", { after: readsBefore });
+      await refresh.waitFor();
+      expect(await merged.textContent()).toContain("Merged");
+      const target = (await gateway.waitForRequest("sessions.github.options")).params;
+      if (target === null || typeof target !== "object" || Array.isArray(target)) {
+        throw new Error("Expected publication request parameters");
+      }
+      const published = {
+        pullRequests: [
+          {
+            owner: "synthetic",
+            repo: "publication-demo",
+            number: 45,
+            branch: "feature/finished-task",
+            title: "Completed task",
+            url: "https://github.com/synthetic/publication-demo/pull/45",
+            state: "merged",
+            headSha: "f".repeat(40),
+          },
+        ],
+        status: "ready",
+        rateLimited: false,
+      };
+      // An inconclusive coverage observation must not permanently suppress another
+      // automatic check of this same PR head after GitHub becomes readable again.
+      const beforeInconclusive = (await gateway.getRequests("sessions.github.options")).length;
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [key]: published },
+      });
+      await gateway.waitForRequest("sessions.github.options", { after: beforeInconclusive });
+      await refresh.waitFor({ state: "visible" });
+      await expect.poll(() => refresh.isEnabled()).toBe(true);
+      expect(await history.count()).toBe(1);
+      await gateway.setMethodResponse("sessions.github.options", publicationOptions);
+      const beforeRetirement = (await gateway.getRequests("sessions.github.options")).length;
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [key]: published },
+      });
+      await gateway.waitForRequest("sessions.github.options", { after: beforeRetirement });
+      await expect.poll(() => history.count()).toBe(0);
+      if (captureUiProof) {
+        await writeFile(
+          path.join(suite.artifactDir, "superseded-publication-retired.png"),
+          await takeControlUiViewportScreenshot(page, surface, [merged]),
+        );
+      }
+      await page.reload();
+      const reloadedKey = await waitForWatchedSessionKey(gateway);
+      await gateway.waitForRequest("sessions.github.options");
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: { [reloadedKey]: published },
+      });
+      await merged.waitFor();
+      expect(await history.count()).toBe(0);
+      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
+        sessions: {
+          [reloadedKey]: {
+            pullRequests: [],
+            status: "ready",
+            rateLimited: false,
+            branch: {
+              owner: "synthetic",
+              repo: "publication-demo",
+              branch: "feature/next-work",
+              changedFiles: 1,
+            },
+          },
+        },
+      });
+      await surface.locator("article[data-state=branch]").waitFor();
+      expect(await page.getByText(failure.message, { exact: true }).count()).toBe(0);
+      await gateway.setMethodResponse("sessions.github.options", {
+        ...publicationOptions,
+        latestShared: {
+          result: {
+            ...failure,
+            requestId: "18bcedb0-bc8f-468d-88e8-6a048b8e9ed9",
+            nextAction: "Publish the new changes.",
+          },
+          confirmation: null,
+        },
+      });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...target,
+        reason: "github-publication",
+      });
+      await page.getByText("Publish the new changes.", { exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
     });
   });
 

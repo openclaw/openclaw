@@ -14,7 +14,7 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  isRecord,
+  asOptionalRecord,
   filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -26,9 +26,7 @@ import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
 type VoiceResponseParams = {
-  /** Voice call config */
   voiceConfig: VoiceCallConfig;
-  /** Core OpenClaw config */
   coreConfig: OpenClawConfig;
   /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
@@ -44,7 +42,6 @@ type VoiceResponseParams = {
   agentId?: string;
   /** Audible call transcript, used only for bounded first-turn opening context. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  /** Latest user message */
   userMessage: string;
   /** Delivers completed reply blocks while post-turn work is still running. */
   onEarlyText?: (text: string) => Promise<boolean>;
@@ -62,26 +59,6 @@ type VoiceResponsePayload = {
   isError?: boolean;
   isReasoning?: boolean;
 };
-
-function readExplicitToolsAllow(value: unknown): string[] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const allow = value.allow;
-  if (!Array.isArray(allow)) {
-    return undefined;
-  }
-
-  return filterStringEntries(allow);
-}
-
-function resolveVoiceAgentToolsAllow(
-  config: OpenClawConfig,
-  agentId: string,
-): string[] | undefined {
-  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
-}
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "Output format requirements:",
@@ -336,9 +313,9 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
     coreSession: coreConfig.session,
   });
-  const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
+  const allow = asOptionalRecord(resolveAgentConfig(cfg, agentId)?.tools)?.allow;
+  const toolsAllow = Array.isArray(allow) ? filterStringEntries(allow) : undefined;
 
-  // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
     return await agentRuntime.session.runWithWorkAdmission(
@@ -347,17 +324,14 @@ export async function generateVoiceResponse(
         const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
         const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
-        // Ensure workspace exists
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
-        // Load or create session entry
         const now = Date.now();
         const existingSessionEntry = agentRuntime.session.getSessionEntry({
           storePath,
           sessionKey: resolvedSessionKey,
         });
 
-        // Resolve model from config
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
@@ -417,10 +391,8 @@ export async function generateVoiceResponse(
           ? resolvePersistedSessionRuntimeId(sessionEntry)
           : undefined;
 
-        // Resolve thinking level
         const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
-        // Resolve agent identity for personalized prompt
         const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
         const agentName = identity?.name?.trim() || "assistant";
 
@@ -435,7 +407,6 @@ export async function generateVoiceResponse(
         ].join("\n\n");
         const prompt = buildVoiceTurnPrompt({ transcript, userMessage });
 
-        // Resolve timeout
         const timeoutMs =
           voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
         const runId = `voice:${callId}:${Date.now()}`;
@@ -482,6 +453,8 @@ export async function generateVoiceResponse(
           toolsAllow,
           abortSignal,
           blockReplyBreak: "text_end",
+          resolveReplyDelivery: async (minimumAssistantMessageIndex = 0) =>
+            deliveredEarly && minimumAssistantMessageIndex === 0 ? "pending" : "missing",
           onBlockReply: (payload, context) => {
             if (latestToolBoundaryMessageIndex !== undefined) {
               const messageIndex = context?.assistantMessageIndex;

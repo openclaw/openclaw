@@ -1,13 +1,8 @@
-// Discord plugin module implements resolve channels behavior.
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } from "./api.js";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
-import {
-  buildDiscordUnresolvedResults,
-  filterDiscordGuilds,
-  resolveDiscordAllowlistToken,
-} from "./resolve-allowlist-common.js";
+import { filterDiscordGuilds, resolveDiscordAllowlistToken } from "./resolve-allowlist-common.js";
 
 type DiscordChannelSummary = {
   id: string;
@@ -56,7 +51,7 @@ function parseDiscordChannelInput(raw: string): {
     return { channelId: channelPrefix[1] };
   }
   const guildPrefix = trimmed.match(/^(?:guild:|server:)?(\d+)$/i);
-  if (guildPrefix && !trimmed.includes("/") && !trimmed.includes("#")) {
+  if (guildPrefix) {
     return { guildId: guildPrefix[1], guildOnly: true };
   }
   const split = trimmed.includes("/") ? trimmed.split("/") : trimmed.split("#");
@@ -155,6 +150,22 @@ function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelS
   return scored[0]?.channel ?? candidates[0];
 }
 
+function resolvedChannelResult(
+  input: string,
+  channel: DiscordChannelSummary,
+  guildName: string | undefined,
+): DiscordChannelResolution {
+  return {
+    input,
+    resolved: true,
+    guildId: channel.guildId,
+    guildName,
+    channelId: channel.id,
+    channelName: channel.name,
+    archived: channel.archived,
+  };
+}
+
 export async function resolveDiscordChannelAllowlist(params: {
   token: string;
   entries: string[];
@@ -162,7 +173,7 @@ export async function resolveDiscordChannelAllowlist(params: {
 }): Promise<DiscordChannelResolution[]> {
   const token = resolveDiscordAllowlistToken(params.token);
   if (!token) {
-    return buildDiscordUnresolvedResults(params.entries, (input) => ({
+    return params.entries.map((input) => ({
       input,
       resolved: false,
     }));
@@ -231,15 +242,7 @@ export async function resolveDiscordChannelAllowlist(params: {
           continue;
         }
         const guild = guilds.find((entry) => entry.id === channel.guildId);
-        results.push({
-          input,
-          resolved: true,
-          guildId: channel.guildId,
-          guildName: guild?.name,
-          channelId: channel.id,
-          channelName: channel.name,
-          archived: channel.archived,
-        });
+        results.push(resolvedChannelResult(input, channel, guild?.name));
         continue;
       }
 
@@ -252,15 +255,7 @@ export async function resolveDiscordChannelAllowlist(params: {
           );
           const match = preferActiveMatch(matches);
           if (match) {
-            results.push({
-              input,
-              resolved: true,
-              guildId: guild.id,
-              guildName: guild.name,
-              channelId: match.id,
-              channelName: match.name,
-              archived: match.archived,
-            });
+            results.push(resolvedChannelResult(input, match, guild.name));
             continue;
           }
         }
@@ -306,15 +301,7 @@ export async function resolveDiscordChannelAllowlist(params: {
       }
       const match = preferActiveMatch(matches);
       if (match) {
-        results.push({
-          input,
-          resolved: true,
-          guildId: guild.id,
-          guildName: guild.name,
-          channelId: match.id,
-          channelName: match.name,
-          archived: match.archived,
-        });
+        results.push(resolvedChannelResult(input, match, guild.name));
       } else {
         results.push({
           input,
@@ -350,13 +337,7 @@ export async function resolveDiscordChannelAllowlist(params: {
     if (match) {
       const guild = guilds.find((entry) => entry.id === match.guildId);
       results.push({
-        input,
-        resolved: true,
-        guildId: match.guildId,
-        guildName: guild?.name,
-        channelId: match.id,
-        channelName: match.name,
-        archived: match.archived,
+        ...resolvedChannelResult(input, match, guild?.name),
         note:
           candidates.length > 1 && guild?.name
             ? `matched multiple; chose ${guild.name}`

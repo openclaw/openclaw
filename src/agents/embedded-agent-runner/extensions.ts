@@ -1,6 +1,3 @@
-/**
- * Builds extension factories available to embedded-agent runtime sessions.
- */
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -93,12 +90,8 @@ function buildAgentToolResultMiddlewareFactory(
       });
       const isAcceptedSessionSpawn =
         event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
-      const isError =
-        !isAcceptedSessionSpawn &&
-        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
-      const clearsAcceptedSessionSpawnError =
-        isAcceptedSessionSpawn &&
-        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const hasError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isError = !isAcceptedSessionSpawn && hasError;
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -111,8 +104,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(result.terminate !== undefined ? { terminate: result.terminate } : {}),
-        ...(isError ? { isError: true } : {}),
-        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
+        ...(hasError ? { isError } : {}),
       };
     });
   };
@@ -160,13 +152,6 @@ export function buildEmbeddedExtensionFactories(params: {
     });
     factories.push(compactionSafeguardExtension);
   }
-  factories.push(
-    buildAgentToolResultMiddlewareFactory(params.sessionManager, {
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      runId: params.runId,
-    }),
-  );
+  factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params));
   return factories;
 }

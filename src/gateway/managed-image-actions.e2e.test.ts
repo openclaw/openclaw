@@ -14,6 +14,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -46,7 +47,7 @@ const SESSION_KEY = "agent:main:main";
 
 describe("managed image actions Gateway E2E", () => {
   test.each(["fresh", "v2026.9.4 retained"] as const)(
-    "downloads %s image and document bytes by run/task scope and rejects stale IDs",
+    "downloads %s image and document bytes by run scope and rejects stale IDs",
     async (provenance) => {
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
@@ -59,7 +60,6 @@ describe("managed image actions Gateway E2E", () => {
       const sessionKey = `agent:main:${sessionId}`;
       const messageId = "delivered-files";
       const runId = "delivered-files-run";
-      const taskId = "delivered-files-task";
       const timestamp = "2026-09-04T00:00:00.000Z";
       const scope = { agentId: "main", sessionId, sessionKey, storePath };
       const blocks: Record<string, unknown>[] = [];
@@ -231,11 +231,12 @@ describe("managed image actions Gateway E2E", () => {
             role: "assistant",
             content: blocks,
             timestamp: Date.parse(timestamp),
-            __openclaw: { id: messageId, runId, messageTaskId: taskId },
+            __openclaw: { id: messageId, runId },
           },
         },
       ]);
       closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await withGatewayServer(
         async ({ port }) => {
@@ -246,48 +247,43 @@ describe("managed image actions Gateway E2E", () => {
           });
           try {
             for (const artifact of artifacts) {
-              for (const selector of [{ runId }, { taskId }]) {
-                const query = { sessionKey, ...selector, messageRole: "assistant" };
-                const download = await client.request<{
-                  artifact: Record<string, unknown>;
-                  url?: string;
-                  data?: string;
-                }>("artifacts.download", { ...query, artifactId: artifact.id });
-                expect(download.artifact).toMatchObject({
-                  id: artifact.id,
-                  title: artifact.title,
-                  mimeType: artifact.mimeType,
-                  sizeBytes: artifact.bytes.length,
-                  sessionKey,
-                  runId,
-                  taskId,
+              const query = { sessionKey, runId, messageRole: "assistant" };
+              const download = await client.request<{
+                artifact: Record<string, unknown>;
+                url?: string;
+                data?: string;
+              }>("artifacts.download", { ...query, artifactId: artifact.id });
+              expect(download.artifact).toMatchObject({
+                id: artifact.id,
+                title: artifact.title,
+                mimeType: artifact.mimeType,
+                sizeBytes: artifact.bytes.length,
+                sessionKey,
+                runId,
+              });
+              expect(download.data).toBeUndefined();
+              const response = await fetch(new URL(download.url ?? "", `http://127.0.0.1:${port}`));
+              expect(response.status).toBe(200);
+              expect(response.headers.get("content-type")).toBe(artifact.mimeType);
+              expect(response.headers.get("content-disposition")).toContain(artifact.name);
+              expect(Buffer.from(await response.arrayBuffer())).toEqual(artifact.bytes);
+              let rejected = false;
+              try {
+                await client.request("artifacts.download", {
+                  ...query,
+                  artifactId: artifact.staleId,
                 });
-                expect(download.data).toBeUndefined();
-                const response = await fetch(
-                  new URL(download.url ?? "", `http://127.0.0.1:${port}`),
-                );
-                expect(response.status).toBe(200);
-                expect(response.headers.get("content-type")).toBe(artifact.mimeType);
-                expect(response.headers.get("content-disposition")).toContain(artifact.name);
-                expect(Buffer.from(await response.arrayBuffer())).toEqual(artifact.bytes);
-                let rejected = false;
-                try {
-                  await client.request("artifacts.download", {
-                    ...query,
-                    artifactId: artifact.staleId,
-                  });
-                } catch (error) {
-                  rejected =
-                    isGatewayProtocolResponseError(error) &&
-                    error.code === "INVALID_REQUEST" &&
-                    typeof error.details === "object" &&
-                    error.details !== null &&
-                    "type" in error.details &&
-                    error.details.type === "artifact_not_found";
-                }
-                // A success would leak alternate bytes/tickets. Keep failure output free of bearer URLs.
-                expect(rejected).toBe(true);
+              } catch (error) {
+                rejected =
+                  isGatewayProtocolResponseError(error) &&
+                  error.code === "INVALID_REQUEST" &&
+                  typeof error.details === "object" &&
+                  error.details !== null &&
+                  "type" in error.details &&
+                  error.details.type === "artifact_not_found";
               }
+              // A success would leak alternate bytes/tickets. Keep failure output free of bearer URLs.
+              expect(rejected).toBe(true);
             }
           } finally {
             await disconnectGatewayClient(client);
@@ -402,6 +398,10 @@ describe("managed image actions Gateway E2E", () => {
           expect(full.status).toBe(200);
           const fullBytes = Buffer.from(await full.arrayBuffer());
           expect(fullBytes).toEqual(source);
+          expect(readImageProbeFromHeader(fullBytes)).toMatchObject({
+            width: 1280,
+            height: 358,
+          });
 
           const thumbnailUrl = new URL(fullUrl);
           thumbnailUrl.pathname = thumbnailUrl.pathname.replace(/\/full$/u, "/thumbnail");
@@ -410,8 +410,8 @@ describe("managed image actions Gateway E2E", () => {
           expect(thumbnail.headers.get("content-type")).toBe("image/png");
           const thumbnailBytes = Buffer.from(await thumbnail.arrayBuffer());
           expect(readImageProbeFromHeader(thumbnailBytes)).toMatchObject({
-            width: 300,
-            height: 84,
+            width: 1200,
+            height: 336,
           });
 
           const authenticated = await fetch(new URL(imageUrl, fullUrl), {
@@ -533,10 +533,10 @@ describe("managed image actions Gateway E2E", () => {
               .digest("hex"),
           ).toBe(archiveHash);
           expect(
-            readManagedImageRecord(
+            (await readManagedImageRecord(
               artifactId.slice(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX.length),
               stateDir,
-            ) !== null,
+            )) !== null,
           ).toBe(true);
           // Retain only statuses and predicates so a failed denial never prints a new ticket.
           expect(denied).toEqual([
@@ -553,7 +553,7 @@ describe("managed image actions Gateway E2E", () => {
           expect(afterDisconnect.status).toBe(200);
           expect(Buffer.from(await afterDisconnect.arrayBuffer())).toEqual(source);
 
-          const record = readManagedImageRecord(
+          const record = await readManagedImageRecord(
             artifactId.slice(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX.length),
             stateDir,
           );
@@ -571,7 +571,7 @@ describe("managed image actions Gateway E2E", () => {
             forceDeleteSessionRecords: true,
           });
           expect(cleanup).toMatchObject({ deletedRecordCount: 1, deletedFileCount: 1 });
-          expect(readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
+          expect(await readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
           await expect(fs.access(originalPath)).rejects.toMatchObject({ code: "ENOENT" });
 
           const afterCleanup = await fetch(fullUrl);

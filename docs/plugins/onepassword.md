@@ -257,6 +257,11 @@ call through shared SQLite state, so the handoff also works when more than one
 plugin instance is active in the gateway process. Unused authorizations expire
 after the 600-second approval window.
 
+Pending authorization reads and writes run on the SQLite worker. Tool execution
+waits for an approval's pending write to finish before consuming it; a failed
+write fails the request without retrieving a secret. Existing pending rows and
+their expiry remain compatible across updates.
+
 The in-memory cache defaults to 300 seconds and is bounded by the configured
 slug registry. Set `cacheTtlSeconds` to `0` to disable it. Policy is evaluated
 before every cache lookup, and cache hits are audited. Runtime config reloads

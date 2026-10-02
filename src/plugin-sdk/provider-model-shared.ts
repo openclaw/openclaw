@@ -1,4 +1,3 @@
-// Provider model helpers normalize model catalog entries shared by provider plugins.
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   buildAnthropicReplayPolicyForModel,
@@ -10,6 +9,7 @@ import {
   buildStrictAnthropicReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
 } from "../plugins/provider-replay-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { definePluginEntry } from "./plugin-entry.js";
@@ -18,6 +18,7 @@ import type {
   ProviderReplayPolicyContext,
   ProviderRuntimeModel,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "./plugin-entry.js";
 
 export { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -145,6 +146,7 @@ export {
   resolveClaudeNativeThinkingLevelMap,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaude1MContext,
@@ -204,6 +206,7 @@ export {
   buildPassthroughGeminiSanitizingReplayPolicy,
   resolveTaggedReasoningOutputMode,
   sanitizeGoogleGeminiReplayHistory,
+  sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 };
 
@@ -286,24 +289,12 @@ export {
   resolveClaudeThinkingProfile,
 } from "../plugins/provider-claude-thinking.js";
 
-function getModelProviderHint(modelId: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  if (!trimmed) {
-    return null;
-  }
-  const slashIndex = trimmed.indexOf("/");
-  if (slashIndex <= 0) {
-    return null;
-  }
-  return trimmed.slice(0, slashIndex) || null;
-}
-
 /** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupportedModelHint(
   /** Model id that may include a provider prefix such as `x-ai/model`. */
   modelId: string,
 ): boolean {
-  return getModelProviderHint(modelId) === "x-ai";
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /**
@@ -319,7 +310,10 @@ export type ProviderReplayFamily =
 
 type ProviderReplayFamilyHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "sanitizeReplayHistory" | "resolveReasoningOutputMode"
+  | "buildReplayPolicy"
+  | "sanitizeReplayHistory"
+  | "sanitizeReplayHistoryAsync"
+  | "resolveReasoningOutputMode"
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
@@ -390,8 +384,11 @@ export function buildProviderReplayFamilyHooks(
     case "google-gemini":
       return {
         buildReplayPolicy: () => buildGoogleGeminiReplayPolicy(),
+        // Retained adapter for third-party callers of the legacy family hook.
         sanitizeReplayHistory: (ctx: ProviderSanitizeReplayHistoryContext) =>
           sanitizeGoogleGeminiReplayHistory(ctx),
+        sanitizeReplayHistoryAsync: (ctx: ProviderSanitizeReplayHistoryContextV2) =>
+          sanitizeGoogleGeminiReplayHistoryAsync(ctx),
         resolveReasoningOutputMode: (_ctx: ProviderReasoningOutputModeContext) =>
           resolveTaggedReasoningOutputMode(),
       };

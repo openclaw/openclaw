@@ -9,6 +9,36 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TrustedSubagentResume } from "./in-process-subagent-resume.js";
 import type { GatewayContextResolver, TrustedAgentToolCaller } from "./server-methods/types.js";
 
+/** Select task continuation from recorded ownership; admission still binds and revalidates it. */
+export function shouldResumeParentSubagent(params: {
+  cfg: OpenClawConfig;
+  caller: TrustedAgentToolCaller;
+  childSessionKey: string;
+}): boolean {
+  const entry = getLatestLiveSubagentRunByChildSessionKey(
+    params.childSessionKey,
+    (candidate) => candidate.pauseReason === "sessions_yield",
+  );
+  if (!entry || entry.expectsCompletionMessage !== true) {
+    return false;
+  }
+  const controllerStorePath = entry.controllerSessionKey?.trim()
+    ? entry.controllerStorePath
+    : entry.requesterStorePath;
+  if (controllerStorePath === undefined) {
+    return false;
+  }
+  const controller = resolveSubagentController({
+    cfg: params.cfg,
+    agentId: params.caller.agentId,
+    agentSessionKey: params.caller.sessionKey,
+  });
+  return (
+    controller.controlScope === "children" &&
+    ensureSubagentControllerOwnsRun({ cfg: params.cfg, controller, entry }) === undefined
+  );
+}
+
 // Control ownership comes from the registry, not the child's key shape or message provenance.
 function requirePausedChild(cfg: OpenClawConfig, caller: TrustedAgentToolCaller, key: string) {
   if (!caller.assertCurrent) {
@@ -115,7 +145,7 @@ export function assertParentSubagentResumeSuccessorCurrent(
   }
 }
 
-/** Loads the existing replacement owner before admission's final synchronous transfer. */
+/** Loads the replacement owner; final admission awaits its durable ownership transfer. */
 export async function prepareParentSubagentResume(params: {
   cfg: OpenClawConfig;
   resume: TrustedSubagentResume;
@@ -124,22 +154,27 @@ export async function prepareParentSubagentResume(params: {
   runId: string;
   task: string;
   assertAdmissionCurrent: () => void;
+  onAdopted?: (entry: SubagentRunRecord) => void;
   gatewayContextResolver?: GatewayContextResolver;
-}): Promise<() => string> {
+}): Promise<() => Promise<string>> {
   const runtime = await import("../agents/subagents/registry/subagent-registry.js");
-  return () => {
+  return async () => {
     params.assertAdmissionCurrent();
     const expected = assertParentSubagentResumeCurrent({
       ...params,
       sessionId: params.getSessionId(),
     });
-    // No await separates revalidation from the registry's atomic task/flow replacement.
-    const adopted = runtime.adoptPausedSubagentRunForFollowUp({
+    const adopted = await runtime.adoptPausedSubagentRunForFollowUp({
       childSessionKey: params.resume.childSessionKey,
       runId: params.runId,
       task: params.task,
       expected,
+      onPublished: params.onAdopted,
       gatewayContextResolver: params.gatewayContextResolver,
+      assertCurrent: () => {
+        params.assertAdmissionCurrent();
+        assertParentSubagentResumeCurrent({ ...params, sessionId: params.getSessionId() });
+      },
     });
     if (!adopted) {
       throw new Error("Paused task replacement was rejected; no continuation was started.");

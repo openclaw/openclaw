@@ -2,16 +2,6 @@
 import Foundation
 import WebKit
 
-#if os(iOS)
-import UIKit
-
-typealias ChatInlineWidgetSnapshotImage = UIImage
-#elseif os(macOS)
-import AppKit
-
-typealias ChatInlineWidgetSnapshotImage = NSImage
-#endif
-
 struct ChatInlineWidgetSnapshotRequest: Equatable {
     enum Action: Equatable {
         case copy
@@ -25,7 +15,7 @@ struct ChatInlineWidgetSnapshotRequest: Equatable {
 }
 
 enum ChatInlineWidgetSnapshotOutcome {
-    case success(ChatInlineWidgetSnapshotRequest, ChatInlineWidgetSnapshotImage)
+    case success(ChatInlineWidgetSnapshotRequest, OpenClawPlatformImage)
     case failure(ChatInlineWidgetSnapshotRequest)
 }
 

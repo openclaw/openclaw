@@ -6,6 +6,7 @@ import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
+import type { RuntimeSessionFactsResult } from "./types-session-facts.js";
 
 export type { RuntimeLogger };
 
@@ -14,6 +15,8 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 // ── Subagent runtime types ──────────────────────────────────────────
 
 type SubagentRunParams = {
+  /** Revalidate command authority at the host's run admission boundary. */
+  assertCurrent?: () => void;
   sessionKey: string;
   message: string;
   /** Run with an exact empty tool surface. */
@@ -141,6 +144,18 @@ export type PluginRuntime = PluginRuntimeCore & {
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
+    /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
+    readSessionFacts: (params: {
+      sessionKeys: readonly string[];
+    }) => Promise<RuntimeSessionFactsResult>;
+    withUserProfileIdentity?: <T>(
+      params: {
+        profileId: string;
+        emails: readonly string[];
+        githubAccountIds?: readonly number[];
+      },
+      run: (assertCurrent: () => void) => Promise<T>,
+    ) => Promise<T>;
   };
   subagent: {
     /** Fresh, tool-free background inference under the existing subagent model policy. */
@@ -201,6 +216,7 @@ export type PluginRuntime = PluginRuntimeCore & {
       baseRef?: string;
       ownerKind: "workboard";
       ownerId: string;
+      commitGuard?: () => void;
     }) => Promise<PluginManagedWorktree>;
     release: (params: { path: string }) => Promise<void>;
     removeIfLossless: (params: {

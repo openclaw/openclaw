@@ -26,6 +26,7 @@ function createOwner(params: {
     metadataSnapshot: { index: { plugins: [] }, plugins: [] },
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: { getAll: () => ({}) }, modelRegistry: {} }),
   } as unknown as PreparedModelRuntimeSnapshot;

@@ -105,7 +105,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
-- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`, `webhookPort`, `webhookCertPath`
+- webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookCertPath`, `legacyWebhook` (defaults to the existing listener; `false` uses only the Gateway port)
 - actions/capabilities: `capabilities.inlineButtons`, `actions.sendMessage|editMessage|deleteMessage|reactions|sticker|createForumTopic|editForumTopic`
 - reactions: `reactionNotifications`, `reactionLevel`
 - errors: `errorPolicy`, `silentErrorReplies`
@@ -116,6 +116,26 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 <Note>
 Multi-account precedence: with two or more account IDs configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Omitted account `dmPolicy`, `groupPolicy`, `allowFrom`, and `groupAllowFrom` inherit the channel root, not `accounts.default.*`. Explicit account policies win; if neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 </Note>
+
+## Multi-agent account ownership
+
+Each Telegram account needs a resolvable agent owner. To bind the default account
+to `main`, add this entry to the top-level `bindings` array:
+
+```json5 validate=false
+{ agentId: "main", match: { channel: "telegram", accountId: "default" } }
+```
+
+Use the configured agent and account IDs for your Gateway. A missing owner leaves
+that account blocked with the exact binding remediation in channel status;
+other accounts keep running. Add the binding and restart the Gateway.
+
+When upgrading a legacy `agents.list` config, Doctor preserves the previous
+implicit account owner in a binding before saving explicit ownership. Doctor
+requires the original roster and never promotes a narrower conversation route
+to account-wide ownership. Missing historical ownership requires an operator
+choice; Doctor reports the exact binding to add without changing existing routes.
+See [migration repairs](/gateway/doctor/config-migrations#channel-ownership-during-an-update).
 
 ## Related
 

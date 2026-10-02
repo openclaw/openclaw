@@ -369,10 +369,10 @@ private final class SessionActionTransport: @unchecked Sendable, OpenClawChatTra
         let createGate = self.createGate
         let createIsUnsupported = self.createIsUnsupported
         return OpenClawChatNewSessionRouteLease(
-            listAgents: {
-                OpenClawChatAgentsListResponse(
+            loadAgents: { onUpdate in
+                await onUpdate(OpenClawChatAgentsListResponse(
                     defaultId: "worker",
-                    agents: [OpenClawChatAgentChoice(id: "worker", workspaceGit: true)])
+                    agents: [OpenClawChatAgentChoice(id: "worker", workspaceGit: true)]))
             },
             createSession: { key, _, agentID, parentKey, _, _ in
                 let index = await state.recordCreate(key: key, agentID: agentID, parentKey: parentKey)
@@ -609,7 +609,8 @@ struct ChatViewModelSessionActionTests {
         let transport = SessionActionTransport()
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         let lease = try await viewModel.newSessionRouteLease()
-        let response = try await lease.listAgents()
+        var response: OpenClawChatAgentsListResponse?
+        try await lease.loadAgents { response = $0 }
 
         await viewModel.startNewSession(
             agentID: response?.defaultId ?? "",
@@ -817,9 +818,11 @@ struct ChatViewModelSessionActionTests {
             fileName: "old.png",
             mimeType: "image/png",
             preview: nil)]
+        self.retainCompletedNarration(in: viewModel)
 
         await viewModel.rewindToMessage(self.userMessage(entryID: "message-42"))
 
+        #expect(viewModel.transcriptMessages.isEmpty)
         #expect(viewModel.input == "edit this turn")
         #expect(viewModel.attachments.count == 1)
         #expect(viewModel.attachments.first?.data == imageData)
@@ -1002,7 +1005,7 @@ struct ChatViewModelSessionActionTests {
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.sessionBranches = staleBranches
 
-        await viewModel.refreshSessionBranchesForMenuPresentation()
+        await viewModel.refreshSessionBranches()
 
         #expect(viewModel.sessionBranches == freshBranches)
         #expect(await transport.branchListSessionKeys() == ["main"])
@@ -1038,7 +1041,7 @@ struct ChatViewModelSessionActionTests {
             outbox: store)
         viewModel.reconciledOutboxBranchScopes.insert(scope)
 
-        await viewModel.refreshSessionBranchesForMenuPresentation()
+        await viewModel.refreshSessionBranches()
 
         #expect(viewModel.reconciledOutboxBranchScopes.contains(scope))
         #expect(await store.branchState(for: scope)?.switchPendingSince == nil)
@@ -1064,7 +1067,7 @@ struct ChatViewModelSessionActionTests {
 
         #expect(viewModel.sessionBranches == newBranches)
         firstGate.release()
-        await firstRefresh.value
+        _ = await firstRefresh.value
 
         #expect(viewModel.sessionBranches == newBranches)
         #expect(viewModel.isLoadingSessionBranches == false)
@@ -1076,9 +1079,11 @@ struct ChatViewModelSessionActionTests {
         let transport = SessionActionTransport(branches: branches)
         let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: transport)
         viewModel.sessionBranches = branches
+        self.retainCompletedNarration(in: viewModel)
 
         await viewModel.switchToBranch("leaf-new")
 
+        #expect(viewModel.transcriptMessages.isEmpty)
         #expect(await transport.switchedBranches().map { [$0.sessionKey, $0.leafEntryID] } == [
             ["main", "leaf-new"],
         ])
@@ -1397,7 +1402,9 @@ struct ChatViewModelSessionActionTests {
         #expect(viewModel.sessionKey == "other")
         #expect(await transport.forkedParentKeys() == ["main"])
     }
+}
 
+extension ChatViewModelSessionActionTests {
     private func waitForForkStart(
         _ gate: SessionActionCompletionGate,
         timeout: Duration = .seconds(15)) async -> Bool
@@ -1478,6 +1485,25 @@ struct ChatViewModelSessionActionTests {
         return false
     }
 
+    private func retainCompletedNarration(in viewModel: OpenClawChatViewModel) {
+        // This transport emits no sessions.changed echo. The successful local
+        // mutation must discard retained narration from the previous branch.
+        viewModel.updateActiveSessionRunIDs(["completed-run"])
+        viewModel.handleTransportEvent(.agent(OpenClawAgentEventPayload(
+            runId: "completed-run",
+            seq: 1,
+            stream: "item",
+            ts: 1000,
+            data: [
+                "kind": AnyCodable("preamble"), "itemId": AnyCodable("old-narration"),
+                "phase": AnyCodable("end"), "progressText": AnyCodable("Previous branch narration"),
+            ])))
+        viewModel.retireTerminalRun("completed-run")
+        #expect(viewModel.transcriptMessages.map { ChatMessageVisibleText.visibleText(in: $0) } == [
+            "Previous branch narration",
+        ])
+    }
+
     private func userMessage(entryID: String) -> OpenClawChatMessage {
         OpenClawChatMessage(
             role: "user",
@@ -1539,3 +1565,101 @@ struct ChatViewModelSessionActionTests {
             hasActiveRun: hasActiveRun)
     }
 }
+
+#if os(macOS)
+extension ChatViewModelSessionActionTests {
+    @Test func `sidebar Markdown pages the requested session without changing the selected conversation`() async throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {"key":"agent:research:release-plan","sessionId":"session-123","label":"Release plan"}
+        """#.utf8))
+        var offsets: [Int] = []
+        let connection = try sidebarMenuConnection { request in
+            #expect(request.method == "chat.history")
+            #expect(request.params["sessionKey"]?.value as? String == "agent:research:release-plan")
+            #expect(request.params["agentId"]?.value as? String == "research")
+            let offset = try #require(request.params["offset"]?.value as? Int)
+            offsets.append(offset)
+            let message = offset == 0 ? "newer answer" : "older question"
+            let payload: [String: Any] = [
+                "sessionId": "session-123",
+                "totalMessages": 2,
+                "deltaCursor": "cursor-1",
+                "sessionInfo": ["activeLeafEntryId": "leaf-1"],
+                "hasMore": offset == 0,
+                "nextOffset": 1,
+                "messages": [[
+                    "role": offset == 0 ? "assistant" : "user",
+                    "timestamp": offset == 0 ? 2000 : 1000,
+                    "content": [["type": "text", "text": message]],
+                ]],
+            ]
+            return try JSONSerialization.data(withJSONObject: payload)
+        }
+        let markdown = try await vm.sidebarMarkdown(session: session, connection: connection)
+        #expect(offsets == [0, 1, 0])
+        let older = try #require(markdown.range(of: "older question"))
+        let newer = try #require(markdown.range(of: "newer answer"))
+        #expect(older.lowerBound < newer.lowerBound)
+        #expect(markdown.hasPrefix("# Release plan"))
+        #expect(vm.sessionKey == "main")
+    }
+
+    @Test(arguments: ["sessionId", "totalMessages", "deltaCursor", "activeLeafEntryId", "nextOffset"])
+    func `sidebar Markdown refuses mixed or nonadvancing transcript pages`(_ changedField: String) async throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
+        let session = try JSONDecoder().decode(OpenClawChatSessionEntry.self, from: Data(#"""
+        {"key":"agent:research:release-plan","sessionId":"session-123"}
+        """#.utf8))
+        var call = 0
+        let connection = try sidebarMenuConnection { _ in
+            call += 1
+            var payload: [String: Any] = [
+                "sessionId": "session-123",
+                "totalMessages": 2,
+                "deltaCursor": "cursor-1",
+                "sessionInfo": ["activeLeafEntryId": "leaf-1"],
+                "hasMore": call == 1,
+                "nextOffset": 1,
+                "messages": [[
+                    "role": "assistant",
+                    "content": [["type": "text", "text": "answer"]],
+                ]],
+            ]
+            if call > 1 || changedField == "nextOffset" {
+                switch changedField {
+                case "sessionId": payload[changedField] = "replacement"
+                case "totalMessages": payload[changedField] = 3
+                case "deltaCursor": payload[changedField] = "cursor-2"
+                case "activeLeafEntryId": payload["sessionInfo"] = [changedField: "leaf-2"]
+                default: payload[changedField] = 0
+                }
+            }
+            return try JSONSerialization.data(withJSONObject: payload)
+        }
+        await #expect { try await vm.sidebarMarkdown(session: session, connection: connection) } throws: { error in
+            (error as NSError).domain == "SessionMenu" && (error as NSError).code == 1
+        }
+    }
+
+    @Test func `sidebar Markdown preserves repeated projected messages while removing page overlap`() async throws {
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: SessionActionTransport())
+        let session = try JSONDecoder().decode(
+            OpenClawChatSessionEntry.self,
+            from: Data(#"{"key":"agent:research:thread"}"#.utf8))
+        var count = 0
+        let connection = try sidebarMenuConnection { _ in
+            count += 1
+            let overlap = "{\"role\":\"assistant\",\"timestamp\":1,\"content\":\"Repeated\",\"__openclaw\":{\"id\":\"row-1\",\"seq\":1,\"recordTimestampMs\":\(count)}}"
+            let sibling = "{\"role\":\"assistant\",\"timestamp\":1,\"content\":\"Sibling projection\",\"__openclaw\":{\"id\":\"row-1\",\"seq\":1}}"
+            let rows = count == 1 ? "\(overlap),\(overlap),\(sibling)" : "\(overlap),\(sibling)"
+            return Data(
+                "{\"sessionId\":\"s-1\",\"totalMessages\":3,\"deltaCursor\":\"cursor-1\",\"hasMore\":\(count == 1),\"nextOffset\":1,\"messages\":[\(rows)]}"
+                    .utf8)
+        }
+        let markdown = try await vm.sidebarMarkdown(session: session, connection: connection)
+        #expect(markdown.components(separatedBy: "Repeated").count - 1 == 2)
+        #expect(markdown.components(separatedBy: "Sibling projection").count - 1 == 1)
+    }
+}
+#endif

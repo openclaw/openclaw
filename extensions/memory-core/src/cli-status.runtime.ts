@@ -4,9 +4,21 @@ import {
   type MemoryEmbeddingProbeResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
+  defaultRuntime,
+  formatErrorMessage,
+  setVerbose,
+  shortenHomePath,
+  theme,
+  withProgress,
+  withProgressTotals,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
   resolveMemoryDeepDreamingConfig,
+  resolveMemoryFtsState,
+  resolveMemoryVectorState,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { formatByteSize } from "openclaw/plugin-sdk/number-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -20,16 +32,6 @@ import {
   type MemoryManager,
   type MemorySourceScan,
 } from "./cli-runtime-common.js";
-import {
-  defaultRuntime,
-  formatErrorMessage,
-  setVerbose,
-  shortenHomePath,
-  theme,
-  withProgress,
-  withProgressTotals,
-  type OpenClawConfig,
-} from "./cli.host.runtime.js";
 import type { MemoryCommandOptions } from "./cli.types.js";
 import {
   auditDreamingArtifacts,
@@ -46,6 +48,8 @@ import {
   type ShortTermAuditSummary,
 } from "./short-term-promotion.js";
 const { accent, heading, info, muted, success, warn } = theme;
+const formatMemoryByteSize = (value: number) =>
+  formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
 type LlamaCppRuntimeStatus = {
   state?: string;
   backend?: string;
@@ -308,13 +312,11 @@ export async function runMemoryStatus(
     ].filter(Boolean) as string[];
     if (status.storage) {
       const storage = status.storage;
-      const bytes = (value: number) =>
-        formatByteSize(value, { style: "iec", maxUnit: "tera", separator: " ", fractionDigits: 1 });
       lines.push(
-        `${label("Agent database")} ${info(bytes(storage.databaseBytes))} · WAL ${bytes(storage.walBytes)} · reusable ${bytes(storage.reusableBytes)}`,
+        `${label("Agent database")} ${info(formatMemoryByteSize(storage.databaseBytes))} · WAL ${formatMemoryByteSize(storage.walBytes)} · reusable ${formatMemoryByteSize(storage.reusableBytes)}`,
       );
       lines.push(
-        `${label("Stored embedding cache")} ${info(bytes(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
+        `${label("Stored embedding cache")} ${info(formatMemoryByteSize(storage.embeddingCacheBytes))} · ${storage.embeddingCacheEntries} entries`,
       );
       lines.push(
         muted(
@@ -335,9 +337,8 @@ export async function runMemoryStatus(
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
       }
     }
-    const llamaCppRuntime = deep ? readLlamaCppRuntimeStatus(status) : null;
-    if (llamaCppRuntime) {
-      const runtime = llamaCppRuntime;
+    const runtime = deep ? readLlamaCppRuntimeStatus(status) : null;
+    if (runtime) {
       const backend = runtime.backend ?? "unknown";
       const build = runtime.buildInfo ? ` (${runtime.buildInfo})` : "";
       lines.push(`${label("llama.cpp server")} ${info(backend)}${muted(build)}`);
@@ -388,12 +389,7 @@ export async function runMemoryStatus(
         const payload =
           entry.chunkBytes === undefined
             ? ""
-            : ` · ${formatByteSize(entry.chunkBytes, {
-                style: "iec",
-                maxUnit: "tera",
-                separator: " ",
-                fractionDigits: 1,
-              })} text + embeddings`;
+            : ` · ${formatMemoryByteSize(entry.chunkBytes)} text + embeddings`;
         lines.push(`  ${accent(entry.source)} ${muted("·")} ${muted(counts + payload)}`);
       }
     }
@@ -401,14 +397,9 @@ export async function runMemoryStatus(
       lines.push(`${label("Fallback")} ${warn(status.fallback.from)}`);
     }
     if (status.vector) {
+      const vector = status.vector;
       const formatVectorState = (available: boolean | undefined) =>
-        status.vector?.enabled
-          ? available === undefined
-            ? "unknown"
-            : available
-              ? "ready"
-              : "unavailable"
-          : "disabled";
+        resolveMemoryVectorState({ enabled: vector.enabled, available }).state;
       const formatVectorLine = (lineLabel: string, state: string) => {
         const vectorColor = state === "ready" ? success : state === "unavailable" ? warn : muted;
         lines.push(`${label(lineLabel)} ${vectorColor(state)}`);
@@ -445,11 +436,7 @@ export async function runMemoryStatus(
       }
     }
     if (status.fts) {
-      const ftsState = status.fts.enabled
-        ? status.fts.available
-          ? "ready"
-          : "unavailable"
-        : "disabled";
+      const { state: ftsState } = resolveMemoryFtsState(status.fts);
       const ftsColor = ftsState === "ready" ? success : ftsState === "unavailable" ? warn : muted;
       lines.push(`${label("FTS")} ${ftsColor(ftsState)}`);
       if (status.fts.error) {
@@ -519,27 +506,19 @@ export async function runMemoryStatus(
         lines.push(`  ${warn(issue)}`);
       }
     }
-    if (audit?.issues.length) {
-      if (!scan?.issues.length) {
+    let hasIssues = Boolean(scan?.issues.length);
+    for (const report of [audit, dreamingAudit]) {
+      if (!report?.issues.length) {
+        continue;
+      }
+      if (!hasIssues) {
         lines.push(label("Issues"));
       }
-      for (const issue of audit.issues) {
+      hasIssues = true;
+      for (const issue of report.issues) {
         lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
       }
-      if (!opts.fix) {
-        if (audit.issues.some((issue) => issue.fixable)) {
-          lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
-        }
-      }
-    }
-    if (dreamingAudit?.issues.length) {
-      if (!scan?.issues.length && !audit?.issues.length) {
-        lines.push(label("Issues"));
-      }
-      for (const issue of dreamingAudit.issues) {
-        lines.push(`  ${issue.severity === "error" ? warn(issue.message) : muted(issue.message)}`);
-      }
-      if (!opts.fix && dreamingAudit.issues.some((issue) => issue.fixable)) {
+      if (!opts.fix && report.issues.some((issue) => issue.fixable)) {
         lines.push(`  ${muted(`Fix: openclaw memory status --fix --agent ${agentId}`)}`);
       }
     }

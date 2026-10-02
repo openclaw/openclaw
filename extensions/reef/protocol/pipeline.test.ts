@@ -4,12 +4,13 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
-import { MemoryAuditStore, type AuditEntry, type AuditStore } from "./audit.js";
+import type { AuditEntry, AuditStore } from "./audit.js";
 import { canonicalBytes } from "./canonical.js";
 import { base64, fromBase64url, utf8 } from "./encoding.js";
 import { seal, type Envelope } from "./envelope.js";
 import type { GuardAdapter, Verdict } from "./guard.js";
 import { generateIdentity } from "./identity.js";
+import { MemoryAuditStore, MemoryReplayStore } from "./memory-stores.test-support.js";
 import {
   composeInbound,
   composeOutbound,
@@ -19,7 +20,6 @@ import {
   type ReviewGate,
   type ReviewRequest,
 } from "./pipeline.js";
-import { MemoryReplayStore } from "./replay.js";
 
 const now = 1_752_300_000;
 const auditKey = Uint8Array.from({ length: 32 }, (_, index) => index + 1);

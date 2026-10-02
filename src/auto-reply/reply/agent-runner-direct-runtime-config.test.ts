@@ -55,12 +55,13 @@ const createReplyMediaPathNormalizerMock = vi.fn();
 const runSessionCompactionIfNeededMock = vi.fn();
 const runMemoryFlushIfNeededMock = vi.fn();
 const executeAgentTurnMock = vi.fn();
-const resetReplyRunSessionMock = vi.fn();
 const enqueueFollowupRunMock = vi.fn();
 const compactEmbeddedAgentSessionMock = vi.fn();
+const runEmbeddedAgentMock = vi.fn();
 
 vi.mock("../../agents/embedded-agent.js", () => ({
   compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
+  runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
 }));
 
 vi.mock("./agent-runner-utils.js", async () => {
@@ -110,16 +111,6 @@ vi.mock("./agent-runner-execution.js", async () => {
   };
 });
 
-vi.mock("./agent-runner-session-reset.js", async () => {
-  const actual = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
-    "./agent-runner-session-reset.js",
-  );
-  return {
-    ...actual,
-    resetReplyRunSession: (...args: unknown[]) => resetReplyRunSessionMock(...args),
-  };
-});
-
 vi.mock("./queue.js", async () => {
   const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
   return {
@@ -150,18 +141,17 @@ function createReplyOperation(): TestReplyOperation {
   return Object.assign(replyOperation, {
     phase: "queued" as const,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
-    hasOwnedSessionId: vi.fn(() => false),
     captureOwnedSessionIds: vi.fn(() => new Set()),
   });
 }
 
 function createDirectRuntimeReplyParams({
-  shouldFollowup,
-  isActive,
+  shouldFollowup = false,
+  isActive = false,
 }: {
-  shouldFollowup: boolean;
-  isActive: boolean;
-}) {
+  shouldFollowup?: boolean;
+  isActive?: boolean;
+} = {}) {
   const followupRun = createTestFollowupRun({
     sessionId: "session-1",
     sessionKey: "agent:main:telegram:default:direct:test",
@@ -253,8 +243,13 @@ describe("runReplyAgent runtime config", () => {
     runSessionCompactionIfNeededMock.mockReset();
     runMemoryFlushIfNeededMock.mockReset();
     executeAgentTurnMock.mockReset();
-    resetReplyRunSessionMock.mockReset();
     enqueueFollowupRunMock.mockReset();
+    compactEmbeddedAgentSessionMock.mockReset().mockResolvedValue({
+      ok: true,
+      compacted: true,
+      result: { tokensAfter: 42 },
+    });
+    runEmbeddedAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
 
     resolveQueuedReplyExecutionConfigMock.mockResolvedValue(freshCfg);
     resolveReplyToModeMock.mockReturnValue("all");
@@ -269,14 +264,10 @@ describe("runReplyAgent runtime config", () => {
       runId: "runtime-config-test",
       outcome: { kind: "rejected", payload: { text: "main reply" } },
     });
-    resetReplyRunSessionMock.mockResolvedValue(false);
   });
 
   it("resolves direct reply runs before early helpers read config", async () => {
-    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams();
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
@@ -319,10 +310,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("passes the derived runtime-policy key to pre-run maintenance", async () => {
-    const { followupRun, replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { followupRun, replyParams } = createDirectRuntimeReplyParams();
     const runtimePolicySessionKey = "agent:main:telegram:default:direct:test";
     followupRun.run.sessionKey = "agent:main:main";
     followupRun.run.runtimePolicySessionKey = runtimePolicySessionKey;
@@ -343,10 +331,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("continues the main reply after a recorded memory-flush failure", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     const onBlockReply = vi.fn();
     const replyOperation = createReplyOperation();
     replyParams.opts = { sourceReplyDeliveryMode: "message_tool_only", onBlockReply };
@@ -381,12 +366,8 @@ describe("runReplyAgent runtime config", () => {
     const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
       "./agent-runner-memory.js",
     );
-    const reset = await vi.importActual<typeof import("./agent-runner-session-reset.js")>(
-      "./agent-runner-session-reset.js",
-    );
     runMemoryFlushIfNeededMock.mockImplementation(memory.runMemoryFlushIfNeeded);
     runSessionCompactionIfNeededMock.mockImplementation(memory.runSessionCompactionIfNeeded);
-    resetReplyRunSessionMock.mockImplementation(reset.resetReplyRunSession);
     registerMemoryCapability("memory-core", {
       flushPlanResolver: () => ({
         softThresholdTokens: 4_000,
@@ -399,10 +380,7 @@ describe("runReplyAgent runtime config", () => {
     });
     try {
       await withTestDir({ prefix: "openclaw-direct-runtime-" }, async (tempDir) => {
-        const { replyParams, followupRun } = createDirectRuntimeReplyParams({
-          shouldFollowup: false,
-          isActive: false,
-        });
+        const { replyParams, followupRun } = createDirectRuntimeReplyParams();
         const sessionKey = "agent:main:telegram:default:direct:test";
         const sessionEntry: SessionEntry = {
           sessionId: "session-1",
@@ -464,7 +442,6 @@ describe("runReplyAgent runtime config", () => {
         const result = await runReplyAgent(replyParams);
 
         expect(result).toEqual({ text: "main reply" });
-        expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
         expect(followupRun.run.sessionId).toBe(sessionEntry.sessionId);
         expect(replyOperation.sessionId).toBe(sessionEntry.sessionId);
         expect(loadSessionEntry(scope)).toMatchObject({
@@ -593,13 +570,112 @@ describe("runReplyAgent runtime config", () => {
     },
   );
 
-  it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
+  it.each([
+    { name: "runnable", totalTokens: 95_000, expectedHeartbeats: 2 },
+    { name: "skipped", totalTokens: 100, expectedHeartbeats: 0 },
+  ])("keeps the ingress watchdog scoped around $name memory flush", async (testCase) => {
+    const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
+      "./agent-runner-memory.js",
+    );
+    runMemoryFlushIfNeededMock.mockImplementation(memory.runMemoryFlushIfNeeded);
+    runSessionCompactionIfNeededMock.mockImplementation(memory.runSessionCompactionIfNeeded);
+    registerMemoryCapability("memory-core", {
+      flushPlanResolver: () => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Save durable notes. NO_REPLY",
+        systemPrompt: "Write memory to memory/notes.md.",
+        relativePath: "memory/notes.md",
+      }),
     });
+    try {
+      await withTestDir({ prefix: "openclaw-memory-heartbeat-" }, async (tempDir) => {
+        const { replyParams, followupRun } = createDirectRuntimeReplyParams({
+          shouldFollowup: false,
+          isActive: false,
+        });
+        const sessionKey = "agent:main:telegram:default:direct:test";
+        const sessionEntry: SessionEntry = {
+          sessionId: "session-1",
+          updatedAt: 1,
+          totalTokens: testCase.totalTokens,
+          totalTokensFresh: true,
+          totalTokensVersion: 1,
+        };
+        const storePath = join(tempDir, "sessions.json");
+        await replaceSessionEntry({ agentId: "main", sessionKey, storePath }, sessionEntry);
+        followupRun.run.workspaceDir = tempDir;
+        followupRun.run.provider = "anthropic";
+        followupRun.run.model = "claude-sonnet-4-6";
+        const lifecycle = {
+          admission: "exclusive" as const,
+          onAdopted: vi.fn(),
+          onDeferredHeartbeat: vi.fn(),
+          deferredHeartbeatIntervalMs: 100,
+        };
+        followupRun.turnAdoptionLifecycle = lifecycle;
+        replyParams.opts = { turnAdoptionLifecycle: lifecycle };
+        replyParams.sessionKey = sessionKey;
+        replyParams.sessionEntry = sessionEntry;
+        replyParams.sessionStore = { [sessionKey]: sessionEntry };
+        replyParams.storePath = storePath;
+        replyParams.replyOperation = createReplyOperation();
+        resolveQueuedReplyExecutionConfigMock.mockResolvedValue(
+          withTestModelContextTokens({
+            cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+            followupRun,
+            defaultModel: replyParams.defaultModel,
+            contextTokens: 100_000,
+          }),
+        );
+        const entered = createDeferred();
+        const release = createDeferred();
+        runEmbeddedAgentMock.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { payloads: [], meta: {} };
+        });
+        vi.useFakeTimers();
+        const pending = runReplyAgent(replyParams);
+        try {
+          if (testCase.expectedHeartbeats > 0) {
+            await expect(
+              Promise.race([
+                entered.promise.then(() => "entered"),
+                pending.then(() => "completed-before-flush"),
+              ]),
+            ).resolves.toBe("entered");
+            await vi.advanceTimersByTimeAsync(350);
+            expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(
+              testCase.expectedHeartbeats,
+            );
+            release.resolve();
+          }
+          await expect(pending).resolves.toEqual({ text: "main reply" });
+          expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
+          lifecycle.onDeferredHeartbeat.mockClear();
+          await vi.advanceTimersByTimeAsync(500);
+          expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
+          expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(
+            testCase.expectedHeartbeats > 0 ? 1 : 0,
+          );
+        } finally {
+          release.resolve();
+          await Promise.allSettled([pending]);
+          vi.useRealTimers();
+        }
+      });
+    } finally {
+      clearMemoryPluginState();
+    }
+  });
+
+  it("keeps the compacted session when preflight recovers an exhausted memory flush", async () => {
+    const { replyParams, followupRun } = createDirectRuntimeReplyParams();
     const sessionEntry = {
       sessionId: "session-1",
+      lifecycleRevision: "original-generation",
       updatedAt: 1,
       compactionCount: 4,
     };
@@ -616,19 +692,28 @@ describe("runReplyAgent runtime config", () => {
 
     await expect(runReplyAgent(replyParams)).resolves.toEqual({ text: "main reply" });
 
-    expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+    expect(followupRun.run.sessionId).toBe(sessionEntry.sessionId);
     expect(executeAgentTurnMock).toHaveBeenCalledOnce();
+    expect(executeAgentTurnMock.mock.calls[0]?.[0].getActiveSessionEntry()).toEqual({
+      ...sessionEntry,
+      compactionCount: 5,
+    });
   });
 
   it.each(["context_overflow", "auth profile mismatch"])(
     "surfaces required preflight failure (%s) after memory exhaustion without resetting",
     async (reason) => {
-      const { replyParams } = createDirectRuntimeReplyParams({
-        shouldFollowup: false,
-        isActive: false,
-      });
+      const { replyParams, followupRun } = createDirectRuntimeReplyParams();
+      const sessionEntry = {
+        sessionId: "session-1",
+        lifecycleRevision: "original-generation",
+        updatedAt: 1,
+        compactionCount: 4,
+      };
+      const sessionSnapshot = { ...sessionEntry };
+      replyParams.sessionEntry = sessionEntry;
       runMemoryFlushIfNeededMock.mockResolvedValue({
-        sessionEntry: { sessionId: "session-1", updatedAt: 1, compactionCount: 4 },
+        sessionEntry,
         outcome: "exhausted",
       });
       runSessionCompactionIfNeededMock.mockImplementation(async (params: PreflightParams) => {
@@ -641,9 +726,10 @@ describe("runReplyAgent runtime config", () => {
       if (!result || Array.isArray(result)) {
         throw new Error("expected a single preflight compaction failure reply payload");
       }
-      expect(result.text).toContain("auto-compaction could not recover");
+      expect(result.text).toContain("OpenClaw couldn't shorten it.");
       expect(getReplyPayloadMetadata(result)?.deliverDespiteSourceReplySuppression).toBe(true);
-      expect(resetReplyRunSessionMock).not.toHaveBeenCalled();
+      expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
+      expect(sessionEntry).toEqual(sessionSnapshot);
       expect(executeAgentTurnMock).not.toHaveBeenCalled();
     },
   );
@@ -651,10 +737,7 @@ describe("runReplyAgent runtime config", () => {
   it.each(["abortByUser", "abortForRestart"] as const)(
     "records %s during memory flush as cancellation without starting the main turn",
     async (abortMethod) => {
-      const { replyParams } = createDirectRuntimeReplyParams({
-        shouldFollowup: false,
-        isActive: false,
-      });
+      const { replyParams } = createDirectRuntimeReplyParams();
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
       runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
@@ -681,10 +764,7 @@ describe("runReplyAgent runtime config", () => {
   it.each(["user", "restart"] as const)(
     "records an aborted %s agent turn as cancellation",
     async (reason) => {
-      const { replyParams } = createDirectRuntimeReplyParams({
-        shouldFollowup: false,
-        isActive: false,
-      });
+      const { replyParams } = createDirectRuntimeReplyParams();
       const runState: ReplyOperationRunState = {};
       replyParams.opts = { [REPLY_OPERATION_RUN_STATE]: runState };
       runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
@@ -700,10 +780,7 @@ describe("runReplyAgent runtime config", () => {
   );
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     const codexMessage =
       "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
     runSessionCompactionIfNeededMock.mockRejectedValue(
@@ -778,10 +855,7 @@ describe("runReplyAgent runtime config", () => {
   });
 
   it("surfaces preflight compaction failures before the agent starts", async () => {
-    const { replyParams } = createDirectRuntimeReplyParams({
-      shouldFollowup: false,
-      isActive: false,
-    });
+    const { replyParams } = createDirectRuntimeReplyParams();
     runSessionCompactionIfNeededMock.mockRejectedValue(
       new Error("Preflight compaction required but failed: auth profile mismatch"),
     );
@@ -792,8 +866,8 @@ describe("runReplyAgent runtime config", () => {
     if (!result || Array.isArray(result)) {
       throw new Error("expected a single preflight compaction failure reply payload");
     }
-    expect(result.text).toContain("Context is too large");
-    expect(result.text).toContain("auto-compaction could not recover");
+    expect(result.text).toContain("This conversation is too long");
+    expect(result.text).toContain("OpenClaw couldn't shorten it.");
     expect(result.text).toContain("/compact");
     expect(result.text).toContain("/new");
     const metadata = getReplyPayloadMetadata(result);

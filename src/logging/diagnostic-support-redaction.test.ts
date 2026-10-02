@@ -45,6 +45,24 @@ describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
 
   it.each([
+    ['"dist/index.js": fields=size,mtimeNs,ctimeNs,sha256', true],
+    ['"node_modules/.package-lock.json": fields=added', true],
+    ['"node_modules/@openclaw/fs-safe/index.js": fields=sha256', true],
+    ['".": fields=dev:ino,mode', true],
+    ['"/private/state.js": fields=sha256', false],
+    ['"../private/state.js": fields=sha256', false],
+    ['"node_modules/@private_team/module/index.js": fields=sha256', false],
+    ['"node_modules/@org/module/index.js": fields=sha256', false],
+    ['"dist/index.js": fields=sha256,private-value', false],
+    ['"dist/index.js": fields=sha256; private-text', false],
+  ])("bounds public package drift diagnostics: %s", (detail, allowed) => {
+    const line = `Package rollback entry ${detail}`;
+    expect(redactPublicSupportDiagnosticLine(line, { env: {}, stateDir: tempDir })).toBe(
+      allowed ? line : "[redacted-diagnostic]",
+    );
+  });
+
+  it.each([
     "EACCES",
     "EPERM",
     "ENOTEMPTY",
@@ -355,4 +373,29 @@ describe("diagnostic support redaction", () => {
     expect(serialized).toContain("--awsSecretAccessKey");
     expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
   });
+});
+
+it("preserves exact typed lease guidance without widening maintenance prose", () => {
+  const context = { env: {}, stateDir: "/synthetic/state" };
+  const guidance =
+    "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.";
+  expect(redactPublicSupportDiagnosticLine(guidance, context)).toBe(guidance);
+  for (const input of [
+    guidance + " /private/state.db token=fixture-only-token alice@example.invalid",
+    "Doctor could not enter maintenance. OpenClawAgentDatabaseLeaseActiveError: private message",
+  ]) {
+    for (const prefix of ["", "DoctorMaintenanceRefusalError: "]) {
+      expect(redactPublicSupportDiagnosticLine(`${prefix}${input}`, context)).toBe(
+        `${prefix}Doctor could not enter maintenance.`,
+      );
+    }
+  }
+  expect(
+    redactPublicSupportDiagnosticLine(
+      "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation. /private/state.db",
+      context,
+    ),
+  ).toBe(
+    "Error: Doctor could not enter maintenance. Error: The update parent owns Gateway activation.",
+  );
 });

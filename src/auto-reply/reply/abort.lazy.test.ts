@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { tryFastAbortFromMessage } from "./abort.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 vi.mock("../../agents/subagents/registry/subagent-control.js", () => {
@@ -8,7 +9,6 @@ vi.mock("../../agents/subagents/registry/subagent-control.js", () => {
 it.each(["direct", "group"])(
   "keeps %s ordinary messages outside cancellation runtime",
   async (chatType) => {
-    const { tryFastAbortFromMessage } = await import("./abort.js");
     await expect(
       tryFastAbortFromMessage({
         ctx: buildTestCtx({ CommandBody: "continue the conversation", ChatType: chatType }),

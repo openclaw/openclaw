@@ -2,8 +2,10 @@
 // talk.catalog, above the embedded talk schema editor (see memory.ts for the
 // same curated-rows-above-schema shape). The pickers and the raw form patch the
 // same config draft, so both stay in sync without narrowing the schema.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { html, nothing, type TemplateResult } from "lit";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import {
   renderSettingsRow,
@@ -94,10 +96,7 @@ export function selectedTalkProviderOption(
   if (catalog.kind !== "ready") {
     return undefined;
   }
-  if (selection.provider) {
-    return findProviderOption(catalog.providers, selection.provider);
-  }
-  return findProviderOption(catalog.providers, catalog.activeProvider);
+  return findProviderOption(catalog.providers, selection.provider || catalog.activeProvider);
 }
 
 /**
@@ -109,14 +108,11 @@ export function talkProviderConfigKeys(
   selection: TalkRealtimeSelection,
   option: TalkRealtimeProviderOption | undefined,
 ): string[] {
-  const candidates = [selection.provider, option?.id, ...(option?.aliases ?? [])];
-  const keys: string[] = [];
-  for (const candidate of candidates) {
-    if (candidate && candidate in selection.providerEntries && !keys.includes(candidate)) {
-      keys.push(candidate);
-    }
-  }
-  return keys;
+  return uniqueStrings(
+    [selection.provider, option?.id, ...(option?.aliases ?? [])].flatMap((key) =>
+      key && key in selection.providerEntries ? [key] : [],
+    ),
+  );
 }
 
 /** Effective model/voice: top-level override, else the provider entry value. */
@@ -160,15 +156,20 @@ function renderStatusRow(props: TalkViewProps) {
   });
 }
 
+function renderConfiguredTalkValue(field: "provider" | "model" | "voice", value: string) {
+  return renderSettingsRow({
+    title: t(`talkPage.${field}.title`),
+    description: t(`talkPage.${field}.description`),
+    control: renderSettingsValue(value, { mono: true }),
+  });
+}
+
 function renderProviderRow(props: TalkViewProps) {
   if (props.catalog.kind !== "ready" || props.catalog.providers.length === 0) {
-    return renderSettingsRow({
-      title: t("talkPage.provider.title"),
-      description: t("talkPage.provider.description"),
-      control: renderSettingsValue(props.selection.provider ?? t("talkPage.provider.auto"), {
-        mono: true,
-      }),
-    });
+    return renderConfiguredTalkValue(
+      "provider",
+      props.selection.provider ?? t("talkPage.provider.auto"),
+    );
   }
   const selected = findProviderOption(props.catalog.providers, props.selection.provider);
   // A configured provider missing from the catalog (for example a disabled
@@ -199,11 +200,7 @@ function renderModelRow(props: TalkViewProps) {
   const provider = selectedTalkProviderOption(props.catalog, props.selection);
   const { model } = effectiveTalkValues(props.selection, provider);
   if (!provider) {
-    return renderSettingsRow({
-      title: t("talkPage.model.title"),
-      description: t("talkPage.model.description"),
-      control: renderSettingsValue(model ?? t("talkPage.model.default"), { mono: true }),
-    });
+    return renderConfiguredTalkValue("model", model ?? t("talkPage.model.default"));
   }
   const known = provider.models.length
     ? provider.models
@@ -253,11 +250,7 @@ function renderVoiceRow(props: TalkViewProps) {
     voice !== null &&
     !voices.includes(voice);
   if (voices.length === 0) {
-    return renderSettingsRow({
-      title: t("talkPage.voice.title"),
-      description: t("talkPage.voice.description"),
-      control: renderSettingsValue(voice ?? t("talkPage.voice.default"), { mono: true }),
-    });
+    return renderConfiguredTalkValue("voice", voice ?? t("talkPage.voice.default"));
   }
   const options = [
     { value: TALK_PICKER_UNSET, label: t("talkPage.voice.default") },
@@ -308,7 +301,7 @@ function renderGptLiveRow(props: TalkViewProps) {
 export function renderTalk(props: TalkViewProps) {
   return html`
     <section class="talk-page">
-      <div class="settings-page">
+      <div class="settings-page" ${shellLayoutTraits({ settingsPage: true })}>
         ${renderDeviceTalk(props.nativeDeviceSettings)}
         ${props.voiceWake ? renderVoiceWakeEditor(props.voiceWake.state, props.voiceWake.onInput, props.voiceWake.onRetry) : nothing}
         ${renderSettingsSection(

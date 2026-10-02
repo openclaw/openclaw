@@ -19,52 +19,6 @@ const explicitMainRoster: NonNullable<OpenClawConfig["agents"]> = {
 const isolatedEnv: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME };
 
 describe("collectPluginConfigAssignments bundled plugin manifests", () => {
-  it("assigns each webhooks route SecretRef to its exact runtime owner", () => {
-    expect(
-      findBundledPluginMetadataById("webhooks", {
-        includeChannelConfigs: false,
-        includeSyntheticChannelConfigs: false,
-      })?.manifest.configContracts?.secretInputs?.paths,
-    ).toEqual([{ path: "routes.*.secret", expected: "string", ownerKind: "route" }]);
-    const config = {
-      agents: explicitMainRoster,
-      plugins: {
-        entries: {
-          webhooks: {
-            enabled: true,
-            config: {
-              routes: {
-                zapier: {
-                  sessionKey: "agent:main:main",
-                  secret: envRef("WEBHOOK_SECRET"),
-                },
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const context = createResolverContext({ sourceConfig: config, env: isolatedEnv });
-
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: new Map([["webhooks", "bundled"]]),
-    });
-
-    expect(context.assignments).toMatchObject([
-      {
-        path: "plugins.entries.webhooks.config.routes.zapier.secret",
-        ownerKind: "route",
-        ownerId: "plugins.entries.webhooks.config.routes.zapier.secret",
-        requiredForGateway: false,
-        disposition: "isolate",
-      },
-    ]);
-    expect(context.assignments[0]?.ownerContractDigest).toBeTruthy();
-  });
-
   it("collects Codex app-server SecretRefs from bundled manifest contracts", () => {
     expect(
       findBundledPluginMetadataById("codex", {

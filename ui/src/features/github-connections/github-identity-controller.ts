@@ -7,13 +7,13 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { GitHubDeviceAuthorizationController } from "./github-identity-controller-authorization.ts";
 import {
-  configFingerprint,
   githubConnectionOwnerKey,
   readGitHubIdentityDraft,
   type GitHubConnectionTarget,
@@ -42,8 +42,7 @@ export class GitHubIdentityController {
   private connected = false;
   private clientRevision = -1;
   private requestRevision = 0;
-  private displayedIdentityFingerprint = "";
-  private identityInitialized = false;
+  private displayedIdentityFingerprint: string | null = null;
   private verificationQueued = false;
   private confirmationPending = false;
   private mutationOwner: RequestOwner | null = null;
@@ -152,7 +151,7 @@ export class GitHubIdentityController {
         ? resolveAgentConfig(params.target.config, params.target.agentId)
         : null;
     const values = { system: resolved?.globalTools?.github, agent: resolved?.entry?.tools?.github };
-    const fingerprint = configFingerprint(
+    const fingerprint = JSON.stringify(
       nextScope === "personal"
         ? null
         : {
@@ -162,9 +161,9 @@ export class GitHubIdentityController {
           },
     );
     const identityChanged =
-      this.identityInitialized && this.displayedIdentityFingerprint !== fingerprint;
+      this.displayedIdentityFingerprint !== null &&
+      this.displayedIdentityFingerprint !== fingerprint;
     this.displayedIdentityFingerprint = fingerprint;
-    this.identityInitialized = true;
     const mutationOwner = this.mutationOwner;
     const mutationOwnsIdentityChange =
       identityChanged && mutationOwner !== null && this.busy && this.isCurrent(mutationOwner);
@@ -186,18 +185,15 @@ export class GitHubIdentityController {
       this.confirmationPending = false;
     }
     const selected = nextScope === "personal" ? undefined : values[nextScope];
-    const selectedFingerprint = configFingerprint(selected);
-    if (clientChanged || ownerChanged || scopeChanged) {
+    const selectedFingerprint = JSON.stringify(selected ?? null);
+    const resetDraft = clientChanged || ownerChanged || scopeChanged;
+    if (resetDraft || (!this.draftDirty && this.configFingerprint !== selectedFingerprint)) {
       this.selectedDraft = readGitHubIdentityDraft(selected);
       this.draftDirty = false;
       this.configFingerprint = selectedFingerprint;
-      if (clientChanged || ownerChanged) {
-        return;
-      }
     }
-    if (!this.draftDirty && this.configFingerprint !== selectedFingerprint) {
-      this.selectedDraft = readGitHubIdentityDraft(selected);
-      this.configFingerprint = selectedFingerprint;
+    if (clientChanged || ownerChanged) {
+      return;
     }
     if (identityChanged && !mutationOwnsIdentityChange) {
       this.queueVerification();
@@ -597,3 +593,5 @@ export class GitHubIdentityController {
     );
   }
 }
+
+registerGitHubEnglish();

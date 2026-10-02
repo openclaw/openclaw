@@ -1,11 +1,9 @@
+import type { DatabaseSync } from "node:sqlite";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../state/openclaw-state-db-contract.js";
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
+import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
-
-type SqliteUserVersionReader = {
-  prepare: (sql: string) => { get: () => unknown };
-};
 
 const SQLITE_SCHEMA_VERSION_ERROR_NAME = "SqliteSchemaVersionError";
 
@@ -24,8 +22,10 @@ export function isSqliteSchemaVersionError(error: unknown): error is Error {
   );
 }
 
-export function readSqliteUserVersion(db: SqliteUserVersionReader): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
+export function readSqliteUserVersion(db: DatabaseSync): number {
+  const row = executeWithCachedStatement(db, "PRAGMA user_version", [], (statement) =>
+    statement.get(),
+  );
   return Number(row?.user_version ?? 0);
 }
 

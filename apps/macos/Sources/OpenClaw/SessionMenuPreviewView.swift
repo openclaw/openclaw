@@ -1,6 +1,5 @@
 import OpenClawChatUI
 import OpenClawKit
-import OpenClawProtocol
 import OSLog
 import SwiftUI
 
@@ -58,8 +57,7 @@ actor SessionPreviewLimiter {
 
     private let maxConcurrent: Int
     private var available: Int
-    private var waitQueue: [UUID] = []
-    private var waiters: [UUID: CheckedContinuation<Void, Never>] = [:]
+    private var waiters: [CheckedContinuation<Void, Never>] = []
 
     init(maxConcurrent: Int) {
         let normalized = max(1, maxConcurrent)
@@ -79,19 +77,14 @@ actor SessionPreviewLimiter {
             self.available -= 1
             return
         }
-        let id = UUID()
         await withCheckedContinuation { cont in
-            self.waitQueue.append(id)
-            self.waiters[id] = cont
+            self.waiters.append(cont)
         }
     }
 
     private func release() {
-        if let id = self.waitQueue.first {
-            self.waitQueue.removeFirst()
-            if let cont = self.waiters.removeValue(forKey: id) {
-                cont.resume()
-            }
+        if !self.waiters.isEmpty {
+            self.waiters.removeFirst().resume()
             return
         }
         self.available = min(self.available + 1, self.maxConcurrent)
@@ -220,7 +213,6 @@ enum SessionMenuPreviewLoader {
             let payload = try await self.requestPreview(keys: keys, maxItems: maxItems)
             await self.cache(payload: payload, maxItems: maxItems)
         } catch {
-            if self.isUnknownMethodError(error) { return }
             let errorDescription = String(describing: error)
             Self.logger.debug(
                 "Session preview prewarm failed count=\(keys.count, privacy: .public) " +
@@ -255,18 +247,11 @@ enum SessionMenuPreviewLoader {
     }
 
     private static func fetchSnapshot(sessionKey: String, maxItems: Int) async throws -> SessionMenuPreviewSnapshot {
-        do {
-            let payload = try await self.requestPreview(keys: [sessionKey], maxItems: maxItems)
-            if let entry = payload.previews.first(where: { $0.key == sessionKey }) ?? payload.previews.first {
-                return self.snapshot(from: entry, maxItems: maxItems)
-            }
-            return SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
-        } catch {
-            if self.isUnknownMethodError(error) {
-                return try await self.fetchHistorySnapshot(sessionKey: sessionKey, maxItems: maxItems)
-            }
-            throw error
+        let payload = try await self.requestPreview(keys: [sessionKey], maxItems: maxItems)
+        if let entry = payload.previews.first(where: { $0.key == sessionKey }) ?? payload.previews.first {
+            return self.snapshot(from: entry, maxItems: maxItems)
         }
+        return SessionMenuPreviewSnapshot(items: [], status: .error("Preview unavailable"))
     }
 
     private static func requestPreview(
@@ -287,30 +272,6 @@ enum SessionMenuPreviewLoader {
                         timeoutMs: timeoutMs)
                 })
         }
-    }
-
-    private static func fetchHistorySnapshot(
-        sessionKey: String,
-        maxItems: Int) async throws -> SessionMenuPreviewSnapshot
-    {
-        let timeoutMs = Int(self.previewTimeoutSeconds * 1000)
-        let payload = try await SessionPreviewLimiter.shared.withPermit {
-            try await AsyncTimeout.withTimeout(
-                seconds: self.previewTimeoutSeconds,
-                onTimeout: { PreviewTimeoutError() },
-                operation: {
-                    try await GatewayConnection.shared.chatHistory(
-                        sessionKey: sessionKey,
-                        limit: self.previewLimit(for: maxItems),
-                        timeoutMs: timeoutMs)
-                })
-        }
-        let built = Self.previewItems(from: payload, maxItems: maxItems)
-        return Self.snapshot(from: built)
-    }
-
-    private static func snapshot(from items: [SessionPreviewItem]) -> SessionMenuPreviewSnapshot {
-        SessionMenuPreviewSnapshot(items: items, status: items.isEmpty ? .empty : .ready)
     }
 
     private static func snapshot(
@@ -340,11 +301,6 @@ enum SessionMenuPreviewLoader {
         }
     }
 
-    private static func previewLimit(for maxItems: Int) -> Int {
-        let boundedItems = self.normalizeMaxItems(maxItems)
-        return min(max(boundedItems * 3, 20), 120)
-    }
-
     private static func normalizeMaxItems(_ maxItems: Int) -> Int {
         max(1, min(maxItems, 50))
     }
@@ -357,7 +313,7 @@ enum SessionMenuPreviewLoader {
         let built: [SessionPreviewItem] = entry.items.enumerated().compactMap { index, item in
             let text = item.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !text.isEmpty else { return nil }
-            let role = self.previewRoleFromRaw(item.role)
+            let role = PreviewRole(rawValue: item.role.lowercased()) ?? .other
             return SessionPreviewItem(id: "\(entry.key)-\(index)", role: role, text: text)
         }
 
@@ -365,116 +321,9 @@ enum SessionMenuPreviewLoader {
         return Array(trimmed.reversed())
     }
 
-    private static func previewItems(
-        from payload: OpenClawChatHistoryPayload,
-        maxItems: Int) -> [SessionPreviewItem]
-    {
-        let boundedItems = self.normalizeMaxItems(maxItems)
-        let raw: [OpenClawKit.AnyCodable] = payload.messages ?? []
-        let messages = self.decodeMessages(raw)
-        let built = messages.compactMap { message -> SessionPreviewItem? in
-            guard let text = self.previewText(for: message) else { return nil }
-            let isTool = self.isToolCall(message)
-            let role = self.previewRole(message.role, isTool: isTool)
-            let id = "\(message.timestamp ?? 0)-\(UUID().uuidString)"
-            return SessionPreviewItem(id: id, role: role, text: text)
-        }
-
-        let trimmed = built.suffix(boundedItems)
-        return Array(trimmed.reversed())
-    }
-
-    private static func decodeMessages(_ raw: [OpenClawKit.AnyCodable]) -> [OpenClawChatMessage] {
-        raw.compactMap { item in
-            guard let data = try? JSONEncoder().encode(item) else { return nil }
-            return try? JSONDecoder().decode(OpenClawChatMessage.self, from: data)
-        }
-    }
-
-    private static func previewRole(_ raw: String, isTool: Bool) -> PreviewRole {
-        if isTool { return .tool }
-        return self.previewRoleFromRaw(raw)
-    }
-
-    private static func previewRoleFromRaw(_ raw: String) -> PreviewRole {
-        switch raw.lowercased() {
-        case "user": .user
-        case "assistant": .assistant
-        case "system": .system
-        case "tool": .tool
-        default: .other
-        }
-    }
-
-    private static func previewText(for message: OpenClawChatMessage) -> String? {
-        let text = message.content.compactMap(\.text).joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty { return text }
-
-        let toolNames = self.toolNames(for: message)
-        if !toolNames.isEmpty {
-            let shown = toolNames.prefix(2)
-            let overflow = toolNames.count - shown.count
-            var label = "call \(shown.joined(separator: ", "))"
-            if overflow > 0 { label += " +\(overflow)" }
-            return label
-        }
-
-        if let media = self.mediaSummary(for: message) {
-            return media
-        }
-
-        return nil
-    }
-
-    private static func isToolCall(_ message: OpenClawChatMessage) -> Bool {
-        if message.toolName?.nonEmpty != nil { return true }
-        return message.content.contains { $0.name?.nonEmpty != nil || $0.type?.lowercased() == "toolcall" }
-    }
-
-    private static func toolNames(for message: OpenClawChatMessage) -> [String] {
-        var names: [String] = []
-        for content in message.content {
-            if let name = content.name?.nonEmpty {
-                names.append(name)
-            }
-        }
-        if let toolName = message.toolName?.nonEmpty {
-            names.append(toolName)
-        }
-        return Self.dedupePreservingOrder(names)
-    }
-
-    private static func mediaSummary(for message: OpenClawChatMessage) -> String? {
-        let types = message.content.compactMap { content -> String? in
-            let raw = content.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard let raw, !raw.isEmpty else { return nil }
-            if raw == "text" || raw == "toolcall" { return nil }
-            return raw
-        }
-        guard let first = types.first else { return nil }
-        return "[\(first)]"
-    }
-
-    private static func dedupePreservingOrder(_ values: [String]) -> [String] {
-        var seen = Set<String>()
-        var result: [String] = []
-        for value in values where !seen.contains(value) {
-            seen.insert(value)
-            result.append(value)
-        }
-        return result
-    }
-
     private static func uniqueKeys(_ keys: [String]) -> [String] {
-        let trimmed = keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        return self.dedupePreservingOrder(trimmed.filter { !$0.isEmpty })
-    }
-
-    private static func isUnknownMethodError(_ error: Error) -> Bool {
-        guard let response = error as? GatewayResponseError else { return false }
-        guard response.code == ErrorCode.invalidRequest.rawValue else { return false }
-        let message = response.message.lowercased()
-        return message.contains("unknown method")
+        var seen = Set<String>()
+        return keys.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 }

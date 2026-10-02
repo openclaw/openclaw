@@ -3,7 +3,9 @@ import { once } from "node:events";
 import { text } from "node:stream/consumers";
 import { describe, expect, it } from "vitest";
 
-describe.skipIf(process.platform === "win32")("spawn broker proxy lifetime", () => {
+const skipBrokerTests = process.platform === "win32";
+
+describe.skipIf(skipBrokerTests)("spawn broker proxy lifetime", () => {
   it("releases completed command proxies after the host closes", async () => {
     const source = `
       import {createSpawnBrokerHost} from ${JSON.stringify(new URL("./host.js", import.meta.url).href)};
@@ -19,15 +21,24 @@ describe.skipIf(process.platform === "win32")("spawn broker proxy lifetime", () 
       for (let index = 0; index < 5; index++) references.push(await command());
       await host.close();
       for (let index = 0; index < 5; index++) {
-        await new Promise(setImmediate);
-        globalThis.gc();
+        // Collect after the completed command's promise frames have unwound.
+        await new Promise(resolve => setImmediate(() => {
+          globalThis.gc();
+          resolve();
+        }));
       }
       await new Promise(setImmediate);
       console.log(JSON.stringify({retained:references.filter(reference=>reference.deref()).length}));
     `;
     const fixture = spawn(
       process.execPath,
-      ["--expose-gc", "--import", import.meta.resolve("tsx"), "--input-type=module", "-e", source],
+      [
+        "--expose-gc",
+        ...(process.versions.bun ? [] : ["--import", import.meta.resolve("tsx")]),
+        "--input-type=module",
+        "-e",
+        source,
+      ],
       {
         stdio: ["ignore", "pipe", "pipe"],
       },

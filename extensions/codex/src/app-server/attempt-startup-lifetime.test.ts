@@ -1,5 +1,8 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { nativeHookRelayTesting } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   answerInitialize,
@@ -13,8 +16,22 @@ import {
 import { CodexAppServerClient } from "./client.js";
 import { threadStartResult as createThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { type CodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
+import * as runAttemptResources from "./run-attempt-resources.js";
+import {
+  createCodexRuntimePlanFixture,
+  createRuntimeDynamicTool,
+  createStartedThreadHarness,
+  createTestParams,
+  runCodexAppServerAttempt,
+  setCodexTestModelSupportsTools,
+  setupRunAttemptTestHooks,
+} from "./run-attempt-test-harness.js";
+import * as sandboxExecServer from "./sandbox-exec-server.js";
+import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
   resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
@@ -150,4 +167,114 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     replacementAttempt.turnRoute.release();
     replacementAttempt.releaseSharedClientLease();
   });
+});
+
+describe("Codex runtime startup resource lifetime", () => {
+  setupRunAttemptTestHooks();
+
+  it.each(["capture-failed", "abort", "cleanup", "replacement"] as const)(
+    "releases allocated runtime owners once when native monitor setup ends with %s",
+    async (ending) => {
+      const harness = createStartedThreadHarness();
+      const params = createTestParams();
+      const abortController = new AbortController();
+      params.abortSignal = abortController.signal;
+      params.sandbox = createSandboxContext({});
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      setCodexTestModelSupportsTools(params, true);
+      setCodexTestToolFactory(params, () => [createRuntimeDynamicTool("message")]);
+      const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
+      const releaseSandbox = vi.spyOn(
+        sandboxExecServer,
+        "releaseCodexSandboxExecServerEnvironment",
+      );
+      const allocated: Array<
+        ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>["state"]
+      > = [];
+      const setupError = new Error("native monitor setup failed");
+      const captured = createDeferred<void>();
+      const releaseCapture = createDeferred<void>();
+      const registerMonitor = codexNativeSubagentMonitorRuntime.register;
+      let registration: Awaited<ReturnType<typeof registerMonitor>> | undefined;
+      const register = vi
+        .spyOn(codexNativeSubagentMonitorRuntime, "register")
+        .mockImplementationOnce(async (options) => {
+          const state = resourcesSpy.mock.results[0]?.value.state;
+          assert(state?.turnRoute, "startup must allocate a route before monitor setup");
+          assert(
+            state.sandboxExecEnvironment,
+            "startup must allocate a sandbox before monitor setup",
+          );
+          assert(state.nativeHookRelay, "startup must allocate a relay before monitor setup");
+          assert(
+            state.releaseSharedClientLease,
+            "startup must allocate a client lease before monitor setup",
+          );
+          vi.spyOn(state.turnRoute, "release");
+          vi.spyOn(state.nativeHookRelay, "unregister");
+          vi.spyOn(state.nativeHookRelay, "drain");
+          state.releaseSharedClientLease = vi.fn(state.releaseSharedClientLease);
+          allocated.push({ ...state });
+          if (ending !== "capture-failed") {
+            registration = await registerMonitor(options);
+            vi.spyOn(registration, "unregister");
+          }
+          captured.resolve();
+          await releaseCapture.promise;
+          if (!registration) {
+            throw setupError;
+          }
+          return registration;
+        });
+
+      try {
+        const run = runCodexAppServerAttempt(params, {
+          pluginConfig: { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } },
+          nativeHookRelay: { enabled: true, events: ["pre_tool_use"] },
+        });
+        const rejected =
+          ending === "capture-failed" || ending === "abort"
+            ? expect(run).rejects.toBe(setupError)
+            : expect(run).rejects.toThrow("registration was superseded during setup");
+        await captured.promise;
+        const resources = resourcesSpy.mock.results[0]?.value;
+        assert(resources);
+        expect(resources.state.nativeSubagentMonitor).toBeUndefined();
+        if (ending === "abort") {
+          abortController.abort(setupError);
+        } else if (ending === "cleanup") {
+          await resources.releaseCurrentRoute();
+        } else if (ending === "replacement") {
+          resources.state.thread = { ...resources.state.thread };
+        }
+        releaseCapture.resolve();
+        await rejected;
+        expect(register).toHaveBeenCalledOnce();
+        expect(resources.state.nativeSubagentMonitor).toBeUndefined();
+        if (registration) {
+          expect(registration.unregister).toHaveBeenCalledOnce();
+        }
+        const [owners] = allocated;
+        assert(owners);
+        expect.soft(owners.turnRoute?.release).toHaveBeenCalledOnce();
+        expect.soft(owners.releaseSharedClientLease).toHaveBeenCalledOnce();
+        expect.soft(owners.nativeHookRelay?.unregister).toHaveBeenCalledOnce();
+        expect.soft(owners.nativeHookRelay?.drain).toHaveBeenCalledOnce();
+        expect
+          .soft(releaseSandbox)
+          .toHaveBeenCalledExactlyOnceWith(params.sandbox, owners.sandboxExecEnvironment);
+        expect
+          .soft(
+            nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(
+              owners.nativeHookRelay!.relayId,
+            ),
+          )
+          .toBeUndefined();
+        expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
+      } finally {
+        releaseCapture.resolve();
+        harness.close();
+      }
+    },
+  );
 });

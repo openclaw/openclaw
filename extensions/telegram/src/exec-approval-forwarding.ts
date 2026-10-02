@@ -1,4 +1,3 @@
-// Telegram plugin module implements exec approval forwarding behavior.
 import {
   buildTypedExecApprovalPendingReplyPayload,
   resolveExecApprovalRequestAllowedDecisions,

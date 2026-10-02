@@ -142,6 +142,7 @@ describe("buildChannelInboundEventContext", () => {
         spaceId: "workspace",
         threadId: "thread-1",
         avatar: "/media/inbound/conversation-avatar.png",
+        link: { url: "https://chat.example.test/threads/thread-1", label: "Test Thread" },
       },
       route: {
         agentId: "main",
@@ -253,6 +254,7 @@ describe("buildChannelInboundEventContext", () => {
       ChatType: "group",
       ChatId: "room-1",
       ConversationLabel: "Room One",
+      ConversationLink: { url: "https://chat.example.test/threads/thread-1", label: "Test Thread" },
       GroupSubject: "Room One",
       GroupSpace: "workspace",
       GroupSystemPrompt: "group prompt",
@@ -786,7 +788,7 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     });
   });
 
-  it("suppresses self-authored quote body/media by default", async () => {
+  it("preserves self-authored quote text without loading its media by default", async () => {
     const media = vi.fn(async () => [{ path: "/tmp/reply.png", contentType: "image/png" }]);
     const result = await finalizeChannelInboundContext({
       context: {
@@ -815,7 +817,11 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
     expect(result.context.media).toEqual([
       expect.objectContaining({ path: "/tmp/current.png", contentType: "image/png" }),
     ]);
-    expect(result.supplemental?.quote).toEqual({ id: "reply-1", sender: "Bot" });
+    expect(result.context).toMatchObject({
+      ReplyToId: "reply-1",
+      ReplyToBody: "previous bot reply",
+      ReplyToSender: "Bot",
+    });
   });
 
   it("preserves self-authored quote media when only the body is suppressed", async () => {
@@ -830,6 +836,7 @@ describe("finalizeChannelInboundContext supplemental media resolution", () => {
       },
       resolveSupplementalMedia: true,
       contextVisibility: "all",
+      suppressSelfQuoteBody: true,
       suppressSelfQuoteMedia: false,
       supplemental: {
         quote: {

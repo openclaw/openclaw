@@ -1,7 +1,7 @@
-// Audits installed plugins for trust, provenance, and filesystem risks.
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
@@ -87,7 +87,7 @@ async function isChannelPluginConfigured(
     let resolvedAccount: unknown = inspected;
     if (!resolvedAccount) {
       try {
-        resolvedAccount = plugin.config.resolveAccount(cfg, accountId);
+        resolvedAccount = await resolveChannelAccount({ plugin, cfg, accountId });
       } catch {
         resolvedAccount = null;
       }
@@ -225,20 +225,12 @@ function hasProviderPluginAllow(params: {
   byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[]; deny?: string[] }>;
   enabledPluginIds: Set<string>;
 }): boolean {
-  if (!params.byProvider) {
-    return false;
-  }
-  for (const policy of Object.values(params.byProvider)) {
-    if (
-      hasExplicitPluginAllow({
-        allowEntries: collectAllowEntries(policy),
-        enabledPluginIds: params.enabledPluginIds,
-      })
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return Object.values(params.byProvider ?? {}).some((policy) =>
+    hasExplicitPluginAllow({
+      allowEntries: collectAllowEntries(policy),
+      enabledPluginIds: params.enabledPluginIds,
+    }),
+  );
 }
 
 function isPinnedRegistrySpec(spec: string): boolean {

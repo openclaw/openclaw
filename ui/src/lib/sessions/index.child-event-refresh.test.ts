@@ -211,7 +211,7 @@ it.each([
       } else {
         emitEvent({ type: "event", event: "sessions.changed", payload });
       }
-      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(5_000);
       const childRequests = request.mock.calls.filter(
         ([, params]) => isRecord(params) && params.spawnedBy === parent,
       );

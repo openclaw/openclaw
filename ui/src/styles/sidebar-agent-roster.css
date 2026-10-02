@@ -5,12 +5,10 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-workspace-header__main {
   gap: 4px;
-  padding-inline-end: 0;
+  padding-inline: 0;
 }
 .sidebar-workspace-header .sidebar-agent-card__name-text {
   padding-inline-end: 0;
-  mask-image: none;
-  text-overflow: ellipsis;
 }
 
 .sidebar-agent-roster__header {
@@ -40,6 +38,7 @@ openclaw-sidebar-agent-roster {
   text-decoration: none;
 }
 
+.sidebar-agent-roster__row[aria-current="page"],
 .sidebar-agent-roster__row:hover,
 .sidebar-agent-roster__link:hover {
   background: var(--bg-hover);
@@ -127,6 +126,10 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__group > .sidebar-recent-sessions__group {
   padding: 0;
   margin: 0;
+}
+
+.sidebar-agent-roster__header + .sidebar-recent-sessions__group {
+  min-height: 0;
 }
 
 .sidebar-new-session-menu::part(menu) {
@@ -237,9 +240,13 @@ openclaw-sidebar-agent-roster {
   grid-column: 2;
   grid-row: 1;
   display: flex;
-  gap: var(--team-slot-gap);
+  gap: 8px;
   min-height: 32px;
   padding: 0;
+}
+.sidebar-recent-session--team .sidebar-session-indicator {
+  width: 20px;
+  flex-basis: 20px;
 }
 .sidebar-recent-session--team .sidebar-recent-session__text,
 .sidebar-recent-session--team .sidebar-recent-session__details {
@@ -258,11 +265,7 @@ openclaw-sidebar-agent-roster {
   align-items: center;
   gap: var(--team-slot-gap);
   margin: 0;
-}
-.sidebar-recent-session--team .sidebar-session-indicator {
-  width: auto;
-  min-width: 0;
-  flex: none;
+  margin-inline-end: calc(var(--radius-md) * var(--openclaw-corner-radius-scale));
 }
 .sidebar-recent-session--team openclaw-viewer-facepile:not(:has(.viewer-facepile)),
 .sidebar-recent-session--team
@@ -298,6 +301,19 @@ openclaw-sidebar-agent-roster {
 .sidebar-recent-session--team .sidebar-recent-session__name {
   font-weight: 450;
 }
+.shell--mobile-nav .sidebar-recent-session.sidebar-recent-session--team {
+  grid-template-columns: 20px minmax(0, 1fr) 44px;
+  min-height: 44px;
+
+  > .sidebar-recent-session__aside {
+    grid-column: 3;
+  }
+
+  > .sidebar-recent-session__link {
+    padding-right: 0;
+  }
+}
+
 @media (hover: none), (pointer: coarse) {
   .sidebar-recent-session.sidebar-recent-session--team {
     grid-template-columns: 20px minmax(0, 1fr) 92px;

@@ -1,4 +1,3 @@
-/** Ensures the managed gateway is available before commands that need it run. */
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { promptYesNo } from "../cli/prompt.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,7 +14,6 @@ const daemonLifecycleModuleLoader = createLazyImportLoader(
   () => import("../cli/daemon-cli/lifecycle.js"),
 );
 
-/** Result returned after checking, optionally installing, and optionally starting the gateway. */
 type GatewayReadinessResult =
   | {
       ready: true;
@@ -36,7 +34,6 @@ type GatewayReadinessDeps = {
   startGateway?: () => Promise<void>;
 };
 
-/** Inputs controlling readiness checks, recovery prompts, and injectable test seams. */
 type GatewayReadinessOptions = {
   runtime: RuntimeEnv;
   operation: string;
@@ -161,26 +158,21 @@ async function confirmRecovery(params: {
 async function waitForGatewayReady(params: {
   gatherStatus: () => Promise<DaemonStatus>;
   readyWhenReachable?: boolean;
-  attempts?: number;
-  delayMs?: number;
 }): Promise<DaemonStatus> {
-  const attempts = params.attempts ?? 20;
-  const delayMs = params.delayMs ?? 500;
   let latest = await params.gatherStatus();
   for (
     let attempt = 1;
-    attempt < attempts && !gatewayIsReady(latest, params.readyWhenReachable);
+    attempt < 20 && !gatewayIsReady(latest, params.readyWhenReachable);
     attempt += 1
   ) {
     await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
+      setTimeout(resolve, 500);
     });
     latest = await params.gatherStatus();
   }
   return latest;
 }
 
-/** Checks readiness and, when approved, recovers by installing or starting the gateway. */
 export async function ensureGatewayReadyForOperation(
   options: GatewayReadinessOptions,
 ): Promise<GatewayReadinessResult> {

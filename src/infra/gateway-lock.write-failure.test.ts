@@ -1,17 +1,14 @@
 // Protects descriptor cleanup and competing sidecars after a Gateway lock write failure.
-import type { BigIntStats } from "node:fs";
+import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { withEnvAsync } from "../test-utils/env.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
 
 const fixtureRootTracker = createSuiteTempRootTracker({
   prefix: "openclaw-gateway-write-failure-",
 });
-const realNow = Date.now.bind(Date);
 
 describe("gateway lock write failure", () => {
   beforeAll(async () => {
@@ -47,53 +44,53 @@ describe("gateway lock write failure", () => {
     const writeError = Object.assign(new Error("ENOSPC: no space left on device"), {
       code: "ENOSPC",
     });
-    const open = fs.open;
-    const opened: Awaited<ReturnType<typeof fs.open>>[] = [];
+    const open = fsSync.openSync.bind(fsSync);
+    const write = fsSync.writeFileSync.bind(fsSync);
+    const close = fsSync.closeSync.bind(fsSync);
+    const opened: number[] = [];
+    const activeDescriptors = new Set<number>();
     let closeCalls = 0;
     let foreignIdentity: BigIntStats | undefined;
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await open(...args);
-      if (args[1] === "wx") {
-        opened.push(handle);
-        const close = handle.close.bind(handle);
-        vi.spyOn(handle, "close").mockImplementation(async () => {
-          closeCalls += 1;
-          await close();
-        });
-        vi.spyOn(handle, "writeFile").mockImplementation(async () => {
-          // A competing writer replaces the pathname while the admitted inode stays open.
-          await fs.rename(stateLockPath, `${stateLockPath}.opened`);
-          await fs.writeFile(stateLockPath, "partial", "utf8");
-          foreignIdentity = await fs.lstat(stateLockPath, { bigint: true });
-          throw writeError;
-        });
+    vi.spyOn(fsSync, "openSync").mockImplementation((pathname, flags, mode) => {
+      const fd = open(pathname, flags, mode);
+      if (
+        pathname === stateLockPath &&
+        typeof flags === "number" &&
+        flags & fsSync.constants.O_EXCL
+      ) {
+        opened.push(fd);
+        activeDescriptors.add(fd);
       }
-      return handle;
+      return fd;
+    });
+    vi.spyOn(fsSync, "closeSync").mockImplementation((fd) => {
+      if (activeDescriptors.delete(fd)) {
+        closeCalls += 1;
+      }
+      close(fd);
+    });
+    vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, data, options) => {
+      if (typeof file === "number" && activeDescriptors.has(file)) {
+        // A competing writer replaces the pathname while the admitted inode stays open.
+        fsSync.renameSync(stateLockPath, `${stateLockPath}.opened`);
+        write(stateLockPath, "partial", "utf8");
+        foreignIdentity = fsSync.lstatSync(stateLockPath, { bigint: true });
+        throw writeError;
+      }
+      write(file, data, options);
     });
 
-    await withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, async () => {
-      await expect(
-        acquireGatewayLock({
-          env,
-          allowInTests: true,
-          timeoutMs: 30,
-          pollIntervalMs: 2,
-          now: realNow,
-          sleep: async (ms) => {
-            await nativeSleep(ms);
-          },
-          lockDir,
-        }),
-      ).rejects.toMatchObject({
-        name: "GatewayLockError",
-        cause: writeError,
-      });
+    await expect(
+      acquireGatewayLock({ env, allowInTests: true, timeoutMs: 0, lockDir }),
+    ).rejects.toMatchObject({
+      name: "GatewayLockError",
+      cause: writeError,
     });
 
     expect(opened).toHaveLength(1);
     expect(closeCalls).toBe(1);
-    for (const handle of opened) {
-      await expect(handle.stat()).rejects.toMatchObject({ code: "EBADF" });
+    for (const fd of opened) {
+      expect(() => fsSync.fstatSync(fd)).toThrow(expect.objectContaining({ code: "EBADF" }));
     }
     expect(foreignIdentity).toBeDefined();
     await expect(fs.lstat(stateLockPath, { bigint: true })).resolves.toMatchObject({
@@ -101,7 +98,5 @@ describe("gateway lock write failure", () => {
       ino: foreignIdentity?.ino,
     });
     await expect(fs.readFile(stateLockPath, "utf8")).resolves.toBe("partial");
-
-    openSpy.mockRestore();
   });
 });

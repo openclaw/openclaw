@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { shellLayoutTraits } from "../app/shell-layout-traits.ts";
 import { renderSessionsHubTabs, type SessionsHubTab } from "./sessions-hub-tabs.ts";
 
 type SessionsHubHeaderProps = {
@@ -13,6 +14,7 @@ export function renderSessionsHubHeader(props: SessionsHubHeaderProps): Template
   return html`
     <section
       class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header"
+      ${shellLayoutTraits({ toolbarHeader: true })}
     >
       <div class="hub-page-header__title">
         <div class="page-title">${props.title}</div>

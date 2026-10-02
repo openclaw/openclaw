@@ -1,5 +1,4 @@
 import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
-import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { getStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import type { AssistantMessage, Model } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -12,10 +11,8 @@ import type {
   ThinkingLevel,
 } from "../runtime/index.js";
 import { isToolResultError } from "../tool-result-error.js";
-import {
-  takeCodeModeResponseSource,
-  prepareCodeModeSourceAppend,
-} from "../transcript-code-mode-source.js";
+import { takeCodeModeResponseSource } from "../transcript-code-mode-source.js";
+import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -30,18 +27,10 @@ import {
   type ExtensionErrorListener,
   ExtensionRunner,
   type ExtensionUIContext,
-  type MessageEndEvent,
-  type MessageStartEvent,
-  type MessageUpdateEvent,
   type SessionStartEvent,
   type ShutdownHandler,
   type ToolDefinition,
-  type ToolExecutionEndEvent,
-  type ToolExecutionStartEvent,
-  type ToolExecutionUpdateEvent,
   type ToolInfo,
-  type TurnEndEvent,
-  type TurnStartEvent,
 } from "./extensions/index.js";
 import type { CustomMessage } from "./messages.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
@@ -52,7 +41,6 @@ import {
   retireQueuedUserMessage,
 } from "./queued-user-message-retirement.js";
 import type { ResourceLoader } from "./resource-loader.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
 import { prepareSessionToolResult } from "./session-tool-result-redaction.js";
 import type { SettingsManager } from "./settings-manager.js";
@@ -78,7 +66,6 @@ export abstract class AgentSessionBase {
   readonly sessionManager: SessionManager;
   readonly settingsManager: SettingsManager;
 
-  // Event subscription state
   protected unsubscribeAgent?: () => void;
   private eventListeners: AgentSessionEventListener[] = [];
 
@@ -89,21 +76,18 @@ export abstract class AgentSessionBase {
   /** Messages queued to be included with the next user prompt as context ("asides"). */
   protected pendingNextTurnMessages: CustomMessage[] = [];
 
-  // Compaction state
   protected compactionAbortController: AbortController | undefined = undefined;
   protected autoCompactionAbortController: AbortController | undefined = undefined;
   protected overflowRecoveryAttempts = 0;
   protected contextOverflowRecoveryOwner: "session" | "caller";
+  protected resolveCompactionThinkingLevel?: AgentSessionConfig["resolveCompactionThinkingLevel"];
 
-  // Branch summarization state
   protected branchSummaryAbortController: AbortController | undefined = undefined;
   private extensionModifiedToolResultIds = new Set<string>();
 
-  // Retry state
   protected retryAbortController: AbortController | undefined = undefined;
   protected retryCount = 0;
 
-  // Extension system
   protected currentExtensionRunner!: ExtensionRunner;
   private turnIndex = 0;
 
@@ -126,10 +110,8 @@ export abstract class AgentSessionBase {
   protected extensionErrorUnsubscriber?: () => void;
   private readonly cleanupProviderSessionResourcesOnDispose: boolean;
 
-  // Model registry for API key resolution
   protected sessionModelRegistry: ModelRegistry;
 
-  // Tool registry for extension getTools/setTools
   protected toolRegistry: Map<string, AgentTool> = new Map();
   protected toolDefinitions: Map<string, ToolDefinitionEntry> = new Map();
   protected toolPromptSnippets: Map<string, string> = new Map();
@@ -160,6 +142,7 @@ export abstract class AgentSessionBase {
     };
     this.withExternalSessionWriteSettlement = config.withSessionWriteSettlement;
     this.contextOverflowRecoveryOwner = config.contextOverflowRecoveryOwner ?? "session";
+    this.resolveCompactionThinkingLevel = config.resolveCompactionThinkingLevel;
     this.cleanupProviderSessionResourcesOnDispose =
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
@@ -221,12 +204,8 @@ export abstract class AgentSessionBase {
   }
 
   /**
-   * Install tool hooks once on the Agent instance.
-   *
-   * The callbacks read `this.currentExtensionRunner` at execution time, so extension reload swaps in the
-   * new runner without reinstalling hooks. Extension-specific tool wrappers are still used to adapt
-   * registered tool execution to the extension context. Tool call and tool result interception now
-   * happens here instead of in wrappers.
+   * Hooks resolve the current extension runner at execution time so reloads
+   * need no reinstall. Wrappers only adapt registered tools to extension context.
    */
   protected installAgentToolHooks(): void {
     this.agent.beforeToolCall = async ({ toolCall, args }) => {
@@ -287,10 +266,6 @@ export abstract class AgentSessionBase {
     this.agent.afterToolOutcome = async ({ executionStarted, result, isError }) =>
       executionStarted ? undefined : { isError: isError || isToolResultError(result) };
   }
-
-  // =========================================================================
-  // Event Subscription
-  // =========================================================================
 
   /** Copy-on-write listener registration keeps dispatch stable without per-event snapshots. */
   protected emit(event: AgentSessionEvent): void {
@@ -383,13 +358,14 @@ export abstract class AgentSessionBase {
 
     const sourceSlots =
       event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
-    // Emit to extensions first
-    let messageChanged = await this.emitExtensionEvent(event);
+    let messageChanged = false;
+    if (event.type !== "message_update" || this.currentExtensionRunner.hasHandlers(event.type)) {
+      messageChanged = await this.emitExtensionEvent(event);
+    }
     // Extensions can replace the final result. Protect listeners before publishing it.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
-    // Notify all listeners
     if (event.type === "agent_end") {
       await this.emitTerminal({
         ...event,
@@ -402,44 +378,31 @@ export abstract class AgentSessionBase {
     // Persist the same prepared bytes after synchronous listener changes.
     messageChanged = prepareSessionToolResult(this.sessionManager, event) || messageChanged;
 
-    // Handle session persistence
     if (event.type === "message_end") {
-      // Check if this is a custom message from extensions
       if (event.message.role === "custom") {
-        // Persist as CustomMessageEntry
         const message = event.message;
-        await withSessionManagerWrite(this.sessionManager, () =>
-          this.sessionManager.appendCustomMessageEntry(
-            message.customType,
-            message.content,
-            message.display,
-            message.details,
-          ),
+        await this.sessionManager.appendCustomMessageEntryAsync(
+          message.customType,
+          message.content,
+          message.display,
+          message.details,
         );
       } else if (
         event.message.role === "user" ||
         event.message.role === "assistant" ||
         event.message.role === "toolResult"
       ) {
-        // Regular LLM message - persist as SessionMessageEntry
         const toolResultChangedByExtension =
           event.message.role === "toolResult" &&
           this.extensionModifiedToolResultIds.delete(event.message.toolCallId);
         try {
-          // Normalize live delivery facts before persistence makes its redacted copy.
-          // Stored arguments must never replace the values used for tool execution.
-          applyAssistantDeliveryDirectives(event.message);
-          const appendOptions = {
+          const entryId = await persistAgentSessionMessage(this.sessionManager, event.message, {
             invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
-          };
-          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
-          const message = event.message;
-          await withSessionManagerWrite(this.sessionManager, () => {
-            const entryId = this.sessionManager.appendMessage(message, appendOptions);
-            if (message.role === "assistant") {
-              this.lastAssistantEntryId = entryId;
-            }
+            sourceAppend: sourceSlots,
           });
+          if (event.message.role === "assistant") {
+            this.lastAssistantEntryId = entryId;
+          }
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);
@@ -454,7 +417,6 @@ export abstract class AgentSessionBase {
       }
       // Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
-      // Track assistant message for auto-compaction (checked on agent_end)
       if (event.message.role === "assistant") {
         this.lastAssistantMessage = event.message;
       }
@@ -494,7 +456,6 @@ export abstract class AgentSessionBase {
     return this.agent.state.messages.findLast((message) => message.role === "assistant");
   }
 
-  /** Emit extension events based on agent events */
   private async emitExtensionEvent(event: AgentEvent): Promise<boolean> {
     if (event.type === "agent_start") {
       this.turnIndex = 0;
@@ -502,70 +463,62 @@ export abstract class AgentSessionBase {
     } else if (event.type === "agent_end") {
       await this.currentExtensionRunner.emit({ type: "agent_end", messages: event.messages });
     } else if (event.type === "turn_start") {
-      const extensionEvent: TurnStartEvent = {
+      await this.currentExtensionRunner.emit({
         type: "turn_start",
         turnIndex: this.turnIndex,
         timestamp: Date.now(),
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "turn_end") {
-      const extensionEvent: TurnEndEvent = {
+      await this.currentExtensionRunner.emit({
         type: "turn_end",
         turnIndex: this.turnIndex,
         message: event.message,
         toolResults: event.toolResults,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
       this.turnIndex++;
     } else if (event.type === "message_start") {
-      const extensionEvent: MessageStartEvent = {
+      await this.currentExtensionRunner.emit({
         type: "message_start",
         message: event.message,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "message_update") {
-      const extensionEvent: MessageUpdateEvent = {
+      await this.currentExtensionRunner.emit({
         type: "message_update",
         message: event.message,
         assistantMessageEvent: event.assistantMessageEvent,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "message_end") {
-      const extensionEvent: MessageEndEvent = {
+      const replacement = await this.currentExtensionRunner.emitMessageEnd({
         type: "message_end",
         message: event.message,
-      };
-      const replacement = await this.currentExtensionRunner.emitMessageEnd(extensionEvent);
+      });
       if (replacement) {
         replaceAgentMessageInPlace(event.message, replacement);
         return true;
       }
     } else if (event.type === "tool_execution_start") {
-      const extensionEvent: ToolExecutionStartEvent = {
+      await this.currentExtensionRunner.emit({
         type: "tool_execution_start",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.args,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "tool_execution_update") {
-      const extensionEvent: ToolExecutionUpdateEvent = {
+      await this.currentExtensionRunner.emit({
         type: "tool_execution_update",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         args: event.args,
         partialResult: event.partialResult,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     } else if (event.type === "tool_execution_end") {
-      const extensionEvent: ToolExecutionEndEvent = {
+      await this.currentExtensionRunner.emit({
         type: "tool_execution_end",
         toolCallId: event.toolCallId,
         toolName: event.toolName,
         result: event.result,
         isError: event.isError,
-      };
-      await this.currentExtensionRunner.emit(extensionEvent);
+      });
     }
     return false;
   }
@@ -578,7 +531,6 @@ export abstract class AgentSessionBase {
   subscribe(listener: AgentSessionEventListener): () => void {
     this.eventListeners = [...this.eventListeners, listener];
 
-    // Return unsubscribe function for this specific listener
     return () => {
       const index = this.eventListeners.indexOf(listener);
       if (index !== -1) {
@@ -606,7 +558,7 @@ export abstract class AgentSessionBase {
   protected reconnectToAgent(): void {
     if (this.unsubscribeAgent) {
       return;
-    } // Already connected
+    }
     this.unsubscribeAgent = this.agent.subscribe(this.handleAgentEvent);
   }
 
@@ -629,19 +581,13 @@ export abstract class AgentSessionBase {
       }
     }
 
-    this.currentExtensionRunner.invalidate(
-      "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
-    );
+    this.currentExtensionRunner.invalidate();
     this.disconnectFromAgent();
     this.eventListeners = [];
     if (this.cleanupProviderSessionResourcesOnDispose) {
       cleanupSessionResources(this.sessionId);
     }
   }
-
-  // =========================================================================
-  // Read-only State Access
-  // =========================================================================
 
   /** Full agent state */
   get state(): AgentState {
@@ -673,17 +619,12 @@ export abstract class AgentSessionBase {
     return this.retryCount;
   }
 
-  /**
-   * Get the names of currently active tools.
-   * Returns the names of tools currently set on the agent.
-   */
+  /** Names of the tools currently set on the agent. */
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
 
-  /**
-   * Get all configured tools with name, description, parameter schema, and source metadata.
-   */
+  /** All configured tools with their schema and source metadata. */
   getAllTools(): ToolInfo[] {
     return Array.from(this.toolDefinitions.values()).map(({ definition, sourceInfo }) => ({
       name: definition.name,
@@ -715,7 +656,6 @@ export abstract class AgentSessionBase {
     }
     this.agent.state.tools = tools;
 
-    // Rebuild base system prompt with new tool set
     this.baseSystemPrompt = this.rebuildSystemPrompt(validToolNames);
     this.agent.state.systemPrompt = this.systemPromptOverride ?? this.baseSystemPrompt;
   }
@@ -803,18 +743,7 @@ export abstract class AgentSessionBase {
   }
 
   protected normalizePromptGuidelines(guidelines: string[] | undefined): string[] {
-    if (!guidelines || guidelines.length === 0) {
-      return [];
-    }
-
-    const unique = new Set<string>();
-    for (const guideline of guidelines) {
-      const normalized = guideline.trim();
-      if (normalized.length > 0) {
-        unique.add(normalized);
-      }
-    }
-    return Array.from(unique);
+    return [...new Set(guidelines?.map((guideline) => guideline.trim()).filter(Boolean))];
   }
 
   protected collectActiveToolPromptMetadata(toolNames: string[]): ActiveToolPromptMetadata {

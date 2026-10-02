@@ -8,9 +8,9 @@ import type {
   UserPreferenceError,
 } from "./user-preferences.types.js";
 
-export function prepareUserPreferenceUpdate(
+function prepareEntries(
   entries: Record<string, unknown>,
-): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
+): Result<Pick<PreparedUserPreferenceUpdate, "serialized" | "deletionKeys">, UserPreferenceError> {
   const rawEntries = Object.entries(entries);
   if (rawEntries.length > USER_PREFS_ENTRY_LIMIT) {
     return err({ code: "invalid-entry-count" });
@@ -41,4 +41,25 @@ export function prepareUserPreferenceUpdate(
     serialized.push({ prefKey, valueJson });
   }
   return ok({ serialized, deletionKeys });
+}
+
+export function prepareUserPreferenceUpdate(
+  entries: Record<string, unknown>,
+  expectedEntries: Record<string, unknown> = {},
+): Result<PreparedUserPreferenceUpdate, UserPreferenceError> {
+  const prepared = prepareEntries(entries);
+  if (!prepared.ok) {
+    return prepared;
+  }
+  const expected = prepareEntries(expectedEntries);
+  if (!expected.ok) {
+    return expected;
+  }
+  return ok({
+    ...prepared.value,
+    expected: [
+      ...expected.value.serialized,
+      ...expected.value.deletionKeys.map((prefKey) => ({ prefKey, valueJson: null })),
+    ],
+  });
 }

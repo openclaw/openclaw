@@ -36,22 +36,23 @@ describe("Telegram QA API boundary", () => {
     });
   });
 
-  it("allows only the leased tester in direct-message mode", () => {
+  it("omits apiRoot for a production Bot API qualification", () => {
     const config = buildTelegramQaConfig(
       {},
       {
-        apiRoot: "http://127.0.0.1:8080",
-        directMessageOnly: true,
-        groupId: "-100123",
-        sutToken: "placeholder",
-        testerUserId: "1",
+        groupId: "-10042",
         sutAccountId: "sut",
+        sutToken: "secret-token",
+        testerUserId: "100",
+        additionalTesterUserIds: ["101"],
+        enableDirectMessages: true,
       },
     );
 
+    expect(config.channels?.telegram?.accounts?.sut).not.toHaveProperty("apiRoot");
     expect(config.channels?.telegram?.accounts?.sut).toMatchObject({
-      allowFrom: ["1"],
-      dmPolicy: "allowlist",
+      allowFrom: ["100", "101"],
+      groups: { "-10042": { allowFrom: ["100", "101"] } },
     });
   });
 

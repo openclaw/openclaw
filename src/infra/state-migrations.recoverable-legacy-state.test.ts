@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { userInfo } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -113,15 +114,16 @@ describe("recoverable legacy state", () => {
   );
 
   it.each([false, true])(
-    "keeps Discord cache cleanup advisory unless another import fails (%s)",
-    async (failedImport) => {
+    "keeps Discord cache cleanup advisory unless retired state remains (%s)",
+    async (retiredState) => {
       await withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
         const discordDir = path.join(stateDir, "discord");
         const sourcePath = path.join(discordDir, "command-deploy-cache.json");
+        const retiredPath = path.join(discordDir, "thread-bindings.json");
         await fs.mkdir(discordDir, { recursive: true });
         await fs.writeFile(sourcePath, "retired deploy hashes");
-        if (failedImport) {
-          await fs.writeFile(path.join(discordDir, "thread-bindings.json"), "{}");
+        if (retiredState) {
+          await fs.writeFile(retiredPath, "{}");
         }
         const unlink = fsSync.unlinkSync;
         vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
@@ -154,18 +156,21 @@ describe("recoverable legacy state", () => {
         await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("retired deploy hashes");
         expect(receipt.warnings.join("\n")).toContain("Discord command deployment cache");
         expect(receipt.warnings.join("\n")).toContain("synthetic cache cleanup permission denied");
-        if (failedImport) {
+        if (retiredState) {
           expect(() => throwIfDoctorStateMigrationRefused([receipt])).toThrow(
             "Doctor stopped because a state migration refused",
           );
-          expect(receipt.warnings.join("\n")).toContain("legacy Discord thread bindings store");
+          expect(receipt.warnings.join("\n")).toContain(
+            `Preserved retired Discord JSON state at ${retiredPath}. Install OpenClaw 2026.9.5, run "openclaw doctor --fix", then upgrade to latest.`,
+          );
+          await expect(fs.readFile(retiredPath, "utf8")).resolves.toBe("{}");
         } else {
           expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
           expect(receipt.outcome).toBe("warning");
           expect(receipt.warnings.join("\n")).toContain("openclaw doctor --fix");
         }
         vi.restoreAllMocks();
-        if (!failedImport) {
+        if (!retiredState) {
           expect((await migration.migrateLegacyState(params)).warnings).toEqual([]);
           await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
         }
@@ -338,10 +343,26 @@ describe("legacy agent directory migration", () => {
           const copy = fsSync.copyFileSync;
           const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation((from, to, mode) => {
             if (blockedRestore && String(from) === failedBinary) {
+              expect(fsSync.readFileSync(path.join(targetDir, "bin/fd"), "utf8")).toBe(
+                "installed legacy tool",
+              );
               throw new Error("injected binary move failure");
             }
             copy(from, to, mode);
           });
+          if (blockedRestore) {
+            // The fixture needs a successful copy before its controlled failure;
+            // filesystem enumeration has no ordering guarantee.
+            const readDirectory = fsSync.readdirSync;
+            vi.spyOn(fsSync, "readdirSync").mockImplementation((directory, options) => {
+              const entries = readDirectory.call(fsSync, directory, options);
+              return String(directory) === path.join(legacyDir, "bin")
+                ? entries.toSorted((left, right) =>
+                    String(left.name).localeCompare(String(right.name)),
+                  )
+                : entries;
+            });
+          }
           const result = await migrateLegacyAgentDir(detected, () => 1234);
           const receipt = migrationReceipt("agent-dir", result);
           expect(destinationFiles()).toEqual(originalDestination);
@@ -551,7 +572,9 @@ describe("legacy agent directory migration", () => {
         expect(getAgentDir()).toBe(legacyDir);
         await expect(fs.readdir(canonicalDir)).resolves.toEqual([]);
         if (process.platform !== "win32") {
+          await fs.chown(canonicalDir, -1, userInfo().gid);
           await fs.chmod(canonicalDir, 0o2750);
+          expect((await fs.stat(canonicalDir)).mode & 0o7777).toBe(0o2750);
         }
         const sourceRoot = await fs.realpath(legacyDir);
         const detected = await detect();
@@ -875,5 +898,30 @@ describe("legacy agent directory migration", () => {
       ).toEqual(["agent.legacy-1234"]);
       await expect(fs.stat(state.statePath("agent"))).rejects.toMatchObject({ code: "ENOENT" });
     });
+  });
+
+  it("refuses when recoverable archive warnings mix with non-recoverable database migration failures", () => {
+    const result: MigrationMessages = {
+      changes: [],
+      warnings: [
+        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
+        "Skipped agent database migration for /path/agent.db: Error: schema mismatch",
+      ],
+    };
+    const receipt = migrationReceipt("media-persistence", result);
+    expect(receipt.outcome).toBe("refused");
+  });
+
+  it("marks archive-only failures as recoverable through the receipt path", () => {
+    const result: MigrationMessages = {
+      changes: [],
+      warnings: [
+        "Skipped archived transcript media migration for /path/corrupt.jsonl.deleted: Error: all-NUL",
+      ],
+      warningDisposition: "recoverable",
+    };
+    const receipt = migrationReceipt("media-persistence", result);
+    expect(receipt.outcome).toBe("warning");
+    expect(receipt.outcome).not.toBe("refused");
   });
 });

@@ -3,8 +3,9 @@ import {
   type AssistantMessage,
   type Model,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, vi, type Mock } from "vitest";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
+import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import { AuthStorage } from "./auth-storage.js";
 import type { ToolDefinition } from "./extensions/types.js";
@@ -18,7 +19,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
   streamSimple: vi.fn(),
 }));
 
-export const streamMocks = hoistedStreamMocks;
+export const streamMocks: { streamSimple: Mock } = hoistedStreamMocks;
 
 export const testModel: Model = {
   id: "test-model",
@@ -127,6 +128,9 @@ export async function createTestSession(
     resourceLoader?: ResourceLoader;
     customTools?: ToolDefinition[];
     contextOverflowRecoveryOwner?: "session" | "caller";
+    resolveCompactionThinkingLevel?: NonNullable<
+      AgentSessionConfig["resolveCompactionThinkingLevel"]
+    >;
     withSessionWriteSettlement?: NonNullable<
       Parameters<typeof createAgentSession>[0]
     >["withSessionWriteSettlement"];
@@ -158,18 +162,28 @@ export async function createTestSession(
     modelRegistry,
     withSessionWriteSettlement: options.withSessionWriteSettlement,
   };
-  const result = options.contextOverflowRecoveryOwner
-    ? await createAgentSessionForEmbeddedRunner(sessionOptions, {
-        contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner,
-      })
-    : await createAgentSession(sessionOptions);
+  const internalOptions = {
+    contextOverflowRecoveryOwner: options.contextOverflowRecoveryOwner ?? "session",
+    resolveCompactionThinkingLevel: options.resolveCompactionThinkingLevel,
+  };
+  const result =
+    options.contextOverflowRecoveryOwner || options.resolveCompactionThinkingLevel
+      ? await createAgentSessionForEmbeddedRunner(sessionOptions, internalOptions)
+      : await createAgentSession(sessionOptions);
   sessions.push(result.session);
   return { ...result, modelRegistry, settingsManager, sessionManager };
 }
 
-export function appendHistory(sessionManager: SessionManager, assistant: AssistantMessage): void {
-  sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: Date.now() - 2 });
-  sessionManager.appendMessage({ ...assistant, timestamp: Date.now() - 1 });
+export async function appendHistory(
+  sessionManager: SessionManager,
+  assistant: AssistantMessage,
+): Promise<void> {
+  await sessionManager.appendMessageAsync({
+    role: "user",
+    content: "old prompt",
+    timestamp: Date.now() - 2,
+  });
+  await sessionManager.appendMessageAsync({ ...assistant, timestamp: Date.now() - 1 });
 }
 
 export function registerAgentSessionLoopTestLifecycle(): void {

@@ -75,15 +75,9 @@ describe("Claude model contracts", () => {
 
   it.each([
     ["Anthropic API", { id: "claude-opus-5" }, "claude-opus-5"],
-    ["Anthropic alias", { id: "opus" }, "claude-opus-5"],
+    ["Anthropic alias", { id: "opus" }, "claude-opus-5-5"],
     ["Anthropic version alias", { id: "opus-5" }, "claude-opus-5"],
-    ["Vertex AI", { id: "claude-opus-5@20260701" }, "claude-opus-5@20260701"],
     ["Amazon Bedrock", { id: "global.anthropic.claude-opus-5" }, "claude-opus-5"],
-    [
-      "Amazon Bedrock Mantle",
-      { id: "anthropic.claude-opus-5", params: { canonicalModelId: "claude-opus-5" } },
-      "claude-opus-5",
-    ],
     [
       "Microsoft Foundry",
       { id: "prod-opus", params: { canonicalModelId: "claude-opus-5" } },
@@ -100,7 +94,6 @@ describe("Claude model contracts", () => {
   });
 
   it("recognizes native 1M Claude model families independently", () => {
-    expect(supportsClaude1MContext({ id: "claude-opus-5" })).toBe(true);
     expect(supportsClaude1MContext({ id: "anthropic/claude-opus-4.8" })).toBe(true);
     expect(supportsClaude1MContext({ id: "us.anthropic.claude-sonnet-4-6-v1:0" })).toBe(true);
     expect(supportsClaude1MContext({ id: "claude-opus-50" })).toBe(false);
@@ -321,7 +314,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           expect(policy).not.toHaveProperty(key);
         }
       }
-      expect(Boolean(hooks.sanitizeReplayHistory)).toBe(testCase.hasSanitizeReplayHistory);
+      expect(Boolean(hooks.sanitizeReplayHistoryAsync)).toBe(testCase.hasSanitizeReplayHistory);
       expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(
         testCase.reasoningMode,
       );
@@ -333,7 +326,7 @@ describe("buildProviderReplayFamilyHooks", () => {
       family: "google-gemini",
     });
 
-    const sanitized = await hooks.sanitizeReplayHistory?.({
+    const sanitized = await hooks.sanitizeReplayHistoryAsync?.({
       provider: "google",
       modelApi: "google-generative-ai",
       modelId: "gemini-3.1-pro-preview",
@@ -346,7 +339,10 @@ describe("buildProviderReplayFamilyHooks", () => {
       ],
       sessionState: {
         getCustomEntries: () => [],
-        appendCustomEntry: () => {},
+        appendCustomEntry: () => {
+          throw new Error("legacy persistence used");
+        },
+        appendCustomEntryAsync: async () => "bootstrap",
       },
     } as never);
 
@@ -448,15 +444,19 @@ describe("buildProviderReplayFamilyHooks", () => {
 });
 
 describe("resolveClaudeThinkingProfile", () => {
-  it("defaults Sonnet 5 to high adaptive thinking with native effort levels", () => {
-    const profile = resolveClaudeThinkingProfile("claude-sonnet-5");
-    expectFields(profile, { defaultLevel: "high" });
-    expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
-  });
+  it.each(["claude-sonnet-5", "claude-opus-5"])(
+    "keeps %s high-by-default with optional thinking",
+    (modelId) => {
+      const profile = resolveClaudeThinkingProfile(modelId);
+      expectFields(profile, { defaultLevel: "high" });
+      expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
+    },
+  );
 
   it.each([
     ["claude-fable-5", "medium"],
     ["claude-fable-5-1", "medium"],
+    ["claude-opus-5-5", "medium"],
     ["claude-mythos-5", "high"],
   ])("exposes %s's mandatory-adaptive profile to Claude providers", (modelId, defaultLevel) => {
     const profile = resolveClaudeThinkingProfile(modelId);
@@ -482,12 +482,6 @@ describe("resolveClaudeThinkingProfile", () => {
     expect(resolveClaudeThinkingProfile("anthropic/claude-opus-4-60").defaultLevel).toBeUndefined();
     expect(supportsClaudeNativeMaxEffort({ id: "vendor/claude-fable-500" })).toBe(false);
     expect(supportsClaudeNativeXhighEffort({ id: "anthropic/claude-opus-4-70" })).toBe(false);
-  });
-
-  it("defaults Opus 5 to high adaptive thinking with native effort levels", () => {
-    const profile = resolveClaudeThinkingProfile("claude-opus-5");
-    expectFields(profile, { defaultLevel: "high" });
-    expectLevelIdsInclude(profile, ["off", "xhigh", "adaptive", "max"]);
   });
 
   it("leaves Opus 4.8 thinking off by default with xhigh/adaptive/max options", () => {

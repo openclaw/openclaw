@@ -84,6 +84,7 @@ const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-workspace.ts",
 ] as const;
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Test helper lets assertions ascribe JSON file shape.
@@ -387,8 +388,8 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
     );
-    expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/infra-runtime.d.ts",
+    expect(packageJson.exports?.["./system-event-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/system-event-runtime.d.ts",
     );
     expect(fs.existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
       false,

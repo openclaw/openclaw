@@ -3,7 +3,6 @@ import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeHostCommand,
-  OpenClawPluginNodeInvokePolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSubagentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -11,7 +10,7 @@ import {
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
 import {
-  projectSessionCatalogSourceActor,
+  createSessionCatalogSourceActorProjector,
   readSessionTranscriptCatalogPage,
   readSessionTranscriptCatalogTitle,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -70,6 +69,7 @@ export function createSessionShareNodeCommands(
   return [
     {
       command: SESSION_SHARE_LIST_COMMAND,
+      hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
       isAvailable: ({ config }) => sessionShareGroups(config).length > 0,
@@ -82,7 +82,9 @@ export function createSessionShareNodeCommands(
         const search = params.searchTerm?.toLowerCase();
         const sessions = [];
         for (const { agentId, sessionKey, storePath, entry } of sharedEntries(api)) {
-          const name = readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry });
+          const name = search
+            ? readSessionTranscriptCatalogTitle({ agentId, sessionKey, storePath, entry })
+            : undefined;
           if (
             search &&
             !name?.toLowerCase().includes(search) &&
@@ -91,6 +93,8 @@ export function createSessionShareNodeCommands(
             continue;
           }
           sessions.push({
+            agentId,
+            storePath,
             threadId: sessionKey,
             name,
             entry,
@@ -105,38 +109,48 @@ export function createSessionShareNodeCommands(
           (left, right) =>
             right.recencyAt - left.recencyAt || left.threadId.localeCompare(right.threadId),
         );
-        const page = sessions
-          .slice(offset, offset + params.limit)
-          .map(({ threadId, name, entry, recencyAt }): SessionCatalogSession => {
-            const archived = entry.archivedAt !== undefined;
-            const cwd =
-              entry.execCwd ??
-              entry.spawnedCwd ??
-              entry.spawnedWorkspaceDir ??
-              entry.worktree?.canonicalWorkspaceDir ??
-              entry.worktree?.repoRoot;
-            return {
-              threadId,
-              name,
-              color: entry.color,
-              cwd: cwd ? redactToolPayloadText(cwd).slice(0, 6000) : undefined,
-              status: archived ? "archived" : "idle",
-              createdAt: entry.createdAt,
-              updatedAt: entry.updatedAt,
-              recencyAt,
-              gitBranch: entry.worktree?.branch
-                ? redactToolPayloadText(entry.worktree.branch).slice(0, 6000)
-                : undefined,
-              archived,
-              canContinue: false,
-              canArchive: false,
-              canOpenTerminal: false,
-              createdActor: projectSessionCatalogSourceActor({
-                ...source,
-                actor: entry.createdActor,
-              }),
-            };
-          });
+        const selected = sessions.slice(offset, offset + params.limit);
+        if (!search) {
+          for (const session of selected) {
+            session.name = readSessionTranscriptCatalogTitle({
+              agentId: session.agentId,
+              sessionKey: session.threadId,
+              storePath: session.storePath,
+              entry: session.entry,
+            });
+          }
+        }
+        const projectCreator = createSessionCatalogSourceActorProjector({
+          ...source,
+          actors: selected.map(({ entry }) => entry.createdActor),
+        });
+        const page = selected.map(({ threadId, name, entry, recencyAt }): SessionCatalogSession => {
+          const archived = entry.archivedAt !== undefined;
+          const cwd =
+            entry.execCwd ??
+            entry.spawnedCwd ??
+            entry.spawnedWorkspaceDir ??
+            entry.worktree?.canonicalWorkspaceDir ??
+            entry.worktree?.repoRoot;
+          return {
+            threadId,
+            name,
+            color: entry.color,
+            cwd: cwd ? redactToolPayloadText(cwd).slice(0, 6000) : undefined,
+            status: archived ? "archived" : "idle",
+            createdAt: entry.createdAt,
+            updatedAt: entry.updatedAt,
+            recencyAt,
+            gitBranch: entry.worktree?.branch
+              ? redactToolPayloadText(entry.worktree.branch).slice(0, 6000)
+              : undefined,
+            archived,
+            canContinue: false,
+            canArchive: false,
+            canOpenTerminal: false,
+            createdActor: projectCreator(entry.createdActor),
+          };
+        });
         return JSON.stringify({
           sessions: page,
           ...(offset + page.length < sessions.length
@@ -147,6 +161,7 @@ export function createSessionShareNodeCommands(
     },
     {
       command: SESSION_SHARE_READ_COMMAND,
+      hasActiveWork: () => false,
       cap: "openclaw-sessions",
       dangerous: false,
       isAvailable: ({ config }) => sessionShareGroups(config).length > 0,
@@ -185,16 +200,6 @@ export function createSessionShareNodeCommands(
         }
         return JSON.stringify({ threadId: session.sessionKey, ...page });
       },
-    },
-  ];
-}
-
-export function createSessionShareNodeInvokePolicies(): OpenClawPluginNodeInvokePolicy[] {
-  return [
-    {
-      commands: SESSION_SHARE_COMMANDS,
-      defaultPlatforms: ["macos", "linux", "windows"],
-      handle: (context) => context.invokeNode(),
     },
   ];
 }

@@ -13,13 +13,13 @@ import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
 import { installClawPackages } from "./packages.js";
 import { CLAW_PACKAGE_REF_SCHEMA_VERSION, type PersistedClawPackageRef } from "./provenance.js";
+import { createClawUpdatePlanFixture as plan } from "./resource-update.test-helpers.js";
 import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
   type ClawManifest,
   type ResolvedClawPackage,
 } from "./types.js";
-import { CLAW_UPDATE_PLAN_SCHEMA_VERSION, type ClawUpdatePlan } from "./update-plan.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
@@ -40,37 +40,6 @@ function ref(kind: "skill" | "plugin", name: string, version: string): Persisted
     independentOwner: false,
     installedAtMs: 10,
     updatedAtMs: 10,
-  };
-}
-
-function plan(actions: ClawUpdatePlan["actions"]): ClawUpdatePlan {
-  return {
-    schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
-    stability: CLAW_OUTPUT_STABILITY,
-    dryRun: true,
-    mutationAllowed: false,
-    planIntegrity: "sha256:update-plan",
-    found: true,
-    agentId: "worker",
-    currentClaw: { name: "@acme/worker", version: "1.0.0", integrity: "sha256:old" },
-    targetClaw: { name: "@acme/worker", version: "2.0.0", integrity: "sha256:new" },
-    summary: {
-      totalActions: actions.length,
-      added: actions.filter((action) => action.action === "add").length,
-      changed: actions.filter((action) => action.action === "change").length,
-      removed: actions.filter((action) => action.action === "remove").length,
-      released: actions.filter((action) => action.action === "release").length,
-      unchanged: 0,
-      manual: 0,
-      blocked: 0,
-      capabilityChanges: 0,
-      capabilityEscalations: 0,
-    },
-    actions,
-    capabilityChanges: [],
-    readiness: { ready: true, requirements: [] },
-    blockers: [],
-    diagnostics: [],
   };
 }
 
@@ -222,7 +191,6 @@ describe("applyClawPackageUpdate", () => {
           currentDigest: digestClawPackageRef(previous),
         },
       ]),
-      { ...manifest, packages: [] },
       targetPlan,
       {
         installPackages,
@@ -298,7 +266,6 @@ describe("applyClawPackageUpdate", () => {
             currentDigest: digestClawPackageRef(legacy),
           },
         ]),
-        manifest,
         addPlan,
         {
           installPackages,
@@ -347,7 +314,6 @@ describe("applyClawPackageUpdate", () => {
           currentDigest: digestClawPackageRef(legacy),
         },
       ]),
-      { ...manifest, packages: [] },
       { ...addPlan, actions: [] },
       { readRefs: () => [legacy], replaceExpected },
     );
@@ -372,7 +338,6 @@ describe("applyClawPackageUpdate", () => {
           currentDigest: digestClawPackageRef(oldSkill),
         },
       ]),
-      { ...manifest, packages: [] },
       { ...addPlan, actions: [] },
       {
         readRefs: () => [oldSkill],
@@ -400,7 +365,6 @@ describe("applyClawPackageUpdate", () => {
             reason: "added",
           },
         ]),
-        manifest,
         addPlan,
         {
           installPackages,
@@ -429,7 +393,6 @@ describe("applyClawPackageUpdate", () => {
             currentDigest: digestClawPackageRef(planned),
           },
         ]),
-        { ...manifest, packages: [] },
         { ...addPlan, actions: [] },
         { readRefs: () => [observed], replaceExpected },
       ),
@@ -521,7 +484,6 @@ describe("applyClawPackageUpdate", () => {
               reason: "owned upgrade",
             },
           ]),
-          manifest,
           targetPlan,
           {
             env,
@@ -647,7 +609,6 @@ describe("applyClawPackageUpdate", () => {
             reason: "owned upgrade",
           },
         ]),
-        manifest,
         addPlan,
         {
           installPackages,
@@ -678,7 +639,6 @@ describe("applyClawPackageUpdate", () => {
             reason: "changed",
           },
         ]),
-        manifest,
         addPlan,
         { installPackages, readRefs: () => [oldSkill], replaceExpected },
       ),

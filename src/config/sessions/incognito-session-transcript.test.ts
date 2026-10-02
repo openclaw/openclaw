@@ -74,13 +74,13 @@ describe("session creation scope", () => {
 
       const created = await createSessionEntryWithTranscript(
         scope,
-        ({ existingEntry, targetEntry, isLabelInUse }) => {
+        ({ existingEntry, targetEntry, labelInUse }) => {
           expect(existingEntry).toBeUndefined();
           expect(targetEntry).toBeUndefined();
-          expect(isLabelInUse("unused")).toBe(false);
+          expect(labelInUse).toBe(false);
           return { ok: true, entry };
         },
-        { cwd: state.workspaceDir },
+        { cwd: state.workspaceDir, label: "unused" },
       );
       expect(created).toEqual({ ok: true, entry, sessionFile: key });
       // Inspect before reading: a bad creation can open the sentinel under the wrong agent.
@@ -111,12 +111,16 @@ describe("session creation scope", () => {
 
       const updated = { ...entry, label: "recreated", updatedAt: 2 };
       await expect(
-        createSessionEntryWithTranscript(scope, ({ existingEntry, targetEntry, isLabelInUse }) => {
-          expect(existingEntry).toMatchObject(entry);
-          expect(targetEntry).toMatchObject(entry);
-          expect(isLabelInUse("recreated")).toBe(false);
-          return { ok: true, entry: updated };
-        }),
+        createSessionEntryWithTranscript(
+          scope,
+          ({ existingEntry, targetEntry, labelInUse }) => {
+            expect(existingEntry).toMatchObject(entry);
+            expect(targetEntry).toMatchObject(entry);
+            expect(labelInUse).toBe(false);
+            return { ok: true, entry: updated };
+          },
+          { label: "recreated" },
+        ),
       ).resolves.toMatchObject({ ok: true, sessionFile: key });
       expect(loadSessionEntry(scope)).toMatchObject(updated);
 

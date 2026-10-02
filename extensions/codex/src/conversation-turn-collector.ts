@@ -1,10 +1,9 @@
-// Codex plugin module implements conversation turn collector behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString,
+  readNonEmptyStringPreservingWhitespace,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isAssistantCommentaryCompletionNotification } from "./app-server/attempt-notifications.js";
 import { isCodexNotificationForTurn } from "./app-server/notification-correlation.js";
 import {
   isJsonObject,
@@ -61,7 +60,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
     }
     if (notification.method === "item/agentMessage/delta") {
       const itemId = normalizeOptionalString(params.itemId) ?? "assistant";
-      const delta = readTextString(params, "delta");
+      const delta = readNonEmptyStringPreservingWhitespace(params.delta);
       if (!delta) {
         return;
       }
@@ -74,10 +73,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
         const itemId =
           normalizeOptionalString(item.id) ?? normalizeOptionalString(params.itemId) ?? "assistant";
         assistantTextByItem.delete(itemId);
-        if (isAssistantCommentaryCompletionNotification(notification)) {
-          return;
-        }
-        const text = readTextString(item, "text");
+        const text = readAssistantReplyText(item);
         if (text?.trim()) {
           assistantTextByItem.set(itemId, text);
         }
@@ -107,7 +103,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
           const itemId =
             normalizeOptionalString(item.id) ?? `assistant-${assistantTextByItem.size + 1}`;
           assistantTextByItem.delete(itemId);
-          const text = item.phase === "commentary" ? undefined : readTextString(item, "text");
+          const text = readAssistantReplyText(item);
           if (text?.trim()) {
             assistantTextByItem.set(itemId, text);
           }
@@ -145,7 +141,8 @@ export function createCodexConversationTurnCollector(threadId: string) {
   };
 }
 
-function readTextString(record: Record<string, unknown> | JsonObject | undefined, key: string) {
-  const value = record?.[key];
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+function readAssistantReplyText(item: JsonObject): string | undefined {
+  return item.phase === "commentary" || item.delivery === "async"
+    ? undefined
+    : readNonEmptyStringPreservingWhitespace(item.text);
 }

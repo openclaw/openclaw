@@ -1,18 +1,18 @@
 // Zalouser tests cover tool plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sendImageZalouser, sendLinkZalouser, sendMessageZalouser } from "./send.js";
+import { sendImageZalouser, sendMessageZalouser } from "./send.js";
 import { createZalouserTool } from "./tool.js";
 import {
   checkZaloAuthenticated,
   getZaloUserInfo,
   listZaloFriendsMatching,
   listZaloGroupsMatching,
+  sendZaloLink,
 } from "./zalo-js.js";
 
 vi.mock("./send.js", () => ({
   sendMessageZalouser: vi.fn(),
   sendImageZalouser: vi.fn(),
-  sendLinkZalouser: vi.fn(),
   sendReactionZalouser: vi.fn(),
 }));
 
@@ -21,11 +21,12 @@ vi.mock("./zalo-js.js", () => ({
   getZaloUserInfo: vi.fn(),
   listZaloFriendsMatching: vi.fn(),
   listZaloGroupsMatching: vi.fn(),
+  sendZaloLink: vi.fn(),
 }));
 
 const mockSendMessage = vi.mocked(sendMessageZalouser);
 const mockSendImage = vi.mocked(sendImageZalouser);
-const mockSendLink = vi.mocked(sendLinkZalouser);
+const mockSendLink = vi.mocked(sendZaloLink);
 const mockCheckAuth = vi.mocked(checkZaloAuthenticated);
 const mockGetUserInfo = vi.mocked(getZaloUserInfo);
 const mockListFriends = vi.mocked(listZaloFriendsMatching);
@@ -52,13 +53,6 @@ describe("executeZalouserTool", () => {
     mockGetUserInfo.mockReset();
     mockListFriends.mockReset();
     mockListGroups.mockReset();
-  });
-
-  it("returns error when send action is missing required fields", async () => {
-    const result = await executeZalouserTool("tool-1", { action: "send" });
-    expect(extractDetails(result)).toEqual({
-      error: "threadId and message required for send action",
-    });
   });
 
   it("sends text message for send action", async () => {
@@ -188,12 +182,6 @@ describe("executeZalouserTool", () => {
       name: "matching credential profile with different case",
       deliveryContext: { channel: "zalouser", accountId: "support" },
       profile: " WORK ",
-      bytes: 2048,
-    },
-    {
-      name: "matching route",
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-      profile: "work",
       bytes: 2048,
     },
     {

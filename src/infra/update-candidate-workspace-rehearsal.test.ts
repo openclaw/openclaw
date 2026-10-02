@@ -13,6 +13,7 @@ import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surface
 import { importLegacySkillProposal } from "../skills/workshop/store.js";
 import {
   openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
 import {
@@ -22,6 +23,7 @@ import {
 import { autoMigrateLegacyState } from "./state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
+import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 async function fileHashes(root: string): Promise<Record<string, string>> {
   const entries = await fs.readdir(root, { recursive: true, withFileTypes: true });
@@ -48,14 +50,13 @@ describe("workspace state during an update rehearsal", () => {
     state = await createOpenClawTestState({ label: "workspace-rehearsal" });
   });
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await state.cleanup();
   });
 
   it.each([
-    { name: "older", completed: "2026-04-23T11:31:35.154Z", claim: false },
     { name: "identical", completed: "2026-08-01T02:32:01.596Z", claim: false },
-    { name: "newer", completed: "2026-09-01T02:32:01.596Z", claim: false },
     {
       name: "interrupted claim",
       completed: "2026-04-23T11:31:35.154Z",
@@ -95,12 +96,14 @@ describe("workspace state during an update rehearsal", () => {
     };
     await fs.mkdir(record.target.skillDir, { recursive: true });
     await fs.writeFile(record.target.skillFile, content);
-    importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+    await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
     const before = await fileHashes(historical);
+    const candidateRoot = state.path("candidate");
+    await materializeUpdateCandidateStateWorker(candidateRoot);
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
       stateDir: state.stateDir,
-      candidateRoot: process.cwd(),
+      candidateRoot,
       env: state.env,
     });
     try {
@@ -118,18 +121,18 @@ describe("workspace state during an update rehearsal", () => {
         () => throwIfDoctorStateMigrationRefused(result.stepReceipts),
         result.warnings.join("\n"),
       ).not.toThrow();
-      expect(
-        result.stepReceipts.find((entry) => entry.id === "workspace-state")?.notices,
-      ).toContain("rehearsal: 2 legacy files outside the rehearsal root left untouched");
-      expect(
-        result.stepReceipts.find((entry) => entry.id === "workspace-state")?.rehearsal,
-      ).toEqual({ outsideRootLegacyFileCount: 2 });
+      const receipt = result.stepReceipts.find((entry) => entry.id === "workspace-state");
+      expect(receipt?.notices).toContain(
+        "rehearsal: 2 legacy files outside the rehearsal root left untouched",
+      );
+      expect(receipt?.rehearsal).toEqual({ outsideRootLegacyFileCount: 2 });
       expect(
         openOpenClawStateDatabase({ env })
           .db.prepare("SELECT status FROM skill_workshop_proposals WHERE proposal_id = ?")
           .get(record.id),
       ).toEqual({ status: "applied" });
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await rehearsal.cleanup();
     }

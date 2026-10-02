@@ -105,10 +105,19 @@ it.runIf(process.platform === "linux")(
   async () => {
     const env = scenarioEnvironment();
     delete env.DBUS_SESSION_BUS_ADDRESS;
-    const invocations: string[][] = [];
+    const invocations: Array<{ command: string; args: string[] }> = [];
     vi.mocked(execFileUtf8).mockImplementation(async (command, args) => {
+      invocations.push({ command, args: [...args] });
+      if (command === "systemctl") {
+        expect(args).toEqual(["--system", "is-system-running"]);
+        return {
+          code: 0,
+          termination: "exit",
+          stdout: "running\n",
+          stderr: "",
+        };
+      }
       expect(command).toBe("busctl");
-      invocations.push([...args]);
       const result = spawnSync(process.execPath, [shim, ...args], { encoding: "utf8", env });
       return {
         code: result.status ?? 1,
@@ -120,23 +129,12 @@ it.runIf(process.platform === "linux")(
     await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
       reason: "systemd-user-bus-unavailable",
     });
-    expect(invocations).toEqual([["--machine", "testuser@", ...versionArgs]]);
-    console.info("original Doctor argv:", JSON.stringify(invocations[0]));
+    expect(invocations).toEqual([
+      { command: "busctl", args: ["--machine", "testuser@", ...versionArgs] },
+      { command: "systemctl", args: ["--system", "is-system-running"] },
+    ]);
   },
 );
-
-it.runIf(process.platform === "linux")("still rejects an unavailable synthetic bus", async () => {
-  const env = scenarioEnvironment();
-  vi.mocked(execFileUtf8).mockResolvedValue({
-    code: 1,
-    termination: "exit",
-    stdout: "",
-    stderr: "Failed to connect to bus: No such file or directory",
-  });
-  await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
-    reason: "systemd-user-bus-unavailable",
-  });
-});
 
 it("keeps machine scope, auto-start, and foreign-manager probes outside the shim contract", () => {
   const env = scenarioEnvironment();

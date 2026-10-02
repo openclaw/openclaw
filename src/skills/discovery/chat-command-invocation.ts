@@ -1,10 +1,15 @@
-// Chat command invocation helpers execute skill-provided chat command handlers.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import { getChatCommands } from "../../auto-reply/commands-registry.data.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
+import {
+  recordExplicitSkillSelectionFileHost,
+  resolveExplicitSkillSelectionFileHost,
+  resolveSkillCommandFileHost,
+} from "./skill-command-provenance.js";
 
 const MAX_EXPLICIT_SKILL_REFERENCES = 8;
 const MAX_EXPLICIT_SKILL_REFERENCE_CHARS = 512;
@@ -13,9 +18,14 @@ const MAX_EXPLICIT_SKILL_INSTRUCTION_CHARS = 1_000;
 export function skillCommandsToExplicitSelections(
   skills: readonly SkillCommandSpec[],
 ): ExplicitSkillSelection[] {
-  return skills.flatMap((skill) =>
-    skill.skillFile ? [{ name: skill.name, path: skill.skillFile }] : [],
-  );
+  return skills.flatMap((skill) => {
+    if (!skill.skillFile) {
+      return [];
+    }
+    const fileHost = resolveSkillCommandFileHost(skill);
+    const selection = { name: skill.name, path: skill.skillFile };
+    return [fileHost ? recordExplicitSkillSelectionFileHost(selection, fileHost) : selection];
+  });
 }
 
 export function mergeExplicitSkillSelections(
@@ -23,7 +33,10 @@ export function mergeExplicitSkillSelections(
 ): ExplicitSkillSelection[] | undefined {
   const merged = new Map<string, ExplicitSkillSelection>();
   for (const selection of groups.flatMap((group) => group ?? [])) {
-    merged.set(`${selection.name}\0${selection.path}`, selection);
+    merged.set(
+      `${selection.name}\0${selection.path}\0${resolveExplicitSkillSelectionFileHost(selection) ?? ""}`,
+      selection,
+    );
   }
   return merged.size > 0 ? [...merged.values()] : undefined;
 }
@@ -67,22 +80,13 @@ function findSkillCommand(
   }
   const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
   const normalized = normalizeSkillCommandLookup(trimmed);
-  return skillCommands.find((entry) => {
-    if (normalizeOptionalLowercaseString(entry.name) === lowered) {
-      return true;
-    }
-    if (normalizeOptionalLowercaseString(entry.skillName) === lowered) {
-      return true;
-    }
-    return (
+  return skillCommands.find(
+    (entry) =>
+      normalizeOptionalLowercaseString(entry.name) === lowered ||
+      normalizeOptionalLowercaseString(entry.skillName) === lowered ||
       normalizeSkillCommandLookup(entry.name) === normalized ||
-      normalizeSkillCommandLookup(entry.skillName) === normalized
-    );
-  });
-}
-
-function skillReferenceMatches(text: string): IterableIterator<RegExpMatchArray> {
-  return text.matchAll(/\$([-a-zA-Z0-9_:]+)/gu);
+      normalizeSkillCommandLookup(entry.skillName) === normalized,
+  );
 }
 
 function isEscapedReference(text: string, index: number): boolean {
@@ -93,20 +97,11 @@ function isEscapedReference(text: string, index: number): boolean {
   return backslashes % 2 === 1;
 }
 
-function isShellVariableReference(name: string): boolean {
-  return !/[a-z]/u.test(name);
-}
-
 function* skillReferenceNames(text: string): IterableIterator<string> {
-  for (const match of skillReferenceMatches(text)) {
+  for (const match of text.matchAll(/\$([-a-zA-Z0-9_:]+)/gu)) {
     const name = match[1]?.replace(/:+$/gu, "");
     const index = match.index;
-    if (
-      name &&
-      index !== undefined &&
-      !isEscapedReference(text, index) &&
-      !isShellVariableReference(name)
-    ) {
+    if (name && index !== undefined && !isEscapedReference(text, index) && /[a-z]/u.test(name)) {
       yield name;
     }
   }
@@ -121,52 +116,32 @@ export function resolveSkillCommandInvocation(params: {
   commandBodyNormalized: string;
   skillCommands: SkillCommandSpec[];
 }): { command: SkillCommandSpec; args?: string; inline?: boolean } | null {
-  const trimmed = params.commandBodyNormalized.trim();
-  if (trimmed.startsWith("/")) {
-    const match = trimmed.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
-    if (!match) {
-      return null;
-    }
-    const commandName = normalizeOptionalLowercaseString(match[1]);
-    if (!commandName) {
-      return null;
-    }
-    if (commandName === "skill") {
-      const remainder = match[2]?.trim();
-      if (!remainder) {
-        return null;
-      }
-      const skillMatch = remainder.match(/^([^\s]+)(?:\s+([\s\S]+))?$/);
-      if (!skillMatch) {
-        return null;
-      }
-      const skillCommand = findSkillCommand(params.skillCommands, skillMatch[1] ?? "");
-      if (!skillCommand) {
-        return null;
-      }
-      const args = skillMatch[2]?.trim();
-      return { command: skillCommand, args: args || undefined };
-    }
-    const command = params.skillCommands.find(
-      (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
-    );
-    if (command) {
-      const args = match[2]?.trim();
-      return { command, args: args || undefined };
-    }
+  const match = params.commandBodyNormalized.trim().match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
+  if (!match) {
+    return null;
   }
-  return null;
+  const commandName = normalizeOptionalLowercaseString(match[1]);
+  const invocation =
+    commandName === "skill" ? match[2]?.trim().match(/^([^\s]+)(?:\s+([\s\S]+))?$/) : match;
+  if (!commandName || !invocation) {
+    return null;
+  }
+  const command =
+    commandName === "skill"
+      ? findSkillCommand(params.skillCommands, invocation[1] ?? "")
+      : params.skillCommands.find(
+          (entry) => normalizeOptionalLowercaseString(entry.name) === commandName,
+        );
+  return command ? { command, args: invocation[2]?.trim() || undefined } : null;
 }
 
 export function expandBundleCommandPromptTemplate(template: string, args?: string): string {
   const normalizedArgs = args?.trim() ?? "";
-  const rendered = template.includes("$ARGUMENTS")
-    ? template.replaceAll("$ARGUMENTS", () => normalizedArgs)
-    : template;
-  if (!normalizedArgs || template.includes("$ARGUMENTS")) {
-    return rendered.trim();
+  if (template.includes("$ARGUMENTS")) {
+    return template.replaceAll("$ARGUMENTS", () => normalizedArgs).trim();
   }
-  return `${rendered.trim()}\n\nUser input:\n${normalizedArgs}`;
+  const rendered = template.trim();
+  return normalizedArgs ? `${rendered}\n\nUser input:\n${normalizedArgs}` : rendered;
 }
 
 /** Expands model-routed skill references while leaving unknown slash commands untouched. */
@@ -231,11 +206,19 @@ export function expandExplicitSkillReferences(params: {
   if (available.length === 0) {
     return { body: params.text, skills: [] };
   }
-  const referenceLines = available.map((skill) =>
-    skill.modelVisible === false && skill.skillFile
-      ? `- ${skill.skillName} (SKILL.md: ${skill.skillFile})`
-      : `- ${skill.skillName}`,
-  );
+  const referenceLines = available.map((skill) => {
+    if (skill.modelVisible !== false || !skill.skillFile) {
+      return `- ${skill.skillName}`;
+    }
+    const readPath = resolveSkillReadPath(
+      {
+        name: skill.skillName,
+        filePath: skill.skillFile,
+      },
+      resolveSkillCommandFileHost(skill),
+    );
+    return `- ${skill.skillName} (SKILL.md: ${readPath})`;
+  });
   // The reference-count cap alone does not bound operator-provided names or paths.
   // Keep both each item and the complete injected prefix within fixed prompt budgets.
   if (referenceLines.some((line) => line.length > MAX_EXPLICIT_SKILL_REFERENCE_CHARS)) {

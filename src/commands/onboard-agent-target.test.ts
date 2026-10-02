@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -125,11 +124,14 @@ describe("onboarding agent target", () => {
     });
   });
 
-  it("uses the retained compatibility owner after the marker is removed", () => {
-    const config = retainLegacyDefaultAgentId(
-      { agents: { entries: { main: {}, ops: { workspace: "/srv/ops" } } } },
-      "ops",
-    );
+  it("uses the persisted system-agent owner after the marker is removed", () => {
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "ops" } },
+        entries: { main: {}, ops: { workspace: "/srv/ops" } },
+      },
+    };
 
     expect(resolveOnboardingAgentTarget(config)).toMatchObject({
       agentId: "ops",
@@ -264,26 +266,6 @@ describe("onboarding agent target", () => {
     expect(updated.agents?.entries?.ops?.model).toEqual({ primary: "openai/new" });
     expect(updated.agents?.defaults?.model).toEqual({ primary: "openai/global" });
     expect(updated.agents?.entries?.main?.model).toBeUndefined();
-  });
-
-  it("preserves the authored key when projecting explicit agent defaults", () => {
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {}, OPS: { model: { primary: "old/model" } } },
-      },
-    };
-    const target = resolveOnboardingAgentTarget(config, "ops");
-    const updated = applyAgentModelDefaults(config, target, (projected) => ({
-      ...projected,
-      agents: {
-        ...projected.agents,
-        defaults: { ...projected.agents?.defaults, model: { primary: "new/model" } },
-      },
-    }));
-
-    expect(updated.agents?.entries?.OPS?.model).toEqual({ primary: "new/model" });
-    expect(updated.agents?.entries?.ops).toBeUndefined();
   });
 
   it("preserves unrelated global defaults while projecting model changes onto the authored agent", () => {

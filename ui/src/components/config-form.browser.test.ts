@@ -113,6 +113,82 @@ describe("config form renderer", () => {
     expect(container.textContent).toContain("Token used to authenticate with the Gateway.");
   });
 
+  it.each([
+    ["approvals", "Approvals", "Onaylar"],
+    ["telemetry", "Telemetry", "Telemetri"],
+    ["cloudWorkers", "Cloud Workers", "Bulut çalışanları"],
+  ])(
+    "localizes top-level %s hints and preserves missing-copy fallbacks",
+    async (key, label, translatedLabel) => {
+      const help = "Section help from the Gateway.";
+      const labelHash = configHintTranslationKey(key, "label", label).split(".").at(-1)!;
+      const helpHash = configHintTranslationKey(key, "help", help).split(".").at(-1)!;
+      i18n.registerTranslation("tr", {
+        configHints: {
+          [key]: {
+            label: { [labelHash]: translatedLabel },
+            help: { [helpHash]: "Bölüm açıklaması." },
+          },
+        },
+      });
+      const container = document.createElement("div");
+      const analysis = analyzeConfigSchema({
+        type: "object",
+        properties: {
+          [key]: {
+            type: "object",
+            description: "Schema description.",
+            properties: { enabled: { type: "boolean" } },
+          },
+        },
+      });
+      const props = { value: {}, onPatch: vi.fn(), uiHints: { [key]: { label, help } } };
+      const heading = () =>
+        container.querySelector("h2.settings-section__heading")?.textContent?.trim();
+      const description = () =>
+        container.querySelector(".settings-section__desc")?.textContent?.trim();
+
+      await i18n.setLocale("tr");
+      renderAnalyzedFormFixture(container, analysis, props);
+      expect(heading()).toBe(translatedLabel);
+      expect(description()).toBe("Bölüm açıklaması.");
+
+      await i18n.setLocale("en");
+      renderAnalyzedFormFixture(container, analysis, props);
+      expect(heading()).toBe(label);
+      expect(description()).toBe(help);
+
+      await i18n.setLocale("tr");
+      renderAnalyzedFormFixture(container, analysis, {
+        ...props,
+        uiHints: { [key]: { label, help: "Updated Gateway help without a translation." } },
+      });
+      expect(heading()).toBe(translatedLabel);
+      expect(description()).toBe("Updated Gateway help without a translation.");
+
+      renderAnalyzedFormFixture(container, analysis, { ...props, uiHints: {} });
+      expect(heading()).toBe(key === "cloudWorkers" ? "CloudWorkers" : label);
+      expect(description()).toBe("Schema description.");
+    },
+  );
+
+  it("keeps page-owned section copy ahead of Gateway hints", () => {
+    const container = document.createElement("div");
+    renderAnalyzedFormFixture(container, rootAnalysis, {
+      value: {},
+      activeSection: "gateway",
+      uiHints: { gateway: { label: "Runtime gateway label", help: "Runtime gateway help" } },
+      onPatch: vi.fn(),
+    });
+
+    expect(container.querySelector("h2.settings-section__heading")?.textContent?.trim()).toBe(
+      "Gateway",
+    );
+    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
+      "Gateway server settings (port, auth, binding)",
+    );
+  });
+
   it("conceals core-classified encryption, private-key, and local service env values", () => {
     const container = document.createElement("div");
     const analysis = analyzeConfigSchema({
@@ -423,6 +499,44 @@ describe("config form renderer", () => {
       select.selectedOptions[0]?.textContent?.trim(),
     );
     expect(selectedLabels).toEqual(["tailnet", "openai"]);
+  });
+
+  it("shows an unset default-on boolean as its placeholder instead of an off toggle", () => {
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        cron: { type: "object", properties: { enabled: { type: "boolean" } } },
+      },
+    });
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: { "cron.enabled": { label: "Automations Enabled", placeholder: "Default: On" } },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: {},
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.querySelector("wa-switch.settings-toggle")).toBeNull();
+    const select = expectElement(
+      container.querySelector<HTMLSelectElement>('select[aria-label="Automations Enabled"]'),
+      "automations enabled select",
+    );
+    expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
+    expect(onPatch).not.toHaveBeenCalled();
+    select.value = "1";
+    select.dispatchEvent(new Event("change"));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], false);
+    select.value = "0";
+    select.dispatchEvent(new Event("change"));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], true);
+    select.value = "__unset__";
+    select.dispatchEvent(new Event("change"));
+    expect(onPatch).toHaveBeenLastCalledWith(["cron", "enabled"], undefined);
   });
 
   it("renders map fields from additionalProperties", () => {

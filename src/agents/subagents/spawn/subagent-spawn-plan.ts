@@ -1,8 +1,4 @@
-/**
- * Subagent spawn planning helpers.
- *
- * Resolves model, thinking, and timeout choices before the sessions_spawn executor launches work.
- */
+import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
@@ -18,15 +14,11 @@ import {
 } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
+import { prepareModelChoice } from "./subagent-spawn.runtime.js";
 
-/** Splits a provider/model ref while preserving model-only refs. */
 export function splitModelRef(ref?: string) {
-  if (!ref) {
-    return { provider: undefined, model: undefined };
-  }
-  const trimmed = ref.trim();
+  const trimmed = ref?.trim();
   if (!trimmed) {
     return { provider: undefined, model: undefined };
   }
@@ -36,30 +28,19 @@ export function splitModelRef(ref?: string) {
     const model = trimmed.slice(slash + 1);
     return { provider, model };
   }
-  const provider = undefined;
-  const model = trimmed;
-  if (model) {
-    return { provider, model };
-  }
   return { provider: undefined, model: trimmed };
 }
 
-/** Resolves the effective subagent run timeout from per-call override or config default. */
 export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
   cfg: OpenClawConfig;
   runTimeoutSeconds?: number;
 }) {
-  const cfgSubagentTimeout =
-    typeof params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
-    Number.isFinite(params.cfg.agents.defaults.subagents.runTimeoutSeconds)
-      ? Math.max(0, Math.floor(params.cfg.agents.defaults.subagents.runTimeoutSeconds))
-      : 0;
-  return typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
-    ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-    : cfgSubagentTimeout;
+  return resolveNonNegativeIntegerOption(
+    params.runTimeoutSeconds,
+    resolveNonNegativeIntegerOption(params.cfg?.agents?.defaults?.subagents?.runTimeoutSeconds, 0),
+  );
 }
 
-/** Resolves the subagent model plus thinking patch to apply to the spawned session. */
 export async function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -104,7 +85,7 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
   let choice;
   try {
-    choice = await getSubagentSpawnDeps().prepareModelChoice({
+    choice = await prepareModelChoice({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       workspaceDir: params.workspaceDir,
@@ -161,22 +142,19 @@ export async function resolveSubagentModelAndThinkingPlan(params: {
   return {
     status: "ok" as const,
     resolvedModel,
+    modelRef: choice.ref,
     ...(inheritedModel ? { inheritedModel: choice.ref } : {}),
-    modelApplied: Boolean(resolvedModel),
+    modelApplied: true,
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      ...(resolvedModel
+      model: resolvedModel,
+      modelOverrideSource,
+      ...(modelOrigin
         ? {
-            model: resolvedModel,
-            modelOverrideSource,
-            ...(modelOrigin
-              ? {
-                  // Selected child models are session overrides, not legacy fallback residue.
-                  // Self-origin metadata keeps cleanup from discarding them before first use.
-                  modelOverrideFallbackOriginProvider: modelOrigin.provider,
-                  modelOverrideFallbackOriginModel: modelOrigin.model,
-                }
-              : {}),
+            // Selected child models are session overrides, not legacy fallback residue.
+            // Self-origin metadata keeps cleanup from discarding them before first use.
+            modelOverrideFallbackOriginProvider: modelOrigin.provider,
+            modelOverrideFallbackOriginModel: modelOrigin.model,
           }
         : {}),
       ...(authProfileId

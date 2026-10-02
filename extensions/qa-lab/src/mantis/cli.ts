@@ -102,21 +102,8 @@ export function registerMantisCli(qa: Command) {
     .option("--skip-install", "Skip pnpm install in baseline/candidate worktrees", false)
     .option("--skip-build", "Skip pnpm build in baseline/candidate worktrees", false)
     .action(async (opts: MantisBeforeAfterCommanderOptions) => {
-      const options = {
-        baseline: opts.baseline,
-        candidate: opts.candidate,
-        credentialRole: opts.credentialRole,
-        credentialSource: opts.credentialSource,
-        fastMode: opts.fast,
-        outputDir: opts.outputDir,
-        providerMode: opts.providerMode,
-        repoRoot: opts.repoRoot,
-        scenario: opts.scenario,
-        skipBuild: opts.skipBuild,
-        skipInstall: opts.skipInstall,
-        transport: opts.transport,
-      };
-      await runBeforeAfter(options);
+      const { fast, ...options } = opts;
+      await runBeforeAfter({ ...options, fastMode: fast });
     });
 
   mantis
@@ -132,19 +119,8 @@ export function registerMantisCli(qa: Command) {
     .option("--message <text>", "Smoke message to post")
     .option("--skip-post", "Only check Discord API visibility; do not post or react", false)
     .action(async (opts: MantisDiscordSmokeCommanderOptions) => {
-      const options = {
-        channelId: opts.channelId,
-        guildId: opts.guildId,
-        message: opts.message,
-        outputDir: opts.outputDir,
-        repoRoot: opts.repoRoot,
-        skipPost: opts.skipPost,
-        tokenFile: opts.tokenFile,
-        tokenFileEnv: opts.tokenFileEnv,
-        tokenEnv: opts.tokenEnv,
-      };
       const runtime = await loadMantisCliRuntime();
-      await runtime.runMantisDiscordSmokeCommand(options);
+      await runtime.runMantisDiscordSmokeCommand(opts);
     });
 
   mantis
@@ -174,24 +150,14 @@ export function registerMantisCli(qa: Command) {
     .option("--video-duration <seconds>", "Visible desktop recording duration in seconds")
     .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
     .action(async (opts: MantisDesktopBrowserSmokeCommanderOptions) => {
-      const options = {
-        browserProfileArchiveEnv: opts.browserProfileArchiveEnv,
-        browserProfileDir: opts.browserProfileDir,
-        browserUrl: opts.browserUrl,
-        crabboxBin: opts.crabboxBin,
-        htmlFile: opts.htmlFile,
-        idleTimeout: opts.idleTimeout,
-        keepLease: opts.keepLease,
-        leaseId: opts.leaseId,
-        machineClass: opts.machineClass ?? opts.class,
-        outputDir: opts.outputDir,
-        provider: opts.provider,
-        repoRoot: opts.repoRoot,
-        ttl: opts.ttl,
-        videoDurationSeconds: parseOptionalInteger(opts.videoDuration, "--video-duration"),
-      };
+      const { class: machineClassAlias, videoDuration, ...options } = opts;
+      const videoDurationSeconds = parseOptionalInteger(videoDuration, "--video-duration");
       const runtime = await loadMantisCliRuntime();
-      await runtime.runMantisDesktopBrowserSmokeCommand(options);
+      await runtime.runMantisDesktopBrowserSmokeCommand({
+        ...options,
+        machineClass: options.machineClass ?? machineClassAlias,
+        videoDurationSeconds,
+      });
     });
 
   mantis
@@ -236,33 +202,17 @@ export function registerMantisCli(qa: Command) {
       if (opts.approvalCheckpoints && opts.gatewaySetup) {
         throw new Error("--approval-checkpoints cannot be used with --gateway-setup.");
       }
-      const options = {
-        alternateModel: opts.altModel,
-        approvalCheckpoints: opts.approvalCheckpoints,
-        crabboxBin: opts.crabboxBin,
-        credentialRole: opts.credentialRole,
-        credentialSource: opts.credentialSource,
-        fastMode: opts.fast,
-        freshPr: opts.freshPr,
-        gatewaySetup: opts.gatewaySetup,
-        hydrateMode: opts.hydrateMode,
-        idleTimeout: opts.idleTimeout,
-        keepLease: opts.keepLease,
-        leaseId: opts.leaseId,
-        machineClass: opts.machineClass ?? opts.class,
-        market: opts.market,
-        outputDir: opts.outputDir,
-        primaryModel: opts.model,
-        provider: opts.provider,
-        providerMode: opts.providerMode,
-        repoRoot: opts.repoRoot,
-        scenarioIds: opts.scenario,
-        slackChannelId: opts.slackChannelId,
-        slackUrl: opts.slackUrl,
-        ttl: opts.ttl,
-      };
+      const { altModel, class: machineClassAlias, fast, model, scenario, ...options } = opts;
       const runtime = await loadMantisCliRuntime();
-      await runtime.runMantisSlackDesktopSmokeCommand(options);
+      await runtime.runMantisSlackDesktopSmokeCommand({
+        ...options,
+        alternateModel: altModel,
+        fastMode: fast,
+        gatewaySetup: opts.gatewaySetup,
+        machineClass: options.machineClass ?? machineClassAlias,
+        primaryModel: model,
+        scenarioIds: scenario,
+      });
     });
 
   mantis
@@ -289,27 +239,16 @@ export function registerMantisCli(qa: Command) {
     .option("--vision-timeout-ms <ms>", "Image understanding timeout in milliseconds")
     .option("--expect-text <text>", "Case-insensitive text expected in the vision output")
     .action(async (opts: MantisVisualTaskCommanderOptions) => {
-      const options = {
-        browserUrl: opts.browserUrl,
-        crabboxBin: opts.crabboxBin,
-        duration: opts.duration,
-        expectText: opts.expectText,
-        idleTimeout: opts.idleTimeout,
-        keepLease: opts.keepLease,
-        leaseId: opts.leaseId,
-        machineClass: opts.machineClass ?? opts.class,
-        outputDir: opts.outputDir,
-        provider: opts.provider,
-        repoRoot: opts.repoRoot,
-        settleMs: parseOptionalInteger(opts.settleMs, "--settle-ms"),
-        ttl: opts.ttl,
-        visionMode: opts.visionMode,
-        visionModel: opts.visionModel,
-        visionPrompt: opts.visionPrompt,
-        visionTimeoutMs: parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms"),
-      };
+      const { class: machineClassAlias, ...options } = opts;
+      const settleMs = parseOptionalInteger(opts.settleMs, "--settle-ms");
+      const visionTimeoutMs = parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms");
       const runtime = await loadMantisCliRuntime();
-      await runtime.runMantisVisualTaskCommand(options);
+      await runtime.runMantisVisualTaskCommand({
+        ...options,
+        machineClass: options.machineClass ?? machineClassAlias,
+        settleMs,
+        visionTimeoutMs,
+      });
     });
 
   mantis
@@ -330,21 +269,9 @@ export function registerMantisCli(qa: Command) {
     .option("--vision-timeout-ms <ms>", "Image understanding timeout in milliseconds")
     .option("--expect-text <text>", "Case-insensitive text expected in the vision output")
     .action(async (opts: MantisVisualDriverCommanderOptions) => {
-      const options = {
-        browserUrl: opts.browserUrl,
-        crabboxBin: opts.crabboxBin,
-        expectText: opts.expectText,
-        leaseId: opts.leaseId,
-        outputDir: opts.outputDir,
-        provider: opts.provider,
-        repoRoot: opts.repoRoot,
-        settleMs: parseOptionalInteger(opts.settleMs, "--settle-ms"),
-        visionMode: opts.visionMode,
-        visionModel: opts.visionModel,
-        visionPrompt: opts.visionPrompt,
-        visionTimeoutMs: parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms"),
-      };
+      const settleMs = parseOptionalInteger(opts.settleMs, "--settle-ms");
+      const visionTimeoutMs = parseOptionalInteger(opts.visionTimeoutMs, "--vision-timeout-ms");
       const runtime = await loadMantisCliRuntime();
-      await runtime.runMantisVisualDriverCommand(options);
+      await runtime.runMantisVisualDriverCommand({ ...opts, settleMs, visionTimeoutMs });
     });
 }

@@ -78,6 +78,18 @@ describe("sessionNavigationTarget", () => {
     });
   });
 
+  it.each([8, 12, 32])("preserves an explicit %s-digit prefix", (shortIdLength) => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "agent:main:thread:12345678-90ab-cdef-1234-567890abcdef",
+      fallbackAgentId: "main",
+      shortIdLength,
+    });
+    expect(target.href).toBe(
+      `/chat/main/${"1234567890abcdef1234567890abcdef".slice(0, shortIdLength)}`,
+    );
+  });
+
   it("keeps ordinary literal session paths unchanged", () => {
     expect(
       sessionNavigationTarget({
@@ -101,10 +113,10 @@ describe("sessionNavigationTarget", () => {
     });
 
     expect(target.href).toBe(
-      `/dashboard/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+      `/dashboard/main/1234567890abcdef1234567890abcdef?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
     );
     expect(target.options).toEqual({
-      pathname: "/dashboard/main/12345678",
+      pathname: "/dashboard/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
     });
   });
@@ -117,7 +129,9 @@ describe("sessionNavigationTarget", () => {
       dashboardExpanded: true,
     });
 
-    expect(target.href).toBe(`/chat/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`);
+    expect(target.href).toBe(
+      `/chat/main/1234567890abcdef1234567890abcdef?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+    );
   });
 
   it("marks an uncached preference-derived face for in-app navigation but keeps href shareable", () => {
@@ -130,9 +144,9 @@ describe("sessionNavigationTarget", () => {
 
     // href gets copied and shared, so it stays the clean best-guess path; only the
     // in-app navigation carries the marker that lets the loader re-derive the face.
-    expect(target.href).toBe("/chat/main/12345678");
+    expect(target.href).toBe("/chat/main/1234567890abcdef1234567890abcdef");
     expect(target.options).toEqual({
-      pathname: "/chat/main/12345678",
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
   });
@@ -150,9 +164,9 @@ describe("sessionNavigationTarget", () => {
       preferenceDerivedFace: true,
     });
 
-    expect(target.href).toBe("/chat/main/release-notes-12345678");
+    expect(target.href).toBe("/chat/main/release-notes-1234567890abcdef1234567890abcdef");
     expect(target.options).toEqual({
-      pathname: "/chat/main/release-notes-12345678",
+      pathname: "/chat/main/release-notes-1234567890abcdef1234567890abcdef",
       search: `?${SESSION_NAVIGATION_KEY_PARAM}=${encodeURIComponent(row.key)}`,
     });
   });

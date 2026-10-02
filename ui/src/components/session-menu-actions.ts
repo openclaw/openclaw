@@ -1,7 +1,10 @@
+import { ContextConsumer } from "@lit/context";
 import { html, nothing, type ReactiveControllerHost, type TemplateResult } from "lit";
 import { normalizeSessionIconValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
+import { applicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
+import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
 import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
@@ -10,7 +13,12 @@ import {
   renderCompactSessionMenuNavigationItem,
   type CompactSessionMenuView,
 } from "./session-menu-compact.ts";
-import { renderSessionEditorOptions, renderSessionGroupOptions } from "./session-menu-options.ts";
+import {
+  renderSessionEditorOptions,
+  renderSessionGroupOptions,
+  sessionArchiveShortcut,
+} from "./session-menu-options.ts";
+import { SessionMenuSnooze, type SessionSnoozeMenuAction } from "./session-menu-snooze.ts";
 import type { SessionCreatedActor, SessionOwnerOption } from "./session-owner-chip.ts";
 import { SessionOwnerMenu } from "./session-owner-menu.ts";
 import "../styles/sidebar-menus.css";
@@ -23,6 +31,8 @@ export type SessionMenuData = {
   pinned: boolean;
   unread: boolean;
   archived: boolean;
+  snoozedUntil: number | null;
+  hiddenFromInvolvingMe?: boolean;
   archiving?: boolean;
   category: string | null;
   icon: string | null;
@@ -30,28 +40,36 @@ export type SessionMenuData = {
   categoryClearReturnsToGroups: boolean;
 };
 
+const SIMPLE_SESSION_ACTIONS = [
+  "copy-session-id",
+  "copy-session-link",
+  "copy-session-preview-link",
+  "copy-markdown",
+  "open-new-tab",
+  "open-new-window",
+  "split-right",
+  "split-below",
+  "reset-appearance",
+  "toggle-pin",
+  "toggle-unread",
+  "toggle-involving-me",
+  "rename",
+  "fork",
+  "new-group",
+  "toggle-archived",
+  "delete",
+] as const;
+
 export type SessionManagementAction =
+  | {
+      [Kind in (typeof SIMPLE_SESSION_ACTIONS)[number]]: { kind: Kind };
+    }[(typeof SIMPLE_SESSION_ACTIONS)[number]]
   | { kind: "open-in"; editor: EditorId; path: string }
-  | { kind: "copy-session-id" }
-  | { kind: "copy-session-link" }
-  | { kind: "copy-session-preview-link" }
-  | { kind: "copy-markdown" }
-  | { kind: "open-new-tab" }
-  | { kind: "open-new-window" }
-  | { kind: "split-right" }
-  | { kind: "split-below" }
-  | { kind: "reset-appearance" }
-  | { kind: "toggle-pin" }
-  | { kind: "toggle-unread" }
-  | { kind: "rename" }
   | { kind: "set-icon"; icon: string | null }
   | { kind: "set-color"; color: string | null }
   | { kind: "assign-owner"; owner: Pick<SessionOwnerOption, "type" | "id"> }
-  | { kind: "fork" }
   | { kind: "move-to-group"; category: string | null }
-  | { kind: "new-group" }
-  | { kind: "toggle-archived" }
-  | { kind: "delete" };
+  | SessionSnoozeMenuAction;
 
 export type SessionManagementActionKind = SessionManagementAction["kind"];
 
@@ -61,6 +79,7 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   pinned: false,
   unread: false,
   archived: false,
+  snoozedUntil: null,
   category: null,
   icon: null,
   color: null,
@@ -79,6 +98,8 @@ type SessionMenuActionsState = {
   forkDisabled: boolean;
   forkFromLastCompleted: boolean;
   archiveAllowed: boolean;
+  snoozeAllowed?: boolean;
+  archiveShortcut?: boolean;
   deleteAllowed: boolean;
   groups: readonly string[];
   currentOwner: SessionCreatedActor | null;
@@ -91,9 +112,19 @@ type SessionMenuActionsState = {
 
 /** Canonical single-session actions shared by sidebar and chat-header menus. */
 export class SessionMenuActions {
+  private readonly context;
   private readonly ownerMenu: SessionOwnerMenu;
   private iconPickerMode: "grid" | "custom" = "grid";
   private customIconValue = "";
+  private readonly snoozeMenu = new SessionMenuSnooze({
+    readWakeTime: () => this.readState().session.snoozedUntil,
+    eligible: () => !this.actionExtraDisabled("snooze"),
+    disabled: (kind) => this.actionDisabled(kind, this.actionExtraDisabled(kind)),
+    disabledReason: (kind) => this.readState().actionDisabledReasons[kind],
+    renderItem: (...args) => this.renderItem(...args),
+    renderSubmenu: (...args) => this.renderSubmenu(...args),
+    runAction: (action) => this.runAction(action),
+  });
 
   constructor(
     private readonly host: SessionMenuActionsHost,
@@ -101,7 +132,16 @@ export class SessionMenuActions {
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
   ) {
+    this.context = new ContextConsumer(host, { context: applicationContext, subscribe: true });
+    new SubscriptionsController(host).watchStore(() => this.context.value?.gateway);
     this.ownerMenu = new SessionOwnerMenu(host);
+  }
+
+  private get involvementAvailable(): boolean {
+    return (
+      this.context.value?.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities ===
+      true
+    );
   }
 
   readonly loadOwners = () => {
@@ -113,10 +153,6 @@ export class SessionMenuActions {
   private actionDisabled(kind: SessionManagementActionKind, extra = false): boolean {
     const state = this.readState();
     return state.disabled || extra || Boolean(state.actionDisabledReasons[kind]);
-  }
-
-  private actionTitle(kind: SessionManagementActionKind): string | typeof nothing {
-    return this.readState().actionDisabledReasons[kind] ?? nothing;
   }
 
   private actionExtraDisabled(kind: SessionManagementActionKind): boolean {
@@ -142,6 +178,18 @@ export class SessionMenuActions {
         return batch || !session.sessionId;
       case "toggle-pin":
         return batch || session.pinnable === false || session.isChild === true || session.archived;
+      case "snooze":
+      case "wake":
+        return (
+          !state.snoozeAllowed || this.actionExtraDisabled("toggle-pin") || !state.archiveAllowed
+        );
+      case "toggle-involving-me":
+        return (
+          !this.involvementAvailable ||
+          batch ||
+          session.hiddenFromInvolvingMe === undefined ||
+          !session.sessionId
+        );
       case "rename":
       case "set-icon":
       case "set-color":
@@ -183,25 +231,12 @@ export class SessionMenuActions {
       this.ownerMenu.load();
       return true;
     }
-    if (
-      value === "copy-session-id" ||
-      value === "copy-session-link" ||
-      value === "copy-session-preview-link" ||
-      value === "copy-markdown" ||
-      value === "open-new-tab" ||
-      value === "open-new-window" ||
-      value === "split-right" ||
-      value === "split-below" ||
-      value === "reset-appearance" ||
-      value === "toggle-pin" ||
-      value === "toggle-unread" ||
-      value === "rename" ||
-      value === "fork" ||
-      value === "new-group" ||
-      value === "toggle-archived" ||
-      value === "delete"
-    ) {
-      this.runAction({ kind: value });
+    const kind = SIMPLE_SESSION_ACTIONS.find((candidate) => candidate === value);
+    if (kind) {
+      this.runAction({ kind });
+      return true;
+    }
+    if (this.snoozeMenu.handleSelect(value)) {
       return true;
     }
     if (value.startsWith("open-in:")) {
@@ -293,6 +328,8 @@ export class SessionMenuActions {
     icon: TemplateResult,
     options: { shortcut?: string; inline?: boolean; title?: string } = {},
   ) {
+    const state = this.readState();
+    const archiveShortcut = kind === "toggle-archived" ? sessionArchiveShortcut(state) : undefined;
     return html`<wa-dropdown-item
       slot=${options.inline === false ? "submenu" : nothing}
       class=${`session-menu__item${kind === "delete" ? " session-menu__item--destructive" : ""}`}
@@ -302,11 +339,11 @@ export class SessionMenuActions {
       aria-keyshortcuts=${options.shortcut?.toUpperCase() ?? nothing}
       ?data-new-tab-action=${kind === "open-new-tab" || kind === "open-new-window"}
       ?disabled=${this.actionDisabled(kind, this.actionExtraDisabled(kind))}
-      title=${this.readState().actionDisabledReasons[kind] ?? options.title ?? nothing}
+      title=${state.actionDisabledReasons[kind] ?? options.title ?? nothing}
     >
       <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
       <span class="session-menu__text">${label}</span>
-      ${options.shortcut ? menuShortcutHint(options.shortcut) : nothing}
+      ${options.shortcut ? menuShortcutHint(options.shortcut, archiveShortcut) : nothing}
     </wa-dropdown-item>`;
   }
 
@@ -328,7 +365,7 @@ export class SessionMenuActions {
     }
     const shortcut = view === "icon" ? "i" : view === "copy" ? "c" : undefined;
     return html`<wa-dropdown-item
-      class="session-menu__item"
+      class=${`session-menu__item${view === "assign-owner" ? " people-menu__submenu" : ""}`}
       ?disabled=${disabled}
       title=${title ?? nothing}
       data-shortcut=${shortcut ?? nothing}
@@ -378,6 +415,20 @@ export class SessionMenuActions {
         session.unread ? icons.eye : icons.circle,
         { shortcut: "u" },
       )}
+      ${
+        this.involvementAvailable && !batch && session.hiddenFromInvolvingMe !== undefined
+          ? this.renderItem(
+              "toggle-involving-me",
+              t(
+                session.hiddenFromInvolvingMe
+                  ? "sessionsView.showInInvolvingMe"
+                  : "sessionsView.hideFromInvolvingMe",
+              ),
+              session.hiddenFromInvolvingMe ? icons.eye : icons.eyeOff,
+            )
+          : nothing
+      }
+      ${this.snoozeMenu.renderAction()}
       ${this.renderItem(
         "toggle-archived",
         t(
@@ -483,6 +534,8 @@ export class SessionMenuActions {
   private renderSubmenuBody(view: Exclude<CompactSessionMenuView, "root">, inline = false) {
     const state = this.readState();
     switch (view) {
+      case "snooze":
+        return this.snoozeMenu.renderSubmenu(inline);
       case "copy":
         return this.renderCopySubmenu(inline);
       case "open-in":
@@ -510,22 +563,12 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? html`
-              ${this.renderItem(
-                "copy-session-link",
-                t("sessionsView.copySessionLink"),
-                icons.link,
-                {
-                  inline,
-                },
-              )}
-              ${this.renderItem(
-                "copy-session-preview-link",
-                t("sessionsView.copySessionPreviewLink"),
-                icons.link,
-                { inline },
-              )}
-            `
+          ? (
+              [
+                ["copy-session-link", "sessionsView.copySessionLink"],
+                ["copy-session-preview-link", "sessionsView.copySessionPreviewLink"],
+              ] as const
+            ).map(([kind, label]) => this.renderItem(kind, t(label), icons.link, { inline }))
           : nothing
       }
       ${this.renderItem("copy-markdown", t("sessionsView.copyMarkdown"), icons.fileText, {
@@ -540,31 +583,22 @@ export class SessionMenuActions {
     return html`
       ${
         state.navigationAllowed
-          ? html`
-              ${this.renderItem("open-new-tab", t("sessionsView.openNewTab"), icons.externalLink, {
-                inline,
-              })}
-              ${this.renderItem("open-new-window", t("sessionsView.openNewWindow"), icons.monitor, {
-                inline,
-              })}
-            `
+          ? (
+              [
+                ["open-new-tab", "sessionsView.openNewTab", icons.externalLink],
+                ["open-new-window", "sessionsView.openNewWindow", icons.monitor],
+              ] as const
+            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
           : nothing
       }
       ${
         state.splitAllowed
-          ? html`
-              ${this.renderItem("split-right", t("chat.splitView.splitRight"), icons.columns2, {
-                inline,
-              })}
-              ${this.renderItem(
-                "split-below",
-                t("sessionsView.splitBelow"),
-                icons.panelBottomOpen,
-                {
-                  inline,
-                },
-              )}
-            `
+          ? (
+              [
+                ["split-right", "chat.splitView.splitRight", icons.columns2],
+                ["split-below", "sessionsView.splitBelow", icons.panelBottomOpen],
+              ] as const
+            ).map(([kind, label, icon]) => this.renderItem(kind, t(label), icon, { inline }))
           : nothing
       }
       ${state.renderOpenInExtra?.(inline) ?? nothing}
@@ -589,7 +623,7 @@ export class SessionMenuActions {
       categoryClearReturnsToGroups: state.session.categoryClearReturnsToGroups,
       groups: state.groups,
       actionDisabled: (kind) => this.actionDisabled(kind),
-      actionTitle: (kind) => this.actionTitle(kind),
+      actionTitle: (kind) => state.actionDisabledReasons[kind] ?? nothing,
     });
   }
 
@@ -619,7 +653,7 @@ export class SessionMenuActions {
       onBack: this.showIconGrid,
       onInput: this.updateCustomIconValue,
       onApply: this.applyCustomIcon,
-      onGridKeydown: this.handleIconGridKeydown,
+      onGridKeydown: handleAppearanceGridKeydown,
     });
   }
 
@@ -670,8 +704,6 @@ export class SessionMenuActions {
       this.runAction({ kind: "set-icon", icon });
     }
   };
-
-  private readonly handleIconGridKeydown = handleAppearanceGridKeydown;
 
   private readonly focusAppearanceOnOpen = (event: CustomEvent<{ item: HTMLElement }>) => {
     const item = event.currentTarget;

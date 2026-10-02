@@ -7,8 +7,6 @@ import {
 } from "./execa-protocol.js";
 import type { SpawnBrokerHost } from "./host.js";
 
-export type { CommandSubprocess } from "./execa-types.js";
-
 const SERIALIZABLE_OPTIONS = new Set([
   "buffer",
   "cancelSignal",
@@ -130,10 +128,17 @@ export function spawnBrokerCommand(
   }
   const promise = remote.result
     .then(async (result) => {
+      if (result.timedOut) {
+        child.killed = true;
+      }
       // Result IPC can overtake the last bytes on separately transferred sockets.
       await closed;
       const restored = restoreExecaResult(result);
-      if (restored instanceof Error && options.reject !== false) {
+      // Broker admission refusals remain exceptions even for reject:false.
+      if (
+        restored instanceof Error &&
+        (options.reject !== false || restored.code === "ERR_SPAWN_BROKER_UNAVAILABLE")
+      ) {
         throw restored;
       }
       return restored;

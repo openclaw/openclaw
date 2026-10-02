@@ -7,14 +7,29 @@ import net from "node:net";
 import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { StringDecoder } from "node:string_decoder";
-import { type ClientOptions, type RawData, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
+import { type ClientOptions, WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveCodexAppServerUserHomeDir, type CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerTransport } from "./transport.js";
+import { codexWebSocketDataToBuffer } from "./websocket-data.js";
 
 const WEBSOCKET_HANDSHAKE_TIMEOUT_MS = 10_000;
 const WEBSOCKET_PING_INTERVAL_MS = 20_000;
 const WEBSOCKET_PONG_TIMEOUT_MS = 20_000;
 const MAX_CONSECUTIVE_MISSED_WEBSOCKET_PONGS = 5;
+
+/** Only the transport can prove that its buffered initialize never reached a peer. */
+export function isCodexWebSocketOpenFailure(error: unknown): boolean {
+  const seen = new Set<Error>();
+  let current = error;
+  while (current instanceof Error && !seen.has(current)) {
+    seen.add(current);
+    if ("code" in current && current.code === "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED") {
+      return true;
+    }
+    current = current.cause;
+  }
+  return false;
+}
 
 /** Opens a WebSocket app-server transport and maps newline-delimited frames to stdout/stdin. */
 export function createWebSocketTransport(
@@ -50,7 +65,9 @@ export function createWebSocketTransport(
   const pendingFrames: string[] = [];
   const stdinDecoder = new StringDecoder("utf8");
   let pendingLine = "";
+  let opened = false;
   let killed = false;
+  let exitCode: number | null = null;
   let pingTimeout: NodeJS.Timeout | undefined;
   let pongTimeout: NodeJS.Timeout | undefined;
   let expectedPong: Buffer | undefined;
@@ -135,6 +152,7 @@ export function createWebSocketTransport(
   // `initialize` can be written before the WebSocket open event fires. Buffer
   // whole JSON-RPC frames so stdio and websocket transports share call timing.
   socket.once("open", () => {
+    opened = true;
     for (const frame of pendingFrames.splice(0)) {
       socket.send(frame);
     }
@@ -147,19 +165,47 @@ export function createWebSocketTransport(
   });
   socket.once("error", (error) => {
     clearConnectionHealthTimers();
+    const code = "code" in error ? error.code : undefined;
+    if (
+      options.transport === "websocket" &&
+      !opened &&
+      (code === "ECONNREFUSED" ||
+        code === "ECONNRESET" ||
+        code === "ETIMEDOUT" ||
+        error.message === "Opening handshake has timed out")
+    ) {
+      events.emit(
+        "error",
+        Object.assign(new Error(error.message, { cause: error }), {
+          code: "CODEX_APP_SERVER_WEBSOCKET_OPEN_FAILED",
+        }),
+      );
+      return;
+    }
     events.emit("error", error);
   });
   socket.once("close", (code, reason) => {
     clearConnectionHealthTimers();
     killed = true;
+    exitCode = code;
     events.emit("exit", code, reason.toString("utf8"));
   });
   socket.on("message", (data) => {
     if (options.transport === "websocket") {
       recordConnectionActivity();
     }
-    const text = websocketFrameToText(data);
-    stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    const frame = codexWebSocketDataToBuffer(data);
+    const writable = stdout.write(frame);
+    const delimited = frame.at(-1) === 10 || stdout.write(Buffer.from("\n"));
+    if (!writable || !delimited) {
+      socket.pause();
+    }
+  });
+
+  stdout.on("drain", () => {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.resume();
+    }
   });
 
   const stdin = new Writable({
@@ -199,22 +245,30 @@ export function createWebSocketTransport(
     get killed() {
       return killed;
     },
-    kill: () => {
+    get exitCode() {
+      return exitCode;
+    },
+    kill: (signal) => {
       killed = true;
       clearConnectionHealthTimers();
-      socket.close();
+      if (signal === "SIGKILL") {
+        socket.terminate();
+      } else {
+        socket.close();
+      }
     },
     once: (event, listener) => events.once(event, listener),
+    off: (event, listener) => events.off(event, listener),
   };
 }
 
-/** Opens the owner-scoped Codex control socket used by the WebSocket upgrade. */
+/** Named local-only socket boundary for the egress classifier. */
 function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }
 
 /** Resolves the canonical or explicitly configured Codex control socket. */
-function resolveCodexAppServerUnixSocketPath(
+export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {
   if (options.transport !== "unix") {
@@ -236,17 +290,4 @@ function resolveCodexAppServerUnixSocketPath(
       "app-server-control.sock",
     )
   );
-}
-
-function websocketFrameToText(data: RawData): string {
-  if (typeof data === "string") {
-    return data;
-  }
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
 }

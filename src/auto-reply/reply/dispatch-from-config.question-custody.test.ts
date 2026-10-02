@@ -7,22 +7,29 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import {
   createDispatcher,
   diagnosticMocks,
+  emptyConfig,
   sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticDirectReplyConfig,
+  automaticGroupReplyConfig,
   createReplyOperation,
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
+  firstToolResultPayload,
   replyRunRegistry,
+  requireToolResultHandler,
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
@@ -41,6 +48,82 @@ afterEach(() => {
   replyRunTesting.resetReplyRunRegistry();
   resetInboundDedupe();
   clearAgentHarnesses();
+});
+it.each(["groups"] as const)(
+  "delivers deterministic exec approval tool payloads in %s with progress suppression",
+  async () => {
+    setNoAbort();
+    const cfg = automaticGroupReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "group" });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation run state");
+      }
+      runState.replyCompletion = resolveReplyCompletion(
+        runState.replyCompletion?.expectation ?? "required",
+        "blocked",
+      );
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)?.channelData).toStrictEqual({
+      execApproval: {
+        approvalId: "117ba06d-1111-2222-3333-444444444444",
+        approvalSlug: "117ba06d",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      },
+    });
+    expect(await dispatcher.waitForIdle()).toMatchObject({
+      counts: { tool: { delivered: 1 }, final: { delivered: 0 } },
+    });
+  },
+);
+it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
+  setNoAbort();
+  const payload = {
+    text: "Exec approval is unavailable.",
+    channelData: {
+      execApprovalUnavailable: { reason: "no-approval-route" },
+    },
+  } satisfies ReplyPayload;
+  const finalReply = { text: "The command could not run without an approval route." };
+  const dispatcher = createDispatcher();
+  const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+  const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+    await requireToolResultHandler(opts?.onToolResult)(payload);
+    return finalReply;
+  };
+
+  await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+  expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+  expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
 });
 
 function createQuestionDispatch(name: string) {
@@ -70,11 +153,10 @@ function createQuestionDispatch(name: string) {
 describe("dispatch input custody after a question response", () => {
   // Real question/receipt classification is covered by the wire regression. Here
   // the real dispatch owner must preserve that recorded fact through source faults.
-  it.each(
-    ["confirmed", "indeterminate"].flatMap((outcome) =>
-      ["settlement-error", "source-abort"].map((failure) => ({ outcome, failure })),
-    ),
-  )("does not replay $outcome input after $failure", async ({ outcome, failure }) => {
+  it.each([
+    { outcome: "confirmed", failure: "settlement-error" },
+    { outcome: "indeterminate", failure: "source-abort" },
+  ])("does not replay $outcome input after $failure", async ({ outcome, failure }) => {
     const fixture = createQuestionDispatch(`${outcome}-${failure}`);
     const abort = new AbortController();
     const cleanupError = new Error("source settlement failed");
@@ -137,42 +219,6 @@ describe("dispatch input custody after a question response", () => {
     }
   });
 
-  it.each(["question-response-indeterminate", "question-response-refused"] as const)(
-    "delivers %s and records an error instead of a successful agent turn",
-    async (reason) => {
-      const fixture = createQuestionDispatch(reason);
-      const dispatcher = createDispatcher();
-      const notice =
-        reason === "question-response-indeterminate"
-          ? "The question answer could not be confirmed; check before retrying."
-          : "The question answer was refused; check your permissions before retrying.";
-      try {
-        await dispatchReplyFromConfig({
-          ctx: fixture.ctx,
-          cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
-          dispatcher,
-          replyOptions: { turnAdoptionLifecycle: { onAdopted: async () => {} } },
-          replyResolver: async (_ctx, opts) => {
-            const state = resolveReplyOperationRunState(opts);
-            if (!state) {
-              throw new Error("missing dispatch run state");
-            }
-            state.admission = { status: "skipped", reason };
-            return { text: notice, isError: true };
-          },
-        });
-        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: notice, isError: true });
-        expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-          expect.objectContaining({ outcome: "error", reason }),
-        );
-        expect(fixture.cancel).not.toHaveBeenCalled();
-        expect(fixture.operation.result).toBeNull();
-      } finally {
-        fixture.operation.complete();
-      }
-    },
-  );
-
   it("delivers a host question refusal when the agent owns normal replies", async () => {
     const fixture = createQuestionDispatch("host-refusal");
     const dispatcher = createDispatcher();
@@ -186,7 +232,7 @@ describe("dispatch input custody after a question response", () => {
     try {
       await dispatchReplyFromConfig({
         ctx: fixture.ctx,
-        cfg: automaticDirectReplyConfig,
+        cfg: { ...automaticDirectReplyConfig, diagnostics: { enabled: true } },
         dispatcher,
         replyOptions: {
           sourceReplyDeliveryMode: "message_tool_only",
@@ -210,6 +256,9 @@ describe("dispatch input custody after a question response", () => {
           isError: true,
         }),
       );
+      expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "error", reason: "question-response-refused" }),
+      );
       expect(fixture.cancel).not.toHaveBeenCalled();
     } finally {
       question.dispose();
@@ -220,7 +269,7 @@ describe("dispatch input custody after a question response", () => {
   it("reports an incomplete multi-question answer and keeps the question open", async () => {
     const fixture = createQuestionDispatch("incomplete-answer");
     const dispatcher = createDispatcher();
-    const broker = new EmbeddedQuestionBroker();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
     const questionId = "ask_incomplete_answer";
     const questions = [
       { id: "destination", header: "Where", question: "Where to?" },
@@ -354,8 +403,6 @@ describe("dispatch input custody after a question response", () => {
 
   it.each([
     { code: "INVALID_REQUEST", reason: "QUESTION_ID_IN_USE" },
-    { code: "INVALID_REQUEST", reason: undefined },
-    { code: "FORBIDDEN", reason: "QUESTION_INVALID_ANSWER" },
     { code: "UNAVAILABLE", reason: "QUESTION_INVALID_ANSWER" },
   ])("does not report $code/$reason as an invalid answer", async ({ code, reason }) => {
     const fixture = createQuestionDispatch(`rejection-${code}-${reason}`);

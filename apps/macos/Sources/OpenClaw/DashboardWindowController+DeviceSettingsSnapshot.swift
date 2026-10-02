@@ -27,7 +27,7 @@ extension DashboardWindowController {
     func canUseDeviceSettings(sourceID: String) -> Bool {
         !Task.isCancelled && self.notificationSourceID == sourceID && self.isWindowOpen &&
             !self.isShowingFailurePage && self.hasCurrentBrowserSession &&
-            Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
     private func deviceSettingsSnapshot(
@@ -57,12 +57,16 @@ extension DashboardWindowController {
                 // A moved app can still remove its existing login item; enabling keeps its separate gate.
                 launchAtLoginAvailable: self.deviceLaunchAtLoginAvailable ||
                     (!AppProfile.current.isActive && state.launchAtLogin),
+                keepGatewayRunning: GatewayProcessManager.shared.gatewayHosting == .service,
+                keepGatewayRunningAvailable: GatewayProcessManager.shared.keepGatewayRunningAvailable,
                 quickChatEnabled: state.quickChatEnabled,
                 quickChatShortcut: .some(KeyboardShortcuts.getShortcut(for: .toggleQuickChat)?.description),
                 debugPaneEnabled: state.debugPaneEnabled),
             capabilities: .init(
                 canvasEnabled: state.canvasEnabled,
                 cameraEnabled: defaults.bool(forKey: cameraEnabledKey),
+                desktopSharingEnabled: defaults.object(forKey: desktopSharingEnabledKey) as? Bool ??
+                    MacNodeModeCoordinator.shared.desktopSharingEnabled,
                 computerControlEnabled: isComputerControlEnabled(),
                 computerControlProvider: ComputerControlProvider.current().rawValue,
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,
@@ -72,7 +76,8 @@ extension DashboardWindowController {
             desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,
-                cookieSync: Self.deviceCookieSyncSnapshot(state: state)),
+                cookieSync: Self.deviceCookieSyncSnapshot(state: state),
+                chromeSetupActions: ChromeExtensionSetupAction.allCases),
             permissions: .init(
                 entries: permissions,
                 location: .init(
@@ -134,7 +139,7 @@ extension DashboardWindowController {
     }
 
     private static func devicePermissionEntries() async -> [DeviceSettingsSnapshot.Permissions.Entry] {
-        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording, .appleScript])
+        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording])
         var statuses = Dictionary(uniqueKeysWithValues: DeviceSettingsPermission.macOSPermissions.map {
             ($0, DeviceSettingsPermissionStatus($0.capability.flatMap { monitored[$0] }))
         })

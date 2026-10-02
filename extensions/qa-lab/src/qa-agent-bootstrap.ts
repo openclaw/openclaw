@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements qa agent bootstrap behavior.
 import {
   DEFAULT_QA_AGENT_IDENTITY_MARKDOWN,
   readQaBootstrapScenarioCatalog,
@@ -26,16 +25,12 @@ export function buildQaScenarioPlanMarkdown(): string {
     for (const criterion of scenario.successCriteria) {
       lines.push(`  - ${criterion}`);
     }
-    if (scenario.docsRefs?.length) {
-      lines.push("- docs:");
-      for (const ref of scenario.docsRefs) {
-        lines.push(`  - ${ref}`);
-      }
-    }
-    if (scenario.codeRefs?.length) {
-      lines.push("- code:");
-      for (const ref of scenario.codeRefs) {
-        lines.push(`  - ${ref}`);
+    for (const [label, refs] of [
+      ["docs", scenario.docsRefs],
+      ["code", scenario.codeRefs],
+    ] as const) {
+      if (refs?.length) {
+        lines.push(`- ${label}:`, ...refs.map((ref) => `  - ${ref}`));
       }
     }
     lines.push("");

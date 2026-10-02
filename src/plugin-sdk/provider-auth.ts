@@ -91,10 +91,8 @@ export {
   normalizeOptionalSecretInput,
   normalizeSecretInput,
 } from "../utils/normalize-secret-input.js";
-export {
-  listKnownProviderAuthEnvVarNames,
-  omitEnvKeysCaseInsensitive,
-} from "../secrets/provider-env-vars.js";
+export { listKnownProviderAuthEnvVarNames } from "./provider-env-vars.js";
+export { omitEnvKeysCaseInsensitive } from "../secrets/provider-env-vars.js";
 export { buildOauthProviderAuthResult } from "./provider-auth-result.js";
 export {
   buildOpenAICodexCredentialExtra,

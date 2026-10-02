@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -38,6 +39,7 @@ it(
     const firstGate = createDeferred();
     const finalGate = createDeferred();
     const finalReached = createDeferred();
+    const queuedRunTerminal = createDeferred<unknown>();
     let firstReceived = false;
     let followupReceived = false;
     const tasks = new Set<Promise<void>>();
@@ -134,7 +136,22 @@ it(
         gateway: { auth: { mode: "token", token } },
         plugins: { slots: { memory: "none" } },
       } satisfies OpenClawConfig;
-      gateway = await startGatewayWithClient({ cfg, configPath: state.configPath, token });
+      gateway = await startGatewayWithClient({
+        cfg,
+        configPath: state.configPath,
+        token,
+        onEvent: ({ event, payload }) => {
+          if (
+            event === "chat" &&
+            isRecord(payload) &&
+            payload.sessionKey === sessionKey &&
+            payload.runId === "rpc-queued" &&
+            (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
+          ) {
+            queuedRunTerminal.resolve(payload);
+          }
+        },
+      });
       startupSpy.mockRestore();
       await gateway.server.startupSettled;
       await gateway.client.request("chat.send", {
@@ -150,7 +167,10 @@ it(
         idempotencyKey: "rpc-queued",
         queueMode: "followup",
       });
-      await vi.waitFor(() => expect(context?.chatQueuedTurns.has("rpc-queued")).toBe(true));
+      // chat.send acknowledges before dispatch reaches queue admission. Its source
+      // run terminalizes after handoff, while the held first reply keeps it queued.
+      await expect(queuedRunTerminal.promise).resolves.toMatchObject({ state: "final" });
+      expect(context?.chatQueuedTurns.has("rpc-queued")).toBe(true);
       firstGate.resolve();
       await finalReached.promise;
       expect(followupReceived).toBe(true);

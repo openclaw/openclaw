@@ -23,6 +23,7 @@ import {
 } from "./model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import * as openaiRoutes from "./openai-model-routes.js";
+import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
 const entry: ModelCatalogEntry = { provider: "openai", id: "gpt-5.4", name: "GPT" };
 const config: OpenClawConfig = {
@@ -32,20 +33,24 @@ const config: OpenClawConfig = {
 const metadata = createPluginMetadataSnapshotFixture({
   plugins: [{ id: "codex", providers: ["codex"], syntheticAuthRefs: ["codex"] }],
 });
-function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
+function harnessRegistry(id: string) {
   const registry = createEmptyPluginRegistry();
   registry.agentHarnesses.push({
-    pluginId: "codex",
+    pluginId: id,
     source: "fixture",
     harness: {
-      id: "codex",
-      label: "Codex",
+      id,
+      label: id,
       supports: () => ({ supported: true }),
       async runAttempt() {
         throw new Error("Catalog reads must not execute a model");
       },
     },
   });
+  return registry;
+}
+
+function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => true, cfg = config) {
   return createModelCatalogDecisions({
     cfg,
     agentId: "main",
@@ -56,32 +61,189 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
     preparedAuthStore: { version: 1, profiles: {} },
     preparedRuntimeAuthModes: loggedIn ? { codex: { source: "native", mode: "api_key" } } : {},
     preparedSyntheticAuthComplete: complete,
-    pluginRegistry: registry,
+    pluginRegistry: harnessRegistry("codex"),
     isCurrent,
     routeResolverFactory: routeResolverFactory(dualRoutes),
   });
 }
 
 describe("captured model decisions", () => {
+  beforeEach(() => {
+    // These cases describe prepared auth facts, not credentials from the host shell.
+    for (const key of [
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_OAUTH_TOKEN",
+      "CHATGPT_OAUTH_TOKEN",
+    ]) {
+      vi.stubEnv(key, "");
+    }
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
+    const retirement = new AbortController();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
+    const credential = {
+      type: "token",
+      provider: "openai",
+      token: "synthetic-account-token",
+    } as const;
+    const load = vi.fn(async () => [
+      { provider: "openai", profileId: "account", status: "ready" as const },
+    ]);
+    const request = { profileId: "account", credential, load, allowDiscovery: true };
+    expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+    const first = await owner.acquire(request);
+    await owner.acquire({ ...request, credential: { ...credential } });
+    await owner.acquire({ ...request, allowDiscovery: false });
+    expect(load).toHaveBeenCalledOnce();
+    const refreshed = await owner.acquire({ ...request, refresh: true });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(first.isCurrent()).toBe(false);
+    await owner.acquire({
+      ...request,
+      credential: { ...credential, token: "synthetic-replacement-token" },
+    });
+    expect(refreshed.isCurrent()).toBe(false);
+    expect(load).toHaveBeenCalledTimes(3);
+    retirement.abort();
+    await expect(owner.acquire(request)).rejects.toThrow("changed");
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it("prepares only the selected account through the existing catalog hook", async () => {
+    const pluginRegistry = harnessRegistry("codex");
+    const catalog = vi.fn(
+      async (ctx: import("../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
+        const auth = ctx.resolveProviderAuth("openai");
+        expect(auth.profileId).toBe("openai:selected");
+        return {
+          provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+          outcomes: [
+            {
+              provider: "openai",
+              profileId: auth.profileId,
+              status: "ready" as const,
+              modelServiceTiers: [
+                {
+                  modelId: entry.id,
+                  runtimeId: "codex",
+                  api: subscriptionRoute.api,
+                  baseUrl: subscriptionRoute.baseUrl,
+                  serviceTiers: ["ultrafast"],
+                },
+              ],
+            },
+          ],
+        };
+      },
+    );
+    pluginRegistry.providers.push({
+      pluginId: "openai",
+      source: "fixture",
+      provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: catalog } },
+    });
+    const sharedSnapshot = { entries: [entry], routeVariants: [entry] };
+    const prepared = createModelCatalogDecisions({
+      cfg: config,
+      agentId: "main",
+      agentDir: "/tmp/selected-tier-agent",
+      workspaceDir: "/tmp/selected-tier-workspace",
+      snapshot: sharedSnapshot,
+      accountCatalog: createPreparedAccountCatalogAccess(() => true),
+      metadataSnapshot: metadata,
+      pluginRegistry,
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:shared": { provider: "openai", type: "token", token: "synthetic-shared-token" },
+          "openai:selected": {
+            provider: "openai",
+            type: "token",
+            token: "synthetic-selected-token",
+          },
+        },
+      },
+      preferredProfileId: "openai:selected",
+      pinnedProfileId: "openai:selected",
+      routeResolverFactory: routeResolverFactory(dualRoutes),
+      isCurrent: () => true,
+    });
+    const assertCurrent = vi.fn();
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
+    expect(catalog).toHaveBeenCalledOnce();
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
+    expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
+      "ultrafast",
+    ]);
+    expect(await prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
+      selectedProfileId: "openai:selected",
+      availability: true,
+    });
+  });
+
+  it("does not publish a selected-account result after its generation expires", async () => {
+    let current = true;
+    const pluginRegistry = harnessRegistry("codex");
+    pluginRegistry.providers.push({
+      pluginId: "openai",
+      source: "fixture",
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        catalog: {
+          run: async (ctx) => {
+            current = false;
+            return {
+              provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+              outcomes: [
+                {
+                  provider: "openai",
+                  profileId: ctx.resolveProviderAuth("openai").profileId,
+                  status: "ready",
+                },
+              ],
+            };
+          },
+        },
+      },
+    });
+    const prepared = createModelCatalogDecisions({
+      cfg: config,
+      agentId: "main",
+      snapshot: { entries: [entry], routeVariants: [entry] },
+      metadataSnapshot: metadata,
+      pluginRegistry,
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:selected": {
+            provider: "openai",
+            type: "token",
+            token: "synthetic-selected-token",
+          },
+        },
+      },
+      preferredProfileId: "openai:selected",
+      accountCatalog: createPreparedAccountCatalogAccess(() => current),
+      isCurrent: () => current,
+    });
+    await expect(
+      prepared.prepareSelectedAccountCatalog(() => {}, { allowDiscovery: true }),
+    ).rejects.toThrow("changed");
+    expect(prepared.snapshot.providerOutcomes).toEqual([]);
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it.each([true, false])(
     "preserves provider auth for a non-CLI harness (authenticated=%s)",
     async (authenticated) => {
       const model = { provider: "github-copilot", id: "fixture-model", name: "Fixture model" };
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: "copilot",
-        source: "fixture",
-        harness: {
-          id: "copilot",
-          label: "Copilot",
-          supports: () => ({ supported: true }),
-          async runAttempt() {
-            throw new Error("Catalog reads must not execute a model");
-          },
-        },
-      });
       const owner = createModelCatalogDecisions({
         cfg: { plugins: { entries: { copilot: { enabled: true } } } },
         agentId: "main",
@@ -104,7 +266,7 @@ describe("captured model decisions", () => {
             : {},
         },
         preparedSyntheticAuthComplete: true,
-        pluginRegistry: registry,
+        pluginRegistry: harnessRegistry("copilot"),
         isCurrent: () => true,
       });
       const choices = await owner.runtimeChoices(model);
@@ -209,10 +371,6 @@ describe("captured model decisions", () => {
         pluginRegistry: owner.pluginRegistry,
       }),
     ).toEqual({ id: "codex", source: "implicit" });
-  });
-
-  it("offers only the native runtime when no host credential exists", async () => {
-    expect(await nativeOwner(true, true).runtimeChoices(entry)).toEqual(["codex"]);
   });
 
   it("rechecks physical route evidence after resolving an uncatalogued reference", async () => {

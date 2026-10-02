@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements doctor behavior.
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorConfigMutation,

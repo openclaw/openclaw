@@ -87,7 +87,28 @@ endpoints can use HTTP, provided the joining machine can reach that loopback
 endpoint, for example through a local tunnel.
 
 With only the default loopback bind and no advertised endpoint, URL discovery
-refuses to mint a link. Configure a reachable secure endpoint first; see
+refuses to mint a link. For a loopback Gateway behind public HTTPS ingress, set
+`gateway.publicOrigin` to the proxy's bare HTTPS origin and include the proxy's
+source address in `gateway.trustedProxies`.
+
+Join codes, `/pair`, and QR setup preserve existing endpoint selection:
+`plugins.entries.device-pair.config.publicUrl`, an explicitly preferred
+`gateway.remote.url`, Tailscale Serve/Funnel, the non-preferred remote URL,
+then bind-derived addresses. `gateway.publicOrigin` is used only as the final
+fallback before the loopback-only error; it does not replace an existing route.
+Callers targeting the local Gateway omit the remote URL. HTTP(S) URLs become
+matching `ws:`/`wss:` pairing endpoints.
+
+Join codes preserve the context path of a fully qualified `publicUrl`: for
+`https://pair.example/extra`, the join URL begins with
+`https://pair.example/extra/j/`. The device-pair plugin's `/pair` command instead
+retains its historical origin-only WebSocket endpoint, `wss://pair.example`.
+
+[Cloud node enrollment](/gateway/cloud-workers) uses the same resolver with an
+explicit public-ingress preference: the pairing-specific override still wins,
+then `gateway.publicOrigin` precedes discovery for freshly provisioned workers.
+
+For other deployment prerequisites, see
 [Gateway deployments that cannot host nodes](/nodes/node-host#gateway-deployments-that-cannot-host-nodes).
 Plaintext LAN pairing can use a setup code directly instead of an HTTP join URL.
 See [Connect a machine](/cli/connect).
@@ -165,6 +186,7 @@ A non-admin paired-device caller can revoke only its **own** device token. Revok
 
 - These commands require `operator.pairing` (or `operator.admin`) scope. Non-operator device roles always require `operator.admin`; see [Operator scopes](/gateway/operator-scopes).
 - Token rotation and revocation stay inside the device's approved pairing role set and scope baseline. A stray cached token entry does not grant a token-management target.
+- Rotation and revocation also invalidate the matching device and role's Dashboard read permissions and Cron caller authority retained by an admitted turn, including after a disconnect. Disconnecting alone does not revoke those permissions. Already committed Cron changes keep their outcome, and existing schedules are not canceled by revoking their creator's token.
 - Removing a device or revoking its node token also clears node runtime state. A worker cleanup error does not keep affected connections authorized or open.
 - For operator tokens, the CLI first reads the pairing list, then requests pairing plus the target token's scopes (or explicit rotate scopes). If the target is not visible, it requests admin access for cross-device management. A narrowed token does not inherit a broader device approval baseline; the caller must already be authorized for the requested scopes.
 - For paired-device token sessions, cross-device management (`remove`, `rename`, `rotate`, `revoke`) is self-only unless the caller has `operator.admin`.

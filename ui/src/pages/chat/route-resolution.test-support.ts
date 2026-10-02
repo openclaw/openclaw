@@ -60,6 +60,7 @@ function contextFor(
   const context = {
     basePath: "",
     chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
     // These tests invoke the loader directly; there is no outlet-owned match.
     router,
     lifecycleAbortSignal: lifecycle.signal,

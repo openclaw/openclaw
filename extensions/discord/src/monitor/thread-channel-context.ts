@@ -1,4 +1,3 @@
-// Discord plugin module implements thread channel context behavior.
 import { isDiscordThreadChannelType } from "../channel-type.js";
 import type { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordSlug } from "./allow-list.js";

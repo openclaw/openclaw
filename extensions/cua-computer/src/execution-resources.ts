@@ -55,10 +55,6 @@ function newHandle(): string {
   return `${RESOURCE_HANDLE_PREFIX}${randomUUID()}`;
 }
 
-function safeLabel(value: string): string {
-  return value.replaceAll(/[^a-z0-9-]/giu, "-").slice(0, 32) || "resource";
-}
-
 async function requireEntry(
   resources: Map<string, ResourceEntry>,
   executionRoot: SafeRoot,
@@ -145,7 +141,7 @@ async function createCuaExecutionResources(): Promise<CuaExecutionResources> {
   return {
     async createDirectory(kind) {
       assertActive();
-      const relativePath = `${safeLabel(kind)}-${randomUUID()}`;
+      const relativePath = `${kind}-${randomUUID()}`;
       await executionRoot.mkdir(relativePath);
       return {
         handle: register(kind, relativePath),

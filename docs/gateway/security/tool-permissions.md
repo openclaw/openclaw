@@ -28,7 +28,7 @@ For any agent/surface handling untrusted content, deny these by default:
 }
 ```
 
-`commands.restart=false` disables `/restart` and external `SIGUSR1` restart requests. The `gateway` agent tool has no restart action.
+`commands.restart=false` disables `/restart` and external `SIGUSR2` restart requests. The `gateway` agent tool has no restart action.
 
 ## Cross-provider messaging
 
@@ -143,7 +143,6 @@ Tool profiles do not narrow session-tool reach, and sandboxing only clamps the s
   agents: {
     entries: {
       personal: {
-        default: true,
         workspace: "~/.openclaw/workspace-personal",
         sandbox: { mode: "off" },
       },
@@ -159,7 +158,6 @@ Tool profiles do not narrow session-tool reach, and sandboxing only clamps the s
   agents: {
     entries: {
       family: {
-        default: true,
         workspace: "~/.openclaw/workspace-family",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro" },
         tools: {
@@ -183,7 +181,6 @@ Tool profiles do not narrow session-tool reach, and sandboxing only clamps the s
   agents: {
     entries: {
       public: {
-        default: true,
         workspace: "~/.openclaw/workspace-public",
         sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         tools: {

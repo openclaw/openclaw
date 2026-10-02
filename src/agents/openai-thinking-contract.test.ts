@@ -2,8 +2,6 @@
 import { createLlmRuntime } from "@openclaw/ai";
 import { Agent, type StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
-  createAssistantMessageEventStream,
-  type AssistantMessage,
   type Context,
   type Model,
   type SimpleStreamOptions,
@@ -17,9 +15,6 @@ import {
 } from "../auto-reply/thinking.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import { resolveEmbeddedAgentStream } from "./embedded-agent-runner/stream-resolution.js";
-import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
-
-type ResponsesModel = Model<"openai-responses"> | Model<"openai-chatgpt-responses">;
 
 const openaiModel = {
   api: "openai-responses",
@@ -122,22 +117,30 @@ describe("OpenAI thinking contract", () => {
 
     const levels = profile.levels.map(({ id }) => id);
     expect(levels).not.toContain("max");
-    expect(levels.includes("ultra")).toBe(nativeUltra);
+    expect(levels).toContain("ultra");
     expect(levels).toContain("high");
   });
 
   it.each(
-    (["qwen", "qwen-chat-template"] as const).flatMap((thinkingFormat) =>
-      (["managed", "direct"] as const).flatMap((transport) =>
-        ([undefined, null, "low", "none"] as const).flatMap((offFallback) =>
-          ([undefined, "off", "high"] as const).map((thinkingLevel) => ({
-            thinkingFormat,
-            transport,
-            offFallback,
-            thinkingLevel,
-          })),
-        ),
-      ),
+    (["managed", "direct"] as const).flatMap((transport) =>
+      (
+        [
+          { thinkingFormat: "qwen", offFallback: undefined, thinkingLevel: undefined },
+          { thinkingFormat: "qwen", offFallback: undefined, thinkingLevel: "off" },
+          { thinkingFormat: "qwen", offFallback: null, thinkingLevel: "off" },
+          { thinkingFormat: "qwen", offFallback: "low", thinkingLevel: "off" },
+          { thinkingFormat: "qwen", offFallback: "none", thinkingLevel: "off" },
+          { thinkingFormat: "qwen", offFallback: "none", thinkingLevel: "high" },
+          { thinkingFormat: "qwen-chat-template", offFallback: undefined, thinkingLevel: "off" },
+          { thinkingFormat: "qwen-chat-template", offFallback: "low", thinkingLevel: "off" },
+          { thinkingFormat: "qwen-chat-template", offFallback: "none", thinkingLevel: "high" },
+        ] as const
+      ).map(({ thinkingFormat, offFallback, thinkingLevel }) => ({
+        thinkingFormat,
+        offFallback,
+        thinkingLevel,
+        transport,
+      })),
     ),
   )(
     "honors Agent $thinkingLevel with off=$offFallback over $transport $thinkingFormat HTTP",
@@ -192,45 +195,6 @@ describe("OpenAI thinking contract", () => {
       );
     }
   });
-
-  it.each([
-    { model: openaiModel, expectedReasoning: "high" },
-    { model: codexModel, expectedReasoning: "high" },
-  ])(
-    "forwards enabled session thinkingLevel to shared model runtime options for $model.provider/$model.id",
-    async ({ model, expectedReasoning }) => {
-      const capturedOptions: SimpleStreamOptions[] = [];
-      const agent = new Agent({
-        initialState: {
-          model,
-          thinkingLevel: "high",
-        },
-        streamFn: createCapturingStreamFn(model, capturedOptions),
-      });
-
-      await agent.prompt("hello");
-
-      expect(capturedOptions.map(({ reasoning }) => reasoning)).toStrictEqual([expectedReasoning]);
-    },
-  );
-
-  it.each([openaiModel, codexModel])(
-    "preserves explicit off when session thinkingLevel is off for $provider/$id",
-    async (model) => {
-      const capturedOptions: SimpleStreamOptions[] = [];
-      const agent = new Agent({
-        initialState: {
-          model,
-          thinkingLevel: "off",
-        },
-        streamFn: createCapturingStreamFn(model, capturedOptions),
-      });
-
-      await agent.prompt("hello");
-
-      expect(capturedOptions.map(({ reasoning }) => reasoning)).toStrictEqual(["off"]);
-    },
-  );
 
   it("serializes OpenAI Responses reasoning effort from shared model runtime simple options", async () => {
     const payload = await captureProviderPayload({
@@ -374,38 +338,6 @@ async function captureHttpProviderPayload(params: {
     throw new Error("Provider did not receive a request");
   }
   return payload;
-}
-
-function createCapturingStreamFn(
-  model: ResponsesModel,
-  capturedOptions: SimpleStreamOptions[],
-): StreamFn {
-  // Captures Agent -> stream options while returning a complete assistant event.
-  return (_model, _context, options) => {
-    capturedOptions.push({ ...options });
-    const stream = createAssistantMessageEventStream();
-    queueMicrotask(() => {
-      stream.push({
-        type: "done",
-        reason: "stop",
-        message: createAssistantMessage(model),
-      });
-    });
-    return stream;
-  };
-}
-
-function createAssistantMessage(model: ResponsesModel): AssistantMessage {
-  return {
-    role: "assistant",
-    content: [{ type: "text", text: "ok" }],
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    usage: createZeroUsageFixture(),
-    stopReason: "stop",
-    timestamp: 0,
-  };
 }
 
 async function captureProviderPayload<

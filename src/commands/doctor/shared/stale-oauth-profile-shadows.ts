@@ -163,7 +163,6 @@ function removeStaleProfilesFromStore(params: {
   const removedProfileIds: string[] = [];
   const profiles = { ...params.store.profiles };
   const usageStats = params.store.usageStats ? { ...params.store.usageStats } : undefined;
-  const order = params.store.order ? { ...params.store.order } : undefined;
   const lastGood = params.store.lastGood ? { ...params.store.lastGood } : undefined;
   for (const profileId of params.profileIds) {
     const local = profiles[profileId];
@@ -189,16 +188,6 @@ function removeStaleProfilesFromStore(params: {
         }
       }
     }
-    if (order) {
-      for (const [provider, profileIds] of Object.entries(order)) {
-        const nextProfileIds = profileIds.filter((entry) => entry !== profileId);
-        if (nextProfileIds.length > 0) {
-          order[provider] = nextProfileIds;
-        } else {
-          delete order[provider];
-        }
-      }
-    }
     removedProfileIds.push(profileId);
   }
   return {
@@ -209,7 +198,6 @@ function removeStaleProfilesFromStore(params: {
         ? { usageStats }
         : { usageStats: undefined }),
       ...(lastGood && Object.keys(lastGood).length > 0 ? { lastGood } : { lastGood: undefined }),
-      ...(order && Object.keys(order).length > 0 ? { order } : { order: undefined }),
     },
     removedProfileIds,
   };

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/path-resolve.js";
+import { SHARED_AUTH_STORE_STATE_KEY } from "../../agents/auth-profiles/sqlite-json.js";
 import { writePersistedAuthProfileStoreRaw } from "../../agents/auth-profiles/sqlite.js";
 import { getRuntimeConfig, resolveConfigPath, resolveStateDir } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -37,7 +37,7 @@ describe("models.authRefresh", () => {
       'models.providers["local.service"].apiKey',
     ];
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
       plugins: { enabled: false },
       gateway: { mode: "local", auth: { mode: "token", token } },
       models: {
@@ -140,7 +140,7 @@ describe("models.authRefresh", () => {
     });
     const token = "auth-refresh-integration-token";
     const cfg = {
-      agents: { list: [{ id: "main", workspace: state.workspaceDir }] },
+      agents: { entries: { main: { workspace: state.workspaceDir } } },
       plugins: { enabled: false },
       gateway: { mode: "local", auth: { mode: "token", token } },
     };

@@ -98,6 +98,120 @@ function createDispatcher(
 }
 
 describe("authenticated WebSocket request cancellation", () => {
+  it.each([undefined, false, true])(
+    "binds only explicit reload waits to disconnect (%s)",
+    async (waitForDrain) => {
+      const socket = new EventEmitter();
+      const { client, dispatcher } = createDispatcher(socket);
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let signal: AbortSignal | undefined;
+      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+        signal = options.signal;
+        entered.resolve();
+        await release.promise;
+      });
+      const dispatch = dispatcher.dispatch(
+        {
+          type: "req",
+          id: "plugin-wait",
+          method: "plugins.reload",
+          params: {
+            plugins: [{ pluginId: "demo" }],
+            ...(waitForDrain !== undefined ? { waitForDrain } : {}),
+          },
+        },
+        client,
+      );
+      try {
+        await entered.promise;
+        socket.emit("close", 1000, Buffer.alloc(0));
+        if (waitForDrain) {
+          expect(signal?.aborted).toBe(true);
+        } else {
+          expect(signal).toBeUndefined();
+        }
+      } finally {
+        release.resolve();
+        await dispatch;
+      }
+      expect(socket.listenerCount("close")).toBe(0);
+    },
+  );
+
+  it("cancels only access-bound work after a grant ends, including after ordinary disconnect", async () => {
+    const { registry, frames, waitForFrameCount } = createPairedNode();
+    const guestSocket = new EventEmitter();
+    const guest = createDispatcher(guestSocket, {
+      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      mode: GATEWAY_CLIENT_MODES.UI,
+    });
+    const staff = createDispatcher(new EventEmitter(), {
+      id: GATEWAY_CLIENT_IDS.CONTROL_UI,
+      mode: GATEWAY_CLIENT_MODES.UI,
+    });
+    const profile = {
+      profileId: "same-person",
+      displayName: null,
+      avatarRevision: "1",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    guest.client.authenticatedUserProfile = profile;
+    staff.client.authenticatedUserProfile = profile;
+    const grant = new AbortController();
+    guest.client.internal = {
+      operatorAccessAuthority: {
+        signal: grant.signal,
+        assertCurrent: () => grant.signal.throwIfAborted(),
+      },
+    };
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      const result = await registry.invoke({
+        nodeId: "paired-node",
+        command: "ollama.chat",
+        timeoutMs: 10_000,
+        signal: options.signal,
+      });
+      options.respond(result.ok, result.payload);
+    });
+    const request = (id: string) => ({
+      type: "req",
+      id,
+      method: "test.access-lifetime",
+      params: { sessionKey: "agent:main:shared" },
+    });
+    const guestDispatch = guest.dispatcher.dispatch(request("guest"), guest.client);
+    await waitForFrameCount(1);
+    const staffDispatch = staff.dispatcher.dispatch(request("staff"), staff.client);
+    try {
+      await waitForFrameCount(2);
+      guestSocket.emit("close", 1006, Buffer.alloc(0));
+      expect(frames).toHaveLength(2);
+      grant.abort(new Error("Grant ended"));
+      await waitForFrameCount(3);
+      const guestRequest = JSON.parse(frames[0] ?? "{}") as { payload: { id: string } };
+      const staffRequest = JSON.parse(frames[1] ?? "{}") as { payload: { id: string } };
+      expect(JSON.parse(frames[2] ?? "{}")).toMatchObject({
+        event: "node.invoke.cancel",
+        payload: { invokeId: guestRequest.payload.id },
+      });
+      expect(
+        registry.handleInvokeResult({
+          id: staffRequest.payload.id,
+          nodeId: "paired-node",
+          connId: "paired-node-connection",
+          ok: true,
+        }),
+      ).toBe(true);
+      await staff.awaitResponseFrame("staff");
+      expect(staff.close).not.toHaveBeenCalled();
+    } finally {
+      registry.unregister("paired-node-connection");
+      await Promise.all([guestDispatch, staffDispatch]);
+    }
+  });
+
   it("forwards CLI socket closure to the actual first-party node cancel event", async () => {
     const socket = new EventEmitter();
     const { registry, frames, waitForFrameCount } = createPairedNode();
@@ -152,41 +266,38 @@ describe("authenticated WebSocket request cancellation", () => {
     expect(socket.listenerCount("close")).toBe(0);
   });
 
-  it.each(["test.trace", "sessions.cleanup", "agents.delete"])(
-    "keeps authenticated %s work alive after its socket disconnects",
-    async (method) => {
-      const socket = new EventEmitter();
-      const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
-      const invoked = createDeferredCore();
-      const completion = createDeferredCore();
-      let completed = false;
-      handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
-        invoked.resolve();
-        await completion.promise;
-        completed = true;
-        options.respond(true, { ok: true });
-      });
+  it("keeps ordinary authenticated work alive after its socket disconnects", async () => {
+    const socket = new EventEmitter();
+    const { awaitResponseFrame, client, dispatcher } = createDispatcher(socket);
+    const invoked = createDeferredCore();
+    const completion = createDeferredCore();
+    let completed = false;
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      invoked.resolve();
+      await completion.promise;
+      completed = true;
+      options.respond(true, { ok: true });
+    });
 
-      const dispatch = dispatcher.dispatch(
-        { type: "req", id: "ordinary-request", method, params: {} },
-        client,
-      );
-      try {
-        await invoked.promise;
-        expect(handleGatewayRequest).toHaveBeenCalledOnce();
+    const dispatch = dispatcher.dispatch(
+      { type: "req", id: "ordinary-request", method: "test.trace", params: {} },
+      client,
+    );
+    try {
+      await invoked.promise;
+      expect(handleGatewayRequest).toHaveBeenCalledOnce();
 
-        expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-        expect(socket.listenerCount("close")).toBe(0);
-        socket.emit("close", 1006, Buffer.alloc(0));
-        expect(completed).toBe(false);
-      } finally {
-        completion.resolve();
-        await awaitResponseFrame("ordinary-request");
-        await dispatch;
-      }
-      expect(completed).toBe(true);
-    },
-  );
+      expect(handleGatewayRequest.mock.calls[0]?.[0]).not.toHaveProperty("signal");
+      expect(socket.listenerCount("close")).toBe(0);
+      socket.emit("close", 1006, Buffer.alloc(0));
+      expect(completed).toBe(false);
+    } finally {
+      completion.resolve();
+      await awaitResponseFrame("ordinary-request");
+      await dispatch;
+    }
+    expect(completed).toBe(true);
+  });
 
   it("cancels a session companion ask when its authenticated socket closes", async () => {
     const socket = new EventEmitter();

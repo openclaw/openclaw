@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -15,19 +14,10 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
-  createOpenAIRealtimeTranscriptionClientSecret,
+  createOpenAIRealtimeClientSecret,
   readRealtimeErrorDetail,
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
-
-type OpenAIRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  language?: string;
-  model?: string;
-  prompt?: string;
-  silenceDurationMs?: number;
-  vadThreshold?: number;
-};
 
 type OpenAIRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey?: string;
@@ -47,26 +37,6 @@ type RealtimeEvent = {
   previous_item_id?: string | null;
   audio_end_ms?: number;
   error?: unknown;
-};
-
-type OpenAIRealtimeTranscriptionSessionPayload = {
-  type: "transcription";
-  audio: {
-    input: {
-      format: { type: "audio/pcmu" };
-      transcription: {
-        model: string;
-        language?: string;
-        prompt?: string;
-      };
-      turn_detection: {
-        type: "server_vad";
-        threshold: number;
-        prefix_padding_ms: number;
-        silence_duration_ms: number;
-      };
-    };
-  };
 };
 
 const OPENAI_REALTIME_TRANSCRIPTION_URL = "wss://api.openai.com/v1/realtime?intent=transcription";
@@ -109,9 +79,7 @@ function appendedUtf8ByteLength(previous: string, appended: string): number {
   return joinsSurrogatePair ? appendedBytes - 2 : appendedBytes;
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): OpenAIRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey:
@@ -127,17 +95,13 @@ function normalizeProviderConfig(
     model: normalizeOptionalString(raw?.model) ?? normalizeOptionalString(raw?.sttModel),
     prompt: normalizeOptionalString(raw?.prompt),
     silenceDurationMs: asSafeIntegerInRange(raw?.silenceDurationMs, { min: 0 }),
-    vadThreshold: normalizeVadThreshold(raw?.vadThreshold),
+    vadThreshold: asFiniteNumberInRange(raw?.vadThreshold, { min: 0, max: 1 }),
   };
-}
-
-function normalizeVadThreshold(value: unknown): number | undefined {
-  return asFiniteNumberInRange(value, { min: 0, max: 1 });
 }
 
 function buildOpenAIRealtimeTranscriptionSessionPayload(
   config: OpenAIRealtimeTranscriptionSessionConfig,
-): OpenAIRealtimeTranscriptionSessionPayload {
+) {
   return {
     type: "transcription",
     audio: {
@@ -172,7 +136,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
     profileTypes: ["api_key"],
   });
   if (authToken) {
-    const clientSecret = await createOpenAIRealtimeTranscriptionClientSecret(
+    const clientSecret = await createOpenAIRealtimeClientSecret(
       {
         authToken,
         auditContext: "openai-realtime-transcription-session",
@@ -180,6 +144,7 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
         authRejectedMessage: OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED,
       },
       runtime,
+      "OpenAI Realtime transcription",
     );
     return clientSecret.value;
   }
@@ -355,8 +320,6 @@ function createOpenAIRealtimeTranscriptionSession(
       completedTranscripts.delete(itemId);
       if (transcript) {
         retainedTranscriptBytes -= Buffer.byteLength(transcript, "utf8");
-      }
-      if (transcript) {
         config.onTranscript?.(transcript);
       }
     }

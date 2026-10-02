@@ -8,42 +8,21 @@ import {
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
-// Telegram plugin module implements group policy behavior.
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 
 function parseTelegramGroupId(value?: string | null) {
   const raw = value?.trim() ?? "";
   if (!raw) {
     return { chatId: undefined, topicId: undefined };
   }
-  const parts = raw.split(":").filter(Boolean);
-  const chatId = parts[0];
-  const second = parts[1];
-  const third = parts[2];
+  const [chatId, second, third] = raw.split(":").filter(Boolean);
+  const topicId = second === "topic" ? third : second;
   if (
-    parts.length >= 3 &&
-    second === "topic" &&
     chatId !== undefined &&
     /^-?\d+$/.test(chatId) &&
-    third !== undefined &&
-    /^\d+$/.test(third)
+    topicId !== undefined &&
+    /^\d+$/.test(topicId)
   ) {
-    return {
-      chatId: expectDefined(chatId, "validated Telegram group chat id"),
-      topicId: expectDefined(third, "validated Telegram topic id"),
-    };
-  }
-  if (
-    parts.length >= 2 &&
-    chatId !== undefined &&
-    /^-?\d+$/.test(chatId) &&
-    second !== undefined &&
-    /^\d+$/.test(second)
-  ) {
-    return {
-      chatId: expectDefined(chatId, "validated Telegram group chat id"),
-      topicId: expectDefined(second, "validated Telegram topic id"),
-    };
+    return { chatId, topicId };
   }
   return { chatId: raw, topicId: undefined };
 }

@@ -4,17 +4,23 @@ import { pathToFileURL } from "node:url";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
-export type TelegramTestCredential = {
+type TelegramUserCredential = {
+  testerUserId: string;
+  tdlibArchiveBase64: string;
+  tdlibArchiveSha256: string;
+  tdlibVersion: string;
+};
+
+export type TelegramTestCredential = TelegramUserCredential & {
   environment: "test";
   groupId: string;
   schemaVersion: 1;
   sutBotId: string;
   sutToken: string;
   sutUsername: string;
-  tdlibArchiveBase64: string;
-  tdlibArchiveSha256: string;
-  tdlibVersion: string;
-  testerUserId: string;
+  forumGroupId?: string;
+  forumTopicId?: number;
+  participants?: Array<TelegramUserCredential & { alias: string }>;
 };
 
 type RestoredTelegramTestCredential = TelegramTestCredential & {
@@ -132,7 +138,32 @@ export async function loadTelegramUserbotSkillRuntime(params?: {
     createStateRoot: () =>
       fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-telegram-")),
     parseCredential(value) {
-      return parseCredentialResult(Reflect.apply(parseCredential, undefined, [value]));
+      const normalized: unknown = Reflect.apply(parseCredential, undefined, [value]);
+      const credential = parseCredentialResult(normalized);
+      // The skill parser owns validation; retain only its normalized optional fixture fields.
+      if (isRecord(normalized)) {
+        if (typeof normalized.forumGroupId === "string") {
+          credential.forumGroupId = normalized.forumGroupId;
+        }
+        if (typeof normalized.forumTopicId === "number") {
+          credential.forumTopicId = normalized.forumTopicId;
+        }
+        if (Array.isArray(normalized.participants)) {
+          credential.participants = normalized.participants.map((participant: unknown) => {
+            if (!isRecord(participant)) {
+              throw new Error("Telegram userbot parser returned an invalid participant.");
+            }
+            return {
+              alias: requireString(participant, "alias"),
+              testerUserId: requireString(participant, "testerUserId"),
+              tdlibArchiveBase64: requireString(participant, "tdlibArchiveBase64"),
+              tdlibArchiveSha256: requireString(participant, "tdlibArchiveSha256"),
+              tdlibVersion: requireString(participant, "tdlibVersion"),
+            };
+          });
+        }
+      }
+      return credential;
     },
     restoreCredential(value, stateRoot) {
       return parseRestoredCredential(

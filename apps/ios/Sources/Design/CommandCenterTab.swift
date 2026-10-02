@@ -17,21 +17,12 @@ struct CommandCenterTab: View {
     var openAutomations: () -> Void
     var openUsage: () -> Void
 
-    enum WorkRoute {
-        case chat(String?)
-        case settings
-    }
-
-    struct WorkItem: Identifiable {
-        let id: String
+    struct WorkItem {
         let icon: String
         let title: String
         let detail: String
         let state: String
-        let trailing: String
         let color: Color
-        let progress: Double?
-        let route: WorkRoute
         let isUnread: Bool
         let isPinned: Bool
         var sessionColor: String?
@@ -40,7 +31,7 @@ struct CommandCenterTab: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                CommandControlBackground()
+                OpenClawProBackground()
                 self.commandAmbientOverlay
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
@@ -125,7 +116,7 @@ struct CommandCenterTab: View {
         let approvalCount = self.appModel.pendingExecApprovalCount
         let cronCount = self.dashboardModel.failedCronJobCount + self.dashboardModel.overdueCronJobCount
         if approvalCount > 0 || cronCount > 0 {
-            CommandPanel(tint: OpenClawBrand.warn, padding: 12) {
+            ProCard(tint: OpenClawBrand.warn, padding: 12) {
                 VStack(alignment: .leading, spacing: 8) {
                     self.cardHeader(title: String(localized: "Attention"))
                     if approvalCount > 0 {
@@ -151,7 +142,7 @@ struct CommandCenterTab: View {
     private var usageSummaryCard: some View {
         if let usage = self.dashboardModel.usage {
             Button(action: self.openUsage) {
-                CommandPanel(padding: 12) {
+                ProCard(padding: 12) {
                     HStack(spacing: 12) {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(String(localized: "31-day usage"))
@@ -218,14 +209,16 @@ struct CommandCenterTab: View {
     }
 
     private var overviewSessions: [OpenClawChatSessionEntry] {
-        Self.visibleOverviewSessions(self.dashboardModel.sessions)
+        Self.visibleOverviewSessions(self.dashboardModel.sessions, now: self.dashboardModel.now)
     }
 
     static func visibleOverviewSessions(
-        _ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
+        _ sessions: [OpenClawChatSessionEntry],
+        now: Date = .now) -> [OpenClawChatSessionEntry]
     {
         sessions.filter {
-            $0.archived != true && !ChatSessionSidebarModel.isHiddenInternalSession($0.key)
+            SessionStatusScope.active.includes($0, at: now) &&
+                !ChatSessionSidebarModel.isHiddenInternalSession($0.key)
         }
     }
 
@@ -269,7 +262,7 @@ struct CommandCenterTab: View {
             subtitleLineLimit: 1)
         {
             if let headerSidebarAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                OpenClawSidebarControlButton(action: headerSidebarAction)
             }
         } accessory: {
             HStack(spacing: 10) {
@@ -304,7 +297,7 @@ struct CommandCenterTab: View {
     }
 
     private var gatewayCard: some View {
-        CommandPanel(isProminent: true, padding: 12) {
+        ProCard(isProminent: true, padding: 12) {
             VStack(alignment: .leading, spacing: 10) {
                 self.cardHeader(title: "Gateway")
 
@@ -355,12 +348,12 @@ struct CommandCenterTab: View {
     }
 
     private var defaultChatSessionSection: some View {
-        CommandPanel(padding: 12) {
+        ProCard(padding: 12) {
             VStack(spacing: 10) {
                 self.cardHeader(title: "Agent session")
 
                 Button {
-                    self.openDefaultChatSession()
+                    self.openSessionKey(nil)
                 } label: {
                     CommandSessionRow(item: self.defaultChatWorkItem)
                 }
@@ -370,7 +363,7 @@ struct CommandCenterTab: View {
     }
 
     private var recentSessions: some View {
-        CommandPanel(padding: 12) {
+        ProCard(padding: 12) {
             VStack(spacing: 10) {
                 self.cardHeader(title: "Recent sessions")
 
@@ -393,27 +386,23 @@ struct CommandCenterTab: View {
                                 for: session,
                                 currentSessionKey: self.appModel.chatSessionKey)
                             Button {
-                                self.open(session)
+                                self.openSessionKey(session.key)
                             } label: {
                                 CommandSessionRow(item: item)
                             }
                             .buttonStyle(.plain)
                             .commandSessionActions(
                                 session: session,
+                                mainSessionKey: self.appModel.mainSessionKey,
                                 categories: self.sessionCategories,
                                 isEnabled: self.sessionControlsAvailable,
                                 canArchive: ChatSessionSidebarModel.canArchiveSession(
                                     session,
-                                    mainSessionKey: self.appModel.defaultChatSessionKey),
-                                actions: CommandSessionActions(
-                                    rename: { self.patchSession(session, label: .some($0)) },
-                                    moveToGroup: { self.patchSession(session, category: .some($0)) },
-                                    setColor: { self.patchSession(session, color: .some($0)) },
-                                    togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-                                    toggleUnread: { self.patchSession(session, unread: session.unread != true) },
-                                    fork: { self.forkSession(session) },
-                                    toggleArchived: { self.archiveSession(session) },
-                                    delete: { self.deleteSession(session) }))
+                                    mainSessionKey: self.appModel.mainSessionKey),
+                                actions: .gateway(
+                                    session: session,
+                                    performMutation: self.performSessionMutation,
+                                    fork: { self.forkSession(session) }))
                         }
 
                         if self.hasMoreRecentSessions {
@@ -472,8 +461,8 @@ struct CommandCenterTab: View {
     }
 
     private var gatewayAddressText: String {
-        self.normalized(self.appModel.gatewayRemoteAddress)
-            ?? self.normalized(self.appModel.gatewayServerName)
+        Self.normalized(self.appModel.gatewayRemoteAddress)
+            ?? Self.normalized(self.appModel.gatewayServerName)
             ?? String(localized: "Unknown")
     }
 
@@ -483,17 +472,13 @@ struct CommandCenterTab: View {
     }
 
     private var defaultChatWorkItem: WorkItem {
-        let isOpen = self.appModel.chatSessionKey == self.appModel.defaultChatSessionKey
+        let isOpen = self.appModel.chatSessionKey == self.appModel.mainSessionKey
         return WorkItem(
-            id: "default-chat",
             icon: isOpen ? "bubble.left.and.text.bubble.right.fill" : "bubble.left.fill",
             title: self.appModel.activeAgentName,
             detail: self.defaultChatActivityText,
             state: isOpen ? "open" : "default",
-            trailing: "chat",
             color: isOpen ? OpenClawBrand.accent : OpenClawBrand.ok,
-            progress: nil,
-            route: .chat(nil),
             isUnread: self.effectiveDefaultChatSessionEntry?.unread == true,
             isPinned: self.effectiveDefaultChatSessionEntry?.pinned == true,
             sessionColor: self.effectiveDefaultChatSessionEntry?.color)
@@ -529,80 +514,26 @@ struct CommandCenterTab: View {
         let mainKey = ChatSessionSidebarModel.selectedSessionKey(
             sessions: sessions,
             currentSessionKey: "main",
-            mainSessionKey: self.appModel.defaultChatSessionKey,
+            mainSessionKey: self.appModel.mainSessionKey,
             activeAgentID: self.appModel.chatAgentId,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract)
         return sessions.first { $0.key == mainKey }
     }
 
     private var effectiveRecentChatSessions: [OpenClawChatSessionEntry] {
-        Self.sessionChoices(
-            self.dashboardModel.sessions,
-            defaultSessionKey: self.appModel.defaultChatSessionKey)
+        self.dashboardModel.sessions.filter {
+            SessionStatusScope.active.includes($0, at: self.dashboardModel.now) &&
+                Self.isRecentChatSession($0.key, defaultSessionKey: self.appModel.mainSessionKey)
+        }
     }
 
     private var sessionControlsAvailable: Bool {
         !self.appModel.isLocalChatFixtureEnabled && self.appModel.isOperatorGatewayConnected
     }
 
-    private func open(_ route: WorkRoute) {
-        switch route {
-        case let .chat(sessionKey):
-            self.appModel.openChat(sessionKey: sessionKey)
-            self.openChat()
-        case .settings:
-            self.openSettings()
-        }
-    }
-
-    private func open(_ session: OpenClawChatSessionEntry) {
-        self.open(.chat(session.key))
-    }
-
-    private func openDefaultChatSession() {
-        self.open(.chat(nil))
-    }
-
-    private func patchSession(
-        _ session: OpenClawChatSessionEntry,
-        label: String?? = nil,
-        category: String?? = nil,
-        color: String?? = nil,
-        pinned: Bool? = nil,
-        archived: Bool? = nil,
-        unread: Bool? = nil)
-    {
-        self.performSessionMutation { transport in
-            try await transport.patchSession(
-                key: session.key,
-                expectedSessionID: archived == nil ? nil : session.sessionId,
-                label: label,
-                category: category,
-                color: color,
-                pinned: pinned,
-                archived: archived,
-                unread: unread)
-        }
-    }
-
-    private func deleteSession(_ session: OpenClawChatSessionEntry) {
-        self.performSessionMutation(resetActiveSessionKey: session.key) { transport in
-            try await transport.deleteSession(key: session.key)
-        }
-    }
-
-    private func archiveSession(_ session: OpenClawChatSessionEntry) {
-        self.performSessionMutation(resetActiveSessionKey: session.key) { transport in
-            try await transport.patchSession(
-                key: session.key,
-                expectedSessionID: session.sessionId,
-                label: nil,
-                category: nil,
-                color: nil,
-                pinned: nil,
-                archived: true,
-                unread: nil)
-        }
+    private func openSessionKey(_ key: String?) {
+        self.appModel.openChat(sessionKey: key)
+        self.openChat()
     }
 
     private func forkSession(_ session: OpenClawChatSessionEntry) {
@@ -612,7 +543,7 @@ struct CommandCenterTab: View {
                     parentKey: session.key,
                     fromLastCompleted: session.hasActiveRun == true)
                 await self.dashboardModel.refreshSessions(appModel: self.appModel)
-                self.open(.chat(key))
+                self.openSessionKey(key)
             } catch {
                 self.dashboardModel.reportSessionError(error)
             }
@@ -636,58 +567,38 @@ struct CommandCenterTab: View {
         }
     }
 
-    private static func sessionChoices(
-        _ sessions: [OpenClawChatSessionEntry],
-        defaultSessionKey: String) -> [OpenClawChatSessionEntry]
-    {
-        sessions.filter {
-            self.isRecentChatSession($0.key, defaultSessionKey: defaultSessionKey)
-        }
-    }
-
     static func sessionWorkItem(
         for session: OpenClawChatSessionEntry,
-        currentSessionKey: String) -> WorkItem
+        currentSessionKey: String,
+        now: Date = .now) -> WorkItem
     {
         let isCurrent = session.key == currentSessionKey
         return WorkItem(
-            id: "chat-session-\(session.key)",
             icon: isCurrent ? "bubble.left.and.text.bubble.right.fill" : "bubble.left.fill",
             title: Self.sessionTitle(session),
-            detail: Self.sessionDetail(session),
+            detail: Self.sessionDetail(session, now: now),
             state: isCurrent ? "open" : "recent",
-            trailing: "chat",
             color: isCurrent ? OpenClawBrand.accent : OpenClawBrand.ok,
-            progress: nil,
-            route: .chat(session.key),
             isUnread: session.unread == true,
             isPinned: session.pinned == true,
             sessionColor: session.color)
     }
 
     static func sessionTitle(_ session: OpenClawChatSessionEntry) -> String {
-        let label = session.label?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let label, !label.isEmpty {
+        if let label = self.normalized(session.label) {
             return label
         }
-
-        let displayName = session.displayName?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let displayName, !displayName.isEmpty {
+        if let displayName = self.normalized(session.displayName) {
             return Self.redactedSessionTitle(for: displayName) ?? displayName
         }
-        let autoLabel = session.autoLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let autoLabel, !autoLabel.isEmpty {
+        if let autoLabel = self.normalized(session.autoLabel) {
             return autoLabel
         }
-        let subject = session.subject?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let subject, !subject.isEmpty {
+        if let subject = self.normalized(session.subject) {
             return Self.redactedSessionTitle(for: subject) ?? subject
         }
         // Generic key placeholders only after real topic names are absent.
-        if let title = redactedSessionTitle(for: session.key) {
-            return title
-        }
-        return session.key
+        return self.redactedSessionTitle(for: session.key) ?? session.key
     }
 
     fileprivate static func redactedSessionTitle(for key: String) -> String? {
@@ -713,8 +624,6 @@ struct CommandCenterTab: View {
         let words = key
             .replacingOccurrences(of: "_", with: "-")
             .split(separator: "-")
-            .map(String.init)
-            .filter { !$0.isEmpty }
         guard !words.isEmpty else { return nil }
 
         return words
@@ -729,10 +638,15 @@ struct CommandCenterTab: View {
             .joined(separator: " ")
     }
 
-    static func sessionDetail(_ session: OpenClawChatSessionEntry) -> String {
+    static func sessionDetail(_ session: OpenClawChatSessionEntry, now: Date = .now) -> String {
+        if session.archived != true, session.isSnoozed(at: now), let milliseconds = session.snoozedUntil {
+            let wake = OpenClawChatSessionSnooze.wakeDescription(
+                Date(timeIntervalSince1970: milliseconds / 1000), now: now)
+            return String(format: String(localized: "Wakes %@"), wake)
+        }
         let activityAt = session.lastActivityAt ?? session.updatedAt
         if let activityAt, activityAt > 0 {
-            return self.relativeTimeText(forMilliseconds: activityAt)
+            return self.relativeTimeText(forMilliseconds: activityAt, relativeTo: now)
         }
         return session.key
     }
@@ -751,12 +665,6 @@ struct CommandCenterTab: View {
         return formatter.localizedString(for: date, relativeTo: now)
     }
 
-    fileprivate nonisolated static func isHiddenInternalSession(_ key: String) -> Bool {
-        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
-        return trimmed == "onboarding" || trimmed.hasSuffix(":onboarding")
-    }
-
     nonisolated static func isRecentChatSession(_ key: String, defaultSessionKey: String) -> Bool {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return false }
@@ -768,7 +676,7 @@ struct CommandCenterTab: View {
         {
             return false
         }
-        if self.isHiddenInternalSession(trimmed) { return false }
+        if ChatSessionSidebarModel.isHiddenInternalSession(trimmed) { return false }
         return !self.isAgentDeviceSession(trimmed, defaultSessionKey: defaultSessionKey)
     }
 
@@ -799,13 +707,13 @@ struct CommandCenterTab: View {
     }
 
     private var gatewaySubtitle: String {
-        if let server = normalized(appModel.gatewayServerName) {
+        if let server = Self.normalized(appModel.gatewayServerName) {
             return String(
                 format: String(localized: "%@ on %@"),
                 self.appModel.activeAgentName,
                 server)
         }
-        if let address = normalized(appModel.gatewayRemoteAddress) {
+        if let address = Self.normalized(appModel.gatewayRemoteAddress) {
             return String(
                 format: String(localized: "%@ via %@"),
                 self.appModel.activeAgentName,
@@ -814,14 +722,36 @@ struct CommandCenterTab: View {
         return self.appModel.gatewayDisplayStatusText
     }
 
-    private func normalized(_ value: String?) -> String? {
-        Self.normalized(value)
-    }
-
     private static func normalized(_ value: String?) -> String? {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+enum SessionStatusScope: String, CaseIterable {
+    case active
+    case snoozed
+    case archived
+
+    static func available(isConnected: Bool) -> [Self] {
+        isConnected ? self.allCases : [.active, .snoozed]
+    }
+
+    var title: String {
+        switch self {
+        case .active: String(localized: "Active")
+        case .snoozed: String(localized: "Snoozed")
+        case .archived: String(localized: "Archived")
+        }
+    }
+
+    func includes(_ session: OpenClawChatSessionEntry, at now: Date) -> Bool {
+        switch self {
+        case .active: session.archived != true && !session.isSnoozed(at: now)
+        case .snoozed: session.archived != true && session.isSnoozed(at: now)
+        case .archived: session.archived == true
+        }
     }
 }
 
@@ -839,33 +769,21 @@ struct CommandSessionsScreen: View {
     @State private var sessions: [OpenClawChatSessionEntry] = []
     @State private var isLoading = false
     @State private var loadErrorText: String?
-    @State private var showArchived = false
+    @State private var statusScope: SessionStatusScope = .active
+    @State private var now: Date = .now
     @State private var knownGroups = SessionGroupStore.load()
     @State private var groupEditor: GroupEditor?
     @State private var groupDraftText = ""
     @State private var groupPendingDelete: String?
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let usesNativeNavigationChrome: Bool
     let openChat: () -> Void
-
-    init(
-        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        usesNativeNavigationChrome: Bool = false,
-        openChat: @escaping () -> Void)
-    {
-        self.headerSidebarAction = headerSidebarAction
-        self.usesNativeNavigationChrome = usesNativeNavigationChrome
-        self.openChat = openChat
-    }
 
     var body: some View {
         ZStack {
-            CommandControlBackground()
+            OpenClawProBackground()
             ScrollView {
                 VStack(alignment: .leading, spacing: 10) {
-                    if !self.usesNativeNavigationChrome {
-                        self.header
-                    }
+                    self.header
                     self.sessionsPanel
                 }
                 .padding(.top, 16)
@@ -875,9 +793,26 @@ struct CommandSessionsScreen: View {
         }
         .navigationTitle("Sessions")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar(self.usesNativeNavigationChrome ? .visible : .hidden, for: .navigationBar)
+        .toolbar(.hidden, for: .navigationBar)
         .task(id: self.refreshID) {
             await self.refreshSessions()
+        }
+        .onChange(of: self.availableStatusScopes, initial: true) { _, scopes in
+            if !scopes.contains(self.statusScope) {
+                self.statusScope = .active
+            }
+        }
+        .task(id: self.sessions) {
+            self.now = .now
+            while let wake = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now) {
+                do {
+                    try await Task.sleep(for: .seconds(max(0, wake.timeIntervalSinceNow) + 0.001))
+                    try Task.checkCancellation()
+                } catch {
+                    return
+                }
+                self.now = .now
+            }
         }
         .alert(self.groupEditorTitle, isPresented: self.groupEditorBinding) {
             TextField("Group name", text: self.$groupDraftText)
@@ -929,7 +864,7 @@ struct CommandSessionsScreen: View {
             subtitleFont: OpenClawType.captionMedium)
         {
             if let headerSidebarAction {
-                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
+                OpenClawSidebarControlButton(action: headerSidebarAction)
             }
         } accessory: {
             EmptyView()
@@ -938,30 +873,40 @@ struct CommandSessionsScreen: View {
     }
 
     private var sessionsPanel: some View {
-        CommandPanel(padding: 0) {
+        ProCard(padding: 0) {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
-                    Text(self.showArchived
-                        ? LocalizedStringKey("Archived sessions")
-                        : LocalizedStringKey("Recent sessions"))
+                    Text(verbatim: self.panelTitle)
                         .font(OpenClawType.subheadBold)
                     Spacer(minLength: 8)
                     if self.isLoading {
                         ProgressView()
                             .controlSize(.small)
                     }
-                    if self.sessionControlsAvailable {
-                        Toggle(isOn: self.$showArchived) {
-                            Text("Show Archived")
-                                .font(OpenClawType.captionMedium)
-                        }
-                        .toggleStyle(.switch)
-                        .controlSize(.mini)
-                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 10)
                 .padding(.bottom, 3)
+
+                if self.appModel.isCommandSessionListAvailable || !self.sessions.isEmpty {
+                    Picker(selection: self.$statusScope) {
+                        ForEach(self.availableStatusScopes, id: \.self) { scope in
+                            Text(verbatim: scope.title)
+                                .font(OpenClawType.captionMedium)
+                                .tag(scope)
+                                .accessibilityLabel(scope == .archived
+                                    ? String(localized: "Show Archived") : scope.title)
+                                .accessibilityIdentifier("Sessions.Status.\(scope.rawValue)")
+                        }
+                    } label: {
+                        Text("Session status")
+                            .font(OpenClawType.captionMedium)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("Sessions.StatusScope")
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                }
 
                 if let loadErrorText {
                     CommandEmptyStateRow(
@@ -1004,9 +949,11 @@ struct CommandSessionsScreen: View {
 
     private var headerDetail: String {
         if self.isLoading, self.sessions.isEmpty {
-            return self.showArchived
-                ? String(localized: "Loading archived sessions")
-                : String(localized: "Loading recent sessions")
+            switch self.statusScope {
+            case .active: return String(localized: "Loading recent sessions")
+            case .snoozed: return String(localized: "Loading snoozed sessions")
+            case .archived: return String(localized: "Loading archived sessions")
+            }
         }
         let count = self.visibleSessions.count
         if count == 0 {
@@ -1020,10 +967,9 @@ struct CommandSessionsScreen: View {
         self.sessions
             .filter { CommandCenterTab.isRecentChatSession(
                 $0.key,
-                defaultSessionKey: self.appModel.defaultChatSessionKey) }
-            // Gate on the entry's own archived flag so a stale pre-toggle list can
-            // never render active sessions with archived-only actions mid-refresh.
-            .filter { self.showArchived ? $0.archived == true : $0.archived != true }
+                defaultSessionKey: self.appModel.mainSessionKey) }
+            // A stale list must still obey the selected scope while its replacement loads.
+            .filter { self.statusScope.includes($0, at: self.now) }
     }
 
     private var sessionSections: [CommandSessionSection] {
@@ -1038,23 +984,39 @@ struct CommandSessionsScreen: View {
         !self.appModel.isLocalChatFixtureEnabled && self.appModel.isOperatorGatewayConnected
     }
 
+    private var availableStatusScopes: [SessionStatusScope] {
+        SessionStatusScope.available(isConnected: self.appModel.isOperatorGatewayConnected)
+    }
+
     private var emptyTitle: String {
         guard self.appModel.isCommandSessionListAvailable else {
             return String(localized: "Gateway offline")
         }
-        return self.showArchived
-            ? String(localized: "No archived sessions")
-            : String(localized: "No recent sessions")
+        switch self.statusScope {
+        case .active: return String(localized: "No recent sessions")
+        case .snoozed: return String(localized: "No snoozed sessions")
+        case .archived: return String(localized: "No archived sessions")
+        }
     }
 
     private var emptyDetail: String {
-        self.showArchived
-            ? String(localized: "Archived sessions will appear here.")
-            : String(localized: "Start a chat and it will appear here.")
+        switch self.statusScope {
+        case .active: String(localized: "Start a chat and it will appear here.")
+        case .snoozed: String(localized: "Snoozed sessions will appear here until they wake.")
+        case .archived: String(localized: "Archived sessions will appear here.")
+        }
+    }
+
+    private var panelTitle: String {
+        switch self.statusScope {
+        case .active: String(localized: "Recent sessions")
+        case .snoozed: String(localized: "Snoozed sessions")
+        case .archived: String(localized: "Archived sessions")
+        }
     }
 
     private var refreshID: String {
-        "\(self.appModel.commandSessionListMode):\(self.showArchived)"
+        "\(self.appModel.chatViewModelIdentityID):\(self.statusScope.rawValue)"
     }
 
     @ViewBuilder
@@ -1189,83 +1151,34 @@ struct CommandSessionsScreen: View {
     private func sessionRow(_ session: OpenClawChatSessionEntry) -> some View {
         let item = CommandCenterTab.sessionWorkItem(
             for: session,
-            currentSessionKey: self.appModel.chatSessionKey)
+            currentSessionKey: self.appModel.chatSessionKey,
+            now: self.now)
         return Button {
-            self.open(session)
+            self.openSessionKey(session.key)
         } label: {
             CommandSessionRow(item: item)
         }
         .buttonStyle(.plain)
         .commandSessionActions(
             session: session,
+            mainSessionKey: self.appModel.mainSessionKey,
             categories: self.sessionCategories,
             isArchived: session.archived == true,
             isEnabled: self.sessionControlsAvailable,
             canArchive: ChatSessionSidebarModel.canArchiveSession(
                 session,
-                mainSessionKey: self.appModel.defaultChatSessionKey),
-            actions: CommandSessionActions(
-                rename: { self.patchSession(session, label: .some($0)) },
-                moveToGroup: { self.patchSession(session, category: .some($0)) },
-                setColor: { self.patchSession(session, color: .some($0)) },
-                togglePinned: { self.patchSession(session, pinned: session.pinned != true) },
-                toggleUnread: { self.patchSession(session, unread: session.unread != true) },
-                fork: { self.forkSession(session) },
-                toggleArchived: { self.toggleArchived(session) },
-                delete: { self.deleteSession(session) }))
-    }
-
-    private func open(_ session: OpenClawChatSessionEntry) {
-        self.openSessionKey(session.key)
+                mainSessionKey: self.appModel.mainSessionKey),
+            actions: .gateway(
+                session: session,
+                archivesSession: { self.statusScope != .archived && session.archived != true },
+                performMutation: self.performMutation,
+                fork: { self.forkSession(session) }))
     }
 
     private func openSessionKey(_ key: String) {
         self.appModel.openChat(sessionKey: key)
         self.dismiss()
         self.openChat()
-    }
-
-    private func patchSession(
-        _ session: OpenClawChatSessionEntry,
-        label: String?? = nil,
-        category: String?? = nil,
-        color: String?? = nil,
-        pinned: Bool? = nil,
-        archived: Bool? = nil,
-        unread: Bool? = nil)
-    {
-        self.performMutation { transport in
-            try await transport.patchSession(
-                key: session.key,
-                expectedSessionID: archived == nil ? nil : session.sessionId,
-                label: label,
-                category: category,
-                color: color,
-                pinned: pinned,
-                archived: archived,
-                unread: unread)
-        }
-    }
-
-    private func deleteSession(_ session: OpenClawChatSessionEntry) {
-        self.performMutation(resetActiveSessionKey: session.key) { transport in
-            try await transport.deleteSession(key: session.key)
-        }
-    }
-
-    private func toggleArchived(_ session: OpenClawChatSessionEntry) {
-        let archivesSession = !self.showArchived && session.archived != true
-        self.performMutation(resetActiveSessionKey: archivesSession ? session.key : nil) { transport in
-            try await transport.patchSession(
-                key: session.key,
-                expectedSessionID: session.sessionId,
-                label: nil,
-                category: nil,
-                color: nil,
-                pinned: nil,
-                archived: archivesSession,
-                unread: nil)
-        }
     }
 
     private func forkSession(_ session: OpenClawChatSessionEntry) {
@@ -1303,24 +1216,31 @@ struct CommandSessionsScreen: View {
         // Pick up groups stored by other surfaces (for example the per-session
         // New Group editor) alongside the fresh session list.
         self.knownGroups = SessionGroupStore.load()
-        let requestsArchived = self.showArchived
+        let requestedScope = self.statusScope
+        let requestsArchived = requestedScope == .archived
         let sourceGatewayID = self.appModel.chatTranscriptCacheGatewayID
         let sourceAgentID = self.appModel.chatDeliveryAgentId
         self.isLoading = true
         self.loadErrorText = nil
-        defer { self.isLoading = false }
+        defer {
+            if requestedScope == self.statusScope { self.isLoading = false }
+        }
 
         do {
             let roster = try await self.appModel.loadChatSessionRoster(
                 limit: CommandCenterTab.recentSessionsFetchLimit,
                 archived: requestsArchived)
-            guard requestsArchived == self.showArchived else { return }
+            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
             self.sessions = roster.sessions
+        } catch is CancellationError {
+            return
         } catch {
-            guard requestsArchived == self.showArchived else { return }
-            self.sessions = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
+            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
+            let cached = requestsArchived ? [] : await self.appModel.loadCachedChatSessions(
                 gatewayID: sourceGatewayID,
                 agentID: sourceAgentID)
+            guard !Task.isCancelled, requestedScope == self.statusScope else { return }
+            self.sessions = cached
             self.loadErrorText = self.sessions.isEmpty ? "Try again after the gateway reconnects." : nil
         }
     }
@@ -1329,9 +1249,5 @@ struct CommandSessionsScreen: View {
 extension NodeAppModel {
     fileprivate var isCommandSessionListAvailable: Bool {
         self.isLocalChatFixtureEnabled || self.isOperatorGatewayConnected
-    }
-
-    fileprivate var commandSessionListMode: String {
-        self.chatViewModelIdentityID
     }
 }

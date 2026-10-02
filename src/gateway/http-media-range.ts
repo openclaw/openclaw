@@ -1,4 +1,3 @@
-// Pure helpers for HTTP Accept media-range parsing.
 import { splitHttpHeaderValue } from "./http-header-value.js";
 
 const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
@@ -35,10 +34,6 @@ function parseParameterValue(value: string): string | null {
     parsed += character;
   }
   return escaped ? null : parsed;
-}
-
-function normalizeParameterValue(name: string, value: string): string {
-  return name === "charset" ? value.toLowerCase() : value;
 }
 
 type ParsedMediaType = {
@@ -102,7 +97,7 @@ function parseMediaType(value: string, allowQuality: boolean): ParsedMediaType |
     if (parameterValue === null || parameters.has(name)) {
       return null;
     }
-    parameters.set(name, normalizeParameterValue(name, parameterValue));
+    parameters.set(name, name === "charset" ? parameterValue.toLowerCase() : parameterValue);
   }
   return { type, subtype, parameters, quality };
 }

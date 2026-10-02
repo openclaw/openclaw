@@ -2,8 +2,9 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import type { WorkboardCard } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   jsonValue,
   type CARD_CHILD_TABLES,
@@ -46,6 +47,16 @@ function insertChildren<T>(
 }
 
 export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
+  const board = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<{ workboard_boards: { id: string; kind: string | null } }>(db)
+      .selectFrom("workboard_boards")
+      .select("kind")
+      .where("id", "=", cardBoardId(card)),
+  );
+  if (board?.kind === "sessions") {
+    throw new Error("Sessions boards do not hold cards");
+  }
   const execution = card.execution;
   const metadata = card.metadata;
   const query = getNodeSqliteKysely<WorkboardCardDatabase>(db);
@@ -63,7 +74,6 @@ export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
         agent_id: p(() => bindNull(card.agentId)),
         session_key: p(() => bindNull(card.sessionKey)),
         run_id: p(() => bindNull(card.runId)),
-        task_id: p(() => bindNull(card.taskId)),
         source_url: p(() => bindNull(card.sourceUrl)),
         position: p(() => card.position),
         created_at: p(() => card.createdAt),
@@ -100,7 +110,6 @@ export function insertCard(db: DatabaseSync, card: WorkboardCard): void {
           agent_id: eb.ref("excluded.agent_id"),
           session_key: eb.ref("excluded.session_key"),
           run_id: eb.ref("excluded.run_id"),
-          task_id: eb.ref("excluded.task_id"),
           source_url: eb.ref("excluded.source_url"),
           position: eb.ref("excluded.position"),
           created_at: eb.ref("excluded.created_at"),

@@ -1,5 +1,3 @@
-// Gateway hook mapping resolver.
-// Normalizes hook presets, templates, transforms, and resolved hook actions.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -11,6 +9,7 @@ import type { HookMappingConfig, HooksConfig, HookSessionMode } from "../config/
 import { resolveGmailHookMaxBytes } from "../hooks/gmail.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
 export type HookMappingResolved = {
@@ -257,9 +256,6 @@ async function applyMappingToContext(
   ctx: HookMappingContext,
 ): Promise<HookMappingItemResult> {
   const base = buildActionFromMapping(mapping, ctx);
-  if (!base.ok) {
-    return base;
-  }
 
   let override: HookTransformResult = null;
   if (mapping.transform) {
@@ -270,10 +266,7 @@ async function applyMappingToContext(
     }
   }
 
-  if (!base.action) {
-    return { ok: true, action: null };
-  }
-  return mergeAction(base.action, override, mapping.action);
+  return mergeAction(base, override);
 }
 
 async function applyFanOutMapping(
@@ -361,7 +354,7 @@ function normalizeForEachKey(raw: string | undefined): string | undefined {
   }
   // Fan-out replaces one top-level payload key with a single-item array per
   // dispatch; nested paths would require rebuilding arbitrary object graphs.
-  if (/[.[\]]/.test(key) || BLOCKED_PATH_KEYS.has(key)) {
+  if (/[.[\]]/.test(key) || isBlockedObjectKey(key)) {
     throw new Error(`Hook mapping forEach must be a top-level payload key: ${raw}`);
   }
   return key;
@@ -382,58 +375,45 @@ function mappingMatches(mapping: HookMappingResolved, ctx: HookMappingContext) {
   return true;
 }
 
-function buildActionFromMapping(
-  mapping: HookMappingResolved,
-  ctx: HookMappingContext,
-): HookMappingItemResult {
+function buildActionFromMapping(mapping: HookMappingResolved, ctx: HookMappingContext): HookAction {
   if (mapping.action === "wake") {
     const text = renderTemplate(mapping.textTemplate ?? "", ctx);
     return {
-      ok: true,
-      action: {
-        kind: "wake",
-        mappingId: mapping.id,
-        text,
-        mode: mapping.wakeMode ?? "now",
-        agentId: mapping.agentId,
-        sessionKey: renderOptional(mapping.sessionKey, ctx),
-        sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
-      },
+      kind: "wake",
+      mappingId: mapping.id,
+      text,
+      mode: mapping.wakeMode ?? "now",
+      agentId: mapping.agentId,
+      sessionKey: renderOptional(mapping.sessionKey, ctx),
+      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
     };
   }
   const message = renderTemplate(mapping.messageTemplate ?? "", ctx);
   return {
-    ok: true,
-    action: {
-      kind: "agent",
-      mappingId: mapping.id,
-      message,
-      name: renderOptional(mapping.name, ctx),
-      agentId: mapping.agentId,
-      wakeMode: mapping.wakeMode ?? "now",
-      sessionKey: renderOptional(mapping.sessionKey, ctx),
-      sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
-      sessionMode: mapping.sessionMode ?? "isolated",
-      deliver: mapping.deliver,
-      allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
-      channel: mapping.channel,
-      to: renderOptional(mapping.to, ctx),
-      model: renderOptional(mapping.model, ctx),
-      thinking: renderOptional(mapping.thinking, ctx),
-      timeoutSeconds: mapping.timeoutSeconds,
-    },
+    kind: "agent",
+    mappingId: mapping.id,
+    message,
+    name: renderOptional(mapping.name, ctx),
+    agentId: mapping.agentId,
+    wakeMode: mapping.wakeMode ?? "now",
+    sessionKey: renderOptional(mapping.sessionKey, ctx),
+    sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
+    sessionMode: mapping.sessionMode ?? "isolated",
+    deliver: mapping.deliver,
+    allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
+    channel: mapping.channel,
+    to: renderOptional(mapping.to, ctx),
+    model: renderOptional(mapping.model, ctx),
+    thinking: renderOptional(mapping.thinking, ctx),
+    timeoutSeconds: mapping.timeoutSeconds,
   };
 }
 
-function mergeAction(
-  base: HookAction,
-  override: HookTransformResult,
-  defaultAction: "wake" | "agent",
-): HookMappingItemResult {
+function mergeAction(base: HookAction, override: HookTransformResult): HookMappingItemResult {
   if (!override) {
     return validateAction(base);
   }
-  const kind = override.kind ?? base.kind ?? defaultAction;
+  const kind = override.kind ?? base.kind;
   if (kind === "wake") {
     const baseWake = base.kind === "wake" ? base : undefined;
     const text = typeof override.text === "string" ? override.text : (baseWake?.text ?? "");
@@ -543,30 +523,18 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
     cacheBust: true,
     nowMs: generation,
   });
-  const fn = resolveTransformFn(mod, transform.exportName);
+  const fn = resolveFunctionModuleExport<HookTransformFn>({
+    mod,
+    exportName: transform.exportName,
+    fallbackExportNames: ["default", "transform"],
+  });
+  if (!fn) {
+    throw new Error("hook transform module must export a function");
+  }
   if (generation === transformCacheBustVersion) {
     transformCache.set(cacheKey, fn);
   }
   return fn;
-}
-
-function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
-  const candidate = resolveFunctionModuleExport<HookTransformFn>({
-    mod,
-    exportName,
-    fallbackExportNames: ["default", "transform"],
-  });
-  if (!candidate) {
-    throw new Error("hook transform module must export a function");
-  }
-  return candidate;
-}
-
-function resolvePath(baseDir: string, target: string): string {
-  if (!target) {
-    return path.resolve(baseDir);
-  }
-  return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
 }
 
 function safeRealpathSync(candidate: string): string | null {
@@ -600,7 +568,8 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
   if (!trimmed) {
     throw new Error(`${label} module path is required`);
   }
-  const resolved = resolvePath(base, trimmed);
+  // Drive-less rooted Windows paths resolve on the process drive, not the hook root's drive.
+  const resolved = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(base, trimmed);
   if (!isPathInside(base, resolved)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
@@ -692,25 +661,17 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
-// Block traversal into prototype-chain properties on attacker-controlled
-// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
-// for config path traversal.
-const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
-
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
   }
   const parts: Array<string | number> = [];
-  const re = /([^.[\]]+)|(\[(\d+)\])/g;
-  let match = re.exec(pathExpr);
-  while (match) {
+  for (const match of pathExpr.matchAll(/([^.[\]]+)|(\[(\d+)\])/g)) {
     if (match[1]) {
       parts.push(match[1]);
     } else if (match[3]) {
       parts.push(Number(match[3]));
     }
-    match = re.exec(pathExpr);
   }
   let current: unknown = input;
   for (const part of parts) {
@@ -724,7 +685,7 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       current = current[part] as unknown;
       continue;
     }
-    if (BLOCKED_PATH_KEYS.has(part)) {
+    if (isBlockedObjectKey(part)) {
       return undefined;
     }
     if (typeof current !== "object") {

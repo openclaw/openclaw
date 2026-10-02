@@ -41,6 +41,13 @@ producer `qa-evidence.json`. When `qa suite` is reached through `qa run
 --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 
+Runtime-axis parity reports preserve each runtime's recorded `pass`, `fail`, or
+`skip` outcome. Runtime and transport failures override passing or skipped
+outcomes; controlled tool errors remain passable. A tracked `known-harness-gap`
+skip can leave the scenario passing when its paired runtime passes, but the
+skipped cell stays labeled `skip`. Unexpected skips and pairs with both runtimes
+skipped still fail the parity gate. Missing captures are labeled `missing`.
+
 ### Scheduled instances and retained observations
 
 Schema v3 evidence gives each scheduled scenario instance its own identity.
@@ -100,6 +107,8 @@ extensionless files and unknown suffixes; the complete kind label is preserved.
 `qa confidence-report` keeps `productImpact` and `qaImpact` annotations in their
 own Markdown table cells, collapsing whitespace for display. The JSON summary
 preserves the annotation values, including internal line breaks.
+
+For JSONL replay lanes, every transcript must report a nonnegative integer user-turn count, with matching numbers of drift entries and results for both runtimes. Missing or mismatched evidence is classified as `unknown`, so both strict confidence modes reject it. Zero-turn transcripts are allowed alongside complete replayed turns; a report with no replayed user turns remains unknown.
 
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,

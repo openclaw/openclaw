@@ -1,15 +1,33 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  openOpenClawStateDatabase,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { getFileLockProcessStartTime } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, afterEach, describe, expect, it, vi } from "vitest";
+import {
+  configureMemoryCoreDreamingState,
+  memoryCoreWorkspaceStateKey,
+  openMemoryCoreStateStore,
+  SHORT_TERM_LOCK_MAX_ENTRIES,
+  SHORT_TERM_LOCK_NAMESPACE,
+} from "./dreaming-state.js";
 import {
   withMemoryWorkspaceLock,
   withMemoryWorkspacePreparation,
 } from "./memory-workspace-lock.js";
-import { auditShortTermPromotionArtifacts } from "./short-term-promotion-artifacts.js";
+import {
+  auditShortTermPromotionArtifacts,
+  repairShortTermPromotionArtifacts,
+} from "./short-term-promotion-artifacts.js";
+import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
 import {
   configureMemoryCoreDreamingStateForTests,
   resetMemoryCoreDreamingStateForTests,
@@ -42,6 +60,72 @@ describe("memory workspace lock orphan recovery", () => {
     await fs.mkdir(path.join(workspaceDir, "memory", ".dreams"), { recursive: true });
     return workspaceDir;
   }
+
+  it("waits for an active short-term lock before repairing", async () => {
+    const workspaceDir = await makeWorkspace();
+    await testing.writeRawRecallStore(workspaceDir, {
+      version: 1,
+      updatedAt: "2026-04-04T00:00:00.000Z",
+      entries: {
+        bad: {
+          path: "",
+        },
+      },
+    });
+    const acquiredAt = Date.now();
+    const activeLock = { owner: `${process.pid}:${acquiredAt}`, acquiredAt };
+    await testing.writeShortTermLock(workspaceDir, activeLock);
+
+    const blocked = createDeferred<void>();
+    const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
+    let activeObservations = 0;
+    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
+      const store = createPluginStateKeyedStoreForTests<T>("memory-core", options);
+      return {
+        ...store,
+        async observe(...args: Parameters<typeof store.observe>) {
+          const observation = await store.observe(...args);
+          if (
+            options.namespace === SHORT_TERM_LOCK_NAMESPACE &&
+            args[0] === lockKey &&
+            activeObservations < 2
+          ) {
+            expect(observation.value).toEqual(activeLock);
+            if (++activeObservations === 2) {
+              blocked.resolve();
+            }
+          }
+          return observation;
+        },
+      };
+    });
+    let settled = false;
+    const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
+      settled = true;
+      return result;
+    });
+    try {
+      // A second real observation proves the owner waited and kept the active lock intact.
+      await Promise.race([
+        blocked.promise,
+        repairPromise.then(() => {
+          throw new Error("Repair completed before observing the active lock");
+        }),
+      ]);
+      expect(settled).toBe(false);
+
+      await testing.deleteShortTermLock(workspaceDir);
+      const repair = await repairPromise;
+
+      expect(repair.changed).toBe(true);
+      expect(repair.rewroteStore).toBe(true);
+      expect(repair.removedInvalidEntries).toBe(1);
+    } finally {
+      await testing.deleteShortTermLock(workspaceDir);
+      await Promise.allSettled([repairPromise]);
+      await configureMemoryCoreDreamingStateForTests();
+    }
+  });
 
   it("keeps preparations and writers in the same local FIFO", async () => {
     const workspace = await makeWorkspace();
@@ -130,6 +214,71 @@ describe("memory workspace lock orphan recovery", () => {
       await Promise.all([writer, retained.task]);
     }
     expect(order).toEqual(["writer", "preparation"]);
+  });
+
+  it("reports unavailable storage with the original SQLite busy cause", async () => {
+    const workspace = await makeWorkspace();
+    const blocker = new DatabaseSync(openOpenClawStateDatabase().path);
+    const task = vi.fn(async () => "unreachable");
+    try {
+      blocker.exec("PRAGMA busy_timeout = 0");
+      blocker.exec("BEGIN EXCLUSIVE");
+      const failure = await withMemoryWorkspaceLock(workspace, task).catch(
+        (error: unknown) => error,
+      );
+      expect(failure).toMatchObject({
+        code: "MEMORY_WORKSPACE_LOCK_STORE_UNAVAILABLE",
+        outcome: { kind: "store-unavailable", reason: "storage-error" },
+      });
+      expect(collectErrorGraphCandidates(failure, (record) => [record.cause])).toContainEqual(
+        expect.objectContaining({ errcode: 5 }),
+      );
+      expect(task).not.toHaveBeenCalled();
+    } finally {
+      blocker.close();
+    }
+  });
+
+  it("surfaces SQLite contention after a failed release leaves a fresh local lock", async () => {
+    const workspace = await makeWorkspace();
+    const store = openMemoryCoreStateStore<ShortTermLockEntry>({
+      namespace: SHORT_TERM_LOCK_NAMESPACE,
+      maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+    });
+    const stateBlocker = new DatabaseSync(openOpenClawStateDatabase().path);
+    try {
+      await expect(
+        withMemoryWorkspaceLock(workspace, async () => {
+          stateBlocker.exec("PRAGMA busy_timeout = 0");
+          stateBlocker.exec("BEGIN EXCLUSIVE");
+          return "completed";
+        }),
+      ).resolves.toBe("completed");
+    } finally {
+      stateBlocker.close();
+    }
+    const key = memoryCoreWorkspaceStateKey(workspace);
+    expect(await store.lookup(key)).toMatchObject({
+      owner: expect.stringMatching(`${process.pid}:`),
+    });
+
+    const dataPath = path.join(workspace, "locked.sqlite");
+    const data = new DatabaseSync(dataPath);
+    const dataBlocker = new DatabaseSync(dataPath);
+    try {
+      data.exec("CREATE TABLE entries (value TEXT)");
+      data.exec("PRAGMA busy_timeout = 0");
+      dataBlocker.exec("BEGIN EXCLUSIVE");
+      await expect(
+        withMemoryWorkspaceLock(workspace, async () => {
+          data.exec("INSERT INTO entries VALUES ('pending')");
+        }),
+      ).rejects.toMatchObject({ errcode: 5 });
+    } finally {
+      dataBlocker.close();
+      data.close();
+    }
+    expect(await store.lookup(key)).toBeUndefined();
   });
 
   it("reclaims a stale legacy lock after its process id is reused", async () => {

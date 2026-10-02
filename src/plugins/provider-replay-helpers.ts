@@ -1,4 +1,3 @@
-// Provides shared replay-policy helpers for provider plugins.
 import {
   bindsClaudeThinkingPrefix,
   resolveClaudeModelIdentity,
@@ -6,6 +5,7 @@ import {
 } from "@openclaw/llm-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../agents/runtime/index.js";
+import { warnSessionPersistenceDeprecation } from "../agents/sessions/session-persistence-deprecation.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../shared/google-turn-ordering.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type {
@@ -14,6 +14,7 @@ import type {
   ProviderReplayPolicyContext,
   ProviderReplaySessionState,
   ProviderSanitizeReplayHistoryContext,
+  ProviderSanitizeReplayHistoryContextV2,
 } from "./types.js";
 
 /** @deprecated Provider replay helper; prefer provider-local replay hooks. */
@@ -53,17 +54,9 @@ export function buildOpenAICompatibleReplayPolicy(
         }
       : {}),
     ...(isResponsesFamily ? { allowSyntheticToolResults: true } : {}),
-    ...(modelApi === "openai-completions"
-      ? {
-          applyAssistantFirstOrderingFix: true,
-          validateGeminiTurns: true,
-          validateAnthropicTurns: true,
-        }
-      : {
-          applyAssistantFirstOrderingFix: false,
-          validateGeminiTurns: false,
-          validateAnthropicTurns: false,
-        }),
+    applyAssistantFirstOrderingFix: modelApi === "openai-completions",
+    validateGeminiTurns: modelApi === "openai-completions",
+    validateAnthropicTurns: modelApi === "openai-completions",
     ...(modelApi === "openai-completions" && dropReasoningFromHistory
       ? { dropReasoningFromHistory: true }
       : {}),
@@ -213,10 +206,14 @@ export function buildPassthroughGeminiSanitizingReplayPolicy(
   };
 }
 
-/** @deprecated Google provider replay helper; prefer provider-local replay hooks. */
+/** @deprecated Use sanitizeGoogleGeminiReplayHistoryAsync; removed at the next Plugin SDK major. */
 export function sanitizeGoogleGeminiReplayHistory(
   ctx: ProviderSanitizeReplayHistoryContext,
 ): AgentMessage[] {
+  warnSessionPersistenceDeprecation(
+    "sanitizeGoogleGeminiReplayHistory",
+    "sanitizeGoogleGeminiReplayHistoryAsync",
+  );
   const messages = sanitizeGoogleAssistantFirstOrdering(ctx.messages);
   if (
     messages !== ctx.messages &&
@@ -224,6 +221,23 @@ export function sanitizeGoogleGeminiReplayHistory(
     !hasGoogleTurnOrderingMarker(ctx.sessionState)
   ) {
     markGoogleTurnOrderingMarker(ctx.sessionState);
+  }
+  return messages;
+}
+
+/** Sanitize replay and await the worker commit before returning the rewritten history. */
+export async function sanitizeGoogleGeminiReplayHistoryAsync(
+  ctx: ProviderSanitizeReplayHistoryContextV2,
+): Promise<AgentMessage[]> {
+  const messages = sanitizeGoogleAssistantFirstOrdering(ctx.messages);
+  if (
+    messages !== ctx.messages &&
+    ctx.sessionState &&
+    !hasGoogleTurnOrderingMarker(ctx.sessionState)
+  ) {
+    await ctx.sessionState.appendCustomEntryAsync(GOOGLE_TURN_ORDERING_CUSTOM_TYPE, {
+      timestamp: Date.now(),
+    });
   }
   return messages;
 }

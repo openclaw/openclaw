@@ -172,7 +172,7 @@ export function createAlwaysConfiguredPluginConfig(
   };
 }
 
-export function createActionHubPluginFixture() {
+function createActionHubPluginFixture() {
   const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
     jsonResult({ ok: true, params }),
   );
@@ -247,7 +247,7 @@ export function createGatewayActionPlugin(params: {
   messaging?: ChannelPlugin["messaging"];
   threading?: ChannelPlugin["threading"];
   handleAction: ChannelActionHandler;
-}): ChannelPlugin {
+}): ChannelPlugin & { actions: NonNullable<ChannelPlugin["actions"]> } {
   const actions = new Set(params.actions);
   const gatewayActions = new Set(params.gatewayActions ?? params.actions);
   return {

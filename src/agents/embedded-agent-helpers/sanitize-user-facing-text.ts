@@ -1,5 +1,9 @@
 /** Strips internal scaffolding from text before user-facing delivery. */
-import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "../../auto-reply/reply/history.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  HISTORY_CONTEXT_MARKER,
+  RECENT_HISTORY_CONTEXT_MARKER,
+} from "../../auto-reply/reply/history.js";
 import {
   INBOUND_METADATA_MARKERS,
   stripInboundMetadata,
@@ -8,10 +12,10 @@ import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
   assistantTraceTextFilter,
+  legacyBracketToolCallTextFilter,
+  minimaxToolCallTextFilter,
   plainToolCallTextFilter,
-  stripLegacyBracketToolCallBlocks,
-  stripMinimaxToolCallXml,
-  stripToolCallXmlTags,
+  toolCallXmlTextFilter,
 } from "../../shared/text/assistant-visible-text.js";
 import {
   findCodeRegions,
@@ -63,7 +67,11 @@ type VerifiedConversationContext = {
 };
 
 function hasConversationContextMarker(text: string): boolean {
-  return text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER);
+  return (
+    text.includes(HISTORY_CONTEXT_MARKER) ||
+    text.includes(RECENT_HISTORY_CONTEXT_MARKER) ||
+    text.includes(CURRENT_MESSAGE_MARKER)
+  );
 }
 
 function prepareVerifiedConversationContext(
@@ -73,22 +81,24 @@ function prepareVerifiedConversationContext(
     return undefined;
   }
   const sourceCodeRegions = findCodeRegions(source);
-  const ownsConversationContext = [HISTORY_CONTEXT_MARKER, CURRENT_MESSAGE_MARKER].some(
-    (marker) => {
-      let markerOffset = source.indexOf(marker);
-      while (markerOffset !== -1) {
-        const markerEnd = markerOffset + marker.length;
-        const startsLine = markerOffset === 0 || source[markerOffset - 1] === "\n";
-        const endsLine =
-          markerEnd === source.length || source[markerEnd] === "\n" || source[markerEnd] === "\r";
-        if (startsLine && endsLine && !isInsideCode(markerOffset, sourceCodeRegions)) {
-          return true;
-        }
-        markerOffset = source.indexOf(marker, markerEnd);
+  const ownsConversationContext = [
+    HISTORY_CONTEXT_MARKER,
+    RECENT_HISTORY_CONTEXT_MARKER,
+    CURRENT_MESSAGE_MARKER,
+  ].some((marker) => {
+    let markerOffset = source.indexOf(marker);
+    while (markerOffset !== -1) {
+      const markerEnd = markerOffset + marker.length;
+      const startsLine = markerOffset === 0 || source[markerOffset - 1] === "\n";
+      const endsLine =
+        markerEnd === source.length || source[markerEnd] === "\n" || source[markerEnd] === "\r";
+      if (startsLine && endsLine && !isInsideCode(markerOffset, sourceCodeRegions)) {
+        return true;
       }
-      return false;
-    },
-  );
+      markerOffset = source.indexOf(marker, markerEnd);
+    }
+    return false;
+  });
   if (!ownsConversationContext) {
     return undefined;
   }
@@ -245,17 +255,14 @@ export function userFacingTextFilters(
       ],
     },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
-    { transform: stripMinimaxToolCallXml, activationTokens: ["<"] },
-    {
-      transform: (text) => stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }),
-      activationTokens: ["<"],
-    },
+    minimaxToolCallTextFilter,
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,
       activationTokens: [EXEC_NO_OUTPUT_PLACEHOLDER, "[tool calls omitted]"],
     },
     ...(errorContext ? [assistantTraceTextFilter] : []),
-    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
     leadingEmptyLinesTextFilter,
     duplicateParagraphTextFilter,

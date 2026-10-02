@@ -96,16 +96,13 @@ export function emptyPhaseSignalStore(nowIso: string): ShortTermPhaseSignalStore
   };
 }
 
-export function normalizeShortTermPhaseSignalStore(
+function normalizeShortTermPhaseSignalStore(
   raw: unknown,
   nowIso: string,
 ): ShortTermPhaseSignalStore {
   const record = asNullableRecord(raw);
-  if (!record) {
-    return emptyPhaseSignalStore(nowIso);
-  }
   const entriesRaw = asNullableRecord(record?.entries);
-  if (!entriesRaw) {
+  if (!record || !entriesRaw) {
     return emptyPhaseSignalStore(nowIso);
   }
   const entries: Record<string, ShortTermPhaseSignalEntry> = {};

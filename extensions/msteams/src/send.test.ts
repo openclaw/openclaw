@@ -22,6 +22,7 @@ const mockState = vi.hoisted(() => ({
   requiresFileConsent: vi.fn(),
   prepareFileConsentActivity: vi.fn(),
   prepareFileConsentActivityFs: vi.fn(),
+  setPendingUploadActivityIdFs: vi.fn(),
   extractFilename: vi.fn(async () => "fallback.bin"),
   sendMSTeamsMessages: vi.fn(),
   sendMSTeamsActivityWithReference: vi.fn(async () => ({ id: "message-1" })),
@@ -58,13 +59,19 @@ vi.mock("./send-context.js", () => ({
   resolveMSTeamsSendContext: mockState.resolveMSTeamsSendContext,
 }));
 
-vi.mock("./file-consent-helpers.js", () => ({
+vi.mock("./file-consent-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./file-consent-helpers.js")>()),
   requiresFileConsent: mockState.requiresFileConsent,
   prepareFileConsentActivity: mockState.prepareFileConsentActivity,
   prepareFileConsentActivityFs: mockState.prepareFileConsentActivityFs,
 }));
 
-vi.mock("./media-helpers.js", () => ({
+vi.mock("./pending-uploads-fs.js", () => ({
+  setPendingUploadActivityIdFs: mockState.setPendingUploadActivityIdFs,
+}));
+
+vi.mock("./media-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media-helpers.js")>()),
   extractFilename: mockState.extractFilename,
   extractMessageId: () => "message-1",
 }));
@@ -117,39 +124,12 @@ vi.mock("./sdk-proactive.js", () => ({
   deleteMSTeamsActivityWithReference: mockState.deleteMSTeamsActivityWithReference,
 }));
 
-function createMockApp(overrides?: {
-  send?: ReturnType<typeof vi.fn>;
-  update?: ReturnType<typeof vi.fn>;
-  delete?: ReturnType<typeof vi.fn>;
-}) {
-  const sendFn = overrides?.send ?? vi.fn(async () => ({ id: "message-1" }));
-  const updateFn = overrides?.update ?? vi.fn(async () => ({ id: "updated" }));
-  const deleteFn = overrides?.delete ?? vi.fn(async () => {});
-  return {
-    send: sendFn,
-    api: {
-      conversations: {
-        activities: () => ({
-          create: sendFn,
-          update: updateFn,
-          delete: deleteFn,
-        }),
-      },
-    },
-  };
-}
-
 function mockProactiveSendContextFailure(error: string) {
   mockState.sendMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
   mockState.updateMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
   mockState.deleteMSTeamsActivityWithReference.mockRejectedValue(new Error(error));
-  const failingApp = createMockApp({
-    send: vi.fn().mockRejectedValue(new Error(error)),
-    update: vi.fn().mockRejectedValue(new Error(error)),
-    delete: vi.fn().mockRejectedValue(new Error(error)),
-  });
   mockState.resolveMSTeamsSendContext.mockResolvedValue({
-    app: failingApp,
+    app: { id: "failing-app" },
     appId: "app-id",
     conversationId: "19:conversation@thread.tacv2",
     ref: {
@@ -167,7 +147,7 @@ function mockProactiveSendContextFailure(error: string) {
 
 function createSharePointSendContext(params: { conversationId: string; siteId: string }) {
   return {
-    app: createMockApp(),
+    app: { id: "sharepoint-app" },
     appId: "app-id",
     conversationId: params.conversationId,
     ref: {},
@@ -247,6 +227,7 @@ describe("sendMessageMSTeams", () => {
     mockState.requiresFileConsent.mockReset();
     mockState.prepareFileConsentActivity.mockReset();
     mockState.prepareFileConsentActivityFs.mockReset();
+    mockState.setPendingUploadActivityIdFs.mockReset().mockResolvedValue(undefined);
     mockState.extractFilename.mockReset();
     mockState.sendMSTeamsMessages.mockReset();
     mockState.sendMSTeamsActivityWithReference.mockReset();
@@ -259,7 +240,7 @@ describe("sendMessageMSTeams", () => {
     mockState.extractFilename.mockResolvedValue("fallback.bin");
     mockState.requiresFileConsent.mockReturnValue(false);
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
-      app: createMockApp(),
+      app: { id: "send-app" },
       appId: "app-id",
       conversationId: "19:conversation@thread.tacv2",
       ref: {},
@@ -276,6 +257,70 @@ describe("sendMessageMSTeams", () => {
     mockState.updateMSTeamsActivityWithReference.mockResolvedValue({ id: "updated" });
     mockState.deleteMSTeamsActivityWithReference.mockResolvedValue(undefined);
   });
+
+  it.each(["success", "observer failure", "persistence failure"] as const)(
+    "settles an accepted consent card after %s",
+    async (outcome) => {
+      const failure = new Error(outcome);
+      mockState.loadOutboundMediaFromUrl.mockResolvedValue({
+        buffer: Buffer.from("file contents"),
+        contentType: "application/pdf",
+        fileName: "report.pdf",
+        kind: "file",
+      });
+      mockState.requiresFileConsent.mockReturnValue(true);
+      mockState.prepareFileConsentActivityFs.mockResolvedValue({
+        activity: { type: "message", attachments: [] },
+        uploadId: "pending-file",
+      });
+      if (outcome === "persistence failure") {
+        mockState.setPendingUploadActivityIdFs.mockRejectedValue(failure);
+      }
+      const onDeliveryResult = vi.fn(async (result) => {
+        expect(result).toMatchObject({ messageId: "message-1", pendingUploadId: "pending-file" });
+        if (outcome === "observer failure") {
+          throw failure;
+        }
+      });
+
+      const send = sendMessageMSTeams({
+        cfg: {},
+        to: "conversation:19:conversation@thread.tacv2",
+        text: "report",
+        mediaUrl: "file:///tmp/report.pdf",
+        onDeliveryResult,
+      });
+      if (outcome === "success") {
+        await expect(send).resolves.toMatchObject({
+          messageId: "message-1",
+          pendingUploadId: "pending-file",
+        });
+      } else {
+        await expect(send).rejects.toMatchObject({
+          cause: failure,
+          code: "CHANNEL_PARTIAL_DELIVERY",
+          deliveryResult: {
+            visibleReplySent: true,
+            receipt: {
+              platformMessageIds: ["message-1"],
+              parts: [expect.objectContaining({ kind: "card" })],
+            },
+          },
+        });
+      }
+      expect(mockState.sendMSTeamsActivityWithReference).toHaveBeenCalledOnce();
+      expect(onDeliveryResult).toHaveBeenCalledOnce();
+      // The existing pending-upload tests cover storage; this guards the sender's
+      // obligation to finish that write even when its receipt observer rejects.
+      expect(mockState.setPendingUploadActivityIdFs).toHaveBeenCalledExactlyOnceWith(
+        "pending-file",
+        "message-1",
+      );
+      expect(onDeliveryResult.mock.invocationCallOrder[0]).toBeLessThan(
+        mockState.setPendingUploadActivityIdFs.mock.invocationCallOrder[0]!,
+      );
+    },
+  );
 
   it("loads media through shared helper and forwards mediaLocalRoots", async () => {
     const mediaBuffer = Buffer.from("tiny-image");
@@ -563,8 +608,7 @@ describe("editMessageMSTeams", () => {
   });
 
   it("updates with the resolved Teams conversation reference", async () => {
-    const mockUpdateActivity = vi.fn(async () => ({ id: "updated" }));
-    const mockApp = createMockApp({ update: mockUpdateActivity });
+    const mockApp = { id: "edit-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "app-id",
@@ -629,7 +673,7 @@ describe("editMessageMSTeams", () => {
   });
 
   it("updates an existing activity with a replacement Adaptive Card", async () => {
-    const mockApp = createMockApp();
+    const mockApp = { id: "adaptive-card-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       conversationId: "19:conversation@thread.tacv2",
@@ -669,8 +713,7 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("deletes with the resolved Teams conversation reference", async () => {
-    const mockDeleteActivity = vi.fn(async () => {});
-    const mockApp = createMockApp({ delete: mockDeleteActivity });
+    const mockApp = { id: "delete-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "app-id",
@@ -719,8 +762,7 @@ describe("deleteMessageMSTeams", () => {
   });
 
   it("uses app from the resolved context for delete operations", async () => {
-    const mockDeleteActivity = vi.fn(async () => {});
-    const mockApp = createMockApp({ delete: mockDeleteActivity });
+    const mockApp = { id: "context-app" };
     mockState.resolveMSTeamsSendContext.mockResolvedValue({
       app: mockApp,
       appId: "my-app-id",

@@ -1,10 +1,6 @@
-// Openai tests cover realtime session secret creation behavior.
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
-import {
-  createOpenAIRealtimeClientSecret,
-  createOpenAIRealtimeTranscriptionClientSecret,
-} from "./realtime-provider-shared.js";
+import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -93,51 +89,6 @@ describe("createOpenAIRealtimeClientSecret", () => {
     expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
-  it("throws the provider error label on oversized body", async () => {
-    const streamed = makeStreamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
-    guardedFetch(streamed.response);
-
-    await expect(
-      createOpenAIRealtimeTranscriptionClientSecret(
-        {
-          authToken: "sk-test",
-          auditContext: "test",
-          session: { model: "gpt-4o-transcribe" },
-        },
-        openAIRealtimeHost,
-      ),
-    ).rejects.toThrow(/openai\.realtime-session/);
-
-    expect(streamed.wasCanceled()).toBe(true);
-  });
-
-  it("creates transcription secrets through the current client-secrets endpoint", async () => {
-    guardedFetch(
-      new Response(JSON.stringify({ value: "ek-transcription", expires_at: 1_800_000_000 }), {
-        status: 200,
-      }),
-    );
-
-    await createOpenAIRealtimeTranscriptionClientSecret(
-      {
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { type: "transcription" },
-      },
-      openAIRealtimeHost,
-    );
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.openai.com/v1/realtime/client_secrets",
-        timeoutMs: 30_000,
-        init: expect.objectContaining({
-          body: JSON.stringify({ session: { type: "transcription" } }),
-        }),
-      }),
-    );
-  });
-
   it("replaces rejected transcription API-key details with bounded guidance", async () => {
     guardedFetch(
       new Response(JSON.stringify({ error: { message: "Incorrect API key provided: secret" } }), {
@@ -146,7 +97,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
     );
 
     await expect(
-      createOpenAIRealtimeTranscriptionClientSecret(
+      createOpenAIRealtimeClientSecret(
         {
           authToken: "sk-test",
           auditContext: "test",
@@ -154,6 +105,7 @@ describe("createOpenAIRealtimeClientSecret", () => {
           authRejectedMessage: "Update the transcription API key",
         },
         openAIRealtimeHost,
+        "OpenAI Realtime transcription",
       ),
     ).rejects.toThrow("Update the transcription API key");
   });

@@ -1,19 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { ClientVoiceMutationDigestOwner } from "./client-voice-mutation-digest-owner.js";
 
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (error: Error) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((accept, fail) => {
-    resolve = accept;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
+const TEST_POLICY = {
+  maxRetainedIntents: 2,
+  maxRetainedIdentityBytes: 64,
+  maxConcurrentAttempts: 1,
+  maxAttemptFailures: 3,
+  attemptAbortAfterMs: 60_000,
+  failureRetentionMs: 60_000,
+};
 
 async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
@@ -22,24 +18,22 @@ async function flushMicrotasks(): Promise<void> {
 
 describe("client voice mutation digest owner", () => {
   it("bounds retained identities, dedupes keys, and limits concurrency", async () => {
-    const attempts: Array<{ id: string; completion: ReturnType<typeof deferred<boolean>> }> = [];
+    const attempts: Array<{ id: string; completion: ReturnType<typeof createDeferred<boolean>> }> =
+      [];
     let active = 0;
     let maxActive = 0;
     const warn = vi.fn();
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
+        ...TEST_POLICY,
         maxRetainedIntents: 4,
-        maxRetainedIdentityBytes: 64,
         maxConcurrentAttempts: 2,
-        maxAttemptFailures: 3,
-        attemptAbortAfterMs: 60_000,
-        failureRetentionMs: 60_000,
       },
       warn,
       attempt: async ({ voiceSessionId }) => {
         active += 1;
         maxActive = Math.max(maxActive, active);
-        const completion = deferred<boolean>();
+        const completion = createDeferred<boolean>();
         attempts.push({ id: voiceSessionId, completion });
         try {
           return await completion.promise;
@@ -87,19 +81,12 @@ describe("client voice mutation digest owner", () => {
   });
 
   it("retries once when a duplicate intent arrives during a failed active attempt", async () => {
-    const attempts: Array<ReturnType<typeof deferred<boolean>>> = [];
+    const attempts: Array<ReturnType<typeof createDeferred<boolean>>> = [];
     const owner = new ClientVoiceMutationDigestOwner<number>({
-      policy: {
-        maxRetainedIntents: 2,
-        maxRetainedIdentityBytes: 64,
-        maxConcurrentAttempts: 1,
-        maxAttemptFailures: 3,
-        attemptAbortAfterMs: 60_000,
-        failureRetentionMs: 60_000,
-      },
+      policy: TEST_POLICY,
       warn: vi.fn(),
       attempt: async () => {
-        const completion = deferred<boolean>();
+        const completion = createDeferred<boolean>();
         attempts.push(completion);
         return await completion.promise;
       },
@@ -115,21 +102,17 @@ describe("client voice mutation digest owner", () => {
 
   it("keeps an ignored abort request active until its real promise settles", async () => {
     const attempts: Array<{
-      completion: ReturnType<typeof deferred<boolean>>;
+      completion: ReturnType<typeof createDeferred<boolean>>;
       signal: AbortSignal;
     }> = [];
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
-        maxRetainedIntents: 2,
-        maxRetainedIdentityBytes: 64,
-        maxConcurrentAttempts: 1,
-        maxAttemptFailures: 3,
+        ...TEST_POLICY,
         attemptAbortAfterMs: 10,
-        failureRetentionMs: 60_000,
       },
       warn: vi.fn(),
       attempt: async ({ signal }) => {
-        const completion = deferred<boolean>();
+        const completion = createDeferred<boolean>();
         attempts.push({ completion, signal });
         return await completion.promise;
       },
@@ -164,12 +147,8 @@ describe("client voice mutation digest owner", () => {
     const attempt = vi.fn(async () => true);
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
-        maxRetainedIntents: 2,
+        ...TEST_POLICY,
         maxRetainedIdentityBytes: 8,
-        maxConcurrentAttempts: 1,
-        maxAttemptFailures: 3,
-        attemptAbortAfterMs: 60_000,
-        failureRetentionMs: 60_000,
       },
       warn,
       attempt,
@@ -191,20 +170,18 @@ describe("client voice mutation digest owner", () => {
   });
 
   it("preserves older intents when aggregate identity bytes are full", async () => {
-    const attempts: Array<{ id: string; completion: ReturnType<typeof deferred<boolean>> }> = [];
+    const attempts: Array<{ id: string; completion: ReturnType<typeof createDeferred<boolean>> }> =
+      [];
     const warn = vi.fn();
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
+        ...TEST_POLICY,
         maxRetainedIntents: 4,
         maxRetainedIdentityBytes: 10,
-        maxConcurrentAttempts: 1,
-        maxAttemptFailures: 3,
-        attemptAbortAfterMs: 60_000,
-        failureRetentionMs: 60_000,
       },
       warn,
       attempt: async ({ voiceSessionId }) => {
-        const completion = deferred<boolean>();
+        const completion = createDeferred<boolean>();
         attempts.push({ id: voiceSessionId, completion });
         return await completion.promise;
       },
@@ -234,12 +211,9 @@ describe("client voice mutation digest owner", () => {
     const attempts: string[] = [];
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
+        ...TEST_POLICY,
         maxRetainedIntents: 1,
-        maxRetainedIdentityBytes: 64,
-        maxConcurrentAttempts: 1,
         maxAttemptFailures: 2,
-        attemptAbortAfterMs: 60_000,
-        failureRetentionMs: 60_000,
       },
       warn,
       attempt: async ({ agentId }) => {
@@ -275,11 +249,8 @@ describe("client voice mutation digest owner", () => {
       });
       const owner = new ClientVoiceMutationDigestOwner<number>({
         policy: {
+          ...TEST_POLICY,
           maxRetainedIntents: 1,
-          maxRetainedIdentityBytes: 64,
-          maxConcurrentAttempts: 1,
-          maxAttemptFailures: 3,
-          attemptAbortAfterMs: 60_000,
           failureRetentionMs: 100,
         },
         warn,
@@ -316,11 +287,8 @@ describe("client voice mutation digest owner", () => {
       });
       const owner = new ClientVoiceMutationDigestOwner<number>({
         policy: {
+          ...TEST_POLICY,
           maxRetainedIntents: 1,
-          maxRetainedIdentityBytes: 64,
-          maxConcurrentAttempts: 1,
-          maxAttemptFailures: 3,
-          attemptAbortAfterMs: 60_000,
           failureRetentionMs: 100,
         },
         warn: vi.fn(),
@@ -350,20 +318,16 @@ describe("client voice mutation digest owner", () => {
   it("ignores settlement from an attempt owned by a cleared generation", async () => {
     const attempts: Array<{
       context: number;
-      completion: ReturnType<typeof deferred<boolean>>;
+      completion: ReturnType<typeof createDeferred<boolean>>;
     }> = [];
     const owner = new ClientVoiceMutationDigestOwner<number>({
       policy: {
+        ...TEST_POLICY,
         maxRetainedIntents: 1,
-        maxRetainedIdentityBytes: 64,
-        maxConcurrentAttempts: 1,
-        maxAttemptFailures: 3,
-        attemptAbortAfterMs: 60_000,
-        failureRetentionMs: 60_000,
       },
       warn: vi.fn(),
       attempt: async ({ context }) => {
-        const completion = deferred<boolean>();
+        const completion = createDeferred<boolean>();
         attempts.push({ context, completion });
         return await completion.promise;
       },

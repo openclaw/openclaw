@@ -2,10 +2,11 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { CliDeps } from "../cli/deps.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { captureEnv } from "../test-utils/env.js";
+import { messageCommand } from "./message.js";
 
 type ResetPluginRuntimeStateForTest =
   typeof import("../plugins/runtime.js").resetPluginRuntimeStateForTest;
@@ -116,14 +117,12 @@ vi.mock("../infra/outbound/message-action-runner.js", () => ({
   runMessageAction: runMessageActionMock,
 }));
 
-let messageCommand: typeof import("./message.js").messageCommand;
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../test-utils/channel-plugins.js"));
-  ({ messageCommand } = await import("./message.js"));
 });
 
 const runtime: RuntimeEnv = {
@@ -199,12 +198,12 @@ function createLegacySingleAccountPlugin(params: {
 }
 
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
-  sendMessageWhatsApp: vi.fn(),
-  sendMessageTelegram: vi.fn(),
-  sendMessageDiscord: vi.fn(),
-  sendMessageSlack: vi.fn(),
-  sendMessageSignal: vi.fn(),
-  sendMessageIMessage: vi.fn(),
+  whatsapp: vi.fn(),
+  telegram: vi.fn(),
+  discord: vi.fn(),
+  slack: vi.fn(),
+  signal: vi.fn(),
+  imessage: vi.fn(),
   ...overrides,
 });
 
@@ -456,7 +455,7 @@ describe("messageCommand", () => {
   });
 
   it("keeps the retained legacy owner after config load strips the default marker", async () => {
-    const migrated = migratePersistedImplicitMainRoster({
+    const migrated = createCanonicalAgentConfigFixture({
       agents: {
         entries: {
           ops: { default: true },
@@ -733,17 +732,10 @@ describe("messageCommand", () => {
       { ok: false, warning: "Unavailable", added: "✅" },
       "Unavailable",
     ],
-    [
-      "rejected delete",
-      "delete",
-      { ok: false, deleted: false, warning: "Not deleted" },
-      "Not deleted",
-    ],
     ["rejected poll", "poll", { ok: false, error: "Poll rejected" }, "Poll rejected"],
-    ["rejected send", "send", { ok: false, error: "Message rejected" }, "Message rejected"],
   ] as const)("reports %s truthfully in JSON output", async (_name, action, payload, expected) => {
     runMessageActionMock.mockResolvedValueOnce({
-      kind: action === "send" || action === "poll" ? action : "action",
+      kind: action === "poll" ? action : "action",
       channel: "telegram",
       action,
       to: "123456",

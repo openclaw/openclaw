@@ -1,6 +1,7 @@
 import {
   codeModeToolSurfaceObserver,
   type CodeModeToolSurfaceObservation,
+  hasResponsesWebSearchTool,
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "@openclaw/ai/internal/openai";
@@ -15,7 +16,6 @@ import {
 } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-// OpenAI stream wrapper normalizes OpenAI-compatible streamed tool and text events.
 import {
   normalizeFastMode,
   normalizeOptionalLowercaseString,
@@ -46,7 +46,9 @@ import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { streamSimple } from "../../stream.js";
 import type { SimpleStreamOptions } from "../../types.js";
 import {
+  normalizeOpenAIFastMode,
   normalizeOpenAIServiceTier,
+  type OpenAIFastMode,
   supportsOpenAIResponsesFastMode,
   type OpenAIServiceTier,
 } from "../openai-fast-mode.js";
@@ -55,7 +57,7 @@ import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 const log = createSubsystemLogger("llm/providers/stream-wrappers");
 
-type DynamicFastMode = boolean | (() => boolean | undefined);
+type DynamicFastMode = OpenAIFastMode | (() => OpenAIFastMode | undefined);
 type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
   openclawCodeModeToolSurface?: boolean;
   openclawCodeModeAllowedHostedToolTypes?: Set<string>;
@@ -217,25 +219,6 @@ function shouldStripOpenAICompletionMessageKeys(model: {
   return model.api === "openai-completions" && compat?.strictMessageKeys === true;
 }
 
-function hasResponsesWebSearchTool(tools: unknown): boolean {
-  if (!Array.isArray(tools)) {
-    return false;
-  }
-  return tools.some((tool) => {
-    if (!isRecord(tool)) {
-      return false;
-    }
-    if (tool.type === "web_search") {
-      return true;
-    }
-    if (tool.type === "function" && tool.name === "web_search") {
-      return true;
-    }
-    const fn = tool.function;
-    return isRecord(fn) && fn.name === "web_search";
-  });
-}
-
 function resolveOpenAIThinkingPayloadEffort(params: {
   model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown; compat?: unknown };
   payloadObj: Record<string, unknown>;
@@ -299,18 +282,10 @@ export function resolveOpenAIServiceTier(
   return normalized;
 }
 
-function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
-  if (typeof value === "function") {
-    return normalizeOpenAIFastMode((value as () => unknown)());
-  }
-  const fastMode = normalizeFastMode(value);
-  return fastMode === "auto" ? undefined : fastMode;
-}
-
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIFastMode(
   extraParams: Record<string, unknown> | undefined,
-): boolean | undefined {
+): OpenAIFastMode | undefined {
   const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
   const normalized = normalizeOpenAIFastMode(raw);
   if (
@@ -323,15 +298,6 @@ export function resolveOpenAIFastMode(
     log.warn(`ignoring invalid OpenAI fast mode param: ${rawSummary}`);
   }
   return normalized;
-}
-
-function applyOpenAIFastModePayloadOverrides(params: {
-  payloadObj: Record<string, unknown>;
-  model: { provider?: unknown; id?: unknown; baseUrl?: unknown; api?: unknown };
-}): void {
-  if (params.payloadObj.service_tier === undefined && shouldApplyOpenAIServiceTier(params.model)) {
-    params.payloadObj.service_tier = "priority";
-  }
 }
 
 /** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
@@ -357,7 +323,6 @@ export function createOpenAIResponsesContextManagementWrapper(
       return underlying(model, context, options);
     }
 
-    const originalOnPayload = options?.onPayload;
     const effectiveStore = policy.shouldStripStore ? false : policy.explicitStore;
     const replayResponsesItemIds =
       effectiveStore ??
@@ -365,14 +330,10 @@ export function createOpenAIResponsesContextManagementWrapper(
     const nextOptions: OpenAIResponsesReplayOptions = {
       ...options,
       ...(replayResponsesItemIds === undefined ? {} : { replayResponsesItemIds }),
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIResponsesPayloadPolicy(payload as Record<string, unknown>, policy);
-        }
-        return originalOnPayload?.(payload, model);
-      },
     };
-    return underlying(model, context, nextOptions);
+    return streamWithPayloadPatch(underlying, model, context, nextOptions, (payload) => {
+      applyOpenAIResponsesPayloadPolicy(payload, policy);
+    });
   };
 }
 
@@ -500,21 +461,14 @@ export function createOpenAIFastModeWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (normalizeOpenAIFastMode(enabled) !== true || !supportsOpenAIResponsesFastMode(model)) {
+    const fastMode = normalizeOpenAIFastMode(enabled);
+    if (!fastMode || !supportsOpenAIResponsesFastMode(model)) {
       return underlying(model, context, options);
     }
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          applyOpenAIFastModePayloadOverrides({
-            payloadObj: payload as Record<string, unknown>,
-            model,
-          });
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (payload.service_tier === undefined && shouldApplyOpenAIServiceTier(model)) {
+        payload.service_tier = fastMode === "ultrafast" ? "ultrafast" : "priority";
+      }
     });
   };
 }
@@ -550,22 +504,14 @@ export function createOpenAITextVerbosityWrapper(
     const resolvedVerbosity = resolveOpenAITextVerbosityForModel(model, verbosity);
     const shouldOverrideExistingVerbosity =
       model.api === "openai-chatgpt-responses" || resolvedVerbosity !== verbosity;
-    const originalOnPayload = options?.onPayload;
-    return underlying(model, context, {
-      ...options,
-      onPayload: (payload) => {
-        if (payload && typeof payload === "object") {
-          const payloadObj = payload as Record<string, unknown>;
-          const existingText =
-            payloadObj.text && typeof payloadObj.text === "object"
-              ? (payloadObj.text as Record<string, unknown>)
-              : {};
-          if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
-            payloadObj.text = { ...existingText, verbosity: resolvedVerbosity };
-          }
-        }
-        return originalOnPayload?.(payload, model);
-      },
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      const existingText =
+        payload.text && typeof payload.text === "object"
+          ? (payload.text as Record<string, unknown>)
+          : {};
+      if (shouldOverrideExistingVerbosity || existingText.verbosity === undefined) {
+        payload.text = { ...existingText, verbosity: resolvedVerbosity };
+      }
     });
   };
 }

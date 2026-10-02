@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { runSqlitePinnedReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import {
   createSqliteIndexContract,
   createSqliteTableContract,
@@ -78,6 +79,17 @@ export function collectSqliteSchemaIssues(
   schemaSql: string,
   compatibility: SqliteSchemaCompatibility = {},
   readTable?: SqliteTableContractReader,
+): SqliteSchemaIssue[] {
+  return runSqlitePinnedReadSnapshotSync(database, () =>
+    collectSqliteSchemaIssuesInSnapshot(database, schemaSql, compatibility, readTable),
+  );
+}
+
+function collectSqliteSchemaIssuesInSnapshot(
+  database: DatabaseSync,
+  schemaSql: string,
+  compatibility: SqliteSchemaCompatibility,
+  readTable: SqliteTableContractReader | undefined,
 ): SqliteSchemaIssue[] {
   const expected = getSqliteSchemaContract(schemaSql);
   const allowedMissingTables = new Set(compatibility.allowedMissingTables ?? []);
@@ -165,11 +177,7 @@ export function collectSqliteSchemaIssues(
       ) {
         continue;
       }
-      if (
-        !actualTable.triggers.some((actualTrigger) =>
-          isEqualTrigger(actualTrigger, expectedTrigger),
-        )
-      ) {
+      if (!containsTrigger(actualTable.triggers, expectedTrigger)) {
         add("missing-or-drifted-trigger", expectedTrigger.name);
       }
     }
@@ -183,23 +191,15 @@ export function collectSqliteSchemaIssues(
         continue;
       }
       for (const canonicalTrigger of triggerGroup.triggers) {
-        if (
-          !actualTable.triggers.some((actualTrigger) =>
-            isEqualTrigger(actualTrigger, canonicalTrigger),
-          )
-        ) {
+        if (!containsTrigger(actualTable.triggers, canonicalTrigger)) {
           add("missing-or-drifted-trigger", canonicalTrigger.name);
         }
       }
     }
     for (const actualTrigger of actualTable.triggers) {
       if (
-        !expectedTable.triggers.some((expectedTrigger) =>
-          isEqualTrigger(actualTrigger, expectedTrigger),
-        ) &&
-        !optionalCanonicalTriggers.some((canonicalTrigger) =>
-          isEqualTrigger(actualTrigger, canonicalTrigger),
-        )
+        !containsTrigger(expectedTable.triggers, actualTrigger) &&
+        !containsTrigger(optionalCanonicalTriggers, actualTrigger)
       ) {
         add("unexpected-trigger", actualTrigger.name);
       }
@@ -632,8 +632,8 @@ function collectSqliteIndexContract(
   return createSqliteIndexContract(index, typeof row?.sql === "string" ? row.sql : null, terms);
 }
 
-function isEqualTrigger(left: SqliteSchemaRow, right: SqliteSchemaRow): boolean {
-  return left.name === right.name && left.sql === right.sql;
+function containsTrigger(triggers: SqliteSchemaRow[], expected: SqliteSchemaRow): boolean {
+  return triggers.some((trigger) => trigger.name === expected.name && trigger.sql === expected.sql);
 }
 
 function compareJson(left: unknown, right: unknown): number {

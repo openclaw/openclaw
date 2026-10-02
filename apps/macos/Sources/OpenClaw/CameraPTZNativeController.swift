@@ -28,21 +28,6 @@ struct CameraUSBIdentity: Equatable, Sendable {
     }
 }
 
-enum CameraUVCDescriptorParser {
-    static func parse(_ descriptors: [UInt8]) -> (terminalId: UInt8, controls: UInt32)? {
-        var terminalId: UInt8 = 1
-        var controls: UInt32 = 0
-        let parsed = descriptors.withUnsafeBytes { bytes in
-            openclaw_uvc_parse_camera_terminal(
-                bytes.bindMemory(to: UInt8.self).baseAddress,
-                bytes.count,
-                &terminalId,
-                &controls)
-        }
-        return parsed == 1 ? (terminalId, controls) : nil
-    }
-}
-
 enum CameraUVCControlInfo {
     private static let setCapability: UInt8 = 0x02
 

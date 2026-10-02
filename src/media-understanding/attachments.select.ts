@@ -1,11 +1,5 @@
-// Attachment selection applies per-capability filters, ordering preferences,
-// and max-count policy before provider execution.
 import type { MediaUnderstandingAttachmentsConfig } from "../config/types.tools.js";
-import {
-  isAudioAttachment,
-  isImageAttachment,
-  isVideoAttachment,
-} from "./attachments.normalize.js";
+import { resolveAttachmentKind } from "./attachments.normalize.js";
 import type { MediaAttachment, MediaUnderstandingCapability } from "./types.js";
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
@@ -20,8 +14,11 @@ function orderAttachments(
     return attachments.toReversed();
   }
   if (prefer === "path" || prefer === "url") {
-    const preferred = attachments.filter((item) => item[prefer]);
-    const remaining = attachments.filter((item) => !item[prefer]);
+    const preferred: MediaAttachment[] = [];
+    const remaining: MediaAttachment[] = [];
+    for (const item of attachments) {
+      (item[prefer] ? preferred : remaining).push(item);
+    }
     return [...preferred, ...remaining];
   }
   return attachments;
@@ -57,19 +54,16 @@ export function selectAttachments(params: {
   policy?: MediaUnderstandingAttachmentsConfig;
 }): { selected: MediaAttachment[]; droppedAttachmentIndexes: number[] } {
   const { capability, attachments, policy } = params;
-  const input = Array.isArray(attachments) ? attachments.filter(isAttachmentRecord) : [];
+  const input = Array.isArray(attachments) ? attachments : [];
   const matches = input.filter((item) => {
+    if (!isAttachmentRecord(item)) {
+      return false;
+    }
     // Preflight audio has already been consumed; rerunning STT would duplicate transcript output.
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;
     }
-    if (capability === "image") {
-      return isImageAttachment(item);
-    }
-    if (capability === "audio") {
-      return isAudioAttachment(item);
-    }
-    return isVideoAttachment(item);
+    return resolveAttachmentKind(item) === capability;
   });
   if (matches.length === 0) {
     return { selected: [], droppedAttachmentIndexes: [] };

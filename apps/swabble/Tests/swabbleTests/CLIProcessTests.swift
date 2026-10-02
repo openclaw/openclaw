@@ -1,9 +1,10 @@
 import Foundation
+import Swabble
 import XCTest
 
 @available(macOS 26.0, *)
 final class CLIProcessTests: XCTestCase {
-    func testExecutablePathPreservesHealthAndCommandErrors() throws {
+    func testExecutableDispatchPreservesOptionsAndCommandErrors() throws {
         let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
             .appendingPathComponent("swabble")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: executable.path))
@@ -11,8 +12,20 @@ final class CLIProcessTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        let hookOutput = directory.appendingPathComponent("hook-output.txt")
+        let hookConfig = directory.appendingPathComponent("hook-config.json")
+        var hookSettings = SwabbleConfig()
+        hookSettings.hook.command = "/bin/sh"
+        hookSettings.hook.args = ["-c", #"printf '%s\n' "$SWABBLE_TEXT" >> "$SWABBLE_TEST_OUTPUT""#]
+        hookSettings.hook.env = ["SWABBLE_TEST_OUTPUT": hookOutput.path]
+        try ConfigLoader.save(hookSettings, at: hookConfig)
+
+        let config = directory.appendingPathComponent("config.json")
         let cases: [([String], Int32, String, String)] = [
             (["health"], 0, "ok\n", ""),
+            (["test-hook", "hello world", "--config", hookConfig.path], 0, "hook invoked\n", ""),
+            (["setup", "--config", config.path], 0, "wrote config to \(config.path)\n", ""),
+            (["mic", "set", "37", "--config", config.path], 0, "saved device index 37\n", ""),
             (["unknown-command"], 1, "", "error: Unknown subcommand 'unknown-command' for command 'swabble'\n"),
             (["mic"], 1, "", "error: Command 'mic' requires a subcommand\n"),
         ]
@@ -43,5 +56,7 @@ final class CLIProcessTests: XCTestCase {
                 String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
                 expectedError)
         }
+        XCTAssertEqual(try ConfigLoader.load(at: config).audio.deviceIndex, 37)
+        XCTAssertEqual(try String(contentsOf: hookOutput, encoding: .utf8), "hello world\n")
     }
 }

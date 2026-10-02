@@ -6,12 +6,15 @@ import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { NodeHostConfig } from "../node-host/config.js";
+import type { NodeHostConfig, NodeHostGatewayConfig } from "../node-host/config.js";
 import { encodePairingSetupCode } from "../pairing/setup-code.js";
 import { registerConnectCli } from "./connect-cli.js";
 
 const mocks = vi.hoisted(() => ({
   runNodeHost: vi.fn(),
+  loadResumableNodeHostGateway: vi.fn<() => Promise<NodeHostGatewayConfig | undefined>>(
+    async () => undefined,
+  ),
   runNodeDaemonInstall: vi.fn(),
   fetchWithSsrFGuard: vi.fn(),
   loadNodeHostConfig: vi.fn<() => Promise<NodeHostConfig | null>>(async () => null),
@@ -22,7 +25,10 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-vi.mock("../node-host/runner.js", () => ({ runNodeHost: mocks.runNodeHost }));
+vi.mock("../node-host/runner.js", () => ({
+  loadResumableNodeHostGateway: mocks.loadResumableNodeHostGateway,
+  runNodeHost: mocks.runNodeHost,
+}));
 vi.mock("../node-host/config.js", () => ({ loadNodeHostConfig: mocks.loadNodeHostConfig }));
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
@@ -163,6 +169,77 @@ describe("connect cli", () => {
       expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      name: "foreground session host",
+      platform: "linux",
+      args: ["--session-host", "--display-name", "Build Node"],
+      profile: undefined,
+      reconnect: "openclaw node run --session-host --display-name 'Build Node'",
+      pair: "openclaw connect <join-url> --session-host --display-name 'Build Node'",
+    },
+    {
+      name: "session-host service under a named profile",
+      platform: "linux",
+      args: ["--service", "--session-host", "--display-name", "Build --profile test"],
+      profile: "work",
+      reconnect:
+        "openclaw --profile work config set nodeHost.workerRuns.enabled true, then openclaw --profile work node install --force --display-name 'Build --profile test'",
+      pair: "openclaw --profile work connect <join-url> --service --session-host --display-name 'Build --profile test'",
+    },
+    {
+      name: "Windows session host",
+      platform: "win32",
+      args: ["--session-host", "--display-name", "O'Brien"],
+      profile: undefined,
+      reconnect: "openclaw node run --session-host --display-name 'O''Brien'",
+      pair: "openclaw connect <join-url> --session-host --display-name 'O''Brien'",
+    },
+  ] as const)(
+    "points a paired $name without a target at its saved pairing",
+    async ({ platform, args, profile, reconnect, pair }) => {
+      const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+      vi.stubEnv("OPENCLAW_PROFILE", profile);
+      mocks.loadResumableNodeHostGateway.mockResolvedValueOnce({
+        host: "gateway.example",
+        port: 443,
+        tls: true,
+      });
+
+      try {
+        await runConnect([...args]);
+      } finally {
+        if (platformDescriptor) {
+          Object.defineProperty(process, "platform", platformDescriptor);
+        }
+      }
+
+      expect(mocks.runtime.error).toHaveBeenCalledWith(
+        [
+          "Connect target is required. Join URLs and setup codes are single-use.",
+          `If this machine is still paired with wss://gateway.example:443, reconnect with the saved pairing: ${reconnect}`,
+          `Otherwise, mint a join URL on the Gateway host with ${profile ? `openclaw --profile ${profile}` : "openclaw"} devices join-code, then run: ${pair}`,
+        ].join("\n"),
+      );
+      expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.runNodeHost).not.toHaveBeenCalled();
+      expect(mocks.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      expect(mocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+    },
+  );
+
+  it("only offers a new join URL when no pairing can resume", async () => {
+    await runConnect(["--session-host"]);
+
+    expect(mocks.loadResumableNodeHostGateway).toHaveBeenCalledOnce();
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      "Connect target is required. To pair this machine, mint a join URL on the Gateway host with openclaw devices join-code, then run: openclaw connect <join-url> --session-host",
+    );
+    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.runNodeHost).not.toHaveBeenCalled();
+  });
 
   it("consumes an environment-managed target file before connecting", async () => {
     const root = tempDirs.make("openclaw-connect-target-");

@@ -1,4 +1,3 @@
-// Mattermost plugin module implements guarded channel-history reads.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { resolveAllowlistProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";

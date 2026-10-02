@@ -14,8 +14,8 @@ import {
   GuardedFetchRedirectError,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { clampNumber, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   BEAM_MAX_BODY_BYTES,
   BEAM_MAX_ITEM_CHARS,
@@ -68,13 +68,6 @@ const MIRROR_KEYS = new Set([
   "activeWindowMinutes",
 ]);
 
-function boundedNumber(value: unknown, fallback: number, min: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, value));
-}
-
 /** Returns the mirror config, undefined when mirroring is not configured, or an error string. */
 export function parseBeamMirrorConfig(
   config: ReturnType<PluginRuntime["config"]["current"]>,
@@ -87,10 +80,8 @@ export function parseBeamMirrorConfig(
     return `${MIRROR_CONFIG_PATH} must be a closed object with endpoint/token/catalogs/pollSeconds/activeWindowMinutes`;
   }
   const endpoint = typeof mirror.endpoint === "string" ? mirror.endpoint.trim() : "";
-  let parsedEndpoint: URL;
-  try {
-    parsedEndpoint = new URL(endpoint);
-  } catch {
+  const parsedEndpoint = URL.parse(endpoint);
+  if (!parsedEndpoint) {
     return `${MIRROR_CONFIG_PATH}.endpoint must be an absolute URL`;
   }
   // Bearer credentials and transcripts must never cross the network in the
@@ -107,19 +98,17 @@ export function parseBeamMirrorConfig(
   if (
     !Array.isArray(mirror.catalogs) ||
     mirror.catalogs.length === 0 ||
-    mirror.catalogs.some((id) => typeof id !== "string" || !id.trim())
+    !mirror.catalogs.every((id): id is string => typeof id === "string" && id.trim().length > 0)
   ) {
     return `${MIRROR_CONFIG_PATH}.catalogs must explicitly list the catalog ids to mirror`;
   }
-  const catalogs = mirror.catalogs.map((id) => (id as string).trim().toLowerCase());
   return {
     endpoint,
     ...(mirror.token !== undefined ? { token: mirror.token } : {}),
-    catalogs,
-    pollSeconds: boundedNumber(mirror.pollSeconds, DEFAULT_POLL_SECONDS, 10, 3_600),
-    activeWindowMinutes: boundedNumber(
-      mirror.activeWindowMinutes,
-      DEFAULT_ACTIVE_WINDOW_MINUTES,
+    catalogs: mirror.catalogs.map((id) => id.trim().toLowerCase()),
+    pollSeconds: clampNumber(asFiniteNumber(mirror.pollSeconds) ?? DEFAULT_POLL_SECONDS, 10, 3_600),
+    activeWindowMinutes: clampNumber(
+      asFiniteNumber(mirror.activeWindowMinutes) ?? DEFAULT_ACTIVE_WINDOW_MINUTES,
       1,
       10_080,
     ),

@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  appendCallReplayKey,
   releaseRejectedProviderCall,
   rememberManagerReplayKey,
   reserveRejectedProviderCall,
-  trimCallReplayKeys,
 } from "./replay-keys.js";
 
 describe("voice-call manager replay keys", () => {
@@ -16,15 +14,6 @@ describe("voice-call manager replay keys", () => {
     }
 
     expect([...keys]).toEqual(["b", "c", "d"]);
-  });
-
-  it("keeps the newest per-call replay keys in insertion order", () => {
-    const keys = ["a", "b", "c", "d"];
-
-    trimCallReplayKeys(keys, 3);
-    appendCallReplayKey(keys, "e", 3);
-
-    expect(keys).toEqual(["c", "d", "e"]);
   });
 
   it("does not let a stale failed rejection release a newer reservation", () => {

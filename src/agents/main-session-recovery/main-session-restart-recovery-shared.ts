@@ -1,16 +1,16 @@
 import path from "node:path";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveSessionStorePathCore,
   type InternalSessionEntry as SessionEntry,
-  resolveAllAgentSessionStoreTargetsSync,
   type SessionStoreTarget,
 } from "../../config/sessions.js";
 import { hasSessionEntriesByStatusReadOnly } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
+import { prepareSessionStoreTargetInventory } from "../../config/sessions/session-store-target-inventory.js";
+import { prepareSessionStoreTargetInventoryRead } from "../../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -26,6 +26,7 @@ export type ExpectedRestartRecoveryTarget = {
   canonicalSessionKey?: string;
   sessionId: string;
   sessionKey: string;
+  claim?: { runId: string; sourceRunId: string };
 };
 
 export type ExhaustedRestartRecoveryTarget = ExpectedRestartRecoveryTarget & {
@@ -40,36 +41,15 @@ export function resolveRestartRecoveryTerminalClientRunId(
     : undefined;
 }
 
-export function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
-  const normalized = new Set<string>();
-  for (const value of values ?? []) {
-    const trimmed = value.trim();
-    if (trimmed) {
-      normalized.add(trimmed);
-    }
-  }
-  return normalized;
-}
-
-export const normalizeFiniteTimestamp = asFiniteNumber;
-
-export function hasCurrentProcessOwner(params: {
-  activeSessionIds: Set<string>;
-  activeSessionKeys: Set<string>;
-  entry: SessionEntry;
-  sessionKey: string;
-}): boolean {
-  if (params.activeSessionIds.has(params.entry.sessionId)) {
-    return true;
-  }
-  return params.activeSessionIds.size === 0 && params.activeSessionKeys.has(params.sessionKey);
-}
-
 export async function discoverRestartRecoveryStoreTargets(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
   statuses?: Parameters<typeof hasSessionEntriesByStatusReadOnly>[1];
+  shouldContinue?: () => boolean;
 }): Promise<SessionStoreTarget[]> {
+  if (params.shouldContinue?.() === false) {
+    return [];
+  }
   const storeTargets: SessionStoreTarget[] = [];
   const stateDir = params.stateDir ?? resolveStateDir(process.env);
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -84,7 +64,16 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       ),
     );
     const configuredAgentIdSet = new Set(configuredAgentIds);
-    for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+    const inventory = prepareSessionStoreTargetInventoryRead(
+      prepareSessionStoreTargetInventory(params.cfg, configuredAgentIds, env, "recovery"),
+    );
+    const targets = await inventory.withRead(async (snapshot) =>
+      snapshot.agents.flatMap(({ result }) => (result.available ? result.targets : [])),
+    );
+    if (params.shouldContinue?.() === false) {
+      return [];
+    }
+    for (const target of targets) {
       const storePath = path.resolve(target.storePath);
       // Fixed configured stores can retain a durable owner whose ID differs from the
       // current roster entry. The validated path is the configuration fact; the target's
@@ -99,18 +88,32 @@ export async function discoverRestartRecoveryStoreTargets(params: {
       const storePath = path.join(sessionsDir, "sessions.json");
       storeTargets.push({
         agentId:
-          resolveSqliteTargetFromSessionStorePath(storePath).agentId ?? LEGACY_IMPLICIT_AGENT_ID,
+          resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).agentId ??
+          LEGACY_IMPLICIT_AGENT_ID,
         storePath,
       });
     }
   }
-  return storeTargets
-    .filter(
-      (target) =>
-        !readAgentDatabaseAdmissionRefusal(target.agentId, { env }) &&
-        (!params.statuses ||
-          hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses)),
-    )
+  const eligibleTargets: SessionStoreTarget[] = [];
+  for (const target of storeTargets) {
+    if (params.shouldContinue?.() === false) {
+      return [];
+    }
+    if (readAgentDatabaseAdmissionRefusal(target.agentId, { env })) {
+      continue;
+    }
+    const hasStatus =
+      !params.statuses ||
+      (await hasSessionEntriesByStatusReadOnly({ ...target, env }, params.statuses));
+    if (params.shouldContinue?.() === false) {
+      return [];
+    }
+    if (hasStatus) {
+      eligibleTargets.push(target);
+    }
+  }
+  return eligibleTargets
+    .filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env }))
     .toSorted(
       (a, b) => a.storePath.localeCompare(b.storePath) || a.agentId.localeCompare(b.agentId),
     );

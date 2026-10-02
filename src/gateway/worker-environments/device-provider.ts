@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { hasEffectivePairedDeviceRole } from "../../infra/device-pairing.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
-  formatNodeRunnerUpdateRequired,
+  formatNodeRunnerInventoryIssue,
   type NodeRunnerInventoryIssue,
 } from "../../infra/node-runner-inventory.js";
 import {
@@ -53,7 +53,7 @@ export async function resolveDeviceWorkerAvailability(
 
 export function deviceUnavailableText(deviceId: string, availability: DeviceWorkerAvailability) {
   if (availability.issue) {
-    return formatNodeRunnerUpdateRequired(deviceId, availability.issue);
+    return formatNodeRunnerInventoryIssue(deviceId, availability.issue);
   }
   switch (availability.unavailableReason) {
     case "unpaired":
@@ -144,14 +144,23 @@ export function createDeviceWorkerRuntime(options: DeviceWorkerRuntimeOptions) {
       leaseId: deviceLeaseId(requireDeviceId(profile), operationId),
       sharedHost: true,
     }),
-    provision: async (profile, operationId) => {
+    provision: async (profile, operationId, provisionOptions) => {
+      if (!provisionOptions?.assertCurrent) {
+        throw new WorkerProviderError(
+          "Device provisioning requires current Gateway allocation authority",
+        );
+      }
+      provisionOptions.assertCurrent();
       const deviceId = requireDeviceId(profile);
       const availability = await resolveAvailability(deviceId);
+      provisionOptions.assertCurrent();
       if (!availability.available) {
         throw new WorkerProviderError(deviceUnavailableText(deviceId, availability));
       }
+      const allocation = await provider.resolveAllocation(profile, operationId);
+      provisionOptions.assertCurrent();
       return {
-        ...(await provider.resolveAllocation(profile, operationId)),
+        ...allocation,
         node: { deviceId },
       };
     },

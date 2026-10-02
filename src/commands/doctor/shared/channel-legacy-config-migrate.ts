@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../../../config/types.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { findUninspectedPluginDiagnostic } from "../../../plugins/discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
+import { applyPluginDoctorCompatibilitySequence } from "../../../plugins/doctor-compatibility-migration.js";
+import type { PluginDoctorCompatibilityNormalizer } from "../../../plugins/doctor-contract-module.js";
 import {
   applyPluginDoctorCompatibilityMigrations,
   collectDoctorConfigRepairPluginIds,
@@ -16,15 +18,6 @@ import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 
 const log = createSubsystemLogger("plugins/doctor-contracts");
-
-type ChannelDoctorCompatibilityMutation = {
-  config: OpenClawConfig;
-  changes: string[];
-};
-
-type ChannelDoctorCompatibilityNormalizer = (params: {
-  cfg: OpenClawConfig;
-}) => ChannelDoctorCompatibilityMutation;
 
 function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: string[]): void {
   const channels = isRecord(raw.channels) ? raw.channels : null;
@@ -81,7 +74,7 @@ function migrateHeartbeatVisibility(raw: Record<string, unknown>, changes: strin
 
 function resolveBundledChannelCompatibilityNormalizer(
   channelId: string,
-): ChannelDoctorCompatibilityNormalizer | undefined {
+): PluginDoctorCompatibilityNormalizer | undefined {
   if (isPluginDoctorMigrationDeferred(channelId)) {
     return undefined;
   }
@@ -93,21 +86,6 @@ function resolveBundledChannelCompatibilityNormalizer(
   return getBootstrapChannelPlugin(channelId)?.doctor?.normalizeCompatibilityConfig;
 }
 
-function collectPluginDoctorCompatibilityIds(params: {
-  raw: unknown;
-  unresolvedChannelIds: readonly string[];
-}): string[] {
-  const unresolvedChannelIds = new Set(params.unresolvedChannelIds);
-  return [
-    ...new Set([
-      ...params.unresolvedChannelIds,
-      ...collectDoctorConfigRepairPluginIds(params.raw).filter(
-        (pluginId) => !unresolvedChannelIds.has(pluginId),
-      ),
-    ]),
-  ].toSorted();
-}
-
 /** Apply bundled and plugin channel compatibility migrations to a legacy config object. */
 export function applyChannelDoctorCompatibilityMigrations(
   cfg: Record<string, unknown>,
@@ -115,9 +93,11 @@ export function applyChannelDoctorCompatibilityMigrations(
 ): {
   next: Record<string, unknown>;
   changes: string[];
+  warnings?: string[];
 } {
-  let nextCfg = cfg as OpenClawConfig;
-  const loadPaths = nextCfg.plugins?.load?.paths ?? [];
+  // SAFETY: Compatibility hooks accept legacy config before canonical validation.
+  const config = cfg as OpenClawConfig;
+  const loadPaths = config.plugins?.load?.paths ?? [];
   if (loadPaths.length > 0) {
     const warning = findUninspectedPluginDiagnostic(
       discoverConfiguredPluginLoadPaths({ loadPaths }).diagnostics,
@@ -130,41 +110,36 @@ export function applyChannelDoctorCompatibilityMigrations(
   const changes: string[] = [];
   migrateHeartbeatVisibility(cfg, changes);
   const unresolvedChannelIds: string[] = [];
-
-  for (const channelId of listDoctorConfiguredChannelIds(cfg, {
-    configEntryPolicy: "raw",
-    sort: "codepoint",
-  })) {
-    const normalizeCompatibilityConfig = resolveBundledChannelCompatibilityNormalizer(channelId);
-    if (!normalizeCompatibilityConfig) {
-      unresolvedChannelIds.push(channelId);
-      continue;
-    }
-    const mutation = normalizeCompatibilityConfig({ cfg: nextCfg });
-    if (!mutation || mutation.changes.length === 0) {
-      continue;
-    }
-    nextCfg = mutation.config;
-    changes.push(...mutation.changes);
-  }
-
-  // Plugin id collection loads the installed-plugin registry from the shared state
-  // database; state-free preview callers opt out and rely on the full committer run.
+  const bundled = applyPluginDoctorCompatibilitySequence(
+    config,
+    listDoctorConfiguredChannelIds(cfg, { configEntryPolicy: "raw", sort: "codepoint" }).map(
+      (channelId) => {
+        const normalizeCompatibilityConfig =
+          resolveBundledChannelCompatibilityNormalizer(channelId);
+        if (!normalizeCompatibilityConfig) {
+          unresolvedChannelIds.push(channelId);
+        }
+        return { pluginId: channelId, normalizeCompatibilityConfig };
+      },
+    ),
+  );
+  // State-free previews cannot read the installed-plugin registry from shared state.
   const pluginIds =
     options?.pluginContracts === false
       ? []
-      : collectPluginDoctorCompatibilityIds({ raw: cfg, unresolvedChannelIds });
-  if (pluginIds.length > 0) {
-    const compat = applyPluginDoctorCompatibilityMigrations(nextCfg, {
-      config: cfg as OpenClawConfig,
-      pluginIds,
-    });
-    nextCfg = compat.config;
-    changes.push(...compat.changes);
-  }
-
+      : [
+          ...new Set([...unresolvedChannelIds, ...collectDoctorConfigRepairPluginIds(cfg)]),
+        ].toSorted();
+  const plugins: ReturnType<typeof applyPluginDoctorCompatibilityMigrations> = pluginIds.length
+    ? applyPluginDoctorCompatibilityMigrations(bundled.config, {
+        config,
+        pluginIds,
+      })
+    : { config: bundled.config, changes: [] };
+  const warnings = [...(bundled.warnings ?? []), ...(plugins.warnings ?? [])];
   return {
-    next: nextCfg as OpenClawConfig & Record<string, unknown>,
-    changes,
+    next: plugins.config,
+    changes: [...changes, ...bundled.changes, ...plugins.changes],
+    ...(warnings.length ? { warnings } : {}),
   };
 }

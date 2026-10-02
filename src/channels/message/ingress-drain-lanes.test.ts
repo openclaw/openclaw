@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createChannelIngressDrain } from "./ingress-drain.js";
 import {
   createTestIngressQueue,
@@ -105,6 +106,73 @@ describe("channel ingress drain lanes", () => {
     });
   });
 
+  it("keeps a released lane head ahead of its tail when settlement crosses the drain snapshot", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createTestIngressQueue(stateDir, { now: () => 10_000 });
+      await queue.enqueue("head", { text: "head" }, { laneKey: "same", receivedAt: 1 });
+      await queue.enqueue("tail", { text: "tail" }, { laneKey: "same", receivedAt: 2 });
+      const started = createDeferredCore();
+      const failHead = createDeferredCore();
+      const dispatches: string[] = [];
+      const first = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 10_000,
+        dispatchClaimedEvent: async (event) => {
+          dispatches.push(event.id);
+          started.resolve();
+          await failHead.promise;
+          return { kind: "failed-retryable", error: new Error("retry head") };
+        },
+      });
+      const replacement = createChannelIngressDrain<Payload>({
+        queue,
+        now: () => 10_000,
+        retryPolicy: { baseMs: 0, maxMs: 0 },
+        dispatchClaimedEvent: async (event, lifecycle) => {
+          dispatches.push(event.id);
+          await lifecycle.onAdopted();
+        },
+      });
+      try {
+        expect(await first.drainOnce()).toEqual({ started: 1 });
+        await started.promise;
+        const afterSnapshot = async <T>(read: Promise<T>): Promise<T> => {
+          const snapshot = await read;
+          failHead.resolve();
+          await first.waitForIdle();
+          return snapshot;
+        };
+        const listPending = queue.listPending.bind(queue);
+        if (!queue.listUnsettled) {
+          throw new Error("Expected the core queue's unsettled snapshot reader");
+        }
+        const listUnsettled = queue.listUnsettled.bind(queue);
+        // The split-read negative control loses the head between these same boundaries.
+        vi.spyOn(queue, "listPending").mockImplementationOnce((options) =>
+          afterSnapshot(listPending(options)),
+        );
+        vi.spyOn(queue, "listUnsettled").mockImplementationOnce((options) =>
+          afterSnapshot(listUnsettled(options)),
+        );
+
+        expect(await replacement.drainOnce()).toEqual({ started: 0 });
+        expect(dispatches).toEqual(["head"]);
+        expect(await replacement.drainOnce()).toEqual({ started: 1 });
+        await replacement.waitForIdle();
+        expect(dispatches).toEqual(["head", "head"]);
+        expect(await replacement.drainOnce()).toEqual({ started: 1 });
+        await replacement.waitForIdle();
+        expect(dispatches).toEqual(["head", "head", "tail"]);
+      } finally {
+        failHead.resolve();
+        await Promise.allSettled([first.waitForIdle(), replacement.waitForIdle()]);
+        first.dispose();
+        replacement.dispose();
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   it("never claims a retry-delayed event whose lane head settled after the drain snapshot", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
@@ -116,11 +184,11 @@ describe("channel ingress drain lanes", () => {
 
       // Snapshot keeps the eligible head, then a sibling drainer settles it. The
       // freed lane must not hand the still-delayed tail an early attempt.
-      const snapshot = await queue.listPending({ limit: "all", orderBy: "received" });
+      const snapshot = await queue.listUnsettled!({ orderBy: "received" });
       const headClaim = await queue.claim("head");
       expect(headClaim).not.toBeNull();
       await queue.complete(headClaim!);
-      vi.spyOn(queue, "listPending").mockResolvedValue(snapshot);
+      vi.spyOn(queue, "listUnsettled").mockResolvedValue(snapshot);
 
       const dispatches: string[] = [];
       const drain = createChannelIngressDrain<Payload>({

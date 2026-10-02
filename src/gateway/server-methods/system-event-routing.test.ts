@@ -51,9 +51,7 @@ describe("system-event routing", () => {
       },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
+        publishPresence: vi.fn(),
         getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
@@ -83,9 +81,7 @@ describe("system-event routing", () => {
       params: { text: "Wake the retained session.", sessionKey: "global", wake: true },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
+        publishPresence: vi.fn(),
         getRuntimeConfig: vi.fn(() => ({
           session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
           agents: {
@@ -117,9 +113,7 @@ describe("system-event routing", () => {
       params: { text: "Wake the system owner.", wake: true },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
+        publishPresence: vi.fn(),
         getRuntimeConfig: vi.fn(() => ({
           session: { scope: "global" },
           agents: {
@@ -136,7 +130,7 @@ describe("system-event routing", () => {
       'systemHandlers["system-event"] test invariant',
     )(request);
 
-    expect(peekSystemEvents("global")).toEqual(["Wake the system owner."]);
+    expect(peekSystemEvents("agent:main:global")).toEqual(["Wake the system owner."]);
     expect(peekSystemEvents("agent:main:main")).toEqual([]);
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "notifications-event",
@@ -159,9 +153,7 @@ describe("system-event routing", () => {
       },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
+        publishPresence: vi.fn(),
         getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
@@ -196,9 +188,7 @@ describe("system-event routing", () => {
         },
         respond,
         context: {
-          broadcast: vi.fn(),
-          incrementPresenceVersion: vi.fn(() => 1),
-          getHealthVersion: vi.fn(() => 1),
+          publishPresence: vi.fn(),
           getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
         },
       } as unknown as GatewayRequestHandlerOptions;
@@ -230,9 +220,7 @@ describe("system-event routing", () => {
       },
       respond,
       context: {
-        broadcast: vi.fn(),
-        incrementPresenceVersion: vi.fn(() => 1),
-        getHealthVersion: vi.fn(() => 1),
+        publishPresence: vi.fn(),
         getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
       },
     } as unknown as GatewayRequestHandlerOptions;
@@ -259,9 +247,7 @@ describe("system-event routing", () => {
       'systemHandlers["system-event"] test invariant',
     );
     const context = {
-      broadcast: vi.fn(),
-      incrementPresenceVersion: vi.fn(() => 1),
-      getHealthVersion: vi.fn(() => 1),
+      publishPresence: vi.fn(),
       getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main" }] } })),
     };
 

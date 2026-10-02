@@ -86,13 +86,8 @@ suite.define(() => {
                 byAgent: [],
                 byChannel: [],
                 daily: [],
+                costDaily: [{ date, ...totals }],
               },
-            },
-            "usage.cost": {
-              updatedAt: start + 5000,
-              days: 1,
-              daily: [{ date, ...totals }],
-              totals,
             },
             "usage.status": { updatedAt: start + 5000, providers: [] },
             "sessions.usage.timeseries": { points },
@@ -179,12 +174,10 @@ suite.define(() => {
             },
           ],
           totals: refreshedTotals,
-        });
-        await gateway.setMethodResponse("usage.cost", {
-          ...scenario.methodResponses["usage.cost"],
-          updatedAt: start + 7000,
-          daily: [{ date, ...refreshedTotals }],
-          totals: refreshedTotals,
+          aggregates: {
+            ...usage.aggregates,
+            costDaily: [{ date, ...refreshedTotals }],
+          },
         });
         await gateway.setMethodResponse("sessions.usage.timeseries", {
           points: [...points, { ...points[2]!, timestamp: start + 6000, cumulativeTokens: 480 }],

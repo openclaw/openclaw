@@ -34,6 +34,10 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar agent menu layout", 
       sidebar.querySelectorAll<HTMLElement>(".sidebar-agent-menu__agent-switch"),
     );
     expect(tiles).toHaveLength(4);
+    await expect.poll(() => document.activeElement).toBe(tiles[0]);
+    const { userEvent } = await import("vitest/browser");
+    await userEvent.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(tiles[1]);
     await expect
       .poll(() => tiles.map((tile) => tile.getAttribute("aria-checked")))
       .toEqual(["true", "false", "false", "false"]);

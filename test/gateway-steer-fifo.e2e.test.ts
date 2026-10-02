@@ -450,7 +450,13 @@ function createConfig(params: {
       },
     },
     tools: steeringTools
-      ? { profile: "minimal", alsoAllow: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL] }
+      ? {
+          profile: "minimal",
+          // This scripted provider emits direct calls to the steering fixture tools.
+          codeMode: false,
+          toolSearch: false,
+          alsoAllow: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL],
+        }
       : { profile: "minimal" },
     models: {
       mode: "replace",
@@ -615,12 +621,17 @@ function redactedFixtureLogs(instance: OpenClawTestInstance): string {
     .slice(-12_000);
 }
 
-async function sendHeldTurn(fixture: GatewayFixture) {
-  const first = await sendChat({
-    fixture,
-    message: "INITIAL_HELD_TURN",
-    runId: "initial-held-turn",
-  });
+async function sendHeldTurn(fixture: GatewayFixture, directSteer = false) {
+  // Direct chat.send steering retains this connection's admitted authority.
+  // The TUI path below exercises follow-up queue admission instead.
+  const first = directSteer
+    ? await fixture.diagnosticsClient.request<{ runId: string; status?: string }>("chat.send", {
+        sessionKey: fixture.sessionKey,
+        message: "INITIAL_HELD_TURN",
+        deliver: false,
+        idempotencyKey: "initial-held-turn",
+      })
+    : await sendChat({ fixture, message: "INITIAL_HELD_TURN", runId: "initial-held-turn" });
   expect(first.status).toBe("started");
   try {
     await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(1), WAIT_OPTS);
@@ -773,7 +784,12 @@ function userInputs(request: ModelRequest | undefined): string[] {
 }
 
 function currentUserInput(request: ModelRequest | undefined): string {
-  return userInputs(request).at(-1) ?? "";
+  // Conversation metadata can follow the user message as a separate protected block.
+  return (
+    userInputs(request).findLast(
+      (text) => !text.startsWith("<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>"),
+    ) ?? ""
+  );
 }
 
 describe("Gateway steer FIFO", () => {
@@ -877,10 +893,10 @@ describe("Gateway steer FIFO", () => {
       expect(tailOutputIndex).toBeGreaterThan(gateOutputIndex);
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
       expect(contentText(inputItems[gateOutputIndex]?.output)).toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(await readTrace(steeringTools.tracePath)).toEqual([
         "preflight-start",
@@ -903,7 +919,7 @@ describe("Gateway steer FIFO", () => {
       if (!steeringTools) {
         throw new Error("steering tool fixture was not configured");
       }
-      const first = await sendHeldTurn(fixture);
+      const first = await sendHeldTurn(fixture, true);
       const steerMarker = "STEER_DURING_RUNNING_TOOL";
 
       try {
@@ -964,10 +980,10 @@ describe("Gateway steer FIFO", () => {
       expect(steerIndex).toBeGreaterThan(tailOutputIndex);
       expect(contentText(inputItems[gateOutputIndex]?.output)).toContain("steering gate completed");
       expect(contentText(inputItems[gateOutputIndex]?.output)).not.toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(contentText(inputItems[tailOutputIndex]?.output)).toContain(
-        "Skipped due to queued user message.",
+        "Skipped to process an incoming message.",
       );
       expect(
         fixture.modelServer.requests
@@ -1080,7 +1096,7 @@ describe("Gateway steer FIFO", () => {
         );
         expect(statusResult).toBeDefined();
         expect(contentText(statusResult?.output)).not.toContain(
-          "Skipped due to queued user message.",
+          "Skipped to process an incoming message.",
         );
         expect((await historyWithoutSteer()).sessionInfo).toMatchObject({
           hasActiveRun: true,
@@ -1120,7 +1136,7 @@ describe("Gateway steer FIFO", () => {
     "hands steered document attachments to the active run as extracted file context",
     async () => {
       const fixture = await createGatewayFixture("steer-document-context");
-      const first = await sendHeldTurn(fixture);
+      const first = await sendHeldTurn(fixture, true);
 
       // Real gateway protocol send with a file attachment while the initial
       // run is still live: admission must steer the active run instead of
@@ -1152,9 +1168,8 @@ describe("Gateway steer FIFO", () => {
       await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
       const currentSteer = currentUserInput(fixture.modelServer.requests[1]);
       expect(currentSteer).toContain("QUEUED_STEER_DOCUMENT");
-      // The media store persists uploads as `<original>---<mediaId><ext>`, so
-      // the extracted block carries the stored name, matching reply dispatch.
-      expect(currentSteer).toMatch(/<file name="notes---[0-9a-f-]+\.txt" mime="text\/plain">/);
+      // Extraction preserves the sender's filename, not the media-store basename.
+      expect(currentSteer).toContain('<file name="notes.txt" mime="text/plain">');
       expect(currentSteer).toContain("steered document body");
       await waitForRunTerminal(fixture, first.runId);
     },

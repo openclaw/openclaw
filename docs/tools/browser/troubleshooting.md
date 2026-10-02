@@ -12,6 +12,19 @@ For Linux-specific issues (especially snap Chromium), see
 For WSL2 Gateway + Windows Chrome split-host setups, see
 [WSL2 + Windows + remote Chrome CDP troubleshooting](/tools/browser-wsl2-windows-remote-cdp-troubleshooting).
 
+## Inspection times out but screenshots work
+
+Snapshots and page-text reads use a browser automation connection that can become
+stale even while tab listing and screenshots still work. OpenClaw reconnects once
+when that connection can no longer resolve the requested tab. Unresponsive sibling
+tabs share one target-inspection wait instead of adding a separate wait per tab.
+
+Retry the inspection once with the same profile and target ID. If it still fails,
+run `openclaw browser doctor` and inspect a screenshot before restarting the
+Gateway. A browser-rendered HTTP error, such as `403 Forbidden`, is evidence that
+the website denied access; it does not establish whether a profile or resource
+exists.
+
 ## Output directory errors
 
 If an output fails with `Invalid path: must stay within output directory`, set

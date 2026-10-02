@@ -1,4 +1,5 @@
 // Voice Call API module exposes the plugin public contract.
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -16,7 +17,6 @@ import {
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   buildChunkKey,
-  buildVoiceCallLegacyJsonlEventKey,
   encodeCallRecordEvent,
   type CallRecordEventChunk,
   type CallRecordEventMeta,
@@ -25,10 +25,10 @@ import {
   CALL_RECORD_EVENT_META_MAX_ENTRIES,
   CALL_RECORD_EVENTS_NAMESPACE,
   MAX_CALL_RECORD_EVENTS,
-  parseVoiceCallRecordLine,
-  resolveVoiceCallLegacyCallLogPath,
 } from "./src/manager/store.js";
 import { resolveDefaultVoiceCallStoreDir } from "./src/store-path.js";
+import { CallRecordSchema } from "./src/types.js";
+import { resolveUserPath } from "./src/utils.js";
 
 // Doctor state migration for Voice Call legacy JSONL call logs.
 
@@ -39,23 +39,6 @@ type PreparedLegacyCallRecord = {
   chunks: CallRecordEventChunk[];
   meta: CallRecordEventMeta;
 };
-
-/** Resolve home from doctor env with OS fallback. */
-function resolveHome(env: NodeJS.ProcessEnv): string {
-  return env.HOME?.trim() || os.homedir();
-}
-
-/** Resolve config paths, including "~", against the doctor env home. */
-function resolveUserPath(input: string, env: NodeJS.ProcessEnv): string {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return trimmed;
-  }
-  if (trimmed.startsWith("~")) {
-    return path.resolve(trimmed.replace(/^~(?=$|[\\/])/, () => resolveHome(env)));
-  }
-  return path.resolve(trimmed);
-}
 
 /** Read the configured voice-call store path from either package id. */
 function getVoiceCallConfigStore(config: PluginDoctorStateMigrationParams["config"]): string {
@@ -107,7 +90,7 @@ function resolveVoiceCallStorePath(params: {
 }): string {
   const configuredStore = getVoiceCallConfigStore(params.config);
   if (configuredStore) {
-    return resolveUserPath(configuredStore, params.env);
+    return resolveUserPath(configuredStore, () => params.env.HOME?.trim() || os.homedir());
   }
   return resolveDefaultVoiceCallStoreDir(params.env);
 }
@@ -147,6 +130,8 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "Skill Workshop proposals -> per-agent Workshop directory ownership";
     case "prepared-worker-ownership-v17":
       return "prepared workers -> one-use capacity and fixed workspace ownership";
+    case "github-publication-requester-authority-v18":
+      return "GitHub publication receipts -> original requesting authority";
     case "worker-placement-execution-mode-v8":
       return "cloud worker placements -> execution-mode claims";
     case "operator-approvals-system-agent":
@@ -157,6 +142,30 @@ function describeVoiceCallSchemaMigration(migration: OpenClawStateDatabaseSchema
       return "tables -> SQLite STRICT typing";
   }
   return migration.kind satisfies never;
+}
+
+function parseLegacyCallRecord(line: string, sequence: number) {
+  if (!line.trim()) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(line);
+    const record = asOptionalRecord(parsed);
+    const envelope = record?.version === 2 ? record : undefined;
+    return {
+      call: CallRecordSchema.parse(envelope ? envelope.call : parsed),
+      persistedAt:
+        typeof envelope?.persistedAt === "number" && Number.isFinite(envelope.persistedAt)
+          ? envelope.persistedAt
+          : 0,
+      sequence:
+        typeof envelope?.sequence === "number" && Number.isFinite(envelope.sequence)
+          ? envelope.sequence
+          : sequence,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** Read and prepare legacy JSONL call records, collecting line-level warnings. */
@@ -174,7 +183,7 @@ async function readLegacyCallRecords(filePath: string): Promise<{
   const warnings: string[] = [];
   let index = 0;
   for (const line of content.split("\n")) {
-    const parsed = parseVoiceCallRecordLine(line, index);
+    const parsed = parseLegacyCallRecord(line, index);
     if (!parsed) {
       if (line.trim()) {
         warnings.push(`Skipped malformed Voice Call call-log line ${index + 1}`);
@@ -188,7 +197,7 @@ async function readLegacyCallRecords(filePath: string): Promise<{
         prepared.chunk(chunkIndex),
       );
       entries.push({
-        eventKey: buildVoiceCallLegacyJsonlEventKey(line, index),
+        eventKey: `jsonl:${String(index).padStart(8, "0")}:${createHash("sha256").update(line).digest("hex")}`,
         lineNumber: index + 1,
         chunks,
         meta: {
@@ -279,7 +288,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       const { detectOpenClawStateDatabaseSchemaMigrations } =
         await import("openclaw/plugin-sdk/doctor-repair-runtime");
-      const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
+      const filePath = path.join(storePath, "calls.jsonl");
       const { entries } = await readLegacyCallRecords(filePath);
       const schemaMigrations = detectOpenClawStateDatabaseSchemaMigrations({
         env: resolveVoiceCallStateDatabaseEnv(params),
@@ -310,7 +319,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       const { detectOpenClawStateDatabaseSchemaMigrations, repairOpenClawStateDatabaseSchema } =
         await import("openclaw/plugin-sdk/doctor-repair-runtime");
-      const filePath = resolveVoiceCallLegacyCallLogPath(storePath);
+      const filePath = path.join(storePath, "calls.jsonl");
       const { entries, warnings: readWarnings } = await readLegacyCallRecords(filePath);
       warnings.push(...readWarnings);
       const stateDatabaseEnv = resolveVoiceCallStateDatabaseEnv(params);

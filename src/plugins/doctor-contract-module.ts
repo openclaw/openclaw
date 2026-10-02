@@ -1,4 +1,9 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import type {
+  ChannelIngressLegacyImport,
+  ChannelIngressLegacyImportResult,
+} from "../channels/message/ingress-queue.migration.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -14,7 +19,34 @@ export type PluginDoctorStateMigrationDetection = {
   preview: string[];
 };
 
+export type PluginDoctorCronJob = {
+  storeKey: string;
+  id: string;
+  sortOrder: number;
+  /** Exact persisted definition; runtime state remains host-owned. */
+  definitionJson: string;
+  definition: Record<string, unknown> | null;
+  invalidReason?: string;
+};
+
+export type PluginDoctorCronInventory = {
+  jobs: PluginDoctorCronJob[];
+};
+
+export type PluginDoctorCronChange = {
+  job: PluginDoctorCronJob;
+  /** null retires the row; replacements preserve its ID, order, and runtime state. */
+  definition: Record<string, unknown> | null;
+};
+
 export type PluginDoctorStateMigrationContext = {
+  /** Trusted plugins only; non-creating inspection includes inactive cron partitions. */
+  inspectCronJobs?: () => Promise<PluginDoctorCronInventory>;
+  /** Offline repair only. Backs up first, then compares inspected rows before one commit. */
+  repairCronJobs?: (
+    inventory: PluginDoctorCronInventory,
+    changes: readonly PluginDoctorCronChange[],
+  ) => Promise<{ changed: number; backupPath?: string }>;
   /** Non-creating canonical ACP claims for this backend, including incomplete evidence. */
   inspectAcpSessionClaims?: () => Promise<{
     claims: PluginDoctorAcpSessionClaim[];
@@ -32,7 +64,7 @@ export type PluginDoctorStateMigrationContext = {
     options: OpenKeyedStoreOptions,
     entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
-  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  /** Live plugin rows for import preflight; current hosts report no aggregate limit (Infinity). Older hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
   readPluginStateEntriesInKeyRange?: (
     namespace: string,
@@ -75,6 +107,13 @@ export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unkn
  *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
 export type PluginDoctorChannelIngressQueueAccess = {
   channelId: string;
+  /** Offline migration authority, checked again immediately before filesystem effects. */
+  assertCurrent?: () => void;
+  /** Offline-only import with canonical IDs; terminal tombstones never become pending work. */
+  importLegacyEntries?: (params: {
+    accountId: string;
+    entries: readonly ChannelIngressLegacyImport[];
+  }) => ChannelIngressLegacyImportResult;
   /** Inspection-only access, available in every phase including detection. */
   openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
     accountId?: string;
@@ -113,12 +152,36 @@ type PluginDoctorStateMigrationResult = {
   warningDisposition?: "recoverable";
 };
 
+export type PluginDoctorMigrationBackupResource = {
+  /** Absolute source or destination path, including destinations not created yet. */
+  path: string;
+  kind: "sqlite" | "file" | "directory";
+};
+
+export type PluginDoctorMigrationBackupWarning = {
+  kind: "undeclared-migration-resources";
+  pluginId: string;
+  message: string;
+};
+
 export type PluginDoctorStateMigration = {
   id: string;
   label: string;
   /** Import retired file state only during explicit `doctor --fix` repair. */
   doctorOnly?: boolean;
   phase?: "after-session-repair";
+  /** Read-only recovery inventory. Never open or migrate a writable store here. */
+  collectBackupResources?: (
+    params: Pick<
+      PluginDoctorStateMigrationInput,
+      "config" | "env" | "stateDir" | "serviceWorkspaceDir"
+    > & {
+      /** Rehearsal admission must reject remote or otherwise unlisted migration data. */
+      requireLocalResources?: boolean;
+    },
+  ) =>
+    | readonly PluginDoctorMigrationBackupResource[]
+    | Promise<readonly PluginDoctorMigrationBackupResource[]>;
   detectLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) =>
@@ -128,6 +191,18 @@ export type PluginDoctorStateMigration = {
   migrateLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) => Promise<PluginDoctorStateMigrationResult> | PluginDoctorStateMigrationResult;
+};
+
+export type PluginDoctorStateMigrationEntry = {
+  pluginId: string;
+  channelIds: string[];
+  /**
+   * Mirrors the runtime proxy's durable-store gate: only bundled plugins and trusted
+   * official installs may reach channel ingress queues. Doctor must not become a way
+   * around that for an activated workspace plugin.
+   */
+  trustedForDurableStores?: boolean;
+  migration: PluginDoctorStateMigration;
 };
 
 export type PluginDoctorContractModule = {
@@ -142,9 +217,10 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
+export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 };
 
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {
@@ -155,13 +231,10 @@ function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const candidate = entry as { path?: unknown; message?: unknown };
-    return Array.isArray(candidate.path) && typeof candidate.message === "string";
-  }) as LegacyConfigRule[];
+  return value.filter((entry): entry is LegacyConfigRule => {
+    const candidate = asOptionalObjectRecord(entry);
+    return Array.isArray(candidate?.path) && typeof candidate?.message === "string";
+  });
 }
 
 function coerceNormalizeCompatibilityConfig(
@@ -179,17 +252,9 @@ function coerceSessionStoreAgentIdsResolver(
 }
 
 function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    detectLegacyState?: unknown;
-    migrateLegacyState?: unknown;
-  };
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.id === "string" &&
+    typeof candidate?.id === "string" &&
     candidate.id.trim().length > 0 &&
     typeof candidate.label === "string" &&
     candidate.label.trim().length > 0 &&
@@ -207,6 +272,7 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
     label: migration.label.trim(),
     doctorOnly: migration.doctorOnly === true ? true : undefined,
     phase: migration.phase === "after-session-repair" ? migration.phase : undefined,
+    collectBackupResources: migration.collectBackupResources,
     detectLegacyState: migration.detectLegacyState,
     migrateLegacyState: migration.migrateLegacyState,
   }));

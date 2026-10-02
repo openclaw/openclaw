@@ -30,13 +30,13 @@ export class CustodianInputDrafts {
     return this.context ? currentPluginHelpReference(this.context) : undefined;
   }
 
-  reconcile(
-    ready: boolean,
-    prompt: { sensitive: boolean; wizardInputPending: boolean; hasUnresolvedQuestion(): boolean },
-  ): void {
+  reconcile(prompt: {
+    sensitive: boolean;
+    wizardInputPending: boolean;
+    hasUnresolvedQuestion(): boolean;
+  }): void {
     if (
       !this.context ||
-      !ready ||
       prompt.sensitive ||
       prompt.wizardInputPending ||
       prompt.hasUnresolvedQuestion()

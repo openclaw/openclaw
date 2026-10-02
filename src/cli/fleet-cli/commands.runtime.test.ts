@@ -1,4 +1,6 @@
+import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { registerFleetCli } from "./register.js";
 
 const mocks = await vi.hoisted(async () => {
   const { createCliRuntimeMock } = await import("../test-runtime-mock.js");
@@ -102,6 +104,86 @@ describe("fleet command output", () => {
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(reports);
     expect(process.exitCode).toBe(1);
   });
+
+  it.each([
+    { name: "empty", reports: [], lines: [], failures: 0, warnings: 0 },
+    {
+      name: "all pass",
+      reports: [
+        { tenant: "one", findings: [{ check: "health", status: "pass", detail: "healthy" }] },
+      ],
+      lines: ["one:", "  ok"],
+      failures: 0,
+      warnings: 0,
+    },
+    {
+      name: "warnings only",
+      reports: [
+        { tenant: "one", findings: [{ check: "running", status: "warn", detail: "stopped" }] },
+      ],
+      lines: ["one:", "  [warn] running: stopped"],
+      failures: 0,
+      warnings: 1,
+    },
+    {
+      name: "failure only",
+      reports: [
+        { tenant: "one", findings: [{ check: "health", status: "fail", detail: "unhealthy" }] },
+      ],
+      lines: ["one:", "  [fail] health: unhealthy"],
+      failures: 1,
+      warnings: 0,
+    },
+    {
+      name: "mixed tenants",
+      reports: [
+        {
+          tenant: "one",
+          findings: [
+            { check: "local", status: "pass", detail: "local" },
+            { check: "health", status: "fail", detail: "unhealthy" },
+            { check: "running", status: "warn", detail: "stopped" },
+          ],
+        },
+        {
+          tenant: "two",
+          findings: [{ check: "owner", status: "warn", detail: "different owner" }],
+        },
+      ],
+      lines: [
+        "one:",
+        "  [fail] health: unhealthy",
+        "  [warn] running: stopped",
+        "two:",
+        "  [warn] owner: different owner",
+      ],
+      failures: 1,
+      warnings: 2,
+    },
+  ])(
+    "preserves complete doctor output for $name",
+    async ({ reports, lines, failures, warnings }) => {
+      mocks.doctor.mockResolvedValue(reports);
+      const program = new Command();
+      program.exitOverride();
+      registerFleetCli(program);
+      const previousExitCode = process.exitCode;
+      process.exitCode = 9;
+      try {
+        await program.parseAsync(["fleet", "doctor"], { from: "user" });
+        expect(mocks.doctor).toHaveBeenCalledExactlyOnceWith(undefined);
+        expect(mocks.runtimeLogs).toEqual([
+          ...lines,
+          `Summary: ${reports.length} cell(s), ${failures} failure(s), ${warnings} warning(s).`,
+        ]);
+        expect(mocks.runtimeErrors).toEqual([]);
+        expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+        expect(process.exitCode).toBe(failures ? 1 : 9);
+      } finally {
+        process.exitCode = previousExitCode;
+      }
+    },
+  );
 
   it("writes the documented secret-bearing create JSON shape", async () => {
     const result = {

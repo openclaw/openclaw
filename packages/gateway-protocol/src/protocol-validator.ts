@@ -28,18 +28,13 @@ export function lazyCompile<T = unknown>(
   let compiled: TypeBoxValidator | undefined;
   let errors: ValidationError[] | null = null;
 
-  const getCompiled = () => {
-    compiled ??= Compile(schema as never);
-    return compiled;
-  };
-
   const validate = ((data: unknown): data is T => {
     const precheckError = precheck?.(data);
     if (precheckError) {
       errors = [precheckError];
       return false;
     }
-    const current = getCompiled();
+    const current = (compiled ??= Compile(schema as never));
     const valid = current.Check(data);
     errors = valid ? null : normalizeTypeBoxValidationErrors([...current.Errors(data)]);
     return valid;

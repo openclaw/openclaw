@@ -1,9 +1,12 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { once } from "node:events";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnBrokerCommand } from "./execa-client.js";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "./host.js";
 
-describe.skipIf(process.platform === "win32")("spawn broker pipe handoff", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker pipe handoff", () => {
   let host: SpawnBrokerHost;
   beforeAll(async () => {
     host = createSpawnBrokerHost();
@@ -75,6 +78,9 @@ describe.skipIf(process.platform === "win32")("spawn broker pipe handoff", () =>
       await child.ready();
       expect(child.stdout!.readableEnded).toBe(false);
       expect(child.stderr!.readableEnded).toBe(false);
+      if (child.stdin) {
+        expect(child.stdin).toHaveProperty("readable", false);
+      }
       const chunks = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
       child.stdout!.on("data", (chunk: Buffer) => chunks.stdout.push(chunk));
       child.stderr!.on("data", (chunk: Buffer) => chunks.stderr.push(chunk));
@@ -83,8 +89,8 @@ describe.skipIf(process.platform === "win32")("spawn broker pipe handoff", () =>
       await closed;
       await command;
       const expected = Buffer.from(Array.from({ length: size }, (_, index) => index % 251));
-      expect(Buffer.concat(chunks.stdout)).toEqual(expected);
-      expect(Buffer.concat(chunks.stderr)).toEqual(expected);
+      deepStrictEqual(Buffer.concat(chunks.stdout), expected);
+      deepStrictEqual(Buffer.concat(chunks.stderr), expected);
     },
   );
 });

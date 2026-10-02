@@ -1,14 +1,13 @@
-// Memory Wiki plugin module implements source sync state behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
-import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
@@ -51,8 +50,8 @@ type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
   syncKey: string;
 };
 
-export const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
-export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
+const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
+const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
 const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
@@ -69,10 +68,6 @@ const sourceSyncStateChanges = new WeakMap<
   MemoryWikiSourceSyncStateChanges
 >();
 
-export function resolveMemoryWikiSourceSyncStatePath(vaultRoot: string): string {
-  return path.join(vaultRoot, ".openclaw-wiki", "source-sync.json");
-}
-
 function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiImportedSourceState {
   return {
     version: 1,
@@ -82,37 +77,40 @@ function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiI
   };
 }
 
-function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return EMPTY_STATE;
+function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceStateEntry | null {
+  const entry = asNullableRecord(value);
+  if (
+    !entry ||
+    (entry.group !== "bridge" && entry.group !== "unsafe-local") ||
+    typeof entry.pagePath !== "string" ||
+    typeof entry.sourcePath !== "string" ||
+    typeof entry.sourceUpdatedAtMs !== "number" ||
+    typeof entry.sourceSize !== "number" ||
+    typeof entry.renderFingerprint !== "string"
+  ) {
+    return null;
   }
-  const parsed = value as Partial<MemoryWikiImportedSourceState>;
-  if (parsed.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
+  return {
+    group: entry.group,
+    pagePath: entry.pagePath,
+    sourcePath: entry.sourcePath,
+    sourceUpdatedAtMs: entry.sourceUpdatedAtMs,
+    sourceSize: entry.sourceSize,
+    renderFingerprint: entry.renderFingerprint,
+  };
+}
+
+function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
+  const parsed = asNullableRecord(value);
+  if (parsed?.version !== 1 || !parsed.entries || typeof parsed.entries !== "object") {
     return EMPTY_STATE;
   }
   const entries: Record<string, MemoryWikiImportedSourceStateEntry> = {};
-  for (const [syncKey, entry] of Object.entries(parsed.entries)) {
-    if (
-      !entry ||
-      typeof entry !== "object" ||
-      Array.isArray(entry) ||
-      (entry.group !== "bridge" && entry.group !== "unsafe-local") ||
-      typeof entry.pagePath !== "string" ||
-      typeof entry.sourcePath !== "string" ||
-      typeof entry.sourceUpdatedAtMs !== "number" ||
-      typeof entry.sourceSize !== "number" ||
-      typeof entry.renderFingerprint !== "string"
-    ) {
-      continue;
+  for (const [syncKey, rawEntry] of Object.entries(parsed.entries)) {
+    const entry = normalizeSourceSyncEntry(rawEntry);
+    if (entry) {
+      entries[syncKey] = entry;
     }
-    entries[syncKey] = {
-      group: entry.group,
-      pagePath: entry.pagePath,
-      sourcePath: entry.sourcePath,
-      sourceUpdatedAtMs: entry.sourceUpdatedAtMs,
-      sourceSize: entry.sourceSize,
-      renderFingerprint: entry.renderFingerprint,
-    };
   }
   return { version: 1, entries };
 }
@@ -132,15 +130,14 @@ function createMemoryFallbackStateStore(): MemoryWikiSourceSyncStateStore {
       return cloneSourceSyncState(memorySourceSyncStateByVault.get(vaultRootKey) ?? EMPTY_STATE);
     },
     async write(vaultRoot, state) {
-      assertSourceSyncStateWithinLimit(state);
+      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       memorySourceSyncStateByVault.set(vaultRootKey, cloneSourceSyncState(state));
     },
   };
 }
 
-function assertSourceSyncStateWithinLimit(state: MemoryWikiImportedSourceState): void {
-  const count = Object.keys(state.entries).length;
+function assertSourceSyncStateWithinLimit(count: number): void {
   if (count > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
     throw new Error(
       `Memory Wiki source sync state exceeds SQLite entry limit (${count}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
@@ -156,12 +153,7 @@ export function assertMemoryWikiSourceSyncStateCapacity(params: {
   const retainedOtherGroupCount = Object.values(params.state.entries).filter(
     (entry) => entry.group !== params.group,
   ).length;
-  const projectedCount = retainedOtherGroupCount + params.incomingCount;
-  if (projectedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
-    throw new Error(
-      `Memory Wiki source sync state exceeds SQLite entry limit (${projectedCount}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
-    );
-  }
+  assertSourceSyncStateWithinLimit(retainedOtherGroupCount + params.incomingCount);
 }
 
 export function createMemoryWikiSourceSyncStateStore(
@@ -183,11 +175,7 @@ export function createMemoryWikiSourceSyncStateStore(
         if (value.vaultRootKey !== vaultRootKey || typeof value.syncKey !== "string") {
           continue;
         }
-        const normalized = normalizeSourceSyncState({
-          version: 1,
-          entries: { [value.syncKey]: value },
-        });
-        const entry = normalized.entries[value.syncKey];
+        const entry = normalizeSourceSyncEntry(value);
         if (entry) {
           entries[value.syncKey] = entry;
         }
@@ -195,7 +183,7 @@ export function createMemoryWikiSourceSyncStateStore(
       return { version: 1, entries };
     },
     async write(vaultRoot, state, plan) {
-      assertSourceSyncStateWithinLimit(state);
+      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const store = openStore();
       if (plan) {
@@ -256,14 +244,6 @@ export async function readMemoryWikiSourceSyncState(
   const state = await resolveSourceSyncStore(store).read(vaultRoot);
   sourceSyncStateChanges.set(state, { upsertKeys: new Set(), deleteKeys: new Set() });
   return state;
-}
-
-export async function readLegacyMemoryWikiSourceSyncState(
-  vaultRoot: string,
-): Promise<MemoryWikiImportedSourceState> {
-  const statePath = resolveMemoryWikiSourceSyncStatePath(vaultRoot);
-  const { value: parsed } = await readJsonFileWithFallback<unknown>(statePath, EMPTY_STATE);
-  return normalizeSourceSyncState(parsed);
 }
 
 export async function writeMemoryWikiSourceSyncState(

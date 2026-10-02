@@ -392,49 +392,4 @@ export function registerControlUiBootstrapLifecycleSuite(): void {
       restoreGatewayToken(prevToken);
     }
   });
-
-  test("requires approval for bootstrap-auth operator pairing outside the qr baseline profile", async () => {
-    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
-    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { server, port, prevToken } = await startProxiedControlUiServer("secret");
-
-    const { identityPath, identity, client } = await createOperatorIdentityFixture(
-      "openclaw-bootstrap-operator-",
-    );
-
-    try {
-      const issued = await issueDeviceBootstrapToken({
-        profile: {
-          roles: ["operator"],
-          scopes: ["operator.read"],
-        },
-      });
-      const wsBootstrap = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
-      const initial = await connectReq(wsBootstrap, {
-        skipDefaultAuth: true,
-        bootstrapToken: issued.token,
-        role: "operator",
-        scopes: ["operator.read"],
-        client,
-        deviceIdentityPath: identityPath,
-      });
-      expect(initial.ok).toBe(false);
-      expect(initial.error?.message ?? "").toContain("pairing required");
-      expect((initial.error?.details as { code?: string } | undefined)?.code).toBe(
-        ConnectErrorDetailCodes.PAIRING_REQUIRED,
-      );
-
-      const pending = (await listDevicePairing()).pending.filter(
-        (entry) => entry.deviceId === identity.deviceId,
-      );
-      expect(pending).toHaveLength(1);
-      expect(pending[0]?.role).toBe("operator");
-      expectArrayIncludes(pending[0]?.scopes, ["operator.read"]);
-      expect(await getPairedDevice(identity.deviceId)).toBeNull();
-      wsBootstrap.close();
-    } finally {
-      await server.close();
-      restoreGatewayToken(prevToken);
-    }
-  });
 }

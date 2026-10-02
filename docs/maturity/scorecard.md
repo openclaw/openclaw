@@ -690,10 +690,10 @@ The checks below show which scorecard areas were exercised by QA profile evidenc
 <div className="maturity-evidence-grid">
   <div className="maturity-evidence-card">
     <span className="maturity-evidence-title">Full taxonomy validation</span>
-    <span>2026-09-08T10:12:39.428Z</span>
-    <span>Historical evidence: taxonomy identity unknown</span>
-    <span>410 checks - 338 passed, 14 failed, 51 blocked, 7 skipped</span>
-    <span>23 of 280 (8.2%) areas - 414 of 1997 (20.7%) features - 414 of 1997 (20.7%) coverage IDs</span>
+    <span>2026-09-24T22:29:15.060Z</span>
+    <span>Historical evidence: taxonomy identity mismatch</span>
+    <span>430 checks - 344 passed, 28 failed, 51 blocked, 7 skipped</span>
+    <span>21 of 280 (7.5%) areas - 424 of 2028 (20.9%) features - 424 of 2028 (20.9%) coverage IDs</span>
   </div>
 </div>
 
@@ -707,7 +707,7 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | External Runtimes and Subagents            | agent-runtime.external-runtimes-and-subagents          | partial   | 3 of 10 (30%)    | 3 of 10 (30%)    |
 | all     | Hosted Provider Execution                  | agent-runtime.hosted-provider-execution                | partial   | 1 of 5 (20%)     | 1 of 5 (20%)     |
 | all     | Local and Self-hosted Providers            | agent-runtime.local-and-self-hosted-providers          | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
-| all     | Model and Runtime Selection                | agent-runtime.model-and-runtime-selection              | partial   | 1 of 11 (9.1%)   | 1 of 11 (9.1%)   |
+| all     | Model and Runtime Selection                | agent-runtime.model-and-runtime-selection              | partial   | 2 of 11 (18.2%)  | 2 of 11 (18.2%)  |
 | all     | Provider Auth                              | agent-runtime.provider-auth                            | missing   | 0 of 17 (0%)     | 0 of 17 (0%)     |
 | all     | Streaming and Progress                     | agent-runtime.streaming-and-progress                   | partial   | 2 of 9 (22.2%)   | 2 of 9 (22.2%)   |
 | all     | Tool Calls and Response Handling           | agent-runtime.tool-calls-and-response-handling         | partial   | 9 of 26 (34.6%)  | 9 of 26 (34.6%)  |
@@ -726,30 +726,30 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Request Transport and Turn Semantics       | anthropic.request-transport-and-turn-semantics         | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
 | all     | Agent Conversations                        | app-sdk.agent-conversations                            | fulfilled | 6 of 6 (100%)    | 6 of 6 (100%)    |
 | all     | Client API                                 | app-sdk.client-api                                     | partial   | 3 of 4 (75%)     | 3 of 4 (75%)     |
-| all     | Compatibility                              | app-sdk.compatibility                                  | partial   | 2 of 5 (40%)     | 2 of 5 (40%)     |
+| all     | Compatibility                              | app-sdk.compatibility                                  | partial   | 2 of 9 (22.2%)   | 2 of 9 (22.2%)   |
 | all     | Events and Approvals                       | app-sdk.events-and-approvals                           | partial   | 2 of 5 (40%)     | 2 of 5 (40%)     |
-| all     | Gateway Access                             | app-sdk.gateway-access                                 | partial   | 3 of 5 (60%)     | 3 of 5 (60%)     |
+| all     | Gateway Access                             | app-sdk.gateway-access                                 | partial   | 3 of 7 (42.9%)   | 3 of 7 (42.9%)   |
 | all     | Resource Helpers                           | app-sdk.resource-helpers                               | partial   | 4 of 6 (66.7%)   | 4 of 6 (66.7%)   |
 | all     | Automation Hooks                           | automation.automation-hooks                            | fulfilled | 11 of 11 (100%)  | 11 of 11 (100%)  |
-| all     | Background Tasks and Flows                 | automation.background-tasks-and-flows                  | fulfilled | 10 of 10 (100%)  | 10 of 10 (100%)  |
+| all     | Background Tasks and Flows                 | automation.background-tasks-and-flows                  | partial   | 10 of 14 (71.4%) | 10 of 14 (71.4%) |
 | all     | Cron Jobs                                  | automation.cron-jobs                                   | partial   | 12 of 22 (54.5%) | 12 of 22 (54.5%) |
 | all     | Event Ingress                              | automation.event-ingress                               | missing   | 0 of 15 (0%)     | 0 of 15 (0%)     |
-| all     | Heartbeat                                  | automation.heartbeat                                   | missing   | 0 of 4 (0%)      | 0 of 4 (0%)      |
+| all     | Heartbeat                                  | automation.heartbeat                                   | partial   | 1 of 4 (25%)     | 1 of 4 (25%)     |
 | all     | Polling Controls                           | automation.polling-controls                            | partial   | 4 of 10 (40%)    | 4 of 10 (40%)    |
-| all     | Channel Actions Commands and Approvals     | channels.channel-actions-commands-and-approvals        | partial   | 1 of 5 (20%)     | 1 of 5 (20%)     |
+| all     | Channel Actions Commands and Approvals     | channels.channel-actions-commands-and-approvals        | partial   | 3 of 5 (60%)     | 3 of 5 (60%)     |
 | all     | Channel Setup                              | channels.channel-setup                                 | missing   | 0 of 7 (0%)      | 0 of 7 (0%)      |
 | all     | Conversation Routing and Delivery          | channels.conversation-routing-and-delivery             | partial   | 4 of 31 (12.9%)  | 4 of 31 (12.9%)  |
 | all     | Group Thread and Ambient Room Behavior     | channels.group-thread-and-ambient-room-behavior        | partial   | 4 of 13 (30.8%)  | 4 of 13 (30.8%)  |
 | all     | Inbound Access and Identity Gates          | channels.inbound-access-and-identity-gates             | partial   | 3 of 8 (37.5%)   | 3 of 8 (37.5%)   |
 | all     | Media Attachments and Rich Channel Data    | channels.media-attachments-and-rich-channel-data       | partial   | 2 of 4 (50%)     | 2 of 4 (50%)     |
-| all     | Outbound Delivery and Reply Pipeline       | channels.outbound-delivery-and-reply-pipeline          | partial   | 4 of 30 (13.3%)  | 4 of 30 (13.3%)  |
+| all     | Outbound Delivery and Reply Pipeline       | channels.outbound-delivery-and-reply-pipeline          | partial   | 8 of 30 (26.7%)  | 8 of 30 (26.7%)  |
 | all     | Status Health and Operator Controls        | channels.status-health-and-operator-controls           | partial   | 1 of 6 (16.7%)   | 1 of 6 (16.7%)   |
 | all     | Catalog Discovery                          | clawhub.catalog-discovery                              | partial   | 3 of 5 (60%)     | 3 of 5 (60%)     |
 | all     | Compatibility and Trust                    | clawhub.compatibility-and-trust                        | partial   | 1 of 12 (8.3%)   | 1 of 12 (8.3%)   |
 | all     | Plugin Lifecycle and Health                | clawhub.plugin-lifecycle-and-health                    | partial   | 4 of 26 (15.4%)  | 4 of 26 (15.4%)  |
 | all     | Publishing                                 | clawhub.publishing                                     | partial   | 4 of 7 (57.1%)   | 4 of 7 (57.1%)   |
-| all     | CLI Observability                          | cli.cli-observability                                  | partial   | 3 of 5 (60%)     | 3 of 5 (60%)     |
-| all     | CLI Setup                                  | cli.cli-setup                                          | partial   | 4 of 6 (66.7%)   | 4 of 6 (66.7%)   |
+| all     | CLI Observability                          | cli.cli-observability                                  | fulfilled | 5 of 5 (100%)    | 5 of 5 (100%)    |
+| all     | CLI Setup                                  | cli.cli-setup                                          | partial   | 2 of 6 (33.3%)   | 2 of 6 (33.3%)   |
 | all     | Doctor                                     | cli.doctor                                             | partial   | 1 of 10 (10%)    | 1 of 10 (10%)    |
 | all     | Gateway Service Management                 | cli.gateway-service-management                         | partial   | 4 of 7 (57.1%)   | 4 of 7 (57.1%)   |
 | all     | Onboarding and Auth Setup                  | cli.onboarding-and-auth-setup                          | partial   | 4 of 5 (80%)     | 4 of 5 (80%)     |
@@ -759,10 +759,10 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Channel Setup and Operations               | community-channels.channel-setup-and-operations        | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Conversation Routing and Delivery          | community-channels.conversation-routing-and-delivery   | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Media and Rich Content                     | community-channels.media-and-rich-content              | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
-| all     | Agent Sandbox and Tooling                  | containers.agent-sandbox-and-tooling                   | partial   | 1 of 3 (33.3%)   | 1 of 3 (33.3%)   |
-| all     | Container Operations                       | containers.container-operations                        | partial   | 2 of 11 (18.2%)  | 2 of 11 (18.2%)  |
-| all     | Container Setup                            | containers.container-setup                             | partial   | 2 of 6 (33.3%)   | 2 of 6 (33.3%)   |
-| all     | Image Release and Validation               | containers.image-release-and-validation                | partial   | 2 of 7 (28.6%)   | 2 of 7 (28.6%)   |
+| all     | Agent Sandbox and Tooling                  | containers.agent-sandbox-and-tooling                   | partial   | 1 of 5 (20%)     | 1 of 5 (20%)     |
+| all     | Container Operations                       | containers.container-operations                        | partial   | 2 of 13 (15.4%)  | 2 of 13 (15.4%)  |
+| all     | Container Setup                            | containers.container-setup                             | partial   | 2 of 8 (25%)     | 2 of 8 (25%)     |
+| all     | Image Release and Validation               | containers.image-release-and-validation                | partial   | 2 of 9 (22.2%)   | 2 of 9 (22.2%)   |
 | all     | Browser Access and Trust                   | control-ui.browser-access-and-trust                    | partial   | 4 of 5 (80%)     | 4 of 5 (80%)     |
 | all     | Browser Realtime Talk                      | control-ui.browser-realtime-talk                       | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
 | all     | Browser UI                                 | control-ui.browser-ui                                  | partial   | 5 of 12 (41.7%)  | 5 of 12 (41.7%)  |
@@ -778,16 +778,16 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Approvals and Remote Execution             | gateway.approvals-and-remote-execution                 | partial   | 4 of 6 (66.7%)   | 4 of 6 (66.7%)   |
 | all     | Device Auth and Pairing                    | gateway.device-auth-and-pairing                        | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
 | all     | Gateway Lifecycle                          | gateway.gateway-lifecycle                              | partial   | 2 of 12 (16.7%)  | 2 of 12 (16.7%)  |
-| all     | Gateway RPC APIs and Events                | gateway.gateway-rpc-apis-and-events                    | partial   | 18 of 22 (81.8%) | 18 of 22 (81.8%) |
-| all     | Health, Diagnostics, and Repair            | gateway.health-diagnostics-and-repair                  | missing   | 0 of 7 (0%)      | 0 of 7 (0%)      |
+| all     | Gateway RPC APIs and Events                | gateway.gateway-rpc-apis-and-events                    | partial   | 16 of 22 (72.7%) | 16 of 22 (72.7%) |
+| all     | Health, Diagnostics, and Repair            | gateway.health-diagnostics-and-repair                  | partial   | 1 of 7 (14.3%)   | 1 of 7 (14.3%)   |
 | all     | Hosted Web Surface                         | gateway.hosted-web-surface                             | partial   | 3 of 4 (75%)     | 3 of 4 (75%)     |
 | all     | HTTP APIs                                  | gateway.http-apis                                      | fulfilled | 4 of 4 (100%)    | 4 of 4 (100%)    |
 | all     | Network Access and Discovery               | gateway.network-access-and-discovery                   | partial   | 2 of 6 (33.3%)   | 2 of 6 (33.3%)   |
 | all     | Nodes and Remote Capabilities              | gateway.nodes-and-remote-capabilities                  | fulfilled | 8 of 8 (100%)    | 8 of 8 (100%)    |
 | all     | Protocol Compatibility                     | gateway.protocol-compatibility                         | fulfilled | 7 of 7 (100%)    | 7 of 7 (100%)    |
-| all     | Roles and Permissions                      | gateway.roles-and-permissions                          | partial   | 1 of 5 (20%)     | 1 of 5 (20%)     |
+| all     | Roles and Permissions                      | gateway.roles-and-permissions                          | partial   | 1 of 11 (9.1%)   | 1 of 11 (9.1%)   |
 | all     | Security Controls                          | gateway.security-controls                              | partial   | 1 of 6 (16.7%)   | 1 of 6 (16.7%)   |
-| all     | WebSocket Connection                       | gateway.websocket-connection                           | fulfilled | 8 of 8 (100%)    | 8 of 8 (100%)    |
+| all     | WebSocket Connection                       | gateway.websocket-connection                           | partial   | 5 of 8 (62.5%)   | 5 of 8 (62.5%)   |
 | all     | Direct Gemini Runtime                      | google-ai.direct-gemini-runtime                        | missing   | 0 of 9 (0%)      | 0 of 9 (0%)      |
 | all     | Media, Search, and Realtime                | google-ai.media-search-and-realtime                    | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
 | all     | Model Routing and Endpoints                | google-ai.model-routing-and-endpoints                  | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
@@ -799,7 +799,7 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Media and Rich Content                     | google-chat.media-and-rich-content                     | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Native Controls and Approvals              | google-chat.native-controls-and-approvals              | missing   | 0 of 16 (0%)     | 0 of 16 (0%)     |
 | all     | Hosted LLM Providers                       | hosted-providers.hosted-llm-providers                  | missing   | 0 of 12 (0%)     | 0 of 12 (0%)     |
-| all     | Hosted Media Providers                     | hosted-providers.hosted-media-providers                | partial   | 2 of 8 (25%)     | 2 of 8 (25%)     |
+| all     | Hosted Media Providers                     | hosted-providers.hosted-media-providers                | partial   | 1 of 8 (12.5%)   | 1 of 8 (12.5%)   |
 | all     | Provider Operations                        | hosted-providers.provider-operations                   | missing   | 0 of 12 (0%)     | 0 of 12 (0%)     |
 | all     | Access and Identity                        | imessage-bluebubbles.access-and-identity               | missing   | 0 of 6 (0%)      | 0 of 6 (0%)      |
 | all     | Channel Setup and Operations               | imessage-bluebubbles.channel-setup-and-operations      | missing   | 0 of 11 (0%)     | 0 of 11 (0%)     |
@@ -860,9 +860,9 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Video Generation                           | media-generation.video-generation                      | missing   | 0 of 11 (0%)     | 0 of 11 (0%)     |
 | all     | Channel Media Handling                     | media.channel-media-handling                           | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
 | all     | Media Configuration                        | media.media-configuration                              | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
-| all     | Media Generation                           | media.media-generation                                 | partial   | 8 of 21 (38.1%)  | 8 of 21 (38.1%)  |
+| all     | Media Generation                           | media.media-generation                                 | partial   | 7 of 21 (33.3%)  | 7 of 21 (33.3%)  |
 | all     | Media Intake and Access                    | media.media-intake-and-access                          | partial   | 5 of 8 (62.5%)   | 5 of 8 (62.5%)   |
-| all     | Media Understanding                        | media.media-understanding                              | partial   | 8 of 14 (57.1%)  | 8 of 14 (57.1%)  |
+| all     | Media Understanding                        | media.media-understanding                              | partial   | 7 of 14 (50%)    | 7 of 14 (50%)    |
 | all     | Text-to-Speech Delivery                    | media.text-to-speech-delivery                          | fulfilled | 2 of 2 (100%)    | 2 of 2 (100%)    |
 | all     | Access and Identity                        | microsoft-teams.access-and-identity                    | missing   | 0 of 9 (0%)      | 0 of 9 (0%)      |
 | all     | Channel Setup and Operations               | microsoft-teams.channel-setup-and-operations           | missing   | 0 of 9 (0%)      | 0 of 9 (0%)      |
@@ -875,13 +875,13 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Plugin Lifecycle                           | nix.plugin-lifecycle                                   | missing   | 0 of 4 (0%)      | 0 of 4 (0%)      |
 | all     | Service Runtime and Guards                 | nix.service-runtime-and-guards                         | missing   | 0 of 8 (0%)      | 0 of 8 (0%)      |
 | all     | Diagnostic Collection                      | observability.diagnostic-collection                    | partial   | 7 of 10 (70%)    | 7 of 10 (70%)    |
-| all     | Health and Repair                          | observability.health-and-repair                        | partial   | 3 of 18 (16.7%)  | 3 of 18 (16.7%)  |
+| all     | Health and Repair                          | observability.health-and-repair                        | partial   | 9 of 18 (50%)    | 9 of 18 (50%)    |
 | all     | Logging                                    | observability.logging                                  | partial   | 4 of 5 (80%)     | 4 of 5 (80%)     |
 | all     | Session Diagnostics                        | observability.session-diagnostics                      | partial   | 1 of 4 (25%)     | 1 of 4 (25%)     |
-| all     | Telemetry Export                           | observability.telemetry-export                         | partial   | 14 of 26 (53.8%) | 14 of 26 (53.8%) |
+| all     | Telemetry Export                           | observability.telemetry-export                         | partial   | 10 of 26 (38.5%) | 10 of 26 (38.5%) |
 | all     | Image and Multimodal Input                 | openai.image-and-multimodal-input                      | missing   | 0 of 2 (0%)      | 0 of 2 (0%)      |
-| all     | Model and Auth                             | openai.model-and-auth                                  | partial   | 2 of 9 (22.2%)   | 2 of 9 (22.2%)   |
-| all     | Native Codex Harness                       | openai.native-codex-harness                            | missing   | 0 of 12 (0%)     | 0 of 12 (0%)     |
+| all     | Model and Auth                             | openai.model-and-auth                                  | partial   | 3 of 9 (33.3%)   | 3 of 9 (33.3%)   |
+| all     | Native Codex Harness                       | openai.native-codex-harness                            | partial   | 2 of 12 (16.7%)  | 2 of 12 (16.7%)  |
 | all     | Responses and Tool Compatibility           | openai.responses-and-tool-compatibility                | partial   | 1 of 6 (16.7%)   | 1 of 6 (16.7%)   |
 | all     | Voice and Realtime Audio                   | openai.voice-and-realtime-audio                        | missing   | 0 of 2 (0%)      | 0 of 2 (0%)      |
 | all     | Chat Runtime and Normalization             | openrouter.chat-runtime-and-normalization              | missing   | 0 of 15 (0%)     | 0 of 15 (0%)     |
@@ -892,27 +892,27 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Bundled plugins                            | plugins.bundled-plugins                                | partial   | 2 of 5 (40%)     | 2 of 5 (40%)     |
 | all     | Canvas plugin                              | plugins.canvas-plugin                                  | partial   | 2 of 5 (40%)     | 2 of 5 (40%)     |
 | all     | Channel plugins                            | plugins.channel-plugins                                | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
-| all     | Installing and running plugins             | plugins.installing-and-running-plugins                 | partial   | 7 of 24 (29.2%)  | 7 of 24 (29.2%)  |
+| all     | Installing and running plugins             | plugins.installing-and-running-plugins                 | partial   | 11 of 24 (45.8%) | 11 of 24 (45.8%) |
 | all     | Plugin approvals                           | plugins.plugin-approvals                               | missing   | 0 of 6 (0%)      | 0 of 6 (0%)      |
 | all     | Provider and tool plugins                  | plugins.provider-and-tool-plugins                      | partial   | 3 of 22 (13.6%)  | 3 of 22 (13.6%)  |
 | all     | Publishing plugins                         | plugins.publishing-plugins                             | missing   | 0 of 6 (0%)      | 0 of 6 (0%)      |
-| all     | Testing plugins                            | plugins.testing-plugins                                | partial   | 4 of 11 (36.4%)  | 4 of 11 (36.4%)  |
+| all     | Testing plugins                            | plugins.testing-plugins                                | partial   | 6 of 11 (54.5%)  | 6 of 11 (54.5%)  |
 | all     | Access and Identity                        | regional-channels.access-and-identity                  | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Channel Setup and Operations               | regional-channels.channel-setup-and-operations         | missing   | 0 of 6 (0%)      | 0 of 6 (0%)      |
 | all     | Conversation Routing and Delivery          | regional-channels.conversation-routing-and-delivery    | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Media and Rich Content                     | regional-channels.media-and-rich-content               | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Approval Policy and Tool Safeguards        | security.approval-policy-and-tool-safeguards           | partial   | 1 of 6 (16.7%)   | 1 of 6 (16.7%)   |
 | all     | Channel Access Control                     | security.channel-access-control                        | missing   | 0 of 3 (0%)      | 0 of 3 (0%)      |
-| all     | Credential and Secret Hygiene              | security.credential-and-secret-hygiene                 | partial   | 5 of 11 (45.5%)  | 5 of 11 (45.5%)  |
+| all     | Credential and Secret Hygiene              | security.credential-and-secret-hygiene                 | partial   | 3 of 11 (27.3%)  | 3 of 11 (27.3%)  |
 | all     | Device and Node Pairing                    | security.device-and-node-pairing                       | missing   | 0 of 11 (0%)     | 0 of 11 (0%)     |
 | all     | Gateway Auth and Remote Access             | security.gateway-auth-and-remote-access                | partial   | 2 of 9 (22.2%)   | 2 of 9 (22.2%)   |
 | all     | Plugin Trust                               | security.plugin-trust                                  | missing   | 0 of 2 (0%)      | 0 of 2 (0%)      |
-| all     | CLI Session and Transcript Management      | session-memory.cli-session-and-transcript-management   | fulfilled | 2 of 2 (100%)    | 2 of 2 (100%)    |
+| all     | CLI Session and Transcript Management      | session-memory.cli-session-and-transcript-management   | partial   | 2 of 3 (66.7%)   | 2 of 3 (66.7%)   |
 | all     | Context Engine                             | session-memory.context-engine                          | missing   | 0 of 9 (0%)      | 0 of 9 (0%)      |
 | all     | Core Prompts and Context                   | session-memory.core-prompts-and-context                | partial   | 1 of 8 (12.5%)   | 1 of 8 (12.5%)   |
-| all     | Cross-client History and Session Parity    | session-memory.cross-client-history-and-session-parity | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
-| all     | Diagnostics, Maintenance, and Recovery     | session-memory.diagnostics-maintenance-and-recovery    | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
-| all     | Memory                                     | session-memory.memory                                  | partial   | 3 of 22 (13.6%)  | 3 of 22 (13.6%)  |
+| all     | Cross-client History and Session Parity    | session-memory.cross-client-history-and-session-parity | missing   | 0 of 6 (0%)      | 0 of 6 (0%)      |
+| all     | Diagnostics, Maintenance, and Recovery     | session-memory.diagnostics-maintenance-and-recovery    | partial   | 2 of 13 (15.4%)  | 2 of 13 (15.4%)  |
+| all     | Memory                                     | session-memory.memory                                  | partial   | 3 of 23 (13%)    | 3 of 23 (13%)    |
 | all     | Session Routing                            | session-memory.session-routing                         | missing   | 0 of 4 (0%)      | 0 of 4 (0%)      |
 | all     | Token Management                           | session-memory.token-management                        | partial   | 2 of 10 (20%)    | 2 of 10 (20%)    |
 | all     | Transcript Persistence                     | session-memory.transcript-persistence                  | fulfilled | 2 of 2 (100%)    | 2 of 2 (100%)    |
@@ -929,7 +929,7 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Gateway Runtime                            | small-linux.gateway-runtime                            | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
 | all     | Performance and Diagnostics                | small-linux.performance-and-diagnostics                | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
 | all     | Remote Access and Auth                     | small-linux.remote-access-and-auth                     | missing   | 0 of 9 (0%)      | 0 of 9 (0%)      |
-| all     | Setup and Compatibility                    | small-linux.setup-and-compatibility                    | missing   | 0 of 12 (0%)     | 0 of 12 (0%)     |
+| all     | Setup and Compatibility                    | small-linux.setup-and-compatibility                    | missing   | 0 of 13 (0%)     | 0 of 13 (0%)     |
 | all     | Access and Identity                        | telegram.access-and-identity                           | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
 | all     | Channel Setup and Operations               | telegram.channel-setup-and-operations                  | partial   | 2 of 10 (20%)    | 2 of 10 (20%)    |
 | all     | Conversation Routing and Delivery          | telegram.conversation-routing-and-delivery             | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
@@ -944,7 +944,7 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Runtime Modes                              | tui.runtime-modes                                      | fulfilled | 14 of 14 (100%)  | 14 of 14 (100%)  |
 | all     | Session Management                         | tui.session-management                                 | fulfilled | 3 of 3 (100%)    | 3 of 3 (100%)    |
 | all     | Access and Identity                        | voice-call.access-and-identity                         | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
-| all     | Channel Setup and Operations               | voice-call.channel-setup-and-operations                | partial   | 1 of 2 (50%)     | 1 of 2 (50%)     |
+| all     | Channel Setup and Operations               | voice-call.channel-setup-and-operations                | missing   | 0 of 2 (0%)      | 0 of 2 (0%)      |
 | all     | Conversation Routing and Delivery          | voice-call.conversation-routing-and-delivery           | missing   | 0 of 1 (0%)      | 0 of 1 (0%)      |
 | all     | Media and Rich Content                     | voice-call.media-and-rich-content                      | missing   | 0 of 2 (0%)      | 0 of 2 (0%)      |
 | all     | Realtime Voice and Calls                   | voice-call.realtime-voice-and-calls                    | missing   | 0 of 2 (0%)      | 0 of 2 (0%)      |
@@ -962,7 +962,7 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Network Safety                             | web-search.network-safety                              | missing   | 0 of 4 (0%)      | 0 of 4 (0%)      |
 | all     | Search Providers                           | web-search.search-providers                            | missing   | 0 of 19 (0%)     | 0 of 19 (0%)     |
 | all     | Setup and Diagnostics                      | web-search.setup-and-diagnostics                       | missing   | 0 of 9 (0%)      | 0 of 9 (0%)      |
-| all     | Tool Availability and Fetch                | web-search.tool-availability-and-fetch                 | partial   | 2 of 12 (16.7%)  | 2 of 12 (16.7%)  |
+| all     | Tool Availability and Fetch                | web-search.tool-availability-and-fetch                 | partial   | 1 of 12 (8.3%)   | 1 of 12 (8.3%)   |
 | all     | Access and Identity                        | whatsapp.access-and-identity                           | missing   | 0 of 7 (0%)      | 0 of 7 (0%)      |
 | all     | Channel Setup and Operations               | whatsapp.channel-setup-and-operations                  | missing   | 0 of 5 (0%)      | 0 of 5 (0%)      |
 | all     | Conversation Routing and Delivery          | whatsapp.conversation-routing-and-delivery             | missing   | 0 of 4 (0%)      | 0 of 4 (0%)      |
@@ -984,4 +984,4 @@ These recorded categories describe the original run and do not contribute to cur
 | all     | Gateway Service Lifecycle                  | wsl.gateway-service-lifecycle                          | missing   | 0 of 10 (0%)     | 0 of 10 (0%)     |
 | all     | WSL Setup                                  | wsl.wsl-setup                                          | missing   | 0 of 6 (0%)      | 0 of 6 (0%)      |
 
-> Last updated: 2026-09-08
+> Last updated: 2026-09-19

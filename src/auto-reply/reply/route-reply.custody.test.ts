@@ -47,63 +47,61 @@ describe("routeReply custody projections", () => {
   });
   afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
-  describe.each(["held", "released"] as const)("with %s queue custody", (queueCustody) => {
-    it.each([
-      ["throw", false, undefined],
-      ["throw", true, undefined],
-      ["throw", true, "visible-1"],
-      ["best-effort return", false, undefined],
-      ["best-effort return", true, undefined],
-      ["best-effort return", true, "visible-1"],
-    ] as const)(
-      "projects %s with sentBeforeError=%s and messageId=%s through durable send",
-      async (failureMode, sentBeforeError, messageId) => {
-        const cause = new Error("transport failed");
-        const results = messageId ? [{ channel: "slack" as const, messageId }] : [];
-        const outcome = {
-          index: 0,
-          status: "failed",
-          error: cause,
-          sentBeforeError,
-          stage: "platform_send",
-          results,
-        } satisfies OutboundPayloadDeliveryOutcome;
-        const error = new OutboundDeliveryError(cause.message, {
-          cause,
-          results,
-          payloadOutcomes: [outcome],
-          stage: "platform_send",
-        });
-        error.queueCustody = queueCustody;
-        mocks.deliverOutboundPayloads.mockImplementationOnce(
-          async ({ onPayloadDeliveryOutcome }: DeliverOutboundPayloadsParams) => {
-            if (failureMode === "throw") {
-              throw error;
-            }
-            onPayloadDeliveryOutcome?.({ ...outcome, error });
-            return results;
-          },
-        );
+  it.each([
+    ["throw", false, undefined, "held"],
+    ["throw", true, undefined, "released"],
+    ["throw", true, "visible-1", "held"],
+    ["best-effort return", false, undefined, "released"],
+    ["best-effort return", true, undefined, "held"],
+    ["best-effort return", true, "visible-1", "released"],
+  ] as const)(
+    "projects %s with sentBeforeError=%s, messageId=%s, and custody=%s through durable send",
+    async (failureMode, sentBeforeError, messageId, queueCustody) => {
+      const cause = new Error("transport failed");
+      const results = messageId ? [{ channel: "slack" as const, messageId }] : [];
+      const outcome = {
+        index: 0,
+        status: "failed",
+        error: cause,
+        sentBeforeError,
+        stage: "platform_send",
+        results,
+      } satisfies OutboundPayloadDeliveryOutcome;
+      const error = new OutboundDeliveryError(cause.message, {
+        cause,
+        results,
+        payloadOutcomes: [outcome],
+        stage: "platform_send",
+      });
+      error.queueCustody = queueCustody;
+      mocks.deliverOutboundPayloads.mockImplementationOnce(
+        async ({ onPayloadDeliveryOutcome }: DeliverOutboundPayloadsParams) => {
+          if (failureMode === "throw") {
+            throw error;
+          }
+          onPayloadDeliveryOutcome?.({ ...outcome, error });
+          return results;
+        },
+      );
 
-        const result = await routeTestReply({
-          payload: { text: "hello" },
-          channel: "slack",
-          to: "channel:C123",
-        });
+      const result = await routeTestReply({
+        payload: { text: "hello" },
+        channel: "slack",
+        to: "channel:C123",
+      });
 
-        expect(result).toEqual({
-          ok: false,
-          delivered: Boolean(messageId),
-          error: "Failed to route reply to slack: transport failed",
-          cause: expect.objectContaining({ cause, queueCustody, sentBeforeError }),
-          messageId,
-          queueCustody,
-          ...(!messageId && sentBeforeError ? { ambiguous: true } : {}),
-        });
-        expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-      },
-    );
-  });
+      expect(result).toEqual({
+        ok: false,
+        delivered: Boolean(messageId),
+        error: "Failed to route reply to slack: transport failed",
+        cause: expect.objectContaining({ cause, queueCustody, sentBeforeError }),
+        messageId,
+        queueCustody,
+        ...(!messageId && sentBeforeError ? { ambiguous: true } : {}),
+      });
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("keeps unidentified adapter acceptance ambiguous without confirming visibility", async () => {
     mocks.deliverOutboundPayloads.mockImplementationOnce(

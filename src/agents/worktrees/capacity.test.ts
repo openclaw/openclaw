@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
@@ -112,19 +113,36 @@ describe("worktree Git size estimates", () => {
       }
       const commandSpy = vi.spyOn(gitExec, "executeGitCommandBytes");
       const bufferedSpy = vi.spyOn(commandExec, "runCommandBuffered");
+      const packetTrace = path.join(clone, "hydrate-packets.log");
+      vi.stubEnv("GIT_TRACE_PACKET", packetTrace);
+      const objectsBefore = new Set(
+        (await git(clone, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")).split(
+          "\n",
+        ),
+      );
+      const configBefore = await fs.readFile(path.join(clone, ".git", "config"), "utf8");
+      const refsBefore = await git(clone, "show-ref");
+      const fetchHeadBefore = await fs.readFile(path.join(clone, ".git", "FETCH_HEAD"), "utf8");
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
+      const packets = await fs.readFile(packetTrace, "utf8");
+      expect(packets).not.toMatch(/>\s+have [0-9a-f]{40}/u);
+      expect(
+        new Set([...packets.matchAll(/>\s+want ([0-9a-f]{40})/gu)].map((match) => match[1])),
+      ).toEqual(new Set(missing));
+      const objectsAfter = (
+        await git(clone, "cat-file", "--batch-all-objects", "--batch-check=%(objectname)")
+      ).split("\n");
+      expect(new Set(objectsAfter.filter((oid) => !objectsBefore.has(oid)))).toEqual(
+        new Set(missing),
+      );
+      expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
+      expect(await git(clone, "show-ref")).toBe(refsBefore);
+      expect(await fs.readFile(path.join(clone, ".git", "FETCH_HEAD"), "utf8")).toBe(
+        fetchHeadBefore,
+      );
       const fetches = commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch");
-      expect(fetches.length).toBe(1);
-      const [fetchRoot, fetchArgs, fetchOptions] = fetches[0]!;
-      expect(fetchRoot).toBe(clone);
-      expect(fetchArgs).toEqual([
-        "fetch",
-        "origin",
-        "--no-tags",
-        "--no-write-fetch-head",
-        "--recurse-submodules=no",
-        "--stdin",
-      ]);
+      expect(fetches).toHaveLength(1);
+      const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
       const input = fetchOptions?.input;
       expect(
@@ -141,6 +159,69 @@ describe("worktree Git size estimates", () => {
       commandSpy.mockClear();
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);
+    },
+  );
+
+  it.each(["cancel", "revoke"] as const)(
+    "keeps hydration behind queued ref writes and honors %s before fetching",
+    async (action) => {
+      const { clone, commit, missing } = await partialClone();
+      const started = createDeferred();
+      const release = createDeferred();
+      const discovered = createDeferred();
+      const held = gitExec.enqueueGitRefMutation(clone, ".git", async () => {
+        started.resolve();
+        await release.promise;
+      });
+      await started.promise;
+      const execute = gitExec.executeGitCommandBytes;
+      vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+        const result = await execute(cwd, args, options);
+        if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
+          discovered.resolve();
+        }
+        return result;
+      });
+      const controller = new AbortController();
+      const revoked = new Error("hydration authority revoked");
+      let current = true;
+      const pending = estimateWorktreeGitBytes(clone, commit, {
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw revoked;
+          }
+        },
+      });
+      try {
+        await Promise.race([
+          discovered.promise,
+          pending.then(() => {
+            throw new Error("hydration bypassed the queued ref writer");
+          }),
+        ]);
+        for (const object of missing) {
+          await expect(runGit(clone, ["cat-file", "-e", object])).resolves.toMatchObject({
+            code: 1,
+          });
+        }
+        const rejected = expect(pending).rejects.toThrow(revoked.message);
+        if (action === "cancel") {
+          controller.abort(revoked);
+        } else {
+          current = false;
+        }
+        release.resolve();
+        await rejected;
+        for (const object of missing) {
+          await expect(runGit(clone, ["cat-file", "-e", object])).resolves.toMatchObject({
+            code: 1,
+          });
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([held, pending]);
+      }
     },
   );
 

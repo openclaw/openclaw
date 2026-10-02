@@ -151,6 +151,8 @@ describe("createReplyTimingTracker", () => {
     const tracker = createReplyHotPathTimingTracker({ profilerEnabled: true });
     const details = {
       channel: "telegram",
+      runId: "run-1",
+      sessionId: "session-1",
       outcome: "skipped" as const,
       token: "secret",
     };
@@ -160,10 +162,12 @@ describe("createReplyTimingTracker", () => {
 
     expect(subsystemWarn).toHaveBeenCalledOnce();
     expect(subsystemWarn).toHaveBeenCalledWith(
-      "reply hot path timings channel=telegram messageId=unknown sessionKey=unknown outcome=skipped totalMs=1500 stages=none",
+      "reply hot path timings channel=telegram messageId=unknown runId=run-1 sessionId=session-1 sessionKey=unknown outcome=skipped totalMs=1500 stages=none",
       {
         channel: "telegram",
         messageId: undefined,
+        runId: "run-1",
+        sessionId: "session-1",
         sessionKey: undefined,
         outcome: "skipped",
         reason: undefined,
@@ -197,7 +201,7 @@ describe("createReplyTimingTracker", () => {
     expect(subsystemInfo).toHaveBeenCalledTimes(2);
   });
 
-  it("reports slow dispatch preparation before model execution without profiling", async () => {
+  it("reports slow dispatch preparation and early cancellation without profiling", async () => {
     let nowMs = 0;
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const tracker = createReplyHotPathTimingTracker();
@@ -205,8 +209,12 @@ describe("createReplyTimingTracker", () => {
       nowMs += 5_000;
     });
     tracker.logPreparationIfSlow({ channel: "webchat", sessionKey: "agent:main" });
+    tracker.logIfSlow(
+      { channel: "webchat", outcome: "skipped", reason: "reply_operation_aborted" },
+      { beforeReplyResolver: true },
+    );
 
-    expect(subsystemWarn).toHaveBeenCalledOnce();
+    expect(subsystemWarn).toHaveBeenCalledTimes(2);
     expect(subsystemWarn.mock.calls[0]?.[1]).toMatchObject({
       channel: "webchat",
       sessionKey: "agent:main",
@@ -214,6 +222,11 @@ describe("createReplyTimingTracker", () => {
       reason: "before_reply_resolver",
       totalMs: 5_000,
       spans: [{ name: "reply.load_reply_resolver", durationMs: 5_000, elapsedMs: 5_000 }],
+    });
+    expect(subsystemWarn.mock.calls[1]?.[1]).toMatchObject({
+      outcome: "skipped",
+      reason: "reply_operation_aborted",
+      totalMs: 5_000,
     });
   });
 

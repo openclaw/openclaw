@@ -4,19 +4,18 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
-  emitAgentActivityEvent,
   type AgentCommandOutputEventData,
-  type AgentItemEventData,
+  projectAgentToolActivity,
 } from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { peekAdjustedParamsForToolCall } from "./agent-tools.before-tool-call.state.js";
 import { extractLiveExecOutput } from "./embedded-agent-subscribe.handlers.tools.results.js";
 import {
   buildCommandItemId,
   buildCommandItemTitle,
-  buildToolItemId,
-  buildToolItemTitle,
   buildToolStartKey,
   emitAgentEventCallbackBestEffort,
+  emitToolActivityEvent,
   emitTrackedItemEvent,
   isExecToolName,
   toolStartData,
@@ -91,10 +90,14 @@ export function handleToolExecutionUpdate(
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
-  const parentToolCallId = toolStartData.get(
-    buildToolStartKey(ctx.params.runId, toolCallId),
-  )?.parentToolCallId;
-  const hideFromChannelProgress = evt.hideFromChannelProgress === true;
+  const startData = toolStartData.get(buildToolStartKey(ctx.params.runId, toolCallId));
+  const parentToolCallId = startData?.parentToolCallId;
+  const args = peekAdjustedParamsForToolCall(toolCallId, ctx.params.runId) ?? startData?.args;
+  if (startData && evt.hideFromChannelProgress === true) {
+    startData.hideFromChannelProgress = true;
+  }
+  const explicitHideFromChannelProgress =
+    evt.hideFromChannelProgress === true || startData?.hideFromChannelProgress === true;
   const partial = evt.partialResult;
   const isExecTool = isExecToolName(toolName);
   const toolMeta = ctx.state.toolMetaById.get(toolCallId);
@@ -103,12 +106,25 @@ export function handleToolExecutionUpdate(
         name: toolName,
         meta: toolMeta?.meta,
         commandBearing: toolMeta?.commandBearing,
-        hideFromChannelProgress,
+        hideFromChannelProgress: explicitHideFromChannelProgress,
       })
     : undefined;
   const execUpdate = execProgress?.update;
   const liveResult = isExecTool ? execUpdate?.result : sanitizeToolResult(partial);
   const toolProgress = isExecTool ? undefined : readChannelToolProgress(liveResult);
+  const itemData = {
+    ...projectAgentToolActivity({
+      toolCallId,
+      name: toolName,
+      phase: "update",
+      args,
+      meta: toolMeta?.meta,
+      hideFromChannelProgress: explicitHideFromChannelProgress,
+    }),
+    commandBearing: toolMeta?.commandBearing,
+    ...(toolProgress ? { progressText: toolProgress.text, meta: undefined } : {}),
+  };
+  const hideFromChannelProgress = explicitHideFromChannelProgress;
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
@@ -125,19 +141,6 @@ export function handleToolExecutionUpdate(
       },
     });
   }
-  const itemData: AgentItemEventData = {
-    itemId: buildToolItemId(toolCallId),
-    phase: "update",
-    kind: "tool",
-    title: buildToolItemTitle(toolName, toolMeta?.meta),
-    status: "running",
-    name: toolName,
-    toolCallId,
-    commandBearing: toolMeta?.commandBearing,
-    ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-    ...(toolMeta?.commandBearing && !isExecTool ? { suppressChannelProgress: true } : {}),
-    ...(toolProgress ? { progressText: toolProgress.text } : { meta: toolMeta?.meta }),
-  };
   emitTrackedItemEvent(ctx, itemData, execProgress?.emitItems);
   if (!toolProgress) {
     emitAgentEventCallbackBestEffort(ctx, {
@@ -153,35 +156,17 @@ export function handleToolExecutionUpdate(
   }
   if (isExecTool) {
     const output = extractLiveExecOutput(liveResult);
-    const commandData: AgentItemEventData = {
-      itemId: buildCommandItemId(toolCallId),
-      phase: "update",
-      kind: "command",
-      title: buildCommandItemTitle(toolName, toolMeta?.meta),
-      status: "running",
-      name: toolName,
-      meta: toolMeta?.meta,
-      toolCallId,
-      ...(emitDetailedLiveUpdate && output ? { progressText: output } : {}),
-    };
-    emitTrackedItemEvent(ctx, commandData, execProgress?.emitItems);
     if (emitDetailedLiveUpdate && output) {
       const outputData: AgentCommandOutputEventData = {
-        itemId: commandData.itemId,
+        itemId: buildCommandItemId(toolCallId),
         phase: "delta",
-        title: commandData.title,
+        title: buildCommandItemTitle(toolName, toolMeta?.meta),
         toolCallId,
         name: toolName,
         output,
         status: "running",
       };
-      emitAgentActivityEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        stream: "command_output",
-        data: outputData,
-      });
-      emitAgentEventCallbackBestEffort(ctx, {
+      emitToolActivityEvent(ctx, {
         stream: "command_output",
         data: outputData,
       });

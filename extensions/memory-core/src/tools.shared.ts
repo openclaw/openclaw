@@ -1,4 +1,3 @@
-// Memory Core plugin module implements tools.shared behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   AnyAgentTool,
@@ -76,6 +75,7 @@ export function createMemoryTool(params: {
     name: params.contract.name,
     description: params.contract.describe(ctx.sources),
     parameters: params.contract.parameters,
+    prepareArguments: params.contract.prepareArguments,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
       // A live getter makes missing or disabled current config a revocation.

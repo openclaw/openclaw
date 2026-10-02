@@ -290,15 +290,8 @@ class AccessibilityActionExecutor internal constructor(
     validateRefreshedNode: ((AccessibilityNodeInfo) -> ActionResult?)? = null,
   ): ActionResult {
     val node =
-      when (val target = generation.resolve(snapshotId, ref)) {
-        is GenerationTarget.Found -> {
-          target.value
-        }
-
-        GenerationTarget.Stale -> {
-          return ActionResult(ActionOutcomeCode.TargetStale, "Node $ref is not in the current snapshot")
-        }
-      }
+      generation.resolve(snapshotId, ref)
+        ?: return ActionResult(ActionOutcomeCode.TargetStale, "Node $ref is not in the current snapshot")
     if (!runCatching { node.refresh() }.getOrDefault(false)) {
       return ActionResult(ActionOutcomeCode.TargetNotFound, "Node $ref is no longer available")
     }
@@ -428,10 +421,7 @@ internal class SnapshotGenerationStore<T>(
   fun resolve(
     snapshotId: String,
     ref: String,
-  ): GenerationTarget<T> {
-    if (!matches(snapshotId)) return GenerationTarget.Stale
-    return values[ref]?.let { value -> GenerationTarget.Found(value) } ?: GenerationTarget.Stale
-  }
+  ): T? = if (matches(snapshotId)) values[ref] else null
 
   fun clear() {
     values.values.forEach(release)
@@ -441,14 +431,6 @@ internal class SnapshotGenerationStore<T>(
     uiEpoch = 0
     connectionGeneration = 0
   }
-}
-
-internal sealed interface GenerationTarget<out T> {
-  data class Found<T>(
-    val value: T,
-  ) : GenerationTarget<T>
-
-  data object Stale : GenerationTarget<Nothing>
 }
 
 private fun tapGesture(

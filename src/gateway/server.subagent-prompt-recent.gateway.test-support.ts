@@ -8,8 +8,8 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   listSubagentRunsForRequester,
   registerSubagentRun,
@@ -18,6 +18,7 @@ import {
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import { resolvePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
@@ -47,13 +48,13 @@ const CHILD_SESSION_KEY = "agent:main:subagent:gw-prompt-recent";
 const PARENT_SESSION_KEY = "agent:main:main";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function resetGatewayState(): void {
+async function resetGatewayState(): Promise<void> {
   resetConfigOverrides();
   clearRuntimeConfigSnapshot();
   clearConfigCache();
   clearSessionStoreCacheForTest();
   resetAgentEventsForTest({ preserveListeners: true });
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
 }
 
 afterEach(resetGatewayState);
@@ -120,7 +121,7 @@ describe("Completed child results on a real parent-agent turn", () => {
       }
       deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
       deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-      resetGatewayState();
+      await resetGatewayState();
 
       const requests: string[] = [];
       const providerServer = createServer((request, response) => {
@@ -214,6 +215,10 @@ describe("Completed child results on a real parent-agent turn", () => {
             runId: "persisted-outstanding-result",
             childSessionKey: CHILD_SESSION_KEY,
             requesterSessionKey: PARENT_SESSION_KEY,
+            requesterStorePath: resolvePhysicalSessionStorePath(
+              { sessionKey: PARENT_SESSION_KEY },
+              cfg,
+            ),
             requesterAgentId: "main",
             requesterDisplayKey: "main",
             task: "read the retained result",
@@ -225,15 +230,15 @@ describe("Completed child results on a real parent-agent turn", () => {
             delivery: { status: "failed" },
           };
           // Publish retained custody through the owner without registering an active child.
-          persistSubagentRunsToDiskOrThrow(new Map([[retained.runId, retained]]), [retained.runId]);
-          const before = loadSubagentRunsByRunIdsFromSqlite([retained.runId]);
+          persistRegistryFixture(new Map([[retained.runId, retained]]), [retained.runId]);
+          const before = loadSubagentRegistryFromSqlite().get(retained.runId);
           const cursor = requests.length;
           await runParentAgentTurn(gateway.client, "Continue using any outstanding child result.");
           const parentRequest = requests.slice(cursor).join("\n");
           expect(parentRequest).toContain("## Child results awaiting delivery");
           expect(parentRequest).toContain(result);
           expect(parentRequest).not.toContain("## Recently Completed Subagents");
-          expect(loadSubagentRunsByRunIdsFromSqlite([retained.runId])).toEqual(before);
+          expect(loadSubagentRegistryFromSqlite().get(retained.runId)).toEqual(before);
           const unrelatedCursor = requests.length;
           await runParentAgentTurn(
             gateway.client,
@@ -258,7 +263,7 @@ describe("Completed child results on a real parent-agent turn", () => {
           return;
         }
 
-        registerSubagentRun({
+        await registerSubagentRun({
           runId: RUN_ID,
           childSessionKey: CHILD_SESSION_KEY,
           requesterSessionKey: PARENT_SESSION_KEY,

@@ -225,6 +225,9 @@ describe("resolveCommandsSystemPromptBundle", () => {
         allowGatewaySubagentBinding: false,
         modelCatalog: { entries: [], routeVariants: [] },
         configuredRuntimeModels: [],
+        findConfiguredRuntimeModel: () => {
+          throw new Error("Prompt inspection must not select runtime models");
+        },
         configuredModelAliases: [{ alias: "Current", provider: "fixture", model: "current" }],
         inlineProviderModels: [],
         createStores: vi.fn(() => {
@@ -365,26 +368,6 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(vi.mocked(ensureSandboxWorkspaceForSession)).not.toHaveBeenCalled();
   });
 
-  it("uses the canonical target session agent for tool creation", async () => {
-    const params = makeParams();
-    params.agentId = "target";
-    params.sessionKey = "agent:target:telegram:direct:target-session";
-
-    await resolveCommandsSystemPromptBundle(params);
-
-    const toolParams = requireFirstArg(
-      vi.mocked(createOpenClawCodingTools),
-      "createOpenClawCodingTools",
-    );
-    expect(toolParams.agentId).toBe("target");
-    expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
-    const bootstrapParams = requireFirstArg(
-      vi.mocked(resolveBootstrapContextForRun),
-      "resolveBootstrapContextForRun",
-    );
-    expect(bootstrapParams.agentId).toBe("target");
-  });
-
   it("records bootstrap exclusions for generated command prompts", async () => {
     const params = makeParams();
 
@@ -435,6 +418,7 @@ describe("resolveCommandsSystemPromptBundle", () => {
       "resolveBootstrapContextForRun",
     );
     expect(bootstrapParams.sessionId).toBe("target-session");
+    expect(bootstrapParams.agentId).toBe("target");
     const runtimeParams = requireFirstArg(
       vi.mocked(buildSystemPromptParams),
       "buildSystemPromptParams",
@@ -449,6 +433,8 @@ describe("resolveCommandsSystemPromptBundle", () => {
       vi.mocked(createOpenClawCodingTools),
       "createOpenClawCodingTools",
     );
+    expect(toolParams.agentId).toBe("target");
+    expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
     expect(toolParams.groupId).toBe("target-group");
     expect(toolParams.groupChannel).toBe("#target");
     expect(toolParams.groupSpace).toBe("target-space");

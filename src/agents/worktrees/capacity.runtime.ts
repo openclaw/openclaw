@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { createGitCommandError, requireGitCommandOutput } from "../../infra/git-exec.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import {
   requireGit,
@@ -64,9 +65,18 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
       throw missingObjectsError(commit, missing.length);
     }
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
+    // Shared commits do not prove that their promised blobs are present.
     await requireGit(
       repoRoot,
-      ["fetch", remote, "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--stdin"],
+      [
+        "fetch",
+        "--refetch",
+        remote,
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--recurse-submodules=no",
+        "--stdin",
+      ],
       { input: Buffer.from(`${missing.join("\n")}\n`), timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS },
     );
   }
@@ -127,9 +137,7 @@ async function commitObjectBytes(
     }
     if (cacheKey) {
       checkoutSizeFacts.set(cacheKey, bytes);
-      while (checkoutSizeFacts.size > MAX_CHECKOUT_SIZE_FACTS) {
-        checkoutSizeFacts.delete(checkoutSizeFacts.keys().next().value!);
-      }
+      pruneMapToMaxSize(checkoutSizeFacts, MAX_CHECKOUT_SIZE_FACTS);
     }
     return bytes;
   } catch (error) {

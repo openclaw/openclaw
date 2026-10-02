@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readOfflineStorageScope, type OfflineStorageClient } from "../../app/boot-record.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { generateUUID } from "../uuid.ts";
 import type { ChatQueueItem, DurableComposerDraftAttachment } from "./chat-types.ts";
@@ -131,6 +132,7 @@ export async function readOutboxPayload(
         !isRecord(entry) ||
         !(entry.blob instanceof Blob) ||
         typeof entry.mimeType !== "string" ||
+        (entry.origin !== undefined && entry.origin !== "paste" && entry.origin !== "file") ||
         (entry.fileName !== undefined && typeof entry.fileName !== "string") ||
         (entry.sizeBytes !== undefined && entry.sizeBytes !== entry.blob.size)
       ) {
@@ -140,6 +142,7 @@ export async function readOutboxPayload(
       attachments.push({
         blob: entry.blob,
         mimeType: entry.mimeType,
+        ...(entry.origin ? { origin: entry.origin } : {}),
         ...(selectionAnnotation ? { selectionAnnotation } : {}),
         ...(typeof entry.fileName === "string" ? { fileName: entry.fileName } : {}),
         ...(typeof entry.sizeBytes === "number" ? { sizeBytes: entry.sizeBytes } : {}),
@@ -220,28 +223,31 @@ export function outboxPayloadTab(): Promise<string> {
   }));
 }
 
-// A connected client must finish recovery resolution; an offline client may
-// retain the exact owner it previously authenticated, but never infer a new one.
-const knownOwners = new WeakMap<object, string>();
 type RecoveryHost = {
-  client?: { recoveryScope?: string; recoveryScopeReady?: boolean } | null;
+  client?: OfflineStorageClient | null;
   connected?: boolean;
+  settings?: { gatewayUrl?: string | null };
 };
+export function outboxStorageScope(host: RecoveryHost): string | undefined {
+  const owner = readOfflineStorageScope(host);
+  return owner
+    ? JSON.stringify([host.settings?.gatewayUrl?.trim() || "default", owner])
+    : undefined;
+}
 export function observeOutboxRecoveryOwner(host: RecoveryHost): string | undefined {
-  const client = host.client;
-  if (!client || (host.connected && !client.recoveryScopeReady)) {
-    return undefined;
-  }
-  if (client.recoveryScopeReady && client.recoveryScope) {
-    knownOwners.set(client, client.recoveryScope);
-  }
-  const remembered = knownOwners.get(client);
-  return remembered === client.recoveryScope ? remembered : undefined;
+  return readOfflineStorageScope(host);
 }
 
-export function outboxPayloadMatchesOwner(host: RecoveryHost, item: ChatQueueItem): boolean {
+/** Explicit legacy review may assign unowned input, but never another account's input. */
+export function outboxPayloadCanRecover(host: RecoveryHost, item: ChatQueueItem): boolean {
   return (
-    !item.attachmentPayload ||
-    item.attachmentPayload.recoveryScope === observeOutboxRecoveryOwner(host)
+    (!item.storageScope || item.storageScope === outboxStorageScope(host)) &&
+    (!item.attachmentPayload ||
+      item.attachmentPayload.recoveryScope === observeOutboxRecoveryOwner(host))
   );
+}
+
+/** Normal projection and delivery require provenance captured by an admission owner. */
+export function outboxPayloadMatchesOwner(host: RecoveryHost, item: ChatQueueItem): boolean {
+  return Boolean(item.storageScope && outboxPayloadCanRecover(host, item));
 }

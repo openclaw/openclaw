@@ -1,4 +1,3 @@
-// Stores voice wake trigger configuration.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";

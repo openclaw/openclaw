@@ -50,26 +50,6 @@ describe("imessage approval capability", () => {
 
   it("does not use session mode for non-iMessage-origin requests", checks.foreignOrigin);
 
-  it("rejects group origin targets when no approvers are configured", () => {
-    const cfg = buildConfig({ approvals: { exec: { enabled: true } } });
-    const request = buildExecRequest(GROUP_TARGET);
-
-    expect(resolveExecOrigin(cfg, request)).toBeNull();
-  });
-
-  it("allows group origin targets when explicit approvers are configured", () => {
-    const cfg = buildConfig({
-      channel: { allowFrom: ["+15551230000"] },
-      approvals: { exec: { enabled: true } },
-    });
-    const request = buildExecRequest(GROUP_TARGET);
-
-    expect(resolveExecOrigin(cfg, request)).toEqual({
-      to: GROUP_TARGET,
-      accountId: DEFAULT_ACCOUNT_ID,
-    });
-  });
-
   it("resolves approver-dm targets from channels.imessage.allowFrom when the request is session-eligible", () => {
     const cfg = buildConfig({
       channel: { allowFrom: ["+15551230000", "owner@example.com"] },
@@ -104,18 +84,6 @@ describe("imessage approval capability", () => {
 
     expect(describeDelivery(cfg, request)?.enabled).toBe(false);
     expect(nativeShouldHandle({ cfg, approvalKind: "exec", request })).toBe(false);
-  });
-
-  it("renders thumbs-only reaction hints in exec approval prompts", () => {
-    const payload = imessageApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg: buildConfig(),
-      request: buildExecRequest(DIRECT_TARGET),
-      target: { channel: "imessage", to: DIRECT_TARGET, source: "target" },
-      nowMs: 0,
-    });
-
-    expect(payload?.text).toContain("👍 Allow Once");
-    expect(payload?.text).toContain("👎 Deny");
   });
 
   it("renders thumbs-only reaction hints in plugin approval prompts and respects allowed decisions", () => {

@@ -5,6 +5,8 @@ import {
 } from "@openclaw/ai/transports";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { isRetryableAssistantError, isTerminalAssistantError } from "../llm/utils/retry.js";
+import { makeResponsesModel } from "./openai-transport-stream.test-harness.js";
 
 const responsesTransports = [
   {
@@ -19,7 +21,7 @@ const responsesTransports = [
   },
 ] as const;
 
-async function createResponsesSseServer(event: Record<string, unknown>): Promise<{
+async function createResponsesSseServer(...events: Record<string, unknown>[]): Promise<{
   server: Server;
   baseUrl: string;
   requestPaths: string[];
@@ -34,7 +36,9 @@ async function createResponsesSseServer(event: Record<string, unknown>): Promise
         "cache-control": "no-cache",
         connection: "keep-alive",
       });
-      response.write(`event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`);
+      for (const event of events) {
+        response.write(`event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
       response.end();
     });
   });
@@ -63,6 +67,68 @@ async function closeResponsesSseServer(server: Server): Promise<void> {
 }
 
 describe("failed Responses loopback SSE", () => {
+  it.each(
+    responsesTransports.flatMap((transport) =>
+      [false, true].map((hostedTools) => ({ transport, hostedTools })),
+    ),
+  )(
+    "preserves $transport.api identity diagnostics and request retry safety (hosted tools: $hostedTools)",
+    async ({ transport, hostedTools }) => {
+      const { server, baseUrl } = await createResponsesSseServer(
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "reasoning", id: "rs_private_canary", summary: [] },
+        },
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_conflicting",
+            status: "completed",
+            output: [{ type: "message", id: "msg_private_canary", content: [] }],
+          },
+        },
+      );
+      try {
+        const stream = await transport.createStream()(
+          makeResponsesModel({ api: transport.api, provider: transport.provider, baseUrl }),
+          { messages: [{ role: "user", content: "Reply", timestamp: 0 }], tools: [] },
+          {
+            apiKey: "test-key",
+            onPayload: hostedTools
+              ? () => ({
+                  model: "test-model",
+                  input: "Reply",
+                  stream: true,
+                  tools: [{ type: "web_search" }],
+                })
+              : undefined,
+          },
+        );
+        const message = await stream.result();
+        expect(message).toMatchObject({
+          stopReason: "error",
+          errorCode: "responses_output_identity_conflict",
+          errorMessage: "Responses stream changed output item identity",
+        });
+        expect(JSON.parse(message.errorBody ?? "{}")).toEqual({
+          outputIndex: 0,
+          expectedType: "reasoning",
+          actualType: "message",
+          completed: false,
+          completedToolCall: false,
+          mismatch: "type",
+          eventType: "response.completed",
+          retrySafe: !hostedTools,
+        });
+        expect(message.errorBody).not.toContain("private_canary");
+        expect(isRetryableAssistantError(message)).toBe(!hostedTools);
+        expect(isTerminalAssistantError(message)).toBe(hostedTools);
+      } finally {
+        await closeResponsesSseServer(server);
+      }
+    },
+  );
   it.each(responsesTransports)(
     "preserves failed $api terminal facts over the real SDK stream",
     async (transport) => {

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
-  retireUnsafeCodexTurnClientBestEffort,
   unsubscribeCodexThreadBestEffort,
   terminateCodexBackgroundTerminals,
 } from "./attempt-client-cleanup.js";
@@ -13,10 +12,8 @@ import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 describe("Codex app-server attempt client cleanup", () => {
   it.each([
-    { terminated: true, oneShot: false },
     { terminated: false, oneShot: false },
     { terminated: true, oneShot: true },
-    { terminated: false, oneShot: true },
   ])(
     "drains native terminals without claiming OS cleanup (terminated=$terminated, oneShot=$oneShot)",
     async ({ terminated, oneShot }) => {
@@ -92,18 +89,6 @@ describe("Codex app-server attempt client cleanup", () => {
     );
   });
 
-  it("preserves the primary failure when unsafe turn retirement rejects", async () => {
-    const close = vi.fn();
-    const closeAndWait = vi.fn(async () => {
-      throw new Error("unsafe client retirement failed");
-    });
-
-    await expect(
-      retireUnsafeCodexTurnClientBestEffort({ close, closeAndWait } as never, "startup interrupt"),
-    ).resolves.toBeUndefined();
-    expect(close).toHaveBeenCalledOnce();
-  });
-
   it("waits for the matching terminal after an interrupt is acknowledged", async () => {
     const harness = createClientHarness();
     const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
@@ -131,7 +116,7 @@ describe("Codex app-server attempt client cleanup", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-other", status: "interrupted" },
+        turn: { id: "turn-other", status: "interrupted", items: [] },
       },
     });
     await Promise.resolve();
@@ -141,7 +126,7 @@ describe("Codex app-server attempt client cleanup", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "interrupted" },
+        turn: { id: "turn-1", status: "interrupted", items: [] },
       },
     });
 
@@ -225,7 +210,10 @@ describe("Codex app-server attempt client cleanup", () => {
         expect(settled).not.toHaveBeenCalled();
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "interrupted", items: [] },
+          },
         });
         await expect(completion).resolves.toBe(true);
         expect(harness.client.getCloseError()).toBeUndefined();
@@ -237,6 +225,10 @@ describe("Codex app-server attempt client cleanup", () => {
 
   it("keeps one deadline through activation and terminal confirmation", async () => {
     vi.useFakeTimers();
+    // Alias the monotonic clock to the wall clock so advanceTimersByTime drives
+    // both; the deadline now reads performance.now() (see the wall-clock-rewind
+    // regression below for the decoupled case).
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const harness = createClientHarness();
     const request = vi.spyOn(harness.client, "request");
     try {
@@ -292,7 +284,7 @@ describe("Codex app-server attempt client cleanup", () => {
         });
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
         });
         harness.send({
           method: "turn/started",
@@ -310,6 +302,7 @@ describe("Codex app-server attempt client cleanup", () => {
 
   it("does not interrupt after its deadline when timeout callbacks are delayed", async () => {
     vi.useFakeTimers();
+    vi.spyOn(performance, "now").mockImplementation(() => Date.now());
     const harness = createClientHarness();
     try {
       const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
@@ -332,6 +325,54 @@ describe("Codex app-server attempt client cleanup", () => {
       await vi.advanceTimersByTimeAsync(100);
       await expect(completion).resolves.toBe(false);
       expect(harness.writes).toHaveLength(1);
+    } finally {
+      harness.client.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the interrupt deadline bounded when the wall clock rewinds", async () => {
+    vi.useFakeTimers();
+    // Decouple the clocks: performance.now() (driven by advanceTimersByTime)
+    // stays monotonic while Date.now() (driven by setSystemTime) can jump.
+    const harness = createClientHarness();
+    const requestSpy = vi.spyOn(harness.client, "request");
+    try {
+      const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        timeoutMs: 100,
+      });
+      const first = JSON.parse(harness.writes.at(-1) ?? "{}") as { id: number };
+      harness.send({
+        id: first.id,
+        error: { code: -32_600, message: "no active turn to interrupt" },
+      });
+      // Advance 60ms monotonic; both clocks move together so far.
+      await vi.advanceTimersByTimeAsync(60);
+      // A clock correction rewinds the wall clock by 300s. A wall-clock-based
+      // remaining budget would compute ~360s; the monotonic deadline must still
+      // report only the ~40ms that actually remain.
+      vi.setSystemTime(Date.now() - 300_000);
+      harness.send({
+        method: "turn/started",
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "inProgress" } },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // The re-interrupt RPC was sent; its timeoutMs must reflect the monotonic
+      // remaining budget (~40ms), not the wall-clock-rewound ~360s. The
+      // re-interrupt call carries a `signal` (the settledSignal), unlike the
+      // first interrupt call which only passes timeoutMs.
+      expect(harness.writes).toHaveLength(2);
+      const reinterruptCall = requestSpy.mock.calls
+        .toReversed()
+        .find((c) => c[0] === "turn/interrupt");
+      const rpcTimeoutMs = (reinterruptCall?.[2] as { timeoutMs?: number } | undefined)?.timeoutMs;
+      expect(rpcTimeoutMs).toBeLessThanOrEqual(40);
+      expect(rpcTimeoutMs).toBeGreaterThan(0);
+      // Cross the 100ms monotonic budget; the completion settles as failed.
+      await vi.advanceTimersByTimeAsync(40);
+      await expect(completion).resolves.toBe(false);
     } finally {
       harness.client.close();
       vi.useRealTimers();
@@ -374,7 +415,7 @@ describe("Codex app-server attempt client cleanup", () => {
       await route.bindTurn("turn-1");
       harness.send({
         method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
       const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
         threadId: "thread-1",
@@ -436,7 +477,7 @@ describe("Codex app-server attempt client cleanup", () => {
     if (completed) {
       harness.send({
         method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
     }
 

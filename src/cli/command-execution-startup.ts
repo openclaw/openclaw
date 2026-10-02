@@ -19,13 +19,12 @@ const hasVersionFlag = (argv: readonly string[]) =>
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
-  routeLogsToStderrOnSuppress?: boolean;
   startupPolicy: CliStartupPolicy;
   showBanner?: boolean;
   version?: string;
 }) {
   // Machine-readable commands must route diagnostics away before startup can print.
-  if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
+  if (params.startupPolicy.suppressDoctorStdout) {
     routeLogsToStderr();
   }
   if (params.startupPolicy.hideBanner || params.showBanner === false || !params.version) {
@@ -47,22 +46,12 @@ export async function ensureCliExecutionBootstrap(params: {
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
-  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
   validateConfigOnly?: boolean;
-  skipPristineCoreStateMigrations?: boolean;
-  skipPristineStartupStateMigrations?: boolean;
 }) {
-  const {
-    runtime,
-    commandPath,
-    startupPolicy,
-    allowInvalid,
-    beforeStateMigrations,
-    skipPristineCoreStateMigrations,
-    skipPristineStartupStateMigrations,
-  } = params;
+  const { runtime, commandPath, startupPolicy, allowInvalid, beforeStatePreparation } = params;
   const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
   const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
   const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
@@ -70,17 +59,36 @@ export async function ensureCliExecutionBootstrap(params: {
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
       const { ensureConfigReady } = await configGuardModuleLoader.load();
-      await ensureConfigReady({
-        runtime,
-        commandPath,
-        measure: (stage, run) => measureCliCommandStartup(stage, run),
-        ...(allowInvalid ? { allowInvalid: true } : {}),
-        ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
-        ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
-        ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
-        ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
-        ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      });
+      const runConfigGuard = () =>
+        ensureConfigReady({
+          runtime,
+          commandPath,
+          measure: (stage, run) => measureCliCommandStartup(stage, run),
+          ...(allowInvalid ? { allowInvalid: true } : {}),
+          ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
+          ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+          ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+        });
+      const nativeGatewayBootstrap =
+        commandPath[0] === "gateway" &&
+        (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
+      if (nativeGatewayBootstrap && !validateConfigOnly) {
+        const [
+          { withConfigSnapshotPreparation },
+          { prepareHostConfigSnapshot },
+          { resolveConfigPath },
+        ] = await Promise.all([
+          import("../config/io.snapshot-preparation-scope.js"),
+          import("../config/io.snapshot-preparation.js"),
+          import("../config/paths.js"),
+        ]);
+        await withConfigSnapshotPreparation(
+          { configPath: resolveConfigPath(), prepare: prepareHostConfigSnapshot },
+          runConfigGuard,
+        );
+      } else {
+        await runConfigGuard();
+      }
     });
   }
   if (!loadPlugins) {

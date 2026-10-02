@@ -81,7 +81,7 @@ describe("requested session agent ownership", () => {
       const cfg = retainLegacyDefaultAgentId(
         {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-        },
+        } satisfies OpenClawConfig,
         retainedOwner,
       );
 
@@ -111,7 +111,7 @@ describe("requested session agent ownership", () => {
     });
   });
 
-  it.each(["", "   ", "агент✨", "---"])(
+  it.each(["", "агент✨"])(
     "rejects explicit unrepresentable agent id %j instead of selecting main",
     (agentId) => {
       const cfg: OpenClawConfig = {

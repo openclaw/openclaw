@@ -100,15 +100,14 @@ openclaw logs --follow
   </Accordion>
 
   <Accordion title="Bot to bot loops">
-    By default bot-authored messages are ignored.
+    Bot-authored messages are accepted by default under normal mention and access rules.
 
-    If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
-    Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+    Keep mention and allowlist rules appropriate for the room. Set `channels.discord.allowBots=false` to disable bot-triggered turns, or `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot. These settings do not hide accessible bot-authored history or human-selected reply context.
     In `"mentions"` mode, reply-ping metadata alone does not count. Bot replies need an active native mention or a configured text/transcript mention outside Markdown code.
 
-    OpenClaw also ships shared [bot loop protection](/channels/bot-loop-protection). Whenever `allowBots` lets bot-authored messages reach dispatch, Discord maps the inbound event to `(account, channel, bot pair)` facts and the generic pair guard suppresses the pair after it crosses the configured event budget. The guard prevents runaway two-bot loops that previously had to be stopped by Discord rate limits; it does not affect single-bot deployments or one-shot bot replies that stay under the budget.
+    OpenClaw also ships shared [bot loop protection](/channels/bot-loop-protection). Whenever `allowBots` lets bot-authored messages reach dispatch, Discord maps the inbound event to `(account, channel, bot pair)` facts and the generic pair guard suppresses the pair after it crosses the configured event budget. The guard bounds rapid two-bot loops; exchanges below the budget can continue. It does not affect human messages or one-shot bot replies that stay under the budget.
 
-    Default settings (active when `allowBots` is set):
+    Default settings (active whenever bot-authored messages are admitted):
 
     - `maxEventsPerWindow: 20` -- bot pair can exchange 20 messages within the sliding window
     - `windowSeconds: 60` -- sliding window length

@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { getFleetCell } from "./registry.js";
 import {
@@ -27,6 +30,7 @@ describe("fleet service upgrade and restore", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllGlobals();
     await tempRoot.cleanup();
@@ -112,7 +116,7 @@ describe("fleet service upgrade and restore", () => {
       userEnvironmentKeys: keys.split(","),
     });
     expect(profile?.environment).not.toHaveProperty("NODE_VERSION");
-    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:v2");
+    expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:v2");
   });
 
   it("passes digest-pinned images verbatim to create and upgrade", async () => {
@@ -151,7 +155,7 @@ describe("fleet service upgrade and restore", () => {
 
     expect(containers.run).toHaveBeenCalledTimes(2);
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
-    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+    expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
   it("restarts the old cell when removal fails after stop", async () => {
@@ -180,7 +184,7 @@ describe("fleet service upgrade and restore", () => {
       fetch: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       now: () => 1000,
       generateAttemptId: () => NEXT_ATTEMPT_ID,
-      updateImage: () => {
+      updateImage: async () => {
         throw new Error("state database is full");
       },
     });
@@ -204,7 +208,7 @@ describe("fleet service upgrade and restore", () => {
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
     expect(containers.remove).toHaveBeenCalledWith("docker", "replacement-container-id", true);
     expect(containers.removeNetwork).not.toHaveBeenCalled();
-    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+    expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
   it("restores the previous cell when the replacement container is not running", async () => {
@@ -231,7 +235,7 @@ describe("fleet service upgrade and restore", () => {
 
     expect(containers.run).toHaveBeenCalledTimes(2);
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
-    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+    expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
   it("restores the previous cell when the replacement crashes after starting", async () => {
@@ -265,7 +269,7 @@ describe("fleet service upgrade and restore", () => {
 
     expect(containers.run).toHaveBeenCalledTimes(2);
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
-    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+    expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
   it("restores the previous cell when the replacement never becomes healthy", async () => {
@@ -296,7 +300,7 @@ describe("fleet service upgrade and restore", () => {
 
     expect(containers.run).toHaveBeenCalledTimes(2);
     expect(containers.run.mock.calls[1]?.[0].image).toBe("sha256:old-image-id");
-    expect(getFleetCell(env, "acme")?.image).toBe("ghcr.io/openclaw/openclaw:latest");
+    expect((await getFleetCell(env, "acme"))?.image).toBe("ghcr.io/openclaw/openclaw:latest");
   });
 
   it("refuses upgrade before pull or removal when the inspected token is missing", async () => {
@@ -341,7 +345,7 @@ describe("fleet service upgrade and restore", () => {
     await expect(
       service.create({ tenant: "bad-image", image: "--help", gatewayToken: "token" }),
     ).rejects.toThrow(/image must not begin/iu);
-    expect(getFleetCell(env, "bad-image")).toBeUndefined();
+    expect(await getFleetCell(env, "bad-image")).toBeUndefined();
     expect(containers.run).not.toHaveBeenCalled();
 
     await service.create({ tenant: "acme", gatewayToken: "token" });

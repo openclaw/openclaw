@@ -20,42 +20,9 @@ wa-dropdown-item.session-menu__item--compact-details {
   min-width: 0;
 }
 
-/* A compact preference row stacks its value so the established 220px menu
-   still fits both the full label and the current choice. */
-wa-dropdown-item[value="compact:open-empty-groups"]::part(label) {
-  flex-direction: column;
-  align-items: flex-start;
-}
-
-wa-dropdown-item[value="compact:open-empty-groups"] {
-  min-height: 44px;
-}
-
 wa-dropdown.sidebar-session-sort-menu::part(menu) {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
-}
-
-wa-dropdown.sidebar-session-sort-menu--preferences::part(menu) {
-  width: min(300px, calc(100dvw - 16px));
-}
-
-.sidebar-session-empty-groups-value {
-  display: block;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sidebar-session-sort-menu__item > a {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  color: inherit;
-  text-decoration: none;
 }
 
 wa-dropdown-item.sidebar-session-choice-submenu::part(submenu) {
@@ -137,4 +104,331 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   font-size: var(--control-ui-text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* One column for every row: headers, dividers, and row hover surfaces share
+   the panel inset; each row pads its content by the same inset, so labels,
+   boxed controls, switch tracks, and chevrons line up on both edges. */
+.sidebar-session-sort-menu .sidebar-session-filter-panel {
+  --sidebar-filter-row-height: calc(var(--settings-control-height) + var(--space-1));
+  --sidebar-filter-row-inset: var(--space-2);
+
+  box-sizing: border-box;
+  width: calc(var(--space-8) * 8);
+  max-width: calc(100dvw - var(--space-6));
+  max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: var(--menu-padding);
+  border: 1px solid var(--overlay-border);
+  border-radius: var(--menu-radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--overlay-shadow);
+  /* One typography for every row label, value, and choice in the panel. */
+  font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
+  line-height: 1.55;
+}
+
+.sidebar-session-menu-section {
+  display: grid;
+}
+
+.sidebar-session-menu-section + .sidebar-session-menu-section,
+.sidebar-session-menu-footer {
+  margin-block-start: var(--space-2);
+  padding-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border);
+}
+
+/* The header keeps its height with or without Reset, so its label never moves. */
+.sidebar-session-menu-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  min-height: var(--sidebar-filter-row-height);
+  padding: 0 var(--sidebar-filter-row-inset);
+}
+
+.sidebar-session-menu-heading h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: var(--wa-font-weight-semibold);
+  text-transform: uppercase;
+}
+
+.sidebar-session-menu-row,
+.sidebar-session-menu-switch,
+.sidebar-session-filter-footer,
+.sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
+  box-sizing: border-box;
+  min-height: var(--sidebar-filter-row-height);
+  padding: 0 var(--sidebar-filter-row-inset);
+  border-radius: var(--menu-item-radius);
+}
+
+.sidebar-session-filter-panel .picker-select--submenu .picker-select__trigger {
+  border: 0;
+}
+
+/* Boxed-control rows pin the label to the control's line so an inline owner
+   list can grow below it on the mobile sheet. */
+.sidebar-session-menu-row {
+  display: grid;
+  grid-template-columns: calc(var(--space-6) * 4) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  padding-block: calc((var(--sidebar-filter-row-height) - var(--settings-control-height)) / 2);
+}
+
+.sidebar-session-menu-row > :is(label, span) {
+  color: var(--text);
+  padding-block: calc((var(--settings-control-height) - 1lh) / 2);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-session-menu-segmented {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  height: var(--settings-control-height);
+}
+
+.sidebar-session-menu-segmented::part(form-control-input) {
+  flex-wrap: nowrap;
+  gap: calc(var(--space-1) / 2);
+}
+
+.sidebar-session-menu-segmented > .settings-segmented__btn {
+  flex: 1 1 auto;
+  justify-content: center;
+  min-width: 0;
+  min-height: calc(var(--settings-control-height) - var(--space-1) * 1.5);
+  padding-inline: var(--space-1);
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-session-menu-segmented > .settings-segmented__btn::part(label) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-session-menu-row .picker-select__trigger {
+  height: var(--settings-control-height);
+  padding-inline: var(--space-2);
+}
+
+.sidebar-session-menu-row .picker-select__label {
+  font-weight: var(--wa-font-weight-normal);
+}
+
+.sidebar-session-filter-panel :is(.picker-select, .picker-select__trigger, .picker-select__option) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+.sidebar-session-menu-switch,
+.sidebar-session-filter-footer,
+.sidebar-session-menu-reset {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+}
+
+.sidebar-session-menu-switch:hover,
+.sidebar-session-filter-footer:hover,
+.sidebar-session-menu-reset:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-session-filter-panel :is(button, a, input):focus-visible {
+  outline: var(--wa-focus-ring);
+  outline-offset: var(--wa-focus-ring-offset);
+}
+
+/* Accent rings are reserved for keyboard focus: an open trigger keeps its
+   resting border, and a pointer-opened search field and active row stay plain. */
+.sidebar-session-filter-panel .picker-select__trigger[aria-expanded="true"]:not(:focus-visible),
+.sidebar-session-filter-panel .picker-select > :not([data-keyboard]) .picker-select__search {
+  outline: none;
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  box-shadow: none;
+}
+
+.sidebar-session-filter-panel
+  .picker-select
+  > :not([data-keyboard])
+  .picker-select__option[data-active] {
+  outline: none;
+}
+
+/* Choice lists read like the session menus: plain left-aligned rows, the
+   neutral hover background, and a trailing accent check for the selection. */
+.sidebar-session-filter-panel .picker-select__menu {
+  padding: var(--menu-padding);
+}
+
+.sidebar-session-filter-panel .picker-select__option {
+  min-height: var(--menu-item-height);
+  padding: 0 8px;
+  border-radius: var(--menu-item-radius);
+}
+
+.sidebar-session-filter-panel .picker-select__option[aria-selected="true"] {
+  background: transparent;
+  box-shadow: none;
+}
+
+.sidebar-session-filter-panel
+  :is(.picker-select__option:hover, [data-keyboard] .picker-select__option[data-active]) {
+  background: var(--bg-hover);
+}
+
+.sidebar-session-filter-panel .picker-select__option .picker-select__copy {
+  flex: 1 1 auto;
+}
+
+.sidebar-session-filter-panel .picker-select__option .picker-select__label {
+  font-weight: var(--wa-font-weight-normal);
+}
+
+.sidebar-session-filter-panel .picker-select__check {
+  flex-basis: 14px;
+  width: 14px;
+  color: var(--accent);
+}
+
+.sidebar-session-menu-switch > span:first-child {
+  flex: 1;
+}
+
+.sidebar-session-menu-switch wa-switch {
+  pointer-events: none;
+}
+
+/* The empty label slot keeps a leading margin that would pull the track off
+   the shared right edge. */
+.sidebar-session-menu-switch wa-switch::part(label) {
+  display: none;
+}
+
+/* Reset's text ends on the controls' edge; its padded hover surface extends past it. */
+.sidebar-session-menu-reset {
+  width: auto;
+  min-height: 0;
+  margin-inline-end: calc(-1.5 * var(--space-1));
+  padding: var(--space-1) calc(1.5 * var(--space-1));
+  border-radius: var(--menu-item-radius);
+  font-size: var(--control-ui-text-xs);
+}
+
+.sidebar-session-filter-footer > span {
+  color: var(--muted);
+}
+
+.sidebar-session-filter-footer > span,
+.sidebar-session-filter-footer svg {
+  display: inline-flex;
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
+/* Mobile bottom sheets (sidebar issues, session filters) share the backdrop,
+   grabber, and entrance motion; each sheet keeps its own frame. */
+.sidebar-issues-panel__backdrop,
+.sidebar-issues-panel__grabber,
+.sidebar-session-filter-panel__backdrop,
+.sidebar-session-filter-panel__grabber {
+  display: none;
+}
+
+.shell--mobile-nav :is(.sidebar-issues-panel__backdrop, .sidebar-session-filter-panel__backdrop) {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: color-mix(in srgb, black 42%, transparent);
+  animation: fade-in 140ms var(--ease-out);
+}
+
+.shell--mobile-nav :is(.sidebar-issues-panel__grabber, .sidebar-session-filter-panel__grabber) {
+  display: block;
+  width: 36px;
+  height: 4px;
+  flex: none;
+  align-self: center;
+  margin-block: 8px 2px;
+  border-radius: var(--radius-full);
+  background: var(--border-strong);
+}
+
+@keyframes sidebar-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+.shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel {
+  position: fixed;
+  z-index: 121;
+  inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left);
+  width: auto;
+  max-width: none;
+  max-height: calc(var(--shell-canvas-height) - var(--safe-area-top) - var(--space-7));
+  /* Rows and headers keep the issues sheet's side inset. */
+  padding-inline: var(--chat-mobile-edge-inset);
+  padding-block-end: calc(var(--menu-padding) + var(--shell-safe-area-bottom));
+  border-width: 1px 0 0;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+  animation: sidebar-sheet-in 240ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+.shell--mobile-nav .sidebar-session-filter-panel__grabber {
+  margin-inline: auto;
+}
+
+/* An open choice page owns scrolling until Back returns to the sheet. */
+.sidebar-session-filter-panel:has(.picker-select--sheet [aria-expanded="true"]) {
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel,
+  .shell--mobile-nav .sidebar-session-filter-panel__backdrop {
+    animation: none;
+  }
+}
+
+/* Long choice lists fade at an edge they scroll past. */
+.sidebar-session-filter-panel .picker-select__options[data-fade-start] {
+  mask-image: linear-gradient(to bottom, transparent, black 16px);
+}
+
+.sidebar-session-filter-panel .picker-select__options[data-fade-end] {
+  mask-image: linear-gradient(to top, transparent, black 16px);
+}
+
+.sidebar-session-filter-panel .picker-select__options[data-fade-start][data-fade-end] {
+  mask-image: linear-gradient(transparent, black 16px, black calc(100% - 16px), transparent);
+}
+
+@media (max-width: 400px) {
+  .sidebar-session-sort-menu .sidebar-session-filter-panel {
+    width: calc(100dvw - var(--space-6));
+  }
 }

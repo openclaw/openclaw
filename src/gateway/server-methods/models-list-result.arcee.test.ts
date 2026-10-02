@@ -137,7 +137,7 @@ it("materializes a catalog selection from its authored provider wire row", async
         id: "trinity-large-thinking",
         contextWindow: 32768,
       });
-      const model = resolveModelWithRegistry({
+      const model = await resolveModelWithRegistry({
         cfg,
         provider: selected.provider,
         modelId: selected.id,

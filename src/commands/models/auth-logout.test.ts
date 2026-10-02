@@ -7,12 +7,22 @@ import {
   createApiKeyCredential,
   createAuthProfileStoreFixture,
 } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
+import { withAuthProfileTestState } from "../../agents/auth-profiles/profile-mutations.test-support.js";
+import { removeAuthProfilesAcrossOwnerStores } from "../../agents/auth-profiles/profiles.js";
+import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
+import {
+  loadAuthProfileStoreWithoutExternalProfiles,
+  saveAuthProfileStore,
+} from "../../agents/auth-profiles/store-runtime.js";
+import * as catalogCredentials from "../../agents/plugin-model-catalog-credentials.js";
+import * as catalogs from "../../agents/plugin-model-catalog.js";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../../gateway/server-methods.js";
 import type { RespondFn } from "../../gateway/server-methods/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 
 const mocks = vi.hoisted(() => ({
   ensureAuthProfileStoreWithoutExternalProfiles: vi.fn<() => AuthProfileStore>(),
@@ -179,9 +189,12 @@ function storeWith(profileIds: string[]): AuthProfileStore {
 }
 
 /** Runs the config mutator captured by the mocked updateConfig. */
-function applyCapturedConfigUpdate(cfg: OpenClawConfig): OpenClawConfig {
+async function applyCapturedConfigUpdate(cfg: OpenClawConfig): Promise<OpenClawConfig> {
   const mutator = mocks.updateConfig.mock.calls[0]?.[0] as
-    | ((current: OpenClawConfig, context: { runtimeConfig: OpenClawConfig }) => OpenClawConfig)
+    | ((
+        current: OpenClawConfig,
+        context: { runtimeConfig: OpenClawConfig },
+      ) => OpenClawConfig | Promise<OpenClawConfig>)
     | undefined;
   if (!mutator) {
     throw new Error("expected updateConfig to be called");
@@ -240,7 +253,7 @@ describe("models auth logout", () => {
     expect(runtime.logs.some((line) => line.includes("No auth profiles remain for openai"))).toBe(
       true,
     );
-    expect(applyCapturedConfigUpdate({})).toEqual({});
+    expect(await applyCapturedConfigUpdate({})).toEqual({});
   });
 
   it("drops config auth.profiles and auth.order references to the removed profile", async () => {
@@ -262,7 +275,7 @@ describe("models auth logout", () => {
     await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
 
     expect(mocks.updateConfig).toHaveBeenCalledTimes(1);
-    expect(applyCapturedConfigUpdate(cfg).auth).toEqual({
+    expect((await applyCapturedConfigUpdate(cfg)).auth).toEqual({
       profiles: {
         "openai:backup": { provider: "openai", mode: "api_key" },
         "anthropic:manual": { provider: "anthropic", mode: "oauth" },
@@ -288,7 +301,7 @@ describe("models auth logout", () => {
 
     // `anthropic: []` is an authored "select no profiles" instruction for an
     // unrelated provider; only the order this removal emptied may go.
-    expect(applyCapturedConfigUpdate(cfg).auth).toEqual({
+    expect((await applyCapturedConfigUpdate(cfg)).auth).toEqual({
       profiles: {},
       order: { anthropic: [] },
     });
@@ -348,7 +361,7 @@ describe("models auth logout", () => {
     };
     mocks.loadModelsConfig.mockResolvedValue(cfg);
     await modelsAuthLogoutCommand({ profileId: "openai:manual", yes: true }, createRuntime());
-    const updated = applyCapturedConfigUpdate(cfg);
+    const updated = await applyCapturedConfigUpdate(cfg);
     expect(updated.models?.providers?.openai?.apiKey).toBeUndefined();
     expect(updated.agents).toEqual(cfg.agents);
     expect(mocks.removeAuthProfilesAcrossOwnerStores).toHaveBeenCalledOnce();
@@ -413,6 +426,171 @@ describe("models auth logout", () => {
     });
     expect(liveConfig.auth?.order?.openai).toEqual([profileId]);
     expect(liveConfig.models?.providers?.openai?.apiKey).toBe(profileId);
+  });
+
+  it("removes cached credential copies across agents without disabling another account", async () => {
+    await withAuthProfileTestState("openclaw-auth-catalog-logout-", async ({ agentDirFor }) => {
+      const main = agentDirFor("main");
+      const child = agentDirFor("child");
+      const selected = createApiKeyCredential("fixture", "selected-secret");
+      const survivor = createApiKeyCredential("fixture", "surviving-secret");
+      saveAuthProfileStore(createAuthProfileStoreFixture({ selected, survivor }), main);
+      mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockImplementation(() =>
+        loadAuthProfileStoreWithoutExternalProfiles(main),
+      );
+      mocks.removeAuthProfilesAcrossOwnerStores.mockImplementation((params) =>
+        removeAuthProfilesAcrossOwnerStores({ ...params, agentDir: main }),
+      );
+      const catalog = {
+        generatedBy: "openclaw-plugin-model-catalog-v1",
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            apiKey: selected.key,
+            headers: { Authorization: `Bearer ${selected.key}`, "X-Version": "1" },
+            models: [
+              { id: "selected-model", headers: { "X-Api-Key": selected.key } },
+              { id: "surviving-model", apiKey: survivor.key },
+            ],
+          },
+        },
+      };
+      const unusableProviders = [
+        [selected.key],
+        { apiKey: { value: selected.key } },
+        { headers: [selected.key] },
+        { headers: { Authorization: { token: selected.key } } },
+        { models: { Authorization: selected.key } },
+        { models: [selected.key] },
+        { models: [{ id: "array-header", headers: { Authorization: [selected.key] } }] },
+        { models: [{ id: "string-headers", headers: selected.key }] },
+      ];
+      const unusableCatalogs = [
+        '{"apiKey":"selected-secret"',
+        ...unusableProviders.map((fixture) =>
+          JSON.stringify({ ...catalog, providers: { fixture } }),
+        ),
+      ];
+      const scopes = ["plugin-model-catalog-v1", "plugin-model-catalog-migration-v1"];
+      for (const agentDir of [main, child]) {
+        await catalogs.replacePersistedPluginModelCatalogs({
+          agentDir,
+          pluginCatalogWrites: {
+            [catalogs.encodePluginModelCatalogRelativePath("fixture")]: JSON.stringify(catalog),
+          },
+        });
+        const { db } = openOpenClawAgentDatabase({
+          agentId: agentDir === main ? "main" : "child",
+          path: resolveAuthProfileDatabasePath(agentDir),
+        });
+        const insert = db.prepare(
+          "INSERT INTO cache_entries (scope, key, value_json, updated_at) VALUES (?, ?, ?, 1)",
+        );
+        insert.run("plugin-model-catalog-migration-v1", "fixture", JSON.stringify(catalog));
+        for (const scope of scopes) {
+          for (const [index, contents] of unusableCatalogs.entries()) {
+            insert.run(scope, `broken-${index}`, contents);
+          }
+        }
+        insert.run("unrelated-cache", "keep", '{"value":"retained"}');
+      }
+
+      await runRegisteredLogout("selected");
+
+      expect(loadAuthProfileStoreWithoutExternalProfiles(main).profiles).toEqual({ survivor });
+      for (const agentDir of [main, child]) {
+        const { db } = openOpenClawAgentDatabase({
+          agentId: agentDir === main ? "main" : "child",
+          path: resolveAuthProfileDatabasePath(agentDir),
+        });
+        for (const scope of scopes) {
+          const rows = db
+            .prepare("SELECT key, value_json FROM cache_entries WHERE scope = ?")
+            .all(scope) as Array<{ key: string; value_json: string }>;
+          expect(rows.map((row) => row.key)).toEqual(["fixture"]);
+          expect(JSON.parse(rows[0]!.value_json)).toEqual({
+            ...catalog,
+            providers: {
+              fixture: {
+                api: "openai-completions",
+                headers: { "X-Version": "1" },
+                models: [
+                  { id: "selected-model", headers: {} },
+                  { id: "surviving-model", apiKey: survivor.key },
+                ],
+              },
+            },
+          });
+        }
+        expect(
+          db.prepare("SELECT value_json FROM cache_entries WHERE scope = ?").get("unrelated-cache"),
+        ).toEqual({ value_json: '{"value":"retained"}' });
+      }
+    });
+  });
+
+  it("restores the credential and config after final catalog cleanup fails, then permits retry", async () => {
+    await withAuthProfileTestState("openclaw-logout-final-scrub-", async ({ agentDir }) => {
+      const profileId = "openai:manual";
+      const credential = createApiKeyCredential("openai", "retryable-secret");
+      saveAuthProfileStore(createAuthProfileStoreFixture({ [profileId]: credential }), agentDir);
+      const originalConfig: OpenClawConfig = {
+        auth: {
+          profiles: { [profileId]: { provider: "openai", mode: "api_key" } },
+          order: { openai: [profileId] },
+        },
+      };
+      let liveConfig = structuredClone(originalConfig);
+      mocks.loadModelsConfig.mockImplementation(async () => liveConfig);
+      mocks.ensureAuthProfileStoreWithoutExternalProfiles.mockImplementation(() =>
+        loadAuthProfileStoreWithoutExternalProfiles(agentDir),
+      );
+      mocks.updateConfig.mockImplementation(
+        async (
+          mutate: (
+            cfg: OpenClawConfig,
+            context: { runtimeConfig: OpenClawConfig },
+          ) => OpenClawConfig | Promise<OpenClawConfig>,
+        ) => {
+          liveConfig = await mutate(liveConfig, { runtimeConfig: liveConfig });
+          return liveConfig;
+        },
+      );
+      mocks.removeAuthProfilesAcrossOwnerStores.mockImplementation((params) =>
+        removeAuthProfilesAcrossOwnerStores({ ...params, agentDir }),
+      );
+      const scrub = catalogCredentials.removePersistedPluginModelCatalogCredentials;
+      let calls = 0;
+      const cleanup = vi
+        .spyOn(catalogCredentials, "removePersistedPluginModelCatalogCredentials")
+        .mockImplementation(async (params) => {
+          calls += 1;
+          if (calls === 1) {
+            expect(
+              loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+            ).toBeUndefined();
+            throw new Error("synthetic final catalog write failure");
+          }
+          await scrub(params);
+        });
+      try {
+        await expect(runRegisteredLogout(profileId)).rejects.toThrow(
+          "saved credentials were restored",
+        );
+        expect(loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]).toEqual(
+          credential,
+        );
+        expect(liveConfig.auth).toEqual(originalConfig.auth);
+        await runRegisteredLogout(profileId);
+        expect(
+          loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId],
+        ).toBeUndefined();
+        expect(liveConfig.auth?.profiles?.[profileId]).toBeUndefined();
+        expect(liveConfig.auth?.order?.openai).toBeUndefined();
+      } finally {
+        cleanup.mockRestore();
+      }
+    });
   });
 
   it("restores only surviving references after partial multi-store removal", async () => {

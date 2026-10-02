@@ -10,13 +10,6 @@ import { mutateConfigFileWithRetry } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 
-function sameIdentity(
-  left: GitHubToolIdentityConfig | undefined,
-  right: GitHubToolIdentityConfig | null,
-): boolean {
-  return isDeepStrictEqual(left ?? null, right);
-}
-
 export async function updateGitHubToolIdentityConfig(params: {
   scope: "system" | "agent";
   agentId: string;
@@ -30,7 +23,7 @@ export async function updateGitHubToolIdentityConfig(params: {
       if (params.scope === "system") {
         if (
           params.expectedIdentity !== undefined &&
-          !sameIdentity(draft.tools?.github, params.expectedIdentity)
+          !isDeepStrictEqual(draft.tools?.github ?? null, params.expectedIdentity)
         ) {
           throw new Error("GitHub identity changed while setup was in progress.");
         }
@@ -55,7 +48,7 @@ export async function updateGitHubToolIdentityConfig(params: {
       }
       if (
         params.expectedIdentity !== undefined &&
-        !sameIdentity(entry?.tools?.github, params.expectedIdentity)
+        !isDeepStrictEqual(entry?.tools?.github ?? null, params.expectedIdentity)
       ) {
         throw new Error("GitHub identity changed while setup was in progress.");
       }

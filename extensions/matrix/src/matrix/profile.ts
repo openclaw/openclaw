@@ -1,4 +1,3 @@
-// Matrix plugin module implements profile behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -28,30 +27,16 @@ export type MatrixProfileSyncResult = {
 };
 
 function isMatrixMxcUri(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(normalizeOptionalString(value)).startsWith("mxc://");
+  return normalizeLowercaseStringOrEmpty(value).startsWith("mxc://");
 }
 
 function isMatrixHttpAvatarUri(value: string): boolean {
-  const normalized = normalizeLowercaseStringOrEmpty(normalizeOptionalString(value));
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   return normalized.startsWith("https://") || normalized.startsWith("http://");
 }
 
 export function isSupportedMatrixAvatarSource(value: string): boolean {
   return isMatrixMxcUri(value) || isMatrixHttpAvatarUri(value);
-}
-
-async function uploadAvatarMedia(params: {
-  client: MatrixProfileClient;
-  avatarSource: string;
-  avatarMaxBytes: number;
-  loadAvatar: (source: string, maxBytes: number) => Promise<MatrixProfileLoadResult>;
-}): Promise<string> {
-  const media = await params.loadAvatar(params.avatarSource, params.avatarMaxBytes);
-  return await params.client.uploadContent(
-    media.buffer,
-    media.contentType,
-    media.fileName || "avatar",
-  );
 }
 
 async function resolveAvatarUrl(params: {
@@ -67,56 +52,37 @@ async function resolveAvatarUrl(params: {
   convertedAvatarFromHttp: boolean;
 }> {
   const avatarPath = normalizeOptionalString(params.avatarPath) ?? null;
-  if (avatarPath) {
-    if (!params.loadAvatarFromPath) {
-      throw new Error("Matrix avatar path upload requires a media loader.");
-    }
+  const avatarSource = avatarPath ?? normalizeOptionalString(params.avatarUrl) ?? null;
+  if (!avatarSource || (!avatarPath && isMatrixMxcUri(avatarSource))) {
     return {
-      resolvedAvatarUrl: await uploadAvatarMedia({
-        client: params.client,
-        avatarSource: avatarPath,
-        avatarMaxBytes: params.avatarMaxBytes,
-        loadAvatar: params.loadAvatarFromPath,
-      }),
-      uploadedAvatarSource: "path",
-      convertedAvatarFromHttp: false,
-    };
-  }
-
-  const avatarUrl = normalizeOptionalString(params.avatarUrl) ?? null;
-  if (!avatarUrl) {
-    return {
-      resolvedAvatarUrl: null,
+      resolvedAvatarUrl: avatarSource,
       uploadedAvatarSource: null,
       convertedAvatarFromHttp: false,
     };
   }
 
-  if (isMatrixMxcUri(avatarUrl)) {
-    return {
-      resolvedAvatarUrl: avatarUrl,
-      uploadedAvatarSource: null,
-      convertedAvatarFromHttp: false,
-    };
-  }
-
-  if (!isMatrixHttpAvatarUri(avatarUrl)) {
+  if (!avatarPath && !isMatrixHttpAvatarUri(avatarSource)) {
     throw new Error("Matrix avatar URL must be an mxc:// URI or an http(s) URL.");
   }
 
-  if (!params.loadAvatarFromUrl) {
-    throw new Error("Matrix avatar URL conversion requires a media loader.");
+  const loadAvatar = avatarPath ? params.loadAvatarFromPath : params.loadAvatarFromUrl;
+  if (!loadAvatar) {
+    throw new Error(
+      avatarPath
+        ? "Matrix avatar path upload requires a media loader."
+        : "Matrix avatar URL conversion requires a media loader.",
+    );
   }
 
+  const media = await loadAvatar(avatarSource, params.avatarMaxBytes);
   return {
-    resolvedAvatarUrl: await uploadAvatarMedia({
-      client: params.client,
-      avatarSource: avatarUrl,
-      avatarMaxBytes: params.avatarMaxBytes,
-      loadAvatar: params.loadAvatarFromUrl,
-    }),
-    uploadedAvatarSource: "http",
-    convertedAvatarFromHttp: true,
+    resolvedAvatarUrl: await params.client.uploadContent(
+      media.buffer,
+      media.contentType,
+      media.fileName || "avatar",
+    ),
+    uploadedAvatarSource: avatarPath ? "path" : "http",
+    convertedAvatarFromHttp: !avatarPath,
   };
 }
 
@@ -146,9 +112,8 @@ export async function syncMatrixOwnProfile(params: {
       skipped: true,
       displayNameUpdated: false,
       avatarUpdated: false,
+      ...avatar,
       resolvedAvatarUrl: null,
-      uploadedAvatarSource: avatar.uploadedAvatarSource,
-      convertedAvatarFromHttp: avatar.convertedAvatarFromHttp,
     };
   }
 
@@ -178,8 +143,6 @@ export async function syncMatrixOwnProfile(params: {
     skipped: false,
     displayNameUpdated,
     avatarUpdated,
-    resolvedAvatarUrl: desiredAvatarUrl,
-    uploadedAvatarSource: avatar.uploadedAvatarSource,
-    convertedAvatarFromHttp: avatar.convertedAvatarFromHttp,
+    ...avatar,
   };
 }

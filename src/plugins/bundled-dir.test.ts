@@ -4,9 +4,14 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as openClawRoot from "../infra/openclaw-root.js";
 import {
+  isForeignBundledPluginRoot,
+  resolveBundledDirFromPackageRoot,
   resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
+import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
+import type { PluginCandidate } from "./discovery.js";
+import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -169,6 +174,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   if (originalBundledDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   } else {
@@ -223,7 +229,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers built dist/extensions in a pnpm git checkout outside vitest",
+      "keeps source hosts on source bundled plugins outside vitest",
       {
         prefix: "openclaw-bundled-dir-git-built-",
         hasExtensions: true,
@@ -234,7 +240,7 @@ describe("resolveBundledPluginsDir", () => {
         hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: path.join("dist", "extensions"),
+        expectedRelativeDir: "extensions",
       },
     ],
     [
@@ -251,7 +257,7 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers built dist/extensions during tsx-driven pnpm source execution",
+      "keeps tsx source hosts on source bundled plugins",
       {
         prefix: "openclaw-bundled-dir-tsx-built-",
         hasExtensions: true,
@@ -262,7 +268,7 @@ describe("resolveBundledPluginsDir", () => {
         hasPnpmWorkspace: true,
       },
       {
-        expectedRelativeDir: path.join("dist", "extensions"),
+        expectedRelativeDir: "extensions",
         execArgv: ["--import", "tsx"],
       },
     ],
@@ -281,13 +287,19 @@ describe("resolveBundledPluginsDir", () => {
     ],
   ] as const)("%s", (_name, layout, expectation) => {
     const repoRoot = createOpenClawRoot(layout);
-    if (expectation.expectedRelativeDir === path.join("dist-runtime", "extensions")) {
+    if ("hasDistExtensions" in layout && layout.hasDistExtensions) {
       seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
+    }
+    if ("hasDistRuntimeExtensions" in layout && layout.hasDistRuntimeExtensions) {
       seedBundledPluginTree(repoRoot, path.join("dist-runtime", "extensions"));
-    } else if (expectation.expectedRelativeDir === path.join("dist", "extensions")) {
-      seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
-    } else if (expectation.expectedRelativeDir === "extensions") {
+    }
+    if ("hasExtensions" in layout && layout.hasExtensions) {
       seedBundledPluginTree(repoRoot, "extensions");
+    }
+    if ("hasPnpmWorkspace" in layout && layout.hasPnpmWorkspace && "hasDistExtensions" in layout) {
+      expect(resolveBundledDirFromPackageRoot(repoRoot)).toBe(
+        path.join(repoRoot, "dist", "extensions"),
+      );
     }
     expectResolvedBundledDirFromRoot({
       repoRoot,
@@ -419,15 +431,22 @@ describe("resolveBundledPluginsDir", () => {
     );
 
     const resolveRoot = vi.spyOn(openClawRoot, "resolveOpenClawPackageRootSync");
+    let runtimeEnvReads = 0;
+    const env: NodeJS.ProcessEnv = {
+      get VITEST() {
+        runtimeEnvReads++;
+        return undefined;
+      },
+    };
     const sourceDir = path.join(repoRoot, "extensions");
-    expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
+    expect(withPluginCache(owner, () => resolveBundledPluginsDir(env))).toBe(sourceDir);
+    expect(runtimeEnvReads).toBe(0);
     seedBundledPluginTree(repoRoot, path.join("dist", "extensions"));
     expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
     expect(resolveRoot).not.toHaveBeenCalled();
 
-    expect(withPluginCache(createPluginCache(), resolveBundledPluginsDir)).toBe(
-      path.join(repoRoot, "dist", "extensions"),
-    );
+    expect(withPluginCache(createPluginCache(), resolveBundledPluginsDir)).toBe(sourceDir);
+    expect(resolveRoot).toHaveBeenCalled();
     expect(withPluginCache(owner, resolveBundledPluginsDir)).toBe(sourceDir);
   });
 
@@ -481,35 +500,60 @@ describe("resolveBundledPluginsDir", () => {
     );
   });
 
-  it("rechecks changed override trust within one cache owner", () => {
-    const overrideRoot = makeRepoRoot("openclaw-bundled-dir-vitest-override-reject-");
-    seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
+  it.each([
+    { separateEnv: false, trustSource: "ambient", runtimeSource: "ambient" },
+    { separateEnv: true, trustSource: "explicit", runtimeSource: "explicit" },
+    { separateEnv: true, trustSource: "explicit", runtimeSource: "ambient" },
+    { separateEnv: true, trustSource: "ambient", runtimeSource: "explicit" },
+    { separateEnv: true, trustSource: "ambient", runtimeSource: "ambient" },
+  ])(
+    "rechecks $trustSource trust with $runtimeSource runtime (separate env: $separateEnv)",
+    ({ separateEnv, trustSource, runtimeSource }) => {
+      const overrideRoot = makeRepoRoot("openclaw-bundled-dir-vitest-override-reject-");
+      seedBundledPluginTree(overrideRoot, "extensions", "memory-core");
 
-    vi.spyOn(process, "cwd").mockReturnValue(overrideRoot);
-    process.argv[1] = "/usr/bin/env";
-    process.execArgv.length = 0;
-    process.env.VITEST = "true";
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-
-    const expectedOverride = fs.realpathSync(path.join(overrideRoot, "extensions"));
-    withPluginCache(createPluginCache(), () => {
-      for (const trust of [false, true, false]) {
-        if (trust) {
-          process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-        } else {
-          delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-        }
-        const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir()));
-        if (trust) {
-          expect(bundledDir).toBe(expectedOverride);
-        } else {
-          expect(bundledDir).not.toBe(expectedOverride);
-        }
+      vi.spyOn(process, "cwd").mockReturnValue(overrideRoot);
+      process.argv[1] = "/usr/bin/env";
+      process.execArgv.length = 0;
+      for (const key of ["VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID", "NODE_ENV"]) {
+        vi.stubEnv(key, undefined);
       }
-    });
-  });
+      const env: NodeJS.ProcessEnv = separateEnv ? {} : process.env;
+      const trustEnv = trustSource === "explicit" ? env : process.env;
+      const runtimeEnv = runtimeSource === "explicit" ? env : process.env;
+      runtimeEnv.VITEST = "true";
+      env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
+      const expectedOverride = fs.realpathSync(path.join(overrideRoot, "extensions"));
+      withPluginCache(createPluginCache(), () => {
+        for (const trust of [false, true, false]) {
+          if (trust) {
+            trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+          } else {
+            delete trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+          }
+          const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir(env)));
+          if (trust) {
+            expect(bundledDir).toBe(expectedOverride);
+          } else {
+            expect(bundledDir).not.toBe(expectedOverride);
+          }
+        }
+        trustEnv.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+        for (const vitest of ["true", undefined, "true"]) {
+          if (vitest) {
+            runtimeEnv.VITEST = vitest;
+          } else {
+            delete runtimeEnv.VITEST;
+          }
+          const bundledDir = fs.realpathSync(requireBundledDir(resolveBundledPluginsDir(env)));
+          expect(bundledDir === expectedOverride).toBe(vitest !== undefined);
+        }
+      });
+    },
+  );
 
   it("does not let VITEST add cwd to bundled plugin resolution candidates", () => {
     const cwdRepoRoot = createOpenClawRoot({
@@ -685,4 +729,232 @@ describe("resolveBundledPluginsDir", () => {
   ] as const)("$name", ({ createScenario }) => {
     expectInstalledBundledDirScenarioCase(createScenario);
   });
+});
+
+describe("foreign compiled bundle recognition", () => {
+  it.each([
+    { mode: "foreign", expected: true },
+    { mode: "dist-runtime", expected: true },
+    { mode: "own", expected: false },
+    { mode: "unknown", expected: false },
+    { mode: "override", expected: false },
+    { mode: "source-link", expected: false },
+    { mode: "external", expected: false },
+    { mode: "lookalike", expected: false },
+    { mode: "symlink", expected: true },
+  ])("preserves the $mode ownership boundary", ({ mode, expected }) => {
+    const current = createOpenClawRoot({ prefix: "foreign-current-", hasDistExtensions: true });
+    const previous = createOpenClawRoot({ prefix: "foreign-previous-", hasDistExtensions: true });
+    seedBundledPluginTree(current, "dist/extensions", "probe");
+    const relativeDir =
+      mode === "dist-runtime"
+        ? "dist-runtime/extensions"
+        : mode === "source-link"
+          ? "extensions"
+          : mode === "external"
+            ? "plugins"
+            : "dist/extensions";
+    seedBundledPluginTree(previous, relativeDir, "probe");
+    if (mode === "lookalike") {
+      fs.writeFileSync(
+        path.join(previous, "package.json"),
+        JSON.stringify({ name: "external-package" }),
+      );
+    }
+    let pluginRoot = path.join(mode === "own" ? current : previous, relativeDir, "probe");
+    if (mode === "symlink") {
+      const alias = path.join(makeRepoRoot("foreign-alias-"), "probe");
+      fs.symlinkSync(pluginRoot, alias, "dir");
+      pluginRoot = alias;
+    }
+    const resolveRoot = openClawRoot.resolveOpenClawPackageRootSync;
+    const spy = vi
+      .spyOn(openClawRoot, "resolveOpenClawPackageRootSync")
+      .mockImplementation((options) =>
+        options.cwd ? resolveRoot(options) : mode === "unknown" ? null : current,
+      );
+    try {
+      const env =
+        mode === "override"
+          ? {
+              VITEST: "true",
+              OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(previous, relativeDir),
+            }
+          : {};
+      expect(
+        withPluginCache(createPluginCache(), () => isForeignBundledPluginRoot(pluginRoot, env)),
+      ).toBe(expected);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe("relocated compiled bundle precedence", () => {
+  const makeTempDir = () => makeRepoRoot("bundled-precedence-");
+  const mkdirSafe = (root: string) => fs.mkdirSync(root, { recursive: true, mode: 0o755 });
+  const writeManifest = (root: string, manifest: object) =>
+    fs.writeFileSync(path.join(root, "openclaw.plugin.json"), JSON.stringify(manifest));
+  function createPluginCandidate({
+    installOwner,
+    ...candidate
+  }: Pick<PluginCandidate, "idHint" | "rootDir" | "origin"> & {
+    installOwner?: string;
+  }): PluginCandidate {
+    return recordPluginCandidateInstallOwner(
+      { ...candidate, source: path.join(candidate.rootDir, "index.ts") },
+      installOwner,
+    );
+  }
+
+  it.each(["config", "configSelected", "source-link", "external", "lookalike", "dev-source"])(
+    "preserves the intentional %s override without trust elevation",
+    (mode) => {
+      const root = makeTempDir();
+      const current = path.join(root, "current");
+      const previous = path.join(root, "previous");
+      const currentPlugin = path.join(current, "dist/extensions/probe");
+      const selectedPlugin = path.join(
+        previous,
+        mode === "source-link"
+          ? "extensions/probe"
+          : mode === "external"
+            ? "plugins/probe"
+            : "dist/extensions/probe",
+      );
+      for (const pluginRoot of [currentPlugin, selectedPlugin]) {
+        mkdirSafe(pluginRoot);
+        writeManifest(pluginRoot, { id: "probe", configSchema: { type: "object" } });
+      }
+      for (const packageRoot of [current, previous]) {
+        fs.writeFileSync(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({
+            name:
+              packageRoot === previous && mode === "lookalike" ? "ordinary-external" : "openclaw",
+          }),
+        );
+      }
+      if (mode === "dev-source") {
+        fs.writeFileSync(path.join(previous, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
+        mkdirSafe(path.join(previous, "src"));
+        mkdirSafe(path.join(previous, "extensions"));
+      }
+      const selected = createPluginCandidate({
+        idHint: "probe",
+        rootDir: selectedPlugin,
+        origin: mode === "config" ? "config" : "global",
+        installOwner: "probe",
+      });
+      if (mode === "configSelected") {
+        selected.configSelected = true;
+      }
+      const argv = process.argv;
+      process.argv = [...argv];
+      process.argv[1] = path.join(current, "openclaw.mjs");
+      try {
+        const registry = withPluginCache(createPluginCache(), () =>
+          loadPluginManifestRegistryCore({
+            env: mode === "dev-source" ? { OPENCLAW_DEV_SOURCE_ROOT: previous } : {},
+            installRecords: { probe: { source: "path", installPath: selectedPlugin } },
+            candidates: [
+              createPluginCandidate({ idHint: "probe", rootDir: currentPlugin, origin: "bundled" }),
+              selected,
+            ],
+          }),
+        );
+        expect(registry.plugins[0]).toMatchObject({
+          rootDir: selectedPlugin,
+          trust: { reason: "origin-path" },
+        });
+        expect(
+          registry.diagnostics.some((d) => d.message.includes("stale plugin install record")),
+        ).toBe(false);
+      } finally {
+        process.argv = argv;
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains the current bundle and diagnoses the old record (reversed=%s)",
+    (reversed) => {
+      const root = makeTempDir();
+      const makeInstall = (name: string) => {
+        const packageRoot = path.join(root, name);
+        const pluginDir = path.join(packageRoot, "dist", "extensions", "relocation-probe");
+        mkdirSafe(pluginDir);
+        fs.writeFileSync(
+          path.join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw" }),
+        );
+        writeManifest(pluginDir, { id: "relocation-probe", configSchema: { type: "object" } });
+        return { packageRoot, pluginDir };
+      };
+      const current = makeInstall("current");
+      const previous = makeInstall("previous");
+      const oldManifest = fs.readFileSync(path.join(previous.pluginDir, "openclaw.plugin.json"));
+      const installRecords = {
+        "relocation-probe": { source: "path" as const, installPath: previous.pluginDir },
+      };
+      const recordsBefore = JSON.stringify(installRecords);
+      const config = {
+        plugins: {
+          entries: { "relocation-probe": { enabled: true, config: { marker: "preserve" } } },
+          allow: ["relocation-probe"],
+          slots: { memory: "relocation-probe", contextEngine: "relocation-probe" },
+        },
+        channels: { "relocation-probe": { enabled: true, account: "synthetic" } },
+      };
+      const configBefore = JSON.stringify(config);
+      const staleCandidate = createPluginCandidate({
+        idHint: "relocation-probe",
+        rootDir: previous.pluginDir,
+        origin: "global",
+        installOwner: "relocation-probe",
+      });
+      const candidates = [
+        staleCandidate,
+        createPluginCandidate({
+          idHint: "relocation-probe",
+          rootDir: current.pluginDir,
+          origin: "bundled",
+        }),
+      ];
+      const argv = process.argv;
+      process.argv = [...argv];
+      process.argv[1] = path.join(current.packageRoot, "openclaw.mjs");
+      try {
+        const registry = withPluginCache(createPluginCache(), () =>
+          loadPluginManifestRegistryCore({
+            env: {},
+            config,
+            installRecords,
+            candidates: reversed ? candidates.toReversed() : candidates,
+          }),
+        );
+        expect(registry.plugins[0]).toMatchObject({
+          rootDir: current.pluginDir,
+          origin: "bundled",
+          trust: { reason: "bundled" },
+        });
+        const warning = registry.diagnostics.find((d) =>
+          d.message.includes("stale plugin install record"),
+        );
+        expect(warning).toMatchObject({ level: "warn", source: staleCandidate.source });
+        expect(warning?.message).toContain(previous.pluginDir);
+        expect(warning?.message).toContain("No uninstall is needed");
+        expect(warning?.message).toContain("removes plugin configuration");
+        expect(warning?.message).toContain("re-enabling does not restore it");
+        expect(JSON.stringify(installRecords)).toBe(recordsBefore);
+        expect(JSON.stringify(config)).toBe(configBefore);
+        expect(fs.readFileSync(path.join(previous.pluginDir, "openclaw.plugin.json"))).toEqual(
+          oldManifest,
+        );
+      } finally {
+        process.argv = argv;
+      }
+    },
+  );
 });

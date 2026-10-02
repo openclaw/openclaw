@@ -17,7 +17,6 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionStoreAgentIds, stateMigrations } from "./doctor-contract-api.js";
 import {
-  createTestStorePath,
   installVoiceCallStateRuntimeForTests,
   makePersistedCall,
   writeLegacyCallsJsonl,
@@ -103,7 +102,7 @@ describe("voice-call doctor state migration", () => {
   beforeAll(async () => {
     resetPluginStateStoreForTests();
     const warmStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-doctor-"));
-    const warmStorePath = createTestStorePath();
+    const warmStorePath = path.join(warmStateDir, "custom-store");
     const warmEnv = {
       ...process.env,
       HOME: warmStateDir,
@@ -150,14 +149,13 @@ describe("voice-call doctor state migration", () => {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
       await fs.rm(warmStateDir, { recursive: true, force: true });
-      await fs.rm(warmStorePath, { recursive: true, force: true });
     }
   });
 
   beforeEach(async () => {
     resetPluginStateStoreForTests();
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-voice-call-doctor-"));
-    storePath = createTestStorePath();
+    storePath = path.join(stateDir, "custom-store");
     env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
     installVoiceCallStateRuntimeForTests();
   });
@@ -166,7 +164,6 @@ describe("voice-call doctor state migration", () => {
     await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
-    await fs.rm(storePath, { recursive: true, force: true });
   });
 
   it("reports top-level and per-number session-store agents", () => {
@@ -220,6 +217,7 @@ describe("voice-call doctor state migration", () => {
         call,
       },
     ]);
+    const originalBytes = await fs.readFile(sourcePath);
 
     const migration = expectDefined(stateMigrations[0], "voice-call state migration");
     const config = {
@@ -257,15 +255,23 @@ describe("voice-call doctor state migration", () => {
       expect.stringContaining("Archived Voice Call call-log legacy source"),
     ]);
     await expect(fs.access(sourcePath)).rejects.toThrow();
-    await fs.access(`${sourcePath}.migrated`);
+    expect(await fs.readFile(`${sourcePath}.migrated`)).toEqual(originalBytes);
 
     const restored = await loadActiveCallsFromStore(storePath);
     expect(restored.activeCalls.get("call-doctor")?.providerCallId).toBe("provider-doctor");
     expect(restored.processedEventIds.has("evt-doctor")).toBe(true);
 
-    const history = await getCallHistoryFromStore(storePath);
-    expect(history).toHaveLength(1);
-    expect(history[0]?.callId).toBe("call-doctor");
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
+    await expect(
+      migration.migrateLegacyState({
+        config,
+        env,
+        stateDir,
+        oauthDir: path.join(stateDir, "oauth"),
+        context: createDoctorContext(env),
+      }),
+    ).resolves.toEqual({ changes: [], warnings: [] });
+    await expect(getCallHistoryFromStore(storePath)).resolves.toEqual([call]);
   });
 
   it("honors OPENCLAW_STATE_DIR for the default store", async () => {

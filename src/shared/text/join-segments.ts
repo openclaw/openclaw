@@ -2,11 +2,9 @@
 export function concatOptionalTextSegments(params: {
   left?: string;
   right?: string;
-  separator?: string;
 }): string | undefined {
-  const separator = params.separator ?? "\n\n";
   if (params.left && params.right) {
-    return `${params.left}${separator}${params.right}`;
+    return `${params.left}\n\n${params.right}`;
   }
   return params.right ?? params.left;
 }
@@ -15,11 +13,9 @@ export function concatOptionalTextSegments(params: {
 export function joinPresentTextSegments(
   segments: ReadonlyArray<string | null | undefined>,
   options?: {
-    separator?: string;
     trim?: boolean;
   },
 ): string | undefined {
-  const separator = options?.separator ?? "\n\n";
   const trim = options?.trim ?? false;
   const values: string[] = [];
   for (const segment of segments) {
@@ -32,5 +28,5 @@ export function joinPresentTextSegments(
     }
     values.push(normalized);
   }
-  return values.length > 0 ? values.join(separator) : undefined;
+  return values.length > 0 ? values.join("\n\n") : undefined;
 }

@@ -8,7 +8,9 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe.skipIf(process.platform === "win32")("spawn broker process-group custody", () => {
+const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+
+describe.skipIf(skipBrokerTests)("spawn broker process-group custody", () => {
   it.each(["native", "execa"] as const)(
     "cleans an unpublished non-detached %s child after broker death",
     async (transport) => {

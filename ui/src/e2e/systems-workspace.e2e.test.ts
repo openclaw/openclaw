@@ -1,4 +1,6 @@
 import path from "node:path";
+import type { BackupStatusResult } from "@openclaw/gateway-protocol";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -11,12 +13,23 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-function installSystemsGateway(page: Page, additionalWorkers = 20) {
+function installSystemsGateway(
+  page: Page,
+  additionalWorkers = 20,
+  methodResponses: Record<string, unknown> = {},
+) {
   return installMockGateway(page, {
     sessions: Array.from({ length: 30 }, (_, index) =>
       createControlUiSessionRow(`agent:main:task-${index}`, `Task ${index + 1}`, 30 - index),
     ),
-    featureMethods: ["environments.list", "node.list", "system.info"],
+    featureMethods: [
+      "environments.list",
+      "node.list",
+      "system.info",
+      "config.get",
+      "config.patch",
+      "desktop.observe",
+    ],
     methodResponses: {
       "environments.list": {
         environments: [
@@ -61,11 +74,341 @@ function installSystemsGateway(page: Page, additionalWorkers = 20) {
         memoryTotalBytes: 8192,
         memoryFreeBytes: 4096,
       },
+      "backup.status": { targets: [], schedules: [], locations: [] },
+      ...methodResponses,
     },
   });
 }
 
 suite.define(() => {
+  it("shows backup health on the landing and Gateway host views and probes configured storage", async () => {
+    const artifacts = createControlUiE2eArtifactDir("systems-backups");
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const now = Date.now();
+        const success = {
+          id: "backup-ok",
+          createdAt: now - 3_600_000,
+          archivePath: "/scratch/backup.tar.gz",
+          kind: "archive" as const,
+          status: "ok" as const,
+          target: "offsite",
+          location: {
+            name: "offsite",
+            provider: "filesystem",
+            locationId: "synthetic-location",
+            namespace: "gateway",
+            key: "20260930T110000Z-12345678.tar.gz",
+            plaintextBytes: 24 * 1024 ** 2,
+            storedBytes: 25 * 1024 ** 2,
+          },
+        };
+        const status: BackupStatusResult = {
+          targets: [{ kind: "archive", target: "offsite", latest: success, latestOk: success }],
+          schedules: [
+            {
+              id: "backup-schedule",
+              mode: "offsite",
+              target: "offsite",
+              enabled: true,
+              everyMs: 86_400_000,
+              nextRunAtMs: now + 3_600_000,
+            },
+          ],
+          locations: [
+            {
+              name: "offsite",
+              provider: "filesystem",
+              displayTarget: "/Volumes/Archive/openclaw",
+              encrypted: true,
+            },
+          ],
+        };
+        const gateway = await installSystemsGateway(page, 0, {
+          "environments.list": { environments: [] },
+          "backup.status": status,
+          "storage.locations.probe": { state: "ok", freeBytes: 256 * 1024 ** 3 },
+        });
+        await page.goto(suite.server.baseUrl + "systems");
+        const backups = page.getByRole("region", { name: "Backups" });
+        await page.getByRole("heading", { name: "Systems", exact: true }).waitFor();
+        await backups.getByText("Last success:", { exact: false }).waitFor();
+        expect(await backups.textContent()).toContain("Next run:");
+        expect(await gateway.getRequests("backup.status")).toHaveLength(1);
+        expect(await gateway.getRequests("storage.locations.probe")).toHaveLength(0);
+        await page.screenshot({ path: path.join(artifacts, "backups-landing-ok.png") });
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.locator(".systems-mobile-picker").waitFor({ state: "visible" });
+        await page.screenshot({ path: path.join(artifacts, "backups-landing-ok-mobile.png") });
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await gateway.setMethodResponse("environments.list", {
+          environments: [
+            { id: "gateway", type: "local", label: "Gateway machine", status: "available" },
+          ],
+        });
+        await page.getByRole("button", { name: "Refresh machines" }).click();
+        await page.getByRole("button", { name: "Gateway machine" }).click();
+        await page.getByRole("heading", { name: "Gateway machine", exact: true }).waitFor();
+        await backups.getByText("Last success:", { exact: false }).waitFor();
+        await page.screenshot({ path: path.join(artifacts, "backups-ok.png") });
+        await backups.getByRole("button", { name: "Check offsite" }).click();
+        const probe = await gateway.waitForRequest("storage.locations.probe");
+        expect(probe.params).toEqual({ name: "offsite" });
+        await backups.getByRole("status").filter({ hasText: "Available" }).waitFor();
+        const gitPushFailure = {
+          id: "git-push-failed",
+          createdAt: now - 3_600_000,
+          archivePath: "/backups/git",
+          target: "/backups/git",
+          kind: "git" as const,
+          status: "ok" as const,
+          pushFailed: true as const,
+        };
+        await gateway.setMethodResponse("backup.status", {
+          ...status,
+          targets: [
+            {
+              ...status.targets[0],
+              latest: {
+                ...success,
+                status: "failed",
+                error: "Archive disk disconnected. Run openclaw storage test offsite.",
+              },
+            },
+            {
+              kind: "git",
+              target: gitPushFailure.target,
+              latest: gitPushFailure,
+              latestOk: gitPushFailure,
+            },
+          ],
+        });
+        await page.getByRole("button", { name: "Refresh machines" }).click();
+        await backups
+          .getByText("Archive disk disconnected. Run openclaw storage test offsite.", {
+            exact: true,
+          })
+          .waitFor();
+        await backups.getByText("Push failed", { exact: true }).waitFor();
+        expect(await backups.textContent()).toContain("Last local success:");
+        expect(await backups.textContent()).toContain(
+          "Local backup succeeded, but pushing to the Git remote failed. Check the remote and retry.",
+        );
+        await page.screenshot({ path: path.join(artifacts, "backups-failed.png") });
+        await gateway.setMethodResponse("backup.status", {
+          targets: [],
+          schedules: [],
+          locations: [],
+        });
+        await page.getByRole("button", { name: "Refresh machines" }).click();
+        await backups.getByText("No backups recorded —", { exact: false }).waitFor();
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await page.setViewportSize({ width: 640, height: 900 });
+        await page.locator(".systems-mobile-picker").waitFor({ state: "visible" });
+        await page.screenshot({ path: path.join(artifacts, "backups-empty-mobile.png") });
+      },
+    );
+  });
+
+  it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
+    const artifacts = createControlUiE2eArtifactDir("systems-platform-labels");
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+      async ({ page }) => {
+        const originalConfig = {
+          desktop: { host: { port: 5910, passwordFile: "/synthetic/vnc-password" } },
+        };
+        const gateway = await installSystemsGateway(page, 0, {
+          "environments.list": {
+            environments: [
+              {
+                id: "gateway",
+                type: "local",
+                label: "Gateway Mac",
+                platform: "darwin",
+                status: "available",
+                desktopSetup: { state: "ready" },
+              },
+              {
+                id: "node:mac",
+                type: "node",
+                label: "Paired Mac",
+                platform: "macOS 27.0.0",
+                status: "available",
+              },
+            ],
+          },
+          "system.info": {
+            machineName: "Gateway Mac",
+            hostname: "gateway.test",
+            platform: "darwin",
+            release: "26.0.0",
+            arch: "arm64",
+            osLabel: "macOS 27.0.0",
+            nodeVersion: "v26",
+            pid: 1,
+            uptimeMs: 1000,
+            cpuCount: 8,
+            loadAverage: [0.5, 0.4, 0.3],
+            memoryTotalBytes: 16 * 1024 ** 3,
+            memoryFreeBytes: 8 * 1024 ** 3,
+          },
+          "config.get": {
+            config: originalConfig,
+            raw: JSON.stringify(originalConfig),
+            hash: "desktop-config-0",
+            valid: true,
+            issues: [],
+          },
+        });
+        await page.goto(suite.server.baseUrl + "systems");
+        const inventory = page.locator(".systems-sidebar");
+        await inventory.getByRole("button", { name: /Gateway Mac/ }).waitFor();
+        await page.screenshot({ path: path.join(artifacts, "systems-platforms.png") });
+        expect(await inventory.locator(".systems-machine__meta").allTextContents()).toEqual([
+          "macOS 27.0.0",
+          "macOS 27.0.0",
+        ]);
+        expect(await page.locator(".systems-state").textContent()).toContain(
+          "Screen Sharing is available",
+        );
+        expect((await gateway.getRequests("environments.list"))[0]?.params).toEqual({
+          includeDesktopSetup: true,
+        });
+        expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+        await inventory.getByRole("searchbox", { name: "Find a machine…" }).fill("macOS");
+        await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(2);
+        await page
+          .locator(".systems-toolbar")
+          .getByRole("button", { name: "Machine details" })
+          .click();
+        expect(await page.locator(".systems-details dd").allTextContents()).toContain(
+          "macOS 27.0.0",
+        );
+        const systemReads = (await gateway.getRequests("system.info")).length;
+        await gateway.deferNext("system.info");
+        await inventory.getByRole("button", { name: "Refresh machines" }).click();
+        await gateway.waitForRequest("system.info", { after: systemReads });
+        await gateway.rejectDeferred("system.info", {
+          code: "UNAVAILABLE",
+          message: "Host information unavailable",
+        });
+        await expect
+          .poll(() => inventory.locator(".systems-machine__meta").allTextContents())
+          .toEqual(["macOS", "macOS 27.0.0"]);
+
+        const enable = page.getByRole("button", { name: "Enable desktop access in OpenClaw" });
+        const connectionCount = await gateway.getSocketCount();
+        await gateway.deferNext("config.patch");
+        await enable.click();
+        const rejected = await gateway.waitForRequest("config.patch");
+        if (!isRecord(rejected.params) || typeof rejected.params.raw !== "string") {
+          throw new Error("Expected a serialized config patch");
+        }
+        expect(JSON.parse(rejected.params.raw)).toEqual({
+          desktop: { host: { enabled: true } },
+        });
+        expect(rejected.params.baseHash).toBe("desktop-config-0");
+        await gateway.rejectDeferred("config.patch", {
+          code: "INVALID_REQUEST",
+          message: "Desktop configuration could not be saved",
+        });
+        await page
+          .getByRole("alert")
+          .filter({ hasText: "Desktop configuration could not be saved" })
+          .waitFor();
+        expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+
+        await gateway.deferNext("config.patch");
+        await enable.click();
+        await gateway.waitForRequest("config.patch", { after: 1 });
+        const enabledConfig = {
+          desktop: { host: { ...originalConfig.desktop.host, enabled: true } },
+        };
+        await gateway.setMethodResponse("config.get", {
+          config: enabledConfig,
+          raw: JSON.stringify(enabledConfig),
+          hash: "desktop-config-1",
+          valid: true,
+          issues: [],
+        });
+        await gateway.resolveDeferred("config.patch", {
+          config: enabledConfig,
+          hash: "desktop-config-1",
+        });
+        await page.getByRole("heading", { name: "Desktop access is enabled" }).waitFor();
+        await page.screenshot({ path: path.join(artifacts, "desktop-enabled-applying.png") });
+        expect(await gateway.getRequests("config.patch")).toHaveLength(2);
+
+        await gateway.setMethodResponse("desktop.observe", {
+          __mockError: {
+            code: "INVALID_REQUEST",
+            message: "macOS account credentials are required to observe Screen Sharing",
+            details: { code: "DESKTOP_CREDENTIALS_REQUIRED", auth: "ard-account" },
+          },
+        });
+        await gateway.setMethodResponse("environments.list", {
+          environments: [
+            {
+              id: "gateway",
+              type: "local",
+              label: "Gateway Mac",
+              platform: "darwin",
+              status: "available",
+              desktop: true,
+            },
+          ],
+        });
+        await gateway.emitGatewayEvent("config.changed", { hash: "desktop-config-1" });
+        const observed = await gateway.waitForRequest("desktop.observe");
+        expect(observed.params).toEqual({ source: { kind: "host" }, control: false });
+        await page.getByLabel("macOS username").waitFor();
+        expect(await gateway.getSocketCount()).toBe(connectionCount);
+        await page.screenshot({ path: path.join(artifacts, "desktop-account-access.png") });
+      },
+    );
+  });
+
+  it.each(["needs-server", "unsupported", "managed"] as const)(
+    "shows the next step for %s without enabling access",
+    async (state) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Gateway machine",
+                  platform: "linux",
+                  status: "available",
+                  desktopSetup: { state },
+                },
+              ],
+            },
+          });
+          await page.goto(suite.server.baseUrl + "systems");
+          const next = page.getByRole("button", {
+            name: state === "managed" ? "Enable desktop access in OpenClaw" : "Check again",
+          });
+          await next.waitFor();
+          expect(await gateway.getRequests("config.patch")).toHaveLength(0);
+          expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
+          if (state !== "managed") {
+            const reads = (await gateway.getRequests("environments.list")).length;
+            await next.click();
+            await gateway.waitForRequest("environments.list", { after: reads });
+          }
+        },
+      );
+    },
+  );
+
   it.each(["dashboards", "systems"])(
     "scrolls navigation and the %s sidebar content together",
     async (route) => {
@@ -145,7 +488,7 @@ suite.define(() => {
         .toBe("Cloud worker");
       await page.screenshot({ path: path.join(artifacts, "machine-inventory.png") });
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
-      expect(await inventory.locator(".systems-sidebar__header > span").textContent()).toBe("2");
+      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
       await page.locator('.sidebar-nav a[href$="/dashboards"]').click();
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
       await page.locator('.sidebar-nav a[href$="/systems"]').click();
@@ -183,7 +526,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await inventory.getByRole("button", { name: "Refresh machines" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
-      expect(await inventory.locator(".systems-sidebar__header > span").textContent()).toBe("1");
+      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
       await page.setViewportSize({ width: 640, height: 900 });
       expect(await picker.locator('option[value="worker-one"]').count()).toBe(0);
     } finally {

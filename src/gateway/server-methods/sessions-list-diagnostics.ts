@@ -5,36 +5,17 @@ import { areDiagnosticsEnabledForProcess } from "../../infra/diagnostic-events.j
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
-  type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createStageTimingTracker } from "../../shared/stage-timing.js";
-import type { SessionListProjectionTiming } from "../session-utils-list.js";
+import type {
+  SessionListDiagnostics,
+  SessionListPhase,
+} from "../session-list-diagnostics.types.js";
+import { SLOW_GATEWAY_REQUEST_MS } from "../slow-request-diagnostics.js";
 import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
-type Phase =
-  | "setup"
-  | "modelCatalog"
-  | "cacheSelectionOrWait"
-  | "storeLoad"
-  | "filterSetup"
-  | "rows"
-  | "sharing"
-  | "decoration"
-  | "visibilityRepair"
-  | "response"
-  | "handlerExit";
-type CacheRole = "unreached" | "completed-hit" | "in-flight-follower" | "projection-owner";
-type SynchronousCpuMetric =
-  | "storeLoadThreadCpuMs"
-  | "prepareThreadCpuMs"
-  | "rowThreadCpuMs"
-  | "cacheSelectionThreadCpuMs"
-  | "cachePublicationThreadCpuMs"
-  | "responseThreadCpuMs";
 const sessionListDiagnostics = channel("openclaw.session.list");
-
-export type SessionListDiagnostics = NonNullable<ReturnType<typeof startSessionListDiagnostics>>;
 
 function startSessionListDiagnostics(
   respond: RespondFn,
@@ -48,19 +29,21 @@ function startSessionListDiagnostics(
   const startedAt = checkpoint;
   const timing = createStageTimingTracker(() => checkpoint);
   const trace = getActiveDiagnosticTraceContext();
-  let phase: Phase = "setup";
-  let cacheRole: CacheRole = "unreached";
-  let workTrace: DiagnosticTraceContext | undefined;
-  let projection:
-    | (SessionListProjectionTiming & {
-        projectionPasses: number;
-        rowRepairCount: number;
-        fullReloadCount: number;
-      })
-    | undefined;
-  let selectedRowCount: number | undefined;
+  let phase: SessionListPhase = "setup";
+  const projection: SessionListDiagnostics["projection"] = {
+    prepareSyncMs: 0,
+    rowSyncMs: 0,
+    yieldWaitMs: 0,
+    yieldCount: 0,
+    selectedRowCount: 0,
+    dirtyRowCount: 0,
+    materializedRowCount: 0,
+    reusedRowCount: 0,
+  };
   let responseOutcome: "none" | "ok" | "error" | "threw" = "none";
-  let cpuMetrics: Partial<Record<SynchronousCpuMetric, number>> | undefined = {};
+  let cpuMetrics:
+    | Partial<Record<Parameters<SessionListDiagnostics["finishSyncCpu"]>[0], number>>
+    | undefined = {};
   const startSyncCpu = (): NodeJS.CpuUsage | undefined => {
     if (!cpuMetrics) {
       return undefined;
@@ -72,7 +55,10 @@ function startSessionListDiagnostics(
       return undefined;
     }
   };
-  const finishSyncCpu = (metric: SynchronousCpuMetric, started: NodeJS.CpuUsage | undefined) => {
+  const finishSyncCpu = (
+    metric: Parameters<SessionListDiagnostics["finishSyncCpu"]>[0],
+    started: NodeJS.CpuUsage | undefined,
+  ) => {
     if (!started || !cpuMetrics) {
       return;
     }
@@ -84,7 +70,7 @@ function startSessionListDiagnostics(
       cpuMetrics = undefined;
     }
   };
-  const mark = (next: Phase) => {
+  const mark = (next: SessionListPhase) => {
     checkpoint = performance.now();
     timing.mark(phase);
     phase = next;
@@ -94,24 +80,7 @@ function startSessionListDiagnostics(
     mark,
     startSyncCpu,
     finishSyncCpu,
-    get projection() {
-      return projection;
-    },
-    setCacheRole(role: CacheRole, producerTrace?: DiagnosticTraceContext) {
-      cacheRole = role;
-      workTrace = producerTrace;
-      if (role === "projection-owner") {
-        projection = {
-          prepareSyncMs: 0,
-          rowSyncMs: 0,
-          yieldWaitMs: 0,
-          yieldCount: 0,
-          projectionPasses: 0,
-          rowRepairCount: 0,
-          fullReloadCount: 0,
-        };
-      }
-    },
+    projection,
     respond: ((...args) => {
       mark("response");
       responseOutcome = args[0] ? "ok" : "error";
@@ -126,14 +95,13 @@ function startSessionListDiagnostics(
         mark("handlerExit");
       }
     }) satisfies RespondFn,
-    setSelectedRowCount(count: number) {
-      selectedRowCount = count;
-    },
     finish(handlerOutcome: "returned" | "threw") {
       mark("handlerExit");
       const handlerElapsedMs = checkpoint - startedAt;
       const shouldLog =
-        logEnabled && handlerElapsedMs >= 1_000 && areDiagnosticsEnabledForProcess();
+        logEnabled &&
+        handlerElapsedMs >= SLOW_GATEWAY_REQUEST_MS &&
+        areDiagnosticsEnabledForProcess();
       if (!shouldLog && !sessionListDiagnostics.hasSubscribers) {
         return;
       }
@@ -149,15 +117,11 @@ function startSessionListDiagnostics(
           threadId,
           isMainThread,
           handlerElapsedMs: Math.round(handlerElapsedMs),
-          cacheRole,
           phaseDurationsMs,
           ...cpuMetrics,
-          ...(projection
-            ? Object.fromEntries(
-                Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
-              )
-            : {}),
-          ...(selectedRowCount === undefined ? {} : { selectedRowCount }),
+          ...Object.fromEntries(
+            Object.entries(projection).map(([key, value]) => [key, Math.round(value)]),
+          ),
           handlerOutcome,
           responseOutcome,
         };
@@ -168,9 +132,6 @@ function startSessionListDiagnostics(
           runWithDiagnosticTraceContext(trace, () =>
             sessionLog.warn("slow session list", {
               ...fields,
-              ...(workTrace
-                ? { workTraceId: workTrace.traceId, workSpanId: workTrace.spanId }
-                : {}),
             }),
           );
         }

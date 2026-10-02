@@ -1,29 +1,24 @@
-/**
- * Tracks prompt-cache snapshot changes for observability diagnostics.
- */
-import crypto from "node:crypto";
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import type { ContextEnginePromptCacheObservationChange as PromptCacheChange } from "../../context-engine/types.js";
+import { createDedupeCache } from "../../infra/dedupe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { Message } from "../../llm/types.js";
 import type { NormalizedUsage } from "../usage.js";
+import { log } from "./logger.js";
 
-type PromptCacheChangeCode =
-  | "aggregateToolResultTruncation"
-  | "cacheRetention"
-  | "model"
-  | "streamStrategy"
-  | "systemPrompt"
-  | "tools"
-  | "transport";
+type PromptHistoryRewriteReason =
+  | "compaction"
+  | "pruning"
+  | "runtimeContextCarrier"
+  | "imageCleanup";
+type PromptCacheIdentity = { sessionId: string; promptCacheKey?: string; sessionKey?: string };
 
-export type PromptCacheChange = {
-  code: PromptCacheChangeCode;
-  detail: string;
-};
+export type { PromptCacheChange };
 
 type PromptCacheToolSnapshot = {
   name: string;
@@ -34,7 +29,7 @@ type PromptCacheToolSnapshot = {
 type PromptCacheToolDescriptor = {
   readonly name?: string;
   readonly description?: string;
-  readonly parameters?: unknown;
+  readonly parameters?: object;
 };
 
 type PromptCacheSnapshot = {
@@ -45,24 +40,18 @@ type PromptCacheSnapshot = {
   streamStrategy: string;
   transport?: string;
   systemPromptDigest: string;
+  /** Digest of the volatile suffix below the cache boundary; undefined when the prompt has none. */
+  systemPromptSuffixDigest?: string;
   toolDigest: string;
   toolCount: number;
   toolNames: string[];
 };
 
-type PromptCacheObservationStart = {
-  snapshot: PromptCacheSnapshot;
-  changes: PromptCacheChange[] | null;
-  previousCacheRead: number | null;
-};
-
-type PromptCacheBreak = {
-  previousCacheRead: number;
-  cacheRead: number;
-  changes: PromptCacheChange[] | null;
-};
-
 type PromptCacheTracker = {
+  sessionId: string;
+  sessionKey?: string;
+  history: PromptHistoryFingerprint[];
+  declaredRewrites?: Set<PromptHistoryRewriteReason>;
   snapshot: PromptCacheSnapshot;
   lastCacheRead: number | null;
   /** Missing usage must not bind an older hit to a new request fingerprint. */
@@ -70,111 +59,86 @@ type PromptCacheTracker = {
   pendingChanges: PromptCacheChange[] | null;
 };
 
+type PromptHistoryFingerprint = {
+  digest: string;
+  role: string;
+  stringBlock?: { value: string; digest: string };
+};
+
 const trackers = new Map<string, PromptCacheTracker>();
+const blockFingerprints = new WeakMap<
+  object,
+  { digest: string; primitives: [string, unknown][] }
+>();
+// Schemas are provider-owned declarations; unlike transcript blocks, they do not mutate in place.
+const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
-const MAX_TOOL_SCHEMA_FINGERPRINT_DEPTH = 24;
-const MAX_TOOL_SCHEMA_FINGERPRINT_NODES = 2_048;
-const MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES = 128;
-const MAX_TOOL_SCHEMA_FINGERPRINT_STRING_CHARS = 4_096;
+const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
+
+function fingerprintBlock(block: object): string {
+  const primitives: [string, unknown][] = [];
+  const nested: [string, unknown][] = [];
+  for (const entry of Object.entries(block)) {
+    const value = entry[1];
+    if (value === null || ["string", "number", "boolean", "undefined"].includes(typeof value)) {
+      primitives.push(entry);
+    } else {
+      nested.push(entry);
+    }
+  }
+  const previous = blockFingerprints.get(block);
+  const unchanged =
+    previous &&
+    previous.primitives.length === primitives.length &&
+    primitives.every(([key, value], index) => {
+      const cached = previous.primitives[index];
+      return cached?.[0] === key && cached[1] === value;
+    });
+  const memo = unchanged
+    ? previous
+    : { digest: sha256Hex(stableStringify(Object.fromEntries(primitives))), primitives };
+  if (!unchanged) {
+    blockFingerprints.set(block, memo);
+  }
+  return nested.length
+    ? sha256Hex(`${memo.digest}:${stableStringify(Object.fromEntries(nested))}`)
+    : memo.digest;
+}
+
+function fingerprintMessage(
+  message: Message,
+  previous?: PromptHistoryFingerprint,
+): PromptHistoryFingerprint {
+  const { content, ...envelope } = message;
+  // String blocks share the bounded history lifetime instead of a process-wide string cache.
+  let stringBlock: PromptHistoryFingerprint["stringBlock"];
+  let blocks: string[];
+  if (typeof content === "string") {
+    stringBlock =
+      previous?.stringBlock?.value === content
+        ? previous.stringBlock
+        : { value: content, digest: sha256Hex(stableStringify(content)) };
+    blocks = [stringBlock.digest];
+  } else {
+    blocks = content.map(fingerprintBlock);
+  }
+  return {
+    digest: sha256Hex(stableStringify([envelope, blocks])),
+    role: message.role,
+    stringBlock,
+  };
+}
 
 const MIN_CACHE_BREAK_TOKEN_DROP = 1_000;
 const MAX_STABLE_CACHE_READ_RATIO = 0.95;
 
-function digestText(value: string): string {
-  return crypto.createHash("sha256").update(value).digest("hex");
-}
-
-function buildTrackerKey(params: {
-  promptCacheKey?: string;
-  sessionKey?: string;
-  sessionId: string;
-}): string {
-  const promptCacheKey = params.promptCacheKey?.trim();
-  if (promptCacheKey) {
-    return promptCacheKey;
-  }
-  return params.sessionKey?.trim() || params.sessionId;
-}
-
-function normalizeToolSchemaFingerprint(
-  value: unknown,
-  state: { remainingNodes: number; stack: WeakSet<object> },
-  depth = 0,
-): unknown {
-  if (depth >= MAX_TOOL_SCHEMA_FINGERPRINT_DEPTH || state.remainingNodes <= 0) {
-    return "[schema fingerprint limit]";
-  }
-  state.remainingNodes -= 1;
-  if (value === null || typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? value : "[non-finite number]";
-  }
-  if (typeof value === "string") {
-    return truncateUtf16Safe(value, MAX_TOOL_SCHEMA_FINGERPRINT_STRING_CHARS);
-  }
-  if (typeof value !== "object") {
-    return `[${typeof value}]`;
-  }
-  if (state.stack.has(value)) {
-    return "[circular schema]";
-  }
-  state.stack.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const entries = value
-        .slice(0, MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES)
-        .map((entry) => normalizeToolSchemaFingerprint(entry, state, depth + 1));
-      if (value.length > MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES) {
-        entries.push({ omitted: value.length - MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES });
-      }
-      return entries;
-    }
-    const record = value as Record<string, unknown>;
-    const keys: string[] = [];
-    for (const key in record) {
-      if (!Object.hasOwn(record, key)) {
-        continue;
-      }
-      // A schema above this limit receives one order-independent marker. Do
-      // not materialize or sort an attacker-controlled complete key list.
-      if (keys.length >= MAX_TOOL_SCHEMA_FINGERPRINT_ENTRIES) {
-        return "[schema key limit]";
-      }
-      keys.push(key);
-    }
-    keys.sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
-    // Schema property names are untrusted; a null prototype keeps "__proto__"
-    // as an own fingerprinted key instead of invoking a prototype setter.
-    const entries = Object.create(null) as Record<string, unknown>;
-    for (const key of keys) {
-      try {
-        entries[key] = normalizeToolSchemaFingerprint(record[key], state, depth + 1);
-      } catch {
-        entries[key] = "[unreadable schema value]";
-      }
-    }
-    return entries;
-  } catch {
-    return "[unreadable schema]";
-  } finally {
-    state.stack.delete(value);
-  }
-}
-
-function buildToolDigest(tools: readonly PromptCacheToolSnapshot[]): string {
-  // Cache identity includes the exact visible descriptor, not just its name;
-  // canonical ordering prevents discovery order from looking like a break.
-  return digestText(stableStringify(sortPromptCacheToolsByName(tools)));
+function buildTrackerKey(params: PromptCacheIdentity): string {
+  return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
 function setTracker(key: string, tracker: PromptCacheTracker): void {
-  if (trackers.has(key)) {
-    trackers.delete(key);
-  } else if (trackers.size >= MAX_TRACKERS) {
-    pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  }
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   trackers.set(key, tracker);
 }
 
@@ -194,29 +158,24 @@ function diffSnapshots(
       detail: `${previous.modelApi ?? "unknown"} -> ${next.modelApi ?? "unknown"}`,
     });
   }
-  if (previous.cacheRetention !== next.cacheRetention) {
-    changes.push({
-      code: "cacheRetention",
-      detail: `${previous.cacheRetention ?? "default"} -> ${next.cacheRetention ?? "default"}`,
-    });
+  for (const code of ["cacheRetention", "transport", "streamStrategy"] as const) {
+    if (previous[code] !== next[code]) {
+      changes.push({
+        code,
+        detail: `${previous[code] ?? "default"} -> ${next[code] ?? "default"}`,
+      });
+    }
   }
-  if (previous.transport !== next.transport) {
-    changes.push({
-      code: "transport",
-      detail: `${previous.transport ?? "default"} -> ${next.transport ?? "default"}`,
-    });
-  }
-  if (previous.streamStrategy !== next.streamStrategy) {
-    changes.push({
-      code: "streamStrategy",
-      detail: `${previous.streamStrategy} -> ${next.streamStrategy}`,
-    });
-  }
-  if (previous.systemPromptDigest !== next.systemPromptDigest) {
-    changes.push({
-      code: "systemPrompt",
-      detail: "system prompt digest changed",
-    });
+  // OpenAI Responses routes send the suffix inline in `instructions`, so a
+  // suffix change re-caches from that point; Anthropic-style checkpoints lose
+  // the later conversation checkpoint. Track it separately from the prefix.
+  for (const [code, detail] of [
+    ["systemPrompt", "system prompt digest changed"],
+    ["systemPromptSuffix", "system prompt suffix digest changed"],
+  ] as const) {
+    if (previous[`${code}Digest`] !== next[`${code}Digest`]) {
+      changes.push({ code, detail });
+    }
   }
   if (previous.toolDigest !== next.toolDigest) {
     changes.push({
@@ -240,29 +199,20 @@ export function collectPromptCacheTools(
       if (!name) {
         continue;
       }
-      const snapshot: PromptCacheToolSnapshot = { name };
-      try {
-        if (typeof tool.description === "string") {
-          snapshot.descriptionDigest = digestText(tool.description);
+      const { description, parameters } = tool;
+      let schemaDigest: string | undefined;
+      if (parameters) {
+        schemaDigest = toolSchemaFingerprints.get(parameters);
+        if (!schemaDigest) {
+          schemaDigest = sha256Hex(stableStringify(parameters));
+          toolSchemaFingerprints.set(parameters, schemaDigest);
         }
-      } catch {
-        snapshot.descriptionDigest = digestText("[unreadable tool description]");
       }
-      try {
-        if (tool.parameters !== undefined) {
-          snapshot.schemaDigest = digestText(
-            stableStringify(
-              normalizeToolSchemaFingerprint(tool.parameters, {
-                remainingNodes: MAX_TOOL_SCHEMA_FINGERPRINT_NODES,
-                stack: new WeakSet(),
-              }),
-            ),
-          );
-        }
-      } catch {
-        snapshot.schemaDigest = digestText("[unreadable tool schema]");
-      }
-      snapshots.push(snapshot);
+      snapshots.push({
+        name,
+        descriptionDigest: description === undefined ? undefined : sha256Hex(description),
+        schemaDigest,
+      });
     } catch {
       continue;
     }
@@ -270,21 +220,22 @@ export function collectPromptCacheTools(
   return sortPromptCacheToolsByName(snapshots);
 }
 
-export function beginPromptCacheObservation(params: {
-  sessionId: string;
-  promptCacheKey?: string;
-  sessionKey?: string;
-  provider: string;
-  modelId: string;
-  modelApi?: string | null;
-  cacheRetention?: "none" | "short" | "long";
-  streamStrategy: string;
-  transport?: string;
-  systemPrompt: string;
-  tools: readonly PromptCacheToolSnapshot[];
-}): PromptCacheObservationStart {
+export function beginPromptCacheObservation(
+  params: PromptCacheIdentity & {
+    provider: string;
+    modelId: string;
+    modelApi?: string | null;
+    cacheRetention?: "none" | "short" | "long";
+    streamStrategy: string;
+    transport?: string;
+    systemPrompt: string;
+    tools: readonly PromptCacheToolSnapshot[];
+    messages: readonly Message[];
+  },
+) {
   const key = buildTrackerKey(params);
   const tools = sortPromptCacheToolsByName(params.tools);
+  const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
   const snapshot: PromptCacheSnapshot = {
     provider: params.provider,
     modelId: params.modelId,
@@ -292,14 +243,18 @@ export function beginPromptCacheObservation(params: {
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: digestText(
-      splitSystemPromptCacheBoundary(params.systemPrompt)?.stablePrefix ?? params.systemPrompt,
-    ),
-    toolDigest: buildToolDigest(tools),
+    systemPromptDigest: sha256Hex(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
+    ...(splitSystemPrompt
+      ? { systemPromptSuffixDigest: sha256Hex(splitSystemPrompt.dynamicSuffix) }
+      : {}),
+    toolDigest: sha256Hex(stableStringify(tools)),
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
   };
   const previous = trackers.get(key);
+  const history = params.messages.map((message, index) =>
+    fingerprintMessage(message, previous?.history[index]),
+  );
   const changes = previous
     ? [
         ...(previous.pendingChanges?.filter(
@@ -308,12 +263,45 @@ export function beginPromptCacheObservation(params: {
         ...(diffSnapshots(previous.snapshot, snapshot) ?? []),
       ]
     : [];
+  for (const code of previous?.declaredRewrites ?? []) {
+    changes.push({ code, detail: `${code} changed provider history` });
+  }
+  const restarted =
+    previous?.sessionId !== params.sessionId ||
+    changes.some(
+      ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
+    );
+  const divergence =
+    previous && !restarted && !previous.declaredRewrites?.size
+      ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
+      : -1;
+  const violation =
+    divergence < 0
+      ? undefined
+      : {
+          code: "historyRewrite" as const,
+          detail: `message ${divergence} (${history[divergence]?.role ?? previous!.history[divergence]!.role}) differs from the previous request; history must be append-only`,
+        };
+  if (violation) {
+    changes.push(violation);
+  }
   setTracker(key, {
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey?.trim(),
+    history,
     snapshot,
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     pendingChanges: changes.length > 0 ? changes : null,
   });
+  if (violation) {
+    if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
+      throw new Error(violation.detail);
+    }
+    if (!historyRewriteWarnings.check(params.sessionKey?.trim() || params.sessionId)) {
+      log.warn(`[prompt-cache] ${violation.detail} sessionKey=${params.sessionKey ?? key}`);
+    }
+  }
   return {
     snapshot,
     changes: changes.length > 0 ? changes : null,
@@ -321,40 +309,48 @@ export function beginPromptCacheObservation(params: {
   };
 }
 
-export function recordAggregateTruncation(params: {
-  sessionId: string;
-  promptCacheKey?: string;
-  sessionKey?: string;
-}): void {
+export function declarePromptHistoryRewrite(
+  params: PromptCacheIdentity & { reason: PromptHistoryRewriteReason },
+): void {
+  // Session projections are shared; each cache-affinity baseline consumes the rewrite once.
+  for (const tracker of trackers.values()) {
+    if (
+      tracker.sessionId === params.sessionId &&
+      tracker.sessionKey === params.sessionKey?.trim()
+    ) {
+      (tracker.declaredRewrites ??= new Set()).add(params.reason);
+    }
+  }
+}
+
+export function recordAggregateTruncation(params: PromptCacheIdentity): void {
   const tracker = trackers.get(buildTrackerKey(params));
   const changes = tracker?.pendingChanges ?? [];
   if (!tracker || changes.some((change) => change.code === "aggregateToolResultTruncation")) {
     return;
   }
-  tracker.pendingChanges = [
-    ...changes,
-    {
-      code: "aggregateToolResultTruncation",
-      detail: "aggregate tool-result truncation changed provider prompt",
-    },
-  ];
+  changes.push({
+    code: "aggregateToolResultTruncation",
+    detail: "aggregate tool-result truncation changed provider prompt",
+  });
+  tracker.pendingChanges = changes;
 }
 
-export function completePromptCacheObservation(params: {
-  sessionId: string;
-  promptCacheKey?: string;
-  sessionKey?: string;
-  usage?: NormalizedUsage;
-}): PromptCacheBreak | null {
+export function completePromptCacheObservation(
+  params: PromptCacheIdentity & {
+    usage?: NormalizedUsage;
+  },
+) {
   const key = buildTrackerKey(params);
   const tracker = trackers.get(key);
   if (!tracker) {
     return null;
   }
+  const changes = tracker.pendingChanges;
+  tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
   if (typeof cacheRead !== "number" || !Number.isFinite(cacheRead)) {
-    tracker.pendingChanges = null;
     return null;
   }
   const previousCacheRead = tracker.lastCacheRead;
@@ -363,7 +359,6 @@ export function completePromptCacheObservation(params: {
   tracker.lastCacheReadSnapshot = tracker.snapshot;
 
   if (previousCacheRead == null || previousCacheRead <= 0) {
-    tracker.pendingChanges = null;
     return null;
   }
 
@@ -376,14 +371,11 @@ export function completePromptCacheObservation(params: {
     (params.usage?.input ?? 0) > 0 &&
     previousSnapshot !== undefined &&
     diffSnapshots(previousSnapshot, tracker.snapshot) === null;
-  const result =
-    hasMeaningfulDrop || completeMiss
-      ? {
-          previousCacheRead,
-          cacheRead,
-          changes: tracker.pendingChanges,
-        }
-      : null;
-  tracker.pendingChanges = null;
-  return result;
+  return hasMeaningfulDrop || completeMiss
+    ? {
+        previousCacheRead,
+        cacheRead,
+        changes,
+      }
+    : null;
 }

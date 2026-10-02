@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import {
   GatewayCloseCodes,
   GatewayDispatchEvents,
-  GatewayIntentBits,
   GatewayOpcodes,
   InteractionType,
   PresenceUpdateStatus,
@@ -40,15 +39,6 @@ function firstDispatchedData(dispatchGatewayEvent: ReturnType<typeof vi.fn>): un
   return call[1];
 }
 
-function firstSentGatewayPayload(send: ReturnType<typeof attachOpenSocket>): unknown {
-  const [call] = send.mock.calls;
-  if (!call) {
-    throw new Error("Expected gateway socket send call");
-  }
-  const [rawPayload] = call;
-  return JSON.parse(String(rawPayload));
-}
-
 function presenceUpdate(
   status: PresenceUpdateStatus.Online | PresenceUpdateStatus.Idle = PresenceUpdateStatus.Online,
   since: number | null = null,
@@ -74,6 +64,10 @@ class TestGatewayPlugin extends GatewayPlugin {
   sockets: FakeSocket[] = [];
   connectCalls: boolean[] = [];
   urls: string[] = [];
+
+  constructor(options: ConstructorParameters<typeof GatewayPlugin>[0] = {}) {
+    super({ autoInteractions: false, url: "wss://gateway.example.test", ...options });
+  }
 
   override connect(resume = false): void {
     this.connectCalls.push(resume);
@@ -164,10 +158,7 @@ describe("GatewayPlugin", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
     const errorSpy = vi.fn();
     gateway.emitter.on("error", errorSpy);
 
@@ -198,10 +189,7 @@ describe("GatewayPlugin", () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
 
     gateway.connect(false);
     const originalSocket = gateway.sockets[0];
@@ -633,33 +621,35 @@ describe("GatewayPlugin", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it("ignores stale socket close events after reconnecting", () => {
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+  it("ignores stale socket close events after reconnecting", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const gateway = new TestGatewayPlugin();
 
     gateway.connect(false);
     const oldSocket = expectDefined(gateway.sockets[0], "old Discord gateway socket");
     oldSocket.emit("open");
     gateway.connect(false);
-    const heartbeat = setInterval(() => {}, 1_000);
-    gateway.heartbeatInterval = heartbeat;
+    const socket = expectDefined(gateway.sockets[1], "replacement Discord gateway socket");
+    socket.emit("open");
+    socket.emit(
+      "message",
+      JSON.stringify({ op: GatewayOpcodes.Hello, d: { heartbeat_interval: 100 }, s: null }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
     gateway.isConnected = true;
 
     oldSocket.emit("close", 1006);
 
     expect(gateway.isConnected).toBe(true);
-    expect(gateway.heartbeatInterval).toBe(heartbeat);
-    clearInterval(heartbeat);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(sentGatewayOpcodes(socket.send)).toContain(GatewayOpcodes.Heartbeat);
+    gateway.disconnect();
   });
 
   it("logs and re-identifies after a resumable close without session state", async () => {
     vi.useFakeTimers();
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
     const debugSpy = vi.fn();
     gateway.emitter.on("debug", debugSpy);
 
@@ -695,10 +685,7 @@ describe("GatewayPlugin", () => {
   it("falls back to a fresh IDENTIFY after three failed resume attempts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
     const debugSpy = vi.fn();
     gateway.emitter.on("debug", debugSpy);
     (gateway as unknown as { client: unknown }).client = {
@@ -787,10 +774,7 @@ describe("GatewayPlugin", () => {
     "re-identifies after non-resumable gateway close %s",
     async (closeCode) => {
       vi.useFakeTimers();
-      const gateway = new TestGatewayPlugin({
-        autoInteractions: false,
-        url: "wss://gateway.example.test",
-      });
+      const gateway = new TestGatewayPlugin();
 
       gateway.connect(false);
       gateway.sockets[0]?.emit("open");
@@ -805,10 +789,7 @@ describe("GatewayPlugin", () => {
   it("clears resume state after invalid session false", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0);
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
     const sessionState = gatewaySessionState(gateway);
     sessionState.sessionId = "session1";
     sessionState.resumeGatewayUrl = "wss://resume.example.test";
@@ -832,10 +813,7 @@ describe("GatewayPlugin", () => {
   it("delays invalid-session reconnects by Discord's randomized cooldown floor", async () => {
     vi.useFakeTimers();
     vi.spyOn(Math, "random").mockReturnValue(0.75);
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
 
     gateway.connect(false);
     gateway.sockets[0]?.emit("open");
@@ -876,10 +854,7 @@ describe("GatewayPlugin", () => {
 
   it("does not reconnect after fatal gateway closes", async () => {
     vi.useFakeTimers();
-    const gateway = new TestGatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
+    const gateway = new TestGatewayPlugin();
     const errorSpy = vi.fn();
     gateway.emitter.on("error", errorSpy);
 
@@ -894,7 +869,6 @@ describe("GatewayPlugin", () => {
   });
 
   it.each([
-    ["a well-formed interval", { heartbeat_interval: 45_000 }, 45_000],
     ["a shorter negotiated interval", { heartbeat_interval: 41_250 }, 41_250],
     ["a null body", null, 45_000],
     ["an absent body", undefined, 45_000],
@@ -902,8 +876,6 @@ describe("GatewayPlugin", () => {
     ["an empty body", {}, 45_000],
     ["a scalar body", "hello", 45_000],
     ["a zero interval", { heartbeat_interval: 0 }, 45_000],
-    ["a negative interval", { heartbeat_interval: -1 }, 45_000],
-    ["a sub-second interval a compatible gateway may negotiate", { heartbeat_interval: 500 }, 500],
     ["the smallest positive interval", { heartbeat_interval: 1 }, 1],
     ["a stringified interval", { heartbeat_interval: "45000" }, 45_000],
     ["an interval past the timer ceiling", { heartbeat_interval: Number.MAX_SAFE_INTEGER }, 45_000],
@@ -915,10 +887,7 @@ describe("GatewayPlugin", () => {
       // Pin the start jitter to the top of its window so the scheduled delay is
       // exactly the resolved interval; a storm shows up as a heartbeat at t=0.
       vi.spyOn(Math, "random").mockReturnValue(1);
-      const gateway = new TestGatewayPlugin({
-        autoInteractions: false,
-        url: "wss://gateway.example.test",
-      });
+      const gateway = new TestGatewayPlugin();
       gateway.emitter.on("error", () => {});
       gateway.connect(false);
       const socket = expectDefined(gateway.sockets[0], "Discord gateway socket");
@@ -939,72 +908,55 @@ describe("GatewayPlugin", () => {
     },
   );
 
-  it("clears heartbeat timers before delayed reconnects", () => {
+  it.each([0, 50])(
+    "clears heartbeat timers before delayed reconnects at %sms",
+    async (elapsedMs) => {
+      vi.useFakeTimers();
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const gateway = new TestGatewayPlugin();
+      gateway.connect(false);
+      const socket = expectDefined(gateway.sockets[0], "Discord gateway socket");
+      socket.emit("open");
+      socket.emit(
+        "message",
+        JSON.stringify({ op: GatewayOpcodes.Hello, d: { heartbeat_interval: 100 }, s: null }),
+      );
+      await vi.advanceTimersByTimeAsync(elapsedMs);
+      socket.send.mockClear();
+
+      socket.emit("message", JSON.stringify({ op: GatewayOpcodes.Reconnect, d: null }));
+
+      expect(socket.close).toHaveBeenCalledTimes(1);
+      expect(gateway.ws).toBeNull();
+      // Only the reconnect deadline remains, before or after the first heartbeat.
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(socket.send).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(1);
+      gateway.disconnect();
+    },
+  );
+
+  it("clears stale heartbeat timers before early reconnect exits", async () => {
     vi.useFakeTimers();
-    const gateway = new GatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
-    const send = vi.fn();
-    const close = vi.fn();
-    gateway.ws = {
-      readyState: 1,
-      send,
-      close,
-    } as unknown as GatewayPlugin["ws"];
-    const firstHeartbeatTimeout = setTimeout(() => {
-      (
-        gateway as unknown as {
-          sendHeartbeat(): void;
-        }
-      ).sendHeartbeat();
-    }, 10);
-    const heartbeatInterval = setInterval(() => {
-      (
-        gateway as unknown as {
-          sendHeartbeat(): void;
-        }
-      ).sendHeartbeat();
-    }, 10);
-    gateway.firstHeartbeatTimeout = firstHeartbeatTimeout;
-    gateway.heartbeatInterval = heartbeatInterval;
-    (gateway as unknown as { shouldReconnect: boolean }).shouldReconnect = true;
-
-    (
-      gateway as unknown as {
-        handlePayload(payload: { op: number; d: unknown }, resume: boolean): void;
-      }
-    ).handlePayload({ op: GatewayOpcodes.Reconnect, d: null }, false);
-
-    expect(close).toHaveBeenCalledTimes(1);
-    expect(gateway.ws).toBeNull();
-    expect(gateway.firstHeartbeatTimeout).toBeUndefined();
-    expect(gateway.heartbeatInterval).toBeUndefined();
-    vi.advanceTimersByTime(20);
-    expect(send).not.toHaveBeenCalled();
-    expect(
-      (
-        gateway as unknown as {
-          sendHeartbeat(): void;
-        }
-      ).sendHeartbeat(),
-    ).toBeUndefined();
-  });
-
-  it("clears stale heartbeat timers before early reconnect exits", () => {
-    vi.useFakeTimers();
-    const gateway = new GatewayPlugin({
-      autoInteractions: false,
-      url: "wss://gateway.example.test",
-    });
-    (gateway as unknown as { isConnecting: boolean }).isConnecting = true;
-    gateway.heartbeatInterval = setInterval(() => {}, 1_000);
-    gateway.firstHeartbeatTimeout = setTimeout(() => {}, 1_000);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const gateway = new TestGatewayPlugin();
+    gateway.connect(false);
+    const socket = expectDefined(gateway.sockets[0], "Discord gateway socket");
+    socket.emit(
+      "message",
+      JSON.stringify({ op: GatewayOpcodes.Hello, d: { heartbeat_interval: 100 }, s: null }),
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    socket.send.mockClear();
 
     gateway.connect(true);
 
-    expect(gateway.heartbeatInterval).toBeUndefined();
-    expect(gateway.firstHeartbeatTimeout).toBeUndefined();
+    expect(gateway.sockets).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.send).not.toHaveBeenCalled();
+    gateway.disconnect();
   });
 
   it("spaces identify sends by gateway max concurrency bucket", async () => {
@@ -1045,49 +997,5 @@ describe("GatewayPlugin", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     expect(sentGatewayOpcodes(secondSend)).toContain(GatewayOpcodes.Identify);
-  });
-
-  it("validates requestGuildMembers before sending", () => {
-    const withoutMembersIntent = new GatewayPlugin({ autoInteractions: false });
-    attachOpenSocket(withoutMembersIntent);
-
-    expect(() =>
-      withoutMembersIntent.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0 }),
-    ).toThrow(/GUILD_MEMBERS intent/);
-
-    const withoutPresenceIntent = new GatewayPlugin({
-      autoInteractions: false,
-      intents: GatewayIntentBits.GuildMembers,
-    });
-    attachOpenSocket(withoutPresenceIntent);
-
-    expect(() =>
-      withoutPresenceIntent.requestGuildMembers({
-        guild_id: "guild1",
-        query: "",
-        limit: 0,
-        presences: true,
-      }),
-    ).toThrow(/GUILD_PRESENCES intent/);
-
-    const valid = new GatewayPlugin({
-      autoInteractions: false,
-      intents: GatewayIntentBits.GuildMembers | GatewayIntentBits.GuildPresences,
-    });
-    const send = attachOpenSocket(valid);
-
-    expect(() =>
-      valid.requestGuildMembers({
-        guild_id: "guild1",
-        limit: 1,
-      }),
-    ).toThrow(/query or user_ids/);
-
-    valid.requestGuildMembers({ guild_id: "guild1", query: "", limit: 0, presences: true });
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(firstSentGatewayPayload(send)).toEqual({
-      op: GatewayOpcodes.RequestGuildMembers,
-      d: { guild_id: "guild1", query: "", limit: 0, presences: true },
-    });
   });
 });

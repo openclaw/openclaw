@@ -1,9 +1,3 @@
-/**
- * Subagent announcement dispatch strategy.
- *
- * Completion handoff and requester-visible replies use this to choose between
- * steering a subagent and directly delivering a message, with phase evidence.
- */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 type SubagentAnnounceDeliveryDisposition =
   | "delivered"
@@ -12,7 +6,6 @@ type SubagentAnnounceDeliveryDisposition =
   | "retryable"
   | "ambiguous"
   | "permanent_failure";
-/** Stable reasons an announcement delivery can fail without throwing. */
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
@@ -29,7 +22,6 @@ type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" };
 
-/** Result of trying to deliver a subagent announcement. */
 export type SubagentAnnounceDeliveryResult = {
   delivered: boolean;
   path: SubagentDeliveryPath;
@@ -37,6 +29,7 @@ export type SubagentAnnounceDeliveryResult = {
   enqueuedAt?: number;
   /** Direct delivery that already committed the requester's visible final. */
   requesterVisibleFinalDelivered?: true;
+  storeReplaced?: true;
   /** Bounded visible final returned by the direct requester synthesis turn. */
   finalAssistantVisibleText?: string;
   reason?: SubagentAnnounceDeliveryFailureReason;
@@ -61,7 +54,17 @@ type SubagentAnnounceDispatchPhaseResult = {
   error?: string;
 };
 
-/** Converts a steer outcome into the shared delivery result shape. */
+export function sourceOwnerChangedResult(): SubagentAnnounceDeliveryResult {
+  return {
+    delivered: false,
+    path: "none",
+    reason: "source_owner_changed",
+    error: "subagent source lifecycle changed before completion delivery",
+    terminal: true,
+    disposition: "intentional_non_delivery",
+  };
+}
+
 function mapSteerOutcomeToDeliveryResult(
   outcome: SubagentAnnounceSteerOutcome,
 ): SubagentAnnounceDeliveryResult {
@@ -74,14 +77,7 @@ function mapSteerOutcomeToDeliveryResult(
     };
   }
   if (outcome.status === "source_owner_changed") {
-    return {
-      delivered: false,
-      path: "none",
-      reason: "source_owner_changed",
-      error: "subagent source lifecycle changed before completion delivery",
-      terminal: true,
-      disposition: "intentional_non_delivery",
-    };
+    return sourceOwnerChangedResult();
   }
   return {
     delivered: false,
@@ -90,7 +86,6 @@ function mapSteerOutcomeToDeliveryResult(
   };
 }
 
-/** Runs the ordered steer/direct announcement delivery strategy. */
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
   requireDirectDelivery?: boolean;

@@ -1,8 +1,3 @@
-/**
- * Channel setup group access configurator.
- *
- * Applies prompted group policy and allowlist entries through channel-specific hooks.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { promptChannelAccessConfig, type ChannelAccessPolicy } from "./setup-group-access.js";
@@ -24,15 +19,7 @@ export async function configureChannelAccessWithAllowlist<TResolved>(params: {
   applyAllowlist?: (params: { cfg: OpenClawConfig; resolved: TResolved }) => OpenClawConfig;
 }): Promise<OpenClawConfig> {
   let next = params.cfg;
-  const accessConfig = await promptChannelAccessConfig({
-    prompter: params.prompter,
-    label: params.label,
-    currentPolicy: params.currentPolicy,
-    currentEntries: params.currentEntries,
-    placeholder: params.placeholder,
-    updatePrompt: params.updatePrompt,
-    skipAllowlistEntries: params.skipAllowlistEntries,
-  });
+  const accessConfig = await promptChannelAccessConfig(params);
   if (!accessConfig) {
     return next;
   }

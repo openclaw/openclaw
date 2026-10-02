@@ -9,7 +9,7 @@ import {
   resolveProjectCheckout,
   withProjectCheckoutLifecycle,
 } from "./project-checkout.js";
-import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.kernel.js";
+import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectRegistrationInput = {
   path: string;
@@ -54,7 +54,7 @@ export async function registerPreparedProjectRegistry(
     );
   }
   const { runWithOpenClawStateLeaseWorker } =
-    await import("../state/openclaw-state-worker-store.js");
+    await import("../state/openclaw-state-lease-worker-operation.js");
   return await runWithOpenClawStateLeaseWorker(lease, context, async (scope, identity) => {
     const project = await scope.execute({
       type: "projects.insert",

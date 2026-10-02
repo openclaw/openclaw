@@ -22,6 +22,26 @@ enum CLIInstallBuild {
 }
 
 enum CLIInstallPolicy {
+    struct ManagedUpdateSelection: Equatable, Sendable {
+        let installPolicy: String?
+        let gatewayUpdateChannel: String?
+    }
+
+    static func managedUpdateSelection() -> ManagedUpdateSelection {
+        ManagedUpdateSelection(
+            installPolicy: self.storedPolicy(),
+            gatewayUpdateChannel: OpenClawConfigFile.gatewayUpdateChannel())
+    }
+
+    static func permitsManagedUpdate(_ captured: ManagedUpdateSelection) -> Bool {
+        let current = self.managedUpdateSelection()
+        return current == captured && CLIInstallPrompter.managedRepairGatesOpen(
+            launchAgentUsesManagedCLI: true,
+            gatewayUpdateChannel: current.gatewayUpdateChannel,
+            installPolicy: current.installPolicy,
+            launchAgentWriteDisabled: false)
+    }
+
     static func storedPolicy(defaults: UserDefaults = AppDefaults.standard) -> String? {
         defaults.string(forKey: cliInstallPolicyKey)
     }
@@ -67,6 +87,8 @@ enum ManagedCLIUpdateOutcome: Equatable {
 
 @MainActor
 enum CLIInstaller {
+    static let managedUpdateTimeout: TimeInterval = 7200
+
     enum Channel: String, CaseIterable, Equatable {
         case stable
         case beta
@@ -189,6 +211,7 @@ enum CLIInstaller {
     }
 
     static func status() async -> Status {
+        if BundledRuntime.isBundledApp { return self.bundledStatus() }
         let preferredPaths = await CommandResolver.preferredPathsAsync()
         let locations = self.installedLocations(
             searchPaths: preferredPaths,
@@ -212,13 +235,44 @@ enum CLIInstaller {
         return fallbackStatus ?? .missing(location: self.managedExecutableLocation())
     }
 
-    static func managedStatus() async -> Status {
-        await self.managedStatus(expectedVersion: GatewayEnvironment.expectedGatewayVersionString())
+    static func managedStatus(
+        installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        usesBundledRuntime: Bool = true) async -> Status
+    {
+        await self.managedStatus(
+            expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
+            installedCLI: installedCLI,
+            usesBundledRuntime: usesBundledRuntime)
     }
 
-    private static func managedStatus(expectedVersion: String?) async -> Status {
+    static func managedStatus(
+        expectedVersion: String?,
+        installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        usesBundledRuntime: Bool = true) async -> Status
+    {
         let location = self.managedExecutableLocation()
+        if let installedCLI {
+            let environment = GatewayLaunchAgentManager.daemonEnvironment(
+                runtime: nil,
+                installedCLI: installedCLI,
+                environment: ProcessInfo.processInfo.environment,
+                profile: .current,
+                searchPaths: CommandResolver.preferredPaths())
+            let response = await ShellExecutor.runDetailed(
+                command: installedCLI.prefix + ["--version"], cwd: nil, env: environment, timeout: 15)
+            return response.success
+                ? self.classifyVersion(location: location, output: response.stdout, expectedVersion: expectedVersion)
+                : .unusable(location: location)
+        }
+        if usesBundledRuntime, BundledRuntime.isBundledApp { return self.bundledStatus() }
         guard FileManager.default.isExecutableFile(atPath: location) else {
+            if !FileManager.default.fileExists(atPath: location),
+               let authority = try? self.captureCanonicalUpdateAuthority(executable: location),
+               authority.file == nil
+            {
+                return await self.managedStatus(
+                    expectedVersion: expectedVersion, installedCLI: authority.cli, usesBundledRuntime: false)
+            }
             return .missing(location: location)
         }
 
@@ -239,6 +293,18 @@ enum CLIInstaller {
             location: location,
             expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
             preferredPaths: preferredPaths)
+    }
+
+    private static func bundledStatus() -> Status {
+        let location = self.managedExecutableLocation()
+        do {
+            guard let runtime = try BundledRuntime.seeded() else { return .missing(location: location) }
+            _ = try BundledRuntime.resolve(root: runtime.root, bundle: .main)
+            let version = GatewayEnvironment.appVersionString() ?? "unknown"
+            return .ready(location: runtime.packageRoot.appendingPathComponent("openclaw.mjs").path, version: version)
+        } catch {
+            return .unusable(location: location)
+        }
     }
 
     private static func status(
@@ -334,6 +400,18 @@ enum CLIInstaller {
         target: InstallTarget,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async -> Bool
     {
+        if BundledRuntime.isBundledApp {
+            await statusHandler("Preparing OpenClaw…")
+            do {
+                _ = try await self.prepareBundledGateway(statusHandler: statusHandler)
+                NotificationCenter.default.post(name: .openclawCLIInstalled, object: nil)
+                await statusHandler("OpenClaw is ready.")
+                return true
+            } catch {
+                await statusHandler("Preparation failed: \(error.localizedDescription)")
+                return false
+            }
+        }
         let prefix = Self.installPrefix()
         await statusHandler("Installing OpenClaw CLI (\(target.selector))…")
         guard let installerURL = Bundle.main.url(forResource: "install-cli", withExtension: "sh") else {
@@ -521,6 +599,9 @@ enum CLIInstaller {
         targetVersion: String,
         restartGateway: Bool = true,
         repair: Bool = false,
+        installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil,
+        onDispatch: (@MainActor @Sendable () throws -> Void)? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
@@ -528,19 +609,57 @@ enum CLIInstaller {
         await statusHandler(repair
             ? String(localized: "Repairing the OpenClaw Gateway update…")
             : String(format: String(localized: "Updating the OpenClaw Gateway to %@…"), targetVersion))
-        let command = self.managedUpdateCommand(
+        var command = self.managedUpdateCommand(
             executable: executable,
             targetVersion: targetVersion,
             restartGateway: restartGateway,
             repair: repair)
-        let environment = self.probeEnvironment(location: executable)
+        if let installedCLI { command = installedCLI.prefix + command.dropFirst() }
+        let environment = installedCLI.map {
+            GatewayLaunchAgentManager.daemonEnvironment(
+                runtime: nil,
+                installedCLI: $0,
+                environment: ProcessInfo.processInfo.environment,
+                profile: .current,
+                searchPaths: CommandResolver.preferredPaths())
+        } ?? self.probeEnvironment(location: executable)
+        let canonicalAuthority: CanonicalUpdateAuthority?
+        do {
+            canonicalAuthority = try installedCLI == nil ? self
+                .captureCanonicalUpdateAuthority(executable: executable) : nil
+        } catch {
+            return .failure(message: String(localized: "Gateway update failed."), details: error.localizedDescription)
+        }
+        if let canonicalAuthority, canonicalAuthority.file == nil {
+            command = canonicalAuthority.cli.prefix + command.dropFirst()
+        }
+        let beforeSpawn: @Sendable () -> String? = {
+            if let installedCLI { return GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: installedCLI) }
+            return canonicalAuthority?.currentError()
+        }
+        do { try await checkCurrent?() } catch {
+            let message = String(localized: "Gateway update failed.")
+            await statusHandler(message)
+            return .failure(message: message, details: error.localizedDescription)
+        }
+        if let error = beforeSpawn() {
+            let message = String(localized: "Gateway update failed.")
+            await statusHandler(message)
+            return .failure(message: message, details: error)
+        }
+        do { try onDispatch?() } catch {
+            let message = String(localized: "Gateway update failed.")
+            await statusHandler(message)
+            return .failure(message: message, details: error.localizedDescription)
+        }
         let response = await ShellExecutor.runDetailed(
             command: command,
             cwd: nil,
             env: environment,
             // The CLI timeout is per step. Keep the aggregate watchdog above
             // the full package, plugin, doctor, and restart sequence.
-            timeout: 7200)
+            timeout: self.managedUpdateTimeout,
+            beforeSpawn: beforeSpawn)
         let summary = self.parseManagedUpdateSummary(response.stdout)
 
         let reportedStatus = summary?.status
@@ -563,7 +682,10 @@ enum CLIInstaller {
             return .failure(message: message, details: details.map(self.limitDiagnostic))
         }
 
-        let managedStatus = await self.managedStatus(expectedVersion: targetVersion)
+        let managedStatus = await self.managedStatus(
+            expectedVersion: targetVersion,
+            installedCLI: installedCLI,
+            usesBundledRuntime: false)
         guard case let .ready(_, installedVersion) = managedStatus else {
             let message = String(localized: "Gateway update finished, but verification failed.")
             await statusHandler(message)
@@ -606,8 +728,8 @@ enum CLIInstaller {
     }
 
     static func activateLocalGateway(
-        mode: AppState.ConnectionMode = AppStateStore.shared.connectionMode,
-        paused: Bool = AppStateStore.shared.isPaused,
+        mode: @autoclosure () -> AppState.ConnectionMode = AppStateStore.shared.connectionMode,
+        paused: @autoclosure () -> Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
         waitUntilReady: @MainActor () async -> Bool = {
             await GatewayProcessManager.shared.waitForGatewayReady(
@@ -616,10 +738,11 @@ enum CLIInstaller {
         failureReason: @MainActor () -> String? = { GatewayProcessManager.shared.lastFailureReason }) async
         -> LocalGatewayActivation
     {
-        guard mode == .local, !paused else { return .deferred }
+        guard mode() == .local, !paused() else { return .deferred }
         start()
-        guard await waitUntilReady() else { return .failed(reason: failureReason()) }
-        return .ready
+        let ready = await waitUntilReady()
+        guard mode() == .local, !paused() else { return .deferred }
+        return ready ? .ready : .failed(reason: failureReason())
     }
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {

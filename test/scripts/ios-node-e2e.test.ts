@@ -4,6 +4,7 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
+import { withinTest } from "../helpers/promise.js";
 
 type ScriptResult = {
   status: number | null;
@@ -169,118 +170,95 @@ async function listenGateway(params: {
   return `ws://127.0.0.1:${address.port}`;
 }
 
-function runScript(url: string, extraArgs: readonly string[] = []): Promise<ScriptResult> {
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      [
-        "--import",
-        "tsx",
-        "scripts/dev/ios-node-e2e.ts",
-        "--url",
-        url,
-        "--token",
-        "token",
-        "--json",
-        ...extraArgs,
-      ],
-      { stdio: "pipe" },
-    );
-    const stdout = createBoundedChildOutput();
-    const stderr = createBoundedChildOutput();
-    let settled = false;
-    const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      child.kill("SIGKILL");
-      resolve({
-        status: null,
-        signal: "SIGKILL",
-        stdout: stdout.text(),
-        stderr: stderr.text(),
-        timedOut: true,
-      });
-    }, 5000);
-    timeout.unref?.();
-    child.stdout.on("data", (chunk) => {
-      stdout.append(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.append(chunk);
-    });
-    child.on("close", (status, signal) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      clearTimeout(timeout);
-      resolve({ status, signal, stdout: stdout.text(), stderr: stderr.text(), timedOut: false });
-    });
-  });
+function runScript(
+  url: string,
+  signal: AbortSignal,
+  extraArgs: readonly string[] = [],
+): Promise<ScriptResult> {
+  return runScriptRaw(["--url", url, "--token", "token", "--json", ...extraArgs], signal);
 }
 
-function runScriptRaw(args: readonly string[]): Promise<ScriptResult> {
-  return new Promise((resolve) => {
-    const child = spawn(
-      process.execPath,
-      ["--import", "tsx", "scripts/dev/ios-node-e2e.ts", ...args],
-      {
-        stdio: "pipe",
-      },
-    );
-    const stdout = createBoundedChildOutput();
-    const stderr = createBoundedChildOutput();
-    child.stdout.on("data", (chunk) => {
-      stdout.append(chunk);
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr.append(chunk);
-    });
-    child.on("close", (status, signal) => {
-      resolve({ status, signal, stdout: stdout.text(), stderr: stderr.text(), timedOut: false });
+async function runScriptRaw(args: readonly string[], signal: AbortSignal): Promise<ScriptResult> {
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "scripts/dev/ios-node-e2e.ts", ...args],
+    { stdio: "pipe" },
+  );
+  const stdout = createBoundedChildOutput();
+  const stderr = createBoundedChildOutput();
+  child.stdout.on("data", (chunk) => {
+    stdout.append(chunk);
+  });
+  child.stderr.on("data", (chunk) => {
+    stderr.append(chunk);
+  });
+  let spawnError: Error | undefined;
+  child.once("error", (error) => {
+    spawnError = error;
+  });
+  // Retain close from launch so abort cleanup joins the process and both output pipes.
+  const closed = new Promise<ScriptResult>((resolve) => {
+    child.once("close", (status, childSignal) => {
+      resolve({
+        status,
+        signal: childSignal,
+        stdout: stdout.text(),
+        stderr: stderr.text(),
+        timedOut: false,
+      });
     });
   });
+  try {
+    const result = await withinTest(closed, signal);
+    if (spawnError) {
+      throw spawnError;
+    }
+    return result;
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
+  }
 }
 
 describe("ios-node-e2e", () => {
-  it("prints CLI help without connecting", async () => {
-    const result = await runScriptRaw(["--help"]);
+  it("prints CLI help without connecting", async ({ signal }) => {
+    const result = await runScriptRaw(["--help"], signal);
 
     expect(result).toMatchObject({ signal: null, status: 0, timedOut: false });
     expect(result.stdout).toContain("Usage: bun scripts/dev/ios-node-e2e.ts");
     expect(result.stderr).toBe("");
   });
 
-  it("rejects unknown CLI args before connecting", async () => {
-    const result = await runScript("ws://127.0.0.1:9", ["--wat"]);
+  it("rejects unknown CLI args before connecting", async ({ signal }) => {
+    const result = await runScript("ws://127.0.0.1:9", signal, ["--wat"]);
 
     expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
     expect(result.stderr.trim()).toBe("Unknown argument: --wat");
     expect(result.stdout).toBe("");
   });
 
-  it("rejects short flags as CLI option values before help handling", async () => {
-    const result = await runScriptRaw(["--url", "-h", "--token", "token"]);
+  it("rejects short flags as CLI option values before help handling", async ({ signal }) => {
+    const result = await runScriptRaw(["--url", "-h", "--token", "token"], signal);
 
     expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
     expect(result.stderr.trim()).toBe("--url requires a value");
     expect(result.stdout).toBe("");
   });
 
-  it("rejects malformed wait seconds before connecting", async () => {
-    const result = await runScript("ws://127.0.0.1:9", ["--wait-seconds", "1e3"]);
+  it("rejects malformed wait seconds before connecting", async ({ signal }) => {
+    const result = await runScript("ws://127.0.0.1:9", signal, ["--wait-seconds", "1e3"]);
 
     expect(result).toMatchObject({ signal: null, status: 1, timedOut: false });
     expect(result.stderr).toContain("--wait-seconds must be a positive integer; got: 1e3");
     expect(result.stdout).toBe("");
   });
 
-  it("fails empty node invoke payloads instead of counting them as proof", async () => {
+  it("fails empty node invoke payloads instead of counting them as proof", async ({ signal }) => {
     const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
     const url = await listenGateway({ mode: "empty", invokeParams });
-    const result = await runScript(url);
+    const result = await runScript(url, signal);
     const report = JSON.parse(result.stdout) as {
       results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
     };
@@ -299,10 +277,10 @@ describe("ios-node-e2e", () => {
     expect(invokeParams.length).toBeGreaterThan(0);
   });
 
-  it("fails malformed primitive device info payloads", async () => {
+  it("fails malformed primitive device info payloads", async ({ signal }) => {
     const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
     const url = await listenGateway({ mode: "primitive-device-info", invokeParams });
-    const result = await runScript(url);
+    const result = await runScript(url, signal);
     const report = JSON.parse(result.stdout) as {
       results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
     };
@@ -315,10 +293,10 @@ describe("ios-node-e2e", () => {
     });
   });
 
-  it("fails malformed nested payloadJSON payloads", async () => {
+  it("fails malformed nested payloadJSON payloads", async ({ signal }) => {
     const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
     const url = await listenGateway({ mode: "invalid-payload-json", invokeParams });
-    const result = await runScript(url);
+    const result = await runScript(url, signal);
     const report = JSON.parse(result.stdout) as {
       results: Array<{ error?: string; id: string; ok: boolean; payload?: unknown }>;
     };
@@ -331,10 +309,10 @@ describe("ios-node-e2e", () => {
     });
   });
 
-  it("accepts non-empty node invoke payloads and sends idempotency keys", async () => {
+  it("accepts non-empty node invoke payloads and sends idempotency keys", async ({ signal }) => {
     const invokeParams: Array<{ command?: string; idempotencyKey?: string }> = [];
     const url = await listenGateway({ mode: "valid", invokeParams });
-    const result = await runScript(url);
+    const result = await runScript(url, signal);
     const report = JSON.parse(result.stdout) as {
       results: Array<{ id: string; ok: boolean }>;
     };

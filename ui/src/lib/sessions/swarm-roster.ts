@@ -1,6 +1,7 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { childSessionListQuery } from "./child-session-data.ts";
 import type { SessionCapability, SessionListSnapshot, SessionRowObservation } from "./index.ts";
 import { fetchPagedSessionRows } from "./paged-session-rows.ts";
 import {
@@ -10,16 +11,6 @@ import {
 } from "./session-key.ts";
 
 const SWARM_SESSION_PAGE_SIZE = 10_000;
-
-function childQuery(parentKey: string) {
-  return {
-    spawnedBy: parentKey,
-    limit: SWARM_SESSION_PAGE_SIZE,
-    includeGlobal: false,
-    includeUnknown: false,
-    configuredAgentsOnly: true,
-  };
-}
 
 function readSwarmEnabled(value: unknown): boolean | undefined {
   if (typeof value === "boolean") {
@@ -45,12 +36,6 @@ export function isSwarmEnabledInConfig(config: unknown, agentId?: string): boole
   return agentEnabled ?? globalEnabled ?? true;
 }
 
-function isNewerSessionRow(candidate: GatewaySessionRow, current: GatewaySessionRow): boolean {
-  // Equal persisted timestamps intentionally prefer the later row source,
-  // while Map replacement preserves each key's first insertion position.
-  return (candidate.updatedAt ?? 0) >= (current.updatedAt ?? 0);
-}
-
 export function mergeSwarmSessionRows(
   ...rowSources: readonly (readonly GatewaySessionRow[])[]
 ): GatewaySessionRow[] {
@@ -58,7 +43,8 @@ export function mergeSwarmSessionRows(
   for (const rows of rowSources) {
     for (const row of rows) {
       const current = merged.get(row.key);
-      if (!current || isNewerSessionRow(row, current)) {
+      // Ties prefer the later source without changing the first insertion position.
+      if (!current || (row.updatedAt ?? 0) >= (current.updatedAt ?? 0)) {
         merged.set(row.key, row);
       }
     }
@@ -72,8 +58,12 @@ export async function hydrateSwarmSessionRows(params: {
   isCurrent: () => boolean;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
-  const childRows = await fetchPagedSessionRows({
-    list: (offset) => params.sessions.list({ ...childQuery(params.parentKey), offset }),
+  return fetchPagedSessionRows({
+    list: (offset) =>
+      params.sessions.list({
+        ...childSessionListQuery(params.parentKey, SWARM_SESSION_PAGE_SIZE),
+        offset,
+      }),
     initialResult: params.initialResult,
     isCurrent: params.isCurrent,
     missingResultError: "child session list returned no result",
@@ -82,13 +72,12 @@ export async function hydrateSwarmSessionRows(params: {
       return rows.map((row) => params.sessions.inheritRow({ ...row, runtimeSampledAt }, row));
     },
   });
-  return childRows;
 }
 
 type SwarmHydrationParams = {
   sessions: Pick<SessionCapability, "list" | "inheritRow" | "observeRow" | "observeList">;
   agentId?: string;
-  readParent: () => Promise<GatewaySessionRow | null>;
+  readParent: (refresh?: boolean) => Promise<GatewaySessionRow | null>;
   parentKey: string;
   sourceEpoch: number;
   currentRows: () => readonly GatewaySessionRow[];
@@ -118,6 +107,7 @@ export class SwarmRosterHydrator {
   private childRows: GatewaySessionRow[] = [];
   private parentRequest: Promise<void> | null = null;
   private parentRefreshQueued = false;
+  private parentRefreshForced = false;
   private publishingParentRead = false;
 
   update(params: SwarmHydrationParams): void {
@@ -176,11 +166,14 @@ export class SwarmRosterHydrator {
         },
       },
     );
-    this.children = params.sessions.observeList(childQuery(params.parentKey), (snapshot) => {
-      if (isCurrent()) {
-        this.applyChildren(snapshot);
-      }
-    });
+    this.children = params.sessions.observeList(
+      childSessionListQuery(params.parentKey, SWARM_SESSION_PAGE_SIZE),
+      (snapshot) => {
+        if (isCurrent()) {
+          this.applyChildren(snapshot);
+        }
+      },
+    );
     // Parent counts remain independent of the optional child-name page.
     void this.readParent();
     void this.children.refresh().catch(() => {
@@ -254,9 +247,10 @@ export class SwarmRosterHydrator {
     }, delay);
   }
 
-  private readParent(): Promise<void> {
+  private readParent(refresh = false): Promise<void> {
     if (this.parentRequest) {
       this.parentRefreshQueued = true;
+      this.parentRefreshForced ||= refresh;
       return this.parentRequest;
     }
     const params = this.params;
@@ -271,36 +265,32 @@ export class SwarmRosterHydrator {
       // The describe publishes synchronously through its observation. Only external
       // summaries should queue replacement work behind this same read.
       this.publishingParentRead = true;
+      let outcome: ReturnType<typeof reconcile>;
       try {
-        return reconcile(row);
+        outcome = reconcile(row);
       } finally {
         this.publishingParentRead = false;
       }
+      if (outcome.status === "invalidated") {
+        this.parentRefreshQueued = true;
+      } else if (outcome.status === "current") {
+        this.recovered("parent");
+      }
     };
     const request = Promise.resolve()
-      .then(() => params.readParent())
+      .then(() => params.readParent(refresh))
       .then((row) => {
         if (!isCurrent()) {
           return;
         }
-        const outcome = publish(row ?? undefined);
-        if (outcome.status === "invalidated") {
-          this.parentRefreshQueued = true;
-        } else if (outcome.status === "current") {
-          this.recovered("parent");
-        }
+        publish(row ?? undefined);
       })
       .catch((error: unknown) => {
         if (!isCurrent()) {
           return;
         }
         if (error instanceof GatewayRequestError && error.code === "INVALID_REQUEST") {
-          const outcome = publish(undefined);
-          if (outcome.status === "invalidated") {
-            this.parentRefreshQueued = true;
-          } else if (outcome.status === "current") {
-            this.recovered("parent");
-          }
+          publish(undefined);
         } else {
           this.retry("parent");
         }
@@ -311,8 +301,10 @@ export class SwarmRosterHydrator {
         }
         this.parentRequest = null;
         if (this.parentRefreshQueued) {
+          const queuedRefresh = this.parentRefreshForced;
           this.parentRefreshQueued = false;
-          void this.readParent();
+          this.parentRefreshForced = false;
+          void this.readParent(queuedRefresh);
         }
       });
     this.parentRequest = request;
@@ -356,7 +348,8 @@ export class SwarmRosterHydrator {
       );
     });
     if (this.parentRow && (removedMember || missingDetail)) {
-      void this.readParent();
+      // Child membership can change without invalidating the parent's descriptor revision.
+      void this.readParent(true);
     }
     const generation = this.generation;
     const isCurrent = () => generation === this.generation && this.childResult === result;
@@ -398,6 +391,7 @@ export class SwarmRosterHydrator {
     this.childRows = [];
     this.parentRequest = null;
     this.parentRefreshQueued = false;
+    this.parentRefreshForced = false;
     this.rows = [];
     this.key = key;
     this.generation += 1;

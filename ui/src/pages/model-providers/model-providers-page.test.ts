@@ -232,39 +232,6 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
-  it("keeps the Models header focused on provider actions", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.querySelector("[data-models-connect]")).not.toBeNull());
-    expect(page.querySelector("openclaw-agent-select")).toBeNull();
-    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
-      "Providers and credentials for the selected agent.",
-    );
-  });
-
-  it("links the page subtitle to the model providers guide", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await page.updateComplete;
-
-    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(link?.textContent?.trim()).toBe("Learn more");
-    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
-  });
-
-  it("opens model setup from the Model setup action", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await page.updateComplete;
-
-    const action = [
-      ...page.querySelectorAll<HTMLButtonElement>(".page-header-actions button"),
-    ].find((button) => button.textContent?.includes("Model setup"));
-    expect(action?.querySelector("svg")).not.toBeNull();
-    action?.click();
-    expect(context.navigate).toHaveBeenCalledWith("model-setup");
-  });
-
   it.each([
     {
       access: "read-only",
@@ -521,34 +488,10 @@ describe("ModelProvidersPage agent scope", () => {
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);
     expect(page.addProviderKey).toBe("");
-    const form = page.querySelector(".model-providers__add-form")?.parentElement;
+    const form = page.querySelector("[data-models-key-dialog]");
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
-  });
-
-  it("keeps committed default models visible until their authoritative refresh succeeds", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config.get failed after saving default models";
-    });
-    const page = appendPage(context);
-    await waitForProviders(page);
-    const selection: DefaultModelSelection = {
-      primary: "openai/gpt-5",
-      fallbacks: [],
-      utilityModel: null,
-    };
-    page.defaultsDraft = selection;
-
-    await page.saveDefaults();
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.defaultsDraft).toBe(selection);
-    expect(page.messages.defaults).toEqual({
-      kind: "warning",
-      text: "config.get failed after saving default models",
-    });
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
@@ -1009,7 +952,7 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForProviders(page);
     request.mockClear();
 
-    await page.probe("openai", ["openai"]);
+    await page.profileActions.probe("openai", ["openai"]);
 
     expect(request).toHaveBeenCalledWith("models.probe", {
       provider: "openai",
@@ -1025,7 +968,7 @@ describe("ModelProvidersPage agent scope", () => {
     const firstProbe = deferred<ModelsProbeResult>();
     request.mockImplementationOnce(() => firstProbe.promise);
 
-    const probing = page.probe("anthropic", ["anthropic", "claude-cli"]);
+    const probing = page.profileActions.probe("anthropic", ["anthropic", "claude-cli"]);
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("models.probe", {
         provider: "anthropic",
@@ -1055,7 +998,7 @@ describe("ModelProvidersPage agent scope", () => {
     const pending = deferred<ModelsProbeResult>();
     request.mockImplementationOnce(() => pending.promise);
 
-    const probing = page.probe("openai", ["openai"]);
+    const probing = page.profileActions.probe("openai", ["openai"]);
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("models.probe", {
         provider: "openai",

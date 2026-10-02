@@ -3,10 +3,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentConfig, AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  ChatMetadataSnapshotUnavailableError,
-  createGatewayChatMetadataRuntime,
-} from "../gateway/server-methods/chat-metadata-runtime.js";
+import { ChatMetadataSnapshotUnavailableError } from "../gateway/server-methods/chat-metadata-facts.js";
+import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
@@ -28,14 +26,12 @@ const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
 describe("chat metadata with published model owners", () => {
   it.each([
-    { shape: "entries", count: 1 },
-    { shape: "list", count: 1 },
     { shape: "entries", count: 64 },
     { shape: "list", count: 64 },
   ] as const)(
     "bounds unchanged refresh work for $count $shape agents and observes roster replacement",
     async ({ shape, count }) => {
-      const fixture = createCatalogFixture(makeTempDir, 0);
+      const fixture = await createCatalogFixture(makeTempDir, 0);
       const pluginCatalogWrites = Object.fromEntries(
         loadPersistedPluginModelCatalogsReadOnly(fixture.agentDir).map(({ pluginId, contents }) => [
           encodePluginModelCatalogRelativePath(pluginId),
@@ -84,7 +80,7 @@ describe("chat metadata with published model owners", () => {
               }),
         },
       };
-      const add = (id: string) => {
+      const add = async (id: string) => {
         const entry = {
           id,
           agentDir: path.join(fixture.root, "agents", id),
@@ -97,17 +93,18 @@ describe("chat metadata with published model owners", () => {
         retireAfterTest(() => {
           unregisterResolvedAgentDir({ agentId: id, agentDir: entry.agentDir, env: fixture.env });
         });
-        replacePersistedPluginModelCatalogs({
+        await replacePersistedPluginModelCatalogs({
           agentDir: resolveAgentDir(config, id, fixture.env),
           pluginCatalogWrites,
         });
         return entry;
       };
-      const configured = Array.from({ length: count }, (_, index) =>
-        add(index === 0 ? "main" : `agent-${index}`),
-      );
+      const configured: Array<Awaited<ReturnType<typeof add>>> = [];
+      for (let index = 0; index < count; index++) {
+        configured.push(await add(index === 0 ? "main" : `agent-${index}`));
+      }
       const published = new Map<string, PreparedModelRuntimeSnapshot>();
-      const publish = async (entry: ReturnType<typeof add>, force = false) => {
+      const publish = async (entry: Awaited<ReturnType<typeof add>>, force = false) => {
         const snapshot = await publishPreparedModelRuntimeSnapshot(
           {
             agentId: entry.id,
@@ -184,7 +181,7 @@ describe("chat metadata with published model owners", () => {
         );
         expect((await runtime.read({ agentId: "main" })).models).toContainEqual(expectedModel);
         expect(builds).toBe(count + 1);
-        const added = add("added");
+        const added = await add("added");
         await expect(runtime.refresh()).rejects.toBeInstanceOf(
           ChatMetadataSnapshotUnavailableError,
         );

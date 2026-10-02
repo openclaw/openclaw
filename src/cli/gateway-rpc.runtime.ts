@@ -1,17 +1,16 @@
-// Runtime gateway RPC helper shared by CLI commands that call the Gateway.
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isImplicitLocalGatewayTarget } from "../gateway/call.js";
-import { SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
+import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { resolveGatewayLocalPortOverride } from "./gateway-port-option.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 import { withProgress } from "./progress.js";
 
-type CallGatewayFromCliRuntimeExtra = {
+export type GatewayRpcExtraOptions = {
   clientName?: Parameters<typeof callGateway>[0]["clientName"];
   mode?: Parameters<typeof callGateway>[0]["mode"];
   deviceIdentity?: Parameters<typeof callGateway>[0]["deviceIdentity"];
@@ -19,6 +18,10 @@ type CallGatewayFromCliRuntimeExtra = {
   expectFinal?: boolean;
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
+  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
+};
+
+type CallGatewayFromCliRuntimeExtra = GatewayRpcExtraOptions & {
   defaultTimeoutMs?: number;
   timeoutMs?: number | null;
   label?: string;
@@ -27,7 +30,6 @@ type CallGatewayFromCliRuntimeExtra = {
     typeof callGateway
   >[0]["requiredStoredDeviceAuthScopes"];
   requireLocalBackendSharedAuth?: boolean;
-  sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
 type GatewayCliTransportRpcOpts = Omit<GatewayRpcOpts, "timeout"> & {
@@ -54,14 +56,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
   params?: unknown,
   extra?: CallGatewayFromCliRuntimeExtra,
 ) {
-  if (
-    process.env[SUBAGENT_EXEC_ENV_VAR] === "1" &&
-    ["sessions.send", "sessions.steer", "chat.send"].includes(method)
-  ) {
-    throw new Error(
-      "Subagent session messages must use the task completion path. Return your result or blocker in the child turn; do not use the CLI to contact other sessions.",
-    );
-  }
+  assertGatewayCliMessageContext(method, params);
   const localPortOverride = resolveGatewayLocalPortOverride(opts);
   // Progress is disabled for JSON output so stdout stays parseable.
   const showProgress = extra?.progress ?? opts.json !== true;
@@ -96,6 +91,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,
+        allowLocalBackendAuthNone: extra?.clientName === undefined && extra?.mode === undefined,
         sharedStateMode: extra?.sharedStateMode,
         signal: extra?.signal,
         timeoutMs,

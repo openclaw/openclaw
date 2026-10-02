@@ -108,13 +108,9 @@ export function isIpv6Address(address: ParsedIpAddress): address is ipaddr.IPv6 
 }
 
 function normalizeIpv4MappedAddress(address: ParsedIpAddress): ParsedIpAddress {
-  if (!isIpv6Address(address)) {
-    return address;
-  }
-  if (!address.isIPv4MappedAddress()) {
-    return address;
-  }
-  return address.toIPv4Address();
+  return isIpv6Address(address) && address.isIPv4MappedAddress()
+    ? address.toIPv4Address()
+    : address;
 }
 
 function normalizeIpParseInput(raw: string | undefined): string | undefined {
@@ -163,11 +159,7 @@ export function isCanonicalDottedDecimalIPv4(raw: string | undefined): boolean {
 
 /** Detects legacy numeric IPv4 forms that canonical parsing deliberately rejects. */
 export function isLegacyIpv4Literal(raw: string | undefined): boolean {
-  const trimmed = normalizeOptionalString(raw);
-  if (!trimmed) {
-    return false;
-  }
-  const normalized = stripIpv6Brackets(trimmed);
+  const normalized = normalizeIpParseInput(raw);
   if (!normalized || normalized.includes(":")) {
     return false;
   }
@@ -175,16 +167,7 @@ export function isLegacyIpv4Literal(raw: string | undefined): boolean {
     return false;
   }
   const parts = normalized.split(".");
-  if (parts.length === 0 || parts.length > 4) {
-    return false;
-  }
-  if (parts.some((part) => part.length === 0)) {
-    return false;
-  }
-  if (!parts.every((part) => isNumericIpv4LiteralPart(part))) {
-    return false;
-  }
-  return true;
+  return parts.length <= 4 && parts.every(isNumericIpv4LiteralPart);
 }
 
 /** True when a canonical IP literal is loopback, including IPv4-mapped IPv6. */

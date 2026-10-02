@@ -16,7 +16,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
-it("serves the reconciled incognito branch through authenticated Gateway history", async () => {
+it("serves authorized incognito descriptions, events, and reconciled history", async () => {
   const state = await createOpenClawTestState({
     label: "incognito-reconcile-gateway",
     env: {
@@ -33,6 +33,7 @@ it("serves the reconciled incognito branch through authenticated Gateway history
     },
   });
   let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+  const events: Array<{ event?: string; payload?: unknown }> = [];
   await runQaGatewayFixture(
     async () => {
       const cfg = {
@@ -40,6 +41,7 @@ it("serves the reconciled incognito branch through authenticated Gateway history
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
+            model: { primary: "openai/gpt-5.5" },
             heartbeat: { every: "0m" },
           },
         },
@@ -52,8 +54,14 @@ it("serves the reconciled incognito branch through authenticated Gateway history
         configPath: state.configPath,
         token: "incognito-reconcile-test",
         scopes: ["operator.admin", "operator.read", "operator.write"],
+        onEvent: (event) => {
+          if (event.event === "sessions.changed" || event.event === "session.message") {
+            events.push(event);
+          }
+        },
       });
       await gateway.server.startupSettled;
+      await gateway.client.request("sessions.subscribe", {});
       const created = await gateway.client.request<{
         key: string;
         sessionId: string;
@@ -62,6 +70,15 @@ it("serves the reconciled incognito branch through authenticated Gateway history
       }>("sessions.create", { agentId: "main", incognito: true });
       expect(created.entry.incognito).toBe(true);
       expect(created.runStarted).toBe(false);
+      const described = await gateway.client.request<{ session: unknown }>("sessions.describe", {
+        agentId: "main",
+        key: created.key,
+      });
+      expect.soft(described.session).toMatchObject({
+        key: created.key,
+        sessionId: created.sessionId,
+        incognito: true,
+      });
       const options = {
         agentId: "main",
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
@@ -104,9 +121,61 @@ it("serves the reconciled incognito branch through authenticated Gateway history
       expect(projection()).toEqual({ needs_rebuild: 0 });
       const history = await gateway.client.request<{
         sessionId: string;
+        sessionInfo?: {
+          key: string;
+          sessionId: string;
+          incognito: boolean;
+          modelProvider: string;
+          model: string;
+        };
         messages: Array<{ role: string; content: unknown }>;
       }>("chat.history", { agentId: "main", sessionKey: created.key, limit: 10 });
+      await persistSessionTranscriptTurn(
+        { agentId: "main", sessionKey: created.key, sessionId: created.sessionId },
+        {
+          expectedSessionId: created.sessionId,
+          messages: [
+            {
+              eventId: "published",
+              parentId: "active",
+              message: { role: "assistant", content: "published" },
+            },
+          ],
+        },
+      );
+      await expect
+        .poll(() => events)
+        .toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              event: "sessions.changed",
+              payload: expect.objectContaining({
+                sessionKey: created.key,
+                session: expect.objectContaining({ sessionId: created.sessionId, incognito: true }),
+              }),
+            }),
+            expect.objectContaining({
+              event: "session.message",
+              payload: expect.objectContaining({
+                sessionKey: created.key,
+                session: expect.objectContaining({ sessionId: created.sessionId, incognito: true }),
+              }),
+            }),
+          ]),
+        );
+      const roster = await gateway.client.request<{ sessions: Array<{ key: string }> }>(
+        "sessions.list",
+        {},
+      );
+      expect(roster.sessions.map(({ key }) => key)).not.toContain(created.key);
       expect(history.sessionId).toBe(created.sessionId);
+      expect(history.sessionInfo).toMatchObject({
+        key: created.key,
+        sessionId: created.sessionId,
+        incognito: true,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+      });
       expect(history.messages.map(({ role, content }) => ({ role, content }))).toEqual([
         { role: "user", content: "root" },
         { role: "assistant", content: "active" },

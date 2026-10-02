@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 function captureLegacySessionSources(stateDir) {
-  const directory = path.join(stateDir, "sessions");
+  const directory = path.join(stateDir, "agents", "main", "sessions");
   const sources = Object.fromEntries(
     fs.readdirSync(directory).map((name) => [
       name,
@@ -18,10 +18,8 @@ function captureLegacySessionSources(stateDir) {
 }
 
 function usesMissingPathFixture() {
-  return (
-    ["base", "missing-load-path"].includes(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO) &&
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE === "manual"
-  );
+  // Artifact-only base/manual rows seed sessions without the missing-path scenario.
+  return process.env.OPENCLAW_UPGRADE_SURVIVOR_MISSING_LOAD_PATH_SEEDED === "1";
 }
 
 function fixturePath() {

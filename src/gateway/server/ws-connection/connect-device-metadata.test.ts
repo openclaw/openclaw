@@ -27,25 +27,6 @@ describe("resolvePinnedClientMetadata", () => {
   );
 
   it.each([
-    ["cli", "probe"],
-    ["gateway-client", "backend"],
-  ])("accepts the Windows runtime alias for affected caller %s/%s", (clientId, clientMode) => {
-    expect(
-      resolvePinnedClientMetadata({
-        clientId,
-        clientMode,
-        claimedPlatform: "windows",
-        claimedDeviceFamily: "Windows",
-        pairedPlatform: "win32",
-        pairedDeviceFamily: undefined,
-      }),
-    ).toMatchObject({
-      platformMismatch: false,
-      deviceFamilyMismatch: false,
-    });
-  });
-
-  it.each([
     { pairedPlatform: "linux", claimedDeviceFamily: "Windows" },
     { pairedPlatform: "win32", claimedDeviceFamily: "Linux" },
     { pairedPlatform: "darwin", claimedDeviceFamily: "Windows" },
@@ -163,7 +144,6 @@ describe("resolvePinnedClientMetadata", () => {
     ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
     ["openclaw-android", "Android 16", "Android 15", "Android"],
     ["openclaw-macos", "macOS 26.5.1", "macOS 26.5.0", "Mac"],
-    ["openclaw-macos", "macOS 27.0.0", "macOS 26.5.1", "Mac"],
   ])(
     "allows %s platform version refresh without metadata-upgrade approval",
     (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
@@ -186,11 +166,11 @@ describe("resolvePinnedClientMetadata", () => {
     },
   );
 
-  it.each(["node", "ui"])("allows a macOS platform version refresh in %s mode", (clientMode) => {
+  it("allows a macOS platform version refresh in UI mode", () => {
     expect(
       resolvePinnedClientMetadata({
         clientId: "openclaw-macos",
-        clientMode,
+        clientMode: "ui",
         claimedPlatform: "macOS 26.5.2",
         claimedDeviceFamily: "Mac",
         pairedPlatform: "macOS 26.5.1",

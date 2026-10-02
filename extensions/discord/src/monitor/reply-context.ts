@@ -1,7 +1,9 @@
-// Discord plugin module implements reply context behavior.
 import type { Guild, Message, User } from "../internal/discord.js";
 import { resolveTimestampMs } from "./format.js";
-import { resolveDiscordMessageStickers } from "./message-forwarded.js";
+import {
+  resolveDiscordReferencedReplyMessage,
+  resolveDiscordReferencedReplyMessageId,
+} from "./message-forwarded.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
 type DiscordReplyContext = {
@@ -20,26 +22,25 @@ export function resolveReplyContext(
   message: Message,
   resolveDiscordMessageText: (message: Message, options?: { includeForwarded?: boolean }) => string,
 ): DiscordReplyContext | null {
-  const referenced = message.referencedMessage;
-  if (!referenced?.author) {
+  const id = resolveDiscordReferencedReplyMessageId(message);
+  if (!id) {
+    return null;
+  }
+  const referenced = resolveDiscordReferencedReplyMessage(message);
+  const channelId = message.messageReference?.channel_id ?? message.channelId;
+  if (!referenced?.author || referenced.id !== id) {
     return null;
   }
   const referencedText = resolveDiscordMessageText(referenced, {
     includeForwarded: true,
   });
-  const hasVisibleMedia =
-    referenced.attachments.length > 0 ||
-    (!referencedText && resolveDiscordMessageStickers(referenced).length > 0);
-  if (!referencedText && !hasVisibleMedia) {
-    return null;
-  }
   const sender = resolveDiscordSenderIdentity({
     author: referenced.author,
     pluralkitInfo: null,
   });
   return {
-    id: referenced.id,
-    channelId: referenced.channelId,
+    id,
+    channelId,
     sender: sender.tag ?? sender.label ?? "unknown",
     senderId: referenced.author.id,
     senderName: referenced.author.username ?? undefined,

@@ -1,7 +1,8 @@
 // QA Lab Codex auth product proof exercises doctor, SQLite, Gateway, and app-server together.
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createJsonlRequestTailer } from "../../../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
 import { GatewayClient } from "../../../../src/gateway/client.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
@@ -10,11 +11,18 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../../src/utils/message-channel.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../helpers/fixture-receipts.js";
 import { connectGatewayStatusClient, postJson } from "../../../helpers/gateway-e2e-harness.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
+import { withinTest } from "../../../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 import { runCodexAuthDoctorMigrationProof } from "./codex-auth-product-proof.test-support.js";
 
 const oauthAccess = "test-oauth-access";
@@ -22,12 +30,30 @@ const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
 const MISSING_PROFILE_ID = "openai:missing";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
-  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
 
 let instance: OpenClawTestInstance | undefined;
+let receipts: FixtureReceiptChannel;
+let receiptClientUrl: string;
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+  const clientPath = path.join(tempDirs.make("codex-auth-receipts-"), "client.mjs");
+  await fs.writeFile(
+    clientPath,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+export { sendReceipt };
+`,
+  );
+  receiptClientUrl = pathToFileURL(clientPath).href;
+});
+
+afterAll(async () => {
+  await receipts?.close();
+});
 
 type AppServerLogEntry = {
   id?: number | string;
@@ -35,8 +61,6 @@ type AppServerLogEntry = {
   params?: unknown;
   result?: unknown;
 };
-
-type AppServerRequestLog = { read(): AppServerLogEntry[] };
 
 type GatewayHistory = Record<string, unknown> & {
   messages?: unknown[];
@@ -47,14 +71,15 @@ type GatewayEvent = { event?: string; payload?: unknown };
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
-  options?: { allowSessionTruncation?: boolean },
+  options?: { sessionError?: boolean; diagnostic?: string },
 ) {
   const serialized = JSON.stringify(value);
-  if (options?.allowSessionTruncation) {
+  if (options?.sessionError) {
     expect(typeof value).toBe("string");
-    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT.slice(0, 160));
+    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(String(value).length).toBeLessThanOrEqual(160);
   } else {
-    expect(serialized).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(serialized, options?.diagnostic).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
   }
   expect(serialized).not.toContain(MISSING_PROFILE_ID);
   expect(serialized).not.toContain("was not found");
@@ -68,23 +93,27 @@ afterEach(async () => {
   instance = undefined;
 });
 
-function waitForRequest(requestLog: AppServerRequestLog, method: string) {
-  return vi.waitFor(
-    () => {
-      const entries = requestLog.read();
-      const request = entries.find((entry) => entry.method === method);
-      if (!request) {
-        const observedMethods = entries.flatMap((entry) =>
-          typeof entry.method === "string" ? [entry.method] : [],
-        );
-        throw new Error(
-          `waiting for Codex app-server method ${method}; observed ${observedMethods.join(", ") || "no methods"}`,
-        );
-      }
-      return request;
-    },
-    { interval: 25, timeout: REQUEST_TIMEOUT_MS },
-  );
+async function waitForRequest(
+  requestLog: { read(): AppServerLogEntry[] },
+  source: string,
+  method: string,
+  signal: AbortSignal,
+) {
+  // The transport records requests before their handlers report or reply; late receipts are safe.
+  if (!requestLog.read().some((entry) => entry.method === method)) {
+    await withinTest(receipts.waitFor(source, method), signal);
+  }
+  const entries = requestLog.read();
+  const request = entries.find((entry) => entry.method === method);
+  if (!request) {
+    const observedMethods = entries.flatMap((entry) =>
+      typeof entry.method === "string" ? [entry.method] : [],
+    );
+    throw new Error(
+      `waiting for Codex app-server method ${method}; observed ${observedMethods.join(", ") || "no methods"}`,
+    );
+  }
+  return request;
 }
 
 function chatgptAccessToken(accountId: string): string {
@@ -197,7 +226,7 @@ describe("Codex auth product proof", () => {
   it(
     "repairs mixed legacy auth into SQLite and sends the selected OAuth profile to app-server",
     { timeout: 180_000 },
-    async () => {
+    async ({ signal }) => {
       const { CODEX_APP_SERVER_VERSION } = await loadBundledPluginFacade<{
         CODEX_APP_SERVER_VERSION: string;
       }>({ pluginId: "codex", artifactBasename: "test-api.js" });
@@ -210,6 +239,8 @@ describe("Codex auth product proof", () => {
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
+          // Publish the configured runtime owner before the hook starts native task work.
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
           plugins: {
@@ -222,9 +253,8 @@ describe("Codex auth product proof", () => {
                   appServer: {
                     mode: "yolo",
                     command: process.execPath,
-                    args: [appServerFixture],
+                    args: [appServerFixture, receiptClientUrl],
                     requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
                   },
                 },
               },
@@ -264,14 +294,19 @@ describe("Codex auth product proof", () => {
       );
       expect(hook.status, JSON.stringify(hook.json)).toBe(200);
 
-      const loginRequest = await waitForRequest(appServerLog, "account/login/start");
+      const loginRequest = await waitForRequest(
+        appServerLog,
+        requestLog,
+        "account/login/start",
+        signal,
+      );
       const loginParams = loginRequest.params as Record<string, unknown>;
       expect(loginParams.type).toBe("chatgptAuthTokens");
       expect(loginParams.accessToken === oauthAccess).toBe(true);
       expect(loginParams.chatgptAccountId).toBe(ACCOUNT_ID);
       expect(loginParams.chatgptPlanType).toBeNull();
 
-      await waitForRequest(appServerLog, "turn/start");
+      await waitForRequest(appServerLog, requestLog, "turn/start", signal);
       const turnEntries = appServerLog.read();
       const threadStartIndex = turnEntries.findIndex(
         (request) => request.method === "thread/start",
@@ -372,6 +407,7 @@ describe("Codex auth product proof", () => {
       instance = await createOpenClawTestInstance({
         name: "qa-codex-missing-auth-profile",
         env: {
+          OPENCLAW_LOG_LEVEL: undefined,
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -379,6 +415,7 @@ describe("Codex auth product proof", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
+          logging: { consoleLevel: "debug" },
           plugins: {
             enabled: true,
             allow: ["codex"],
@@ -389,9 +426,8 @@ describe("Codex auth product proof", () => {
                   appServer: {
                     mode: "yolo",
                     command: process.execPath,
-                    args: [appServerFixture],
+                    args: [appServerFixture, receiptClientUrl],
                     requestTimeoutMs: REQUEST_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: REQUEST_TIMEOUT_MS,
                   },
                 },
               },
@@ -518,7 +554,7 @@ describe("Codex auth product proof", () => {
             expect(
               events.find(
                 (event) =>
-                  event.event === "session.message" &&
+                  event.event === "sessions.changed" &&
                   event.payload !== null &&
                   typeof event.payload === "object" &&
                   (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
@@ -552,23 +588,23 @@ describe("Codex auth product proof", () => {
       );
       const lifecycleEvent = events.find(
         (event) =>
-          event.event === "session.message" &&
+          event.event === "sessions.changed" &&
           event.payload !== null &&
           typeof event.payload === "object" &&
           (event.payload as { sessionKey?: unknown }).sessionKey === sessionKey &&
           (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId === runId &&
           (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
       );
-      expectBoundedMissingProfileRecovery(finalEvent?.payload);
-      // Native lifecycle publishes the failed session snapshot before broadcasting chat.error.
+      expectBoundedMissingProfileRecovery(finalEvent?.payload, { diagnostic: instance.logs() });
+      // Lifecycle metadata belongs to sessions.changed; transcript delivery has independent timing.
       expectBoundedMissingProfileRecovery(
         (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
           ?.lastRunError,
-        { allowSessionTruncation: true },
+        { sessionError: true },
       );
       expectBoundedMissingProfileRecovery(terminal);
       expectBoundedMissingProfileRecovery(failedHistory?.sessionInfo?.lastRunError, {
-        allowSessionTruncation: true,
+        sessionError: true,
       });
       expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
       expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");

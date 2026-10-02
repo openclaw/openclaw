@@ -15,15 +15,8 @@ function scopeSchemaSections(
   const include = params.include;
   const exclude = params.exclude;
   const nextProps: Record<string, JsonSchema> = {};
-  for (const key of Object.keys(schema.properties)) {
-    if (include && include.size > 0 && !include.has(key)) {
-      continue;
-    }
-    if (exclude && exclude.size > 0 && exclude.has(key)) {
-      continue;
-    }
-    const property = schema.properties[key];
-    if (property) {
+  for (const [key, property] of Object.entries(schema.properties)) {
+    if (property && (!include?.size || include.has(key)) && !exclude?.has(key)) {
       nextProps[key] = property;
     }
   }

@@ -1,23 +1,11 @@
-/**
- * Configured binding matching helpers.
- *
- * Matches compiled binding rules against inbound conversations and materializes targets.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ConversationRef } from "../../infra/outbound/session-binding-service.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import type {
-  CompiledConfiguredBinding,
-  ConfiguredBindingChannel,
-  ConfiguredBindingRecordResolution,
-} from "./binding-types.js";
-import type {
-  ChannelConfiguredBindingConversationRef,
-  ChannelConfiguredBindingMatch,
-} from "./types.adapters.js";
+import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
+import type { ChannelConfiguredBindingMatch } from "./types.adapters.js";
 
 /**
  * Ranks account pattern matches for configured binding rules.
@@ -61,20 +49,6 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
     conversationId,
     parentConversationId: normalizeOptionalString(conversation.parentConversationId),
   };
-}
-
-/**
- * Materializes a configured binding record from the winning rule and conversation.
- */
-export function materializeConfiguredBindingRecord(params: {
-  rule: CompiledConfiguredBinding;
-  accountId: string;
-  conversation: ChannelConfiguredBindingConversationRef;
-}): ConfiguredBindingRecordResolution {
-  return params.rule.targetFactory.materialize({
-    accountId: normalizeAccountId(params.accountId),
-    conversation: params.conversation,
-  });
 }
 
 /**

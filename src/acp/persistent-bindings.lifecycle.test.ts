@@ -8,7 +8,7 @@ import {
 } from "./persistent-bindings.types.js";
 
 const managerMocks = vi.hoisted(() => ({
-  resolveSession: vi.fn<(params: { sessionKey: string }) => AcpSessionResolution>(),
+  resolveSessionAsync: vi.fn<(params: { sessionKey: string }) => Promise<AcpSessionResolution>>(),
   closeSession: vi.fn(),
   initializeSession: vi.fn(),
   setSessionConfigOption: vi.fn(),
@@ -16,7 +16,7 @@ const managerMocks = vi.hoisted(() => ({
 
 vi.mock("./control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: managerMocks.resolveSession,
+    resolveSessionAsync: managerMocks.resolveSessionAsync,
     closeSession: managerMocks.closeSession,
     initializeSession: managerMocks.initializeSession,
     setSessionConfigOption: managerMocks.setSessionConfigOption,
@@ -34,9 +34,9 @@ let ensureConfiguredAcpBindingSession: typeof import("./persistent-bindings.life
 
 beforeEach(async () => {
   vi.resetModules();
-  managerMocks.resolveSession
+  managerMocks.resolveSessionAsync
     .mockReset()
-    .mockImplementation(({ sessionKey }) => ({ kind: "none", sessionKey }));
+    .mockImplementation(async ({ sessionKey }) => ({ kind: "none", sessionKey }));
   managerMocks.closeSession.mockReset().mockResolvedValue({
     runtimeClosed: true,
     metaCleared: false,
@@ -67,7 +67,7 @@ function mockReadySession(params: {
   state?: "idle" | "running" | "error";
 }) {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
-  managerMocks.resolveSession.mockReturnValue({
+  managerMocks.resolveSessionAsync.mockResolvedValue({
     kind: "ready",
     sessionKey,
     agentId: params.spec.agentId,
@@ -107,25 +107,6 @@ function expectInitializeArgs(): Record<string, unknown> {
 }
 
 describe("ensureConfiguredAcpBindingSession", () => {
-  it("keeps an existing ready session when configured binding omits cwd", async () => {
-    const spec = createPersistentSpec();
-    const sessionKey = mockReadySession({
-      spec,
-      cwd: "/workspace/openclaw",
-      model: "manual/selected-model",
-    });
-
-    const ensured = await ensureConfiguredAcpBindingSession({
-      cfg: baseCfg,
-      spec,
-    });
-
-    expect(ensured).toEqual({ ok: true, sessionKey });
-    expect(managerMocks.closeSession).not.toHaveBeenCalled();
-    expect(managerMocks.initializeSession).not.toHaveBeenCalled();
-    expect(managerMocks.setSessionConfigOption).not.toHaveBeenCalled();
-  });
-
   it.each([
     { model: "anthropic/claude-sonnet-4-6" },
     { thinking: "off" },

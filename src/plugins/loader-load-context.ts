@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -30,7 +31,9 @@ import {
 } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
-import { getPluginRegistryForContext } from "./runtime.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import { getActivePluginRegistry, getPluginRegistryForContext } from "./runtime.js";
+import { activationConfigFingerprint } from "./runtime/load-context.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 const runtimeBindingCacheIds = new WeakMap<object, number>();
@@ -47,17 +50,6 @@ function resolveRuntimeBindingCacheId(value: object | undefined): number | undef
   const id = nextRuntimeBindingCacheId++;
   runtimeBindingCacheIds.set(value, id);
   return id;
-}
-
-function resolveRuntimeBindingCacheIdentity(options: PluginLoadOptions): string {
-  const { runtimeOptions } = options;
-  return JSON.stringify({
-    capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
-    modelAuth: resolveRuntimeBindingCacheId(runtimeOptions?.modelAuth),
-    modelConfig: resolveRuntimeBindingCacheId(runtimeOptions?.modelConfig),
-    nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
-    subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
-  });
 }
 
 function buildActivationMetadataHash(params: {
@@ -125,7 +117,9 @@ function buildCacheKeys(params: {
   allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
   runtimeSideEffects: boolean;
-  cliMetadata: boolean;
+  registrationConfigOrigin?: number;
+  registrationSnapshots?: readonly string[];
+  mode: NonNullable<PluginLoadOptions["mode"]>;
   expectedSourceDigests?: Readonly<Record<string, string>>;
 }) {
   const { roots, loadPaths, devSourceRoot } = params.discoveryContext;
@@ -184,16 +178,24 @@ function buildCacheKeys(params: {
     coreGatewayMethodNames: params.coreGatewayMethodNames ?? [],
     activate: params.activate !== false,
     runtimeSideEffects: params.runtimeSideEffects,
-    cliMetadata: params.cliMetadata,
+    mode: params.mode,
     expectedSourceDigests: params.expectedSourceDigests
       ? Object.entries(params.expectedSourceDigests).toSorted(([a], [b]) => a.localeCompare(b))
       : undefined,
   };
-  // Capture request facts once; discovered manifests may replace only the source projection.
   const requestIdentity = JSON.stringify(cacheIdentity);
+  // Routine provider lookups share captured inputs; explicit workspace owners stay distinct.
+  const preparedIdentity = params.registrationSnapshots
+    ? JSON.stringify({
+        ...cacheIdentity,
+        roots: { ...roots, workspace: undefined },
+        registrationConfigOrigin: params.registrationConfigOrigin,
+        registrationSnapshots: params.registrationSnapshots,
+      })
+    : requestIdentity;
   const resolveManifestCacheKey = (manifestRegistry: PluginLoadOptions["manifestRegistry"]) =>
     createHash("sha256")
-      .update(requestIdentity)
+      .update(manifestRegistry ? preparedIdentity : requestIdentity)
       .update(
         JSON.stringify(
           manifestRegistry?.plugins.map((plugin) => [
@@ -223,12 +225,12 @@ export function resolveRuntimeSubagentMode(
 }
 
 function resolveCoreGatewayMethodNames(options: PluginLoadOptions): string[] {
-  const names = new Set(options.coreGatewayMethodNames ?? []);
-  for (const name of Object.keys(options.coreGatewayHandlers ?? {})) {
-    names.add(name);
-  }
-  // oxlint-disable-next-line unicorn/no-array-sort -- Array.from creates a private array.
-  return Array.from(names).sort();
+  return [
+    ...new Set([
+      ...(options.coreGatewayMethodNames ?? []),
+      ...Object.keys(options.coreGatewayHandlers ?? {}),
+    ]),
+  ].toSorted();
 }
 
 function mergePluginTrustList(runtimeList: string[], sourceList: readonly string[]): string[] {
@@ -287,15 +289,11 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
         onMissing: () => undefined,
       }) as OpenClawConfig)
     : rawActivationSourceConfig;
-  // Registration callbacks retain these exact snapshots for their instance lifetime.
-  const cfg = captureRuntimeConfig(runtimeConfig);
-  const activationSourceConfig =
-    activationConfig === runtimeConfig ? cfg : captureRuntimeConfig(activationConfig);
-  const normalized = normalizePluginsConfig(cfg.plugins);
+  const normalized = normalizePluginsConfig(runtimeConfig.plugins);
   // Identical plugin inputs may share facts; source channel policy keeps its own root config.
   const activationSource = createPluginActivationSource({
-    config: activationSourceConfig,
-    plugins: cfg.plugins === activationSourceConfig.plugins ? normalized : undefined,
+    config: activationConfig,
+    plugins: runtimeConfig.plugins === activationConfig.plugins ? normalized : undefined,
   });
   const trustNormalized = mergeTrustPluginConfigFromActivationSource({
     normalized,
@@ -309,6 +307,15 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     options.preferBuiltPluginArtifacts,
   );
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
+  const activeRegistry =
+    runtimeSubagentMode === "gateway-bindable" &&
+    options.mode !== "cli-metadata" &&
+    (!options.runtimeOptions?.nodes || !options.runtimeOptions?.subagent)
+      ? getActivePluginRegistry()
+      : undefined;
+  const borrowedGatewayRuntime = activeRegistry
+    ? getPluginRegistryRuntime(activeRegistry)
+    : undefined;
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   // Config identity cannot prove a custom profile's environment. Only borrow
   // the process-owned generation; full snapshots cover narrower loads, while
@@ -342,7 +349,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     ...(options.installRecords ??
       preparedInstallRecords ??
       loadInstalledPluginIndexInstallRecordsSync({ env })),
-    ...cfg.plugins?.installs,
+    ...runtimeConfig.plugins?.installs,
   };
   const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: options.workspaceDir,
@@ -356,6 +363,14 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const shouldActivate = options.mode !== "cli-metadata" && options.activate !== false;
   // Staged runtime registration is independent of publishing the process registry.
   const runtimeSideEffects = options.runtimeSideEffects ?? shouldActivate;
+  const registrationConfigOrigin = options.registrationConfigOrigin;
+  const registrationGeneration =
+    !shouldActivate && registrationConfigOrigin && getRuntimeConfigCapture(registrationConfigOrigin)
+      ? resolveRuntimeBindingCacheId(registrationConfigOrigin)
+      : undefined;
+  const manifestRegistry =
+    options.manifestRegistry ??
+    (options.discovery === undefined ? currentMetadataSnapshot?.manifestRegistry : undefined);
   const { cacheKey, resolveManifestCacheKey } = buildCacheKeys({
     discoveryContext,
     plugins: trustNormalized,
@@ -365,9 +380,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),
     installs: installRecords,
-    manifestRegistry:
-      options.manifestRegistry ??
-      (options.discovery === undefined ? currentMetadataSnapshot?.manifestRegistry : undefined),
+    manifestRegistry,
     discovery: options.manifestRegistry ? undefined : options.discovery,
     env,
     onlyPluginIds,
@@ -387,24 +400,81 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
-    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options),
+    runtimeBindingIdentity: JSON.stringify({
+      capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
+      modelAuth: resolveRuntimeBindingCacheId(options.runtimeOptions?.modelAuth),
+      modelConfig: resolveRuntimeBindingCacheId(options.runtimeOptions?.modelConfig),
+      nodes: resolveRuntimeBindingCacheId(options.runtimeOptions?.nodes),
+      subagent: resolveRuntimeBindingCacheId(options.runtimeOptions?.subagent),
+      // Root publication becomes the next donor; only caller-owned handles track donor changes.
+      borrowedGatewayRuntime: shouldActivate
+        ? undefined
+        : resolveRuntimeBindingCacheId(borrowedGatewayRuntime),
+    }),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
     activate: shouldActivate,
     runtimeSideEffects,
+    registrationConfigOrigin: registrationGeneration,
+    registrationSnapshots: registrationGeneration
+      ? [activationConfigFingerprint(runtimeConfig), activationConfigFingerprint(activationConfig)]
+      : undefined,
     expectedSourceDigests: options.expectedSourceDigests,
-    cliMetadata: options.mode === "cli-metadata",
+    mode: options.mode ?? "full",
   });
+  // Cache probes need selection facts only. Capture callbacks' immutable inputs on a miss.
+  let captured:
+    | {
+        cfg: OpenClawConfig;
+        activationSourceConfig: OpenClawConfig;
+        activationSource: PluginActivationConfigSource;
+        normalized: NormalizedPluginsConfig;
+      }
+    | undefined;
+  const capture = () => {
+    if (!captured) {
+      const cfg = captureRuntimeConfig(runtimeConfig);
+      if (registrationGeneration !== undefined && cfg !== runtimeConfig) {
+        // api.config reentry belongs to the load already registering this generation.
+        runtimeBindingCacheIds.set(cfg, registrationGeneration);
+      }
+      const activationSourceConfig =
+        activationConfig === runtimeConfig ? cfg : captureRuntimeConfig(activationConfig);
+      const capturedNormalized = normalizePluginsConfig(cfg.plugins);
+      const capturedActivationSource = createPluginActivationSource({
+        config: activationSourceConfig,
+        plugins: cfg.plugins === activationSourceConfig.plugins ? capturedNormalized : undefined,
+      });
+      captured = {
+        cfg,
+        activationSourceConfig,
+        activationSource: capturedActivationSource,
+        normalized: mergeTrustPluginConfigFromActivationSource({
+          normalized: capturedNormalized,
+          activationSource: capturedActivationSource,
+        }),
+      };
+    }
+    return captured;
+  };
   return {
     cacheState,
     env,
-    cfg,
+    get cfg() {
+      return capture().cfg;
+    },
     registrationConfigKey,
     metadataSnapshot: currentMetadataSnapshot,
-    normalized: trustNormalized,
-    activationSourceConfig,
-    activationSource,
+    get normalized() {
+      return capture().normalized;
+    },
+    get activationSourceConfig() {
+      return capture().activationSourceConfig;
+    },
+    get activationSource() {
+      return capture().activationSource;
+    },
     autoEnabledReasons: options.autoEnabledReasons ?? {},
     onlyPluginIds,
     includeSetupOnlyChannelPlugins,
@@ -415,6 +485,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeSideEffects,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
+    borrowedGatewayRuntime,
     installRecords,
     devSourceRoot: discoveryContext.devSourceRoot,
     cacheKey,

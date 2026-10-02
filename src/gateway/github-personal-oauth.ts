@@ -99,6 +99,21 @@ export function personalGitHubStatus(action: PersonalGitHubAction): PersonalGitH
   };
 }
 
+function revalidatePersonalGitHubStatus(
+  action: PersonalGitHubAction,
+  prepared: PersonalGitHubStatus,
+): PersonalGitHubStatus {
+  const current = personalGitHubStatus(action);
+  if (
+    current.generation !== prepared.generation ||
+    current.account?.accountId !== prepared.account?.accountId ||
+    current.account?.login.toLowerCase() !== prepared.account?.login.toLowerCase()
+  ) {
+    throw new Error("My GitHub connection changed; reload its status.");
+  }
+  return prepared.state === "unavailable" ? { ...current, state: "unavailable" } : current;
+}
+
 async function resolvePersonalGitHubStatus(
   action: PersonalGitHubAction,
 ): Promise<PersonalGitHubStatus> {
@@ -111,10 +126,7 @@ async function resolvePersonalGitHubStatus(
     return { ...status, state: "unavailable" };
   }
   const assertCurrent = () => {
-    action.assertCurrent();
-    if (readUserGitHubConnection(action.owner)?.generation !== record.generation) {
-      throw new Error("My GitHub connection changed; reload its status.");
-    }
+    revalidatePersonalGitHubStatus(action, status);
   };
   try {
     // Receipts use the durable selection above; live status must additionally
@@ -124,11 +136,9 @@ async function resolvePersonalGitHubStatus(
       accountId: record.selection.accountId,
       assertCurrent,
     });
-    assertCurrent();
-    return status;
+    return revalidatePersonalGitHubStatus(action, status);
   } catch {
-    assertCurrent();
-    return { ...status, state: "unavailable" };
+    return { ...revalidatePersonalGitHubStatus(action, status), state: "unavailable" };
   }
 }
 
@@ -161,6 +171,15 @@ function rotatedSelection(
     refreshExpiresAtMs: receivedAtMs + tokens.refreshTokenExpiresInSeconds * 1000,
     refreshFailure: undefined,
   };
+}
+
+function needsRefresh(selection: UserGitHubConnected): boolean {
+  return (
+    Boolean(selection.refresh?.tokens) ||
+    (selection.refreshFailure !== "expired" &&
+      selection.refreshExpiresAtMs > Date.now() &&
+      (Boolean(selection.refresh) || selection.accessExpiresAtMs <= Date.now() + 600000))
+  );
 }
 
 /** Personal adapters share device transport and profile materialization with System/agent OAuth. */
@@ -424,6 +443,9 @@ export function createPersonalGitHubOAuthLifecycle() {
       return;
     }
     const id = initial.profileId;
+    if (!rotated.has(id) && !needsRefresh(initial)) {
+      return;
+    }
     await getOrCreatePromise(
       refreshes,
       id,
@@ -439,18 +461,16 @@ export function createPersonalGitHubOAuthLifecycle() {
           }
           const record = readUserGitHubConnection(owner);
           const selection = record?.selection;
-          if (!record || selection?.kind !== "connected" || selection.profileId !== id) {
+          if (
+            !record ||
+            selection?.kind !== "connected" ||
+            selection.profileId !== id ||
+            !needsRefresh(selection)
+          ) {
             return;
           }
           if (selection.refresh?.tokens) {
             await materializeRefresh(owner, id, selection.refresh.operationId, assertOwned);
-            return;
-          }
-          if (
-            selection.refreshFailure === "expired" ||
-            selection.refreshExpiresAtMs <= Date.now() ||
-            (!selection.refresh && selection.accessExpiresAtMs > Date.now() + 600000)
-          ) {
             return;
           }
           const operationId = selection.refresh?.operationId ?? randomUUID();
@@ -577,6 +597,7 @@ export function createPersonalGitHubOAuthLifecycle() {
 
   return {
     status: resolvePersonalGitHubStatus,
+    revalidateStatus: revalidatePersonalGitHubStatus,
     async startAuthorization(
       action: PersonalGitHubAction,
     ): Promise<UsersGitHubAuthorizeStartResult> {

@@ -1,15 +1,24 @@
 import type {
-  AgentHarnessSessionForkParams,
+  AgentHarnessV2,
   AgentHarnessSessionForkResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexSessionCatalogControlFactory } from "../session-catalog-types.js";
 import { codexLastTerminalTurnId, codexUpstreamBaseline } from "../session-upstream-marker.js";
 import { forkCanonicalCodexSession } from "./canonical-session-fork.js";
+import {
+  isCodexAppServerOverloadError,
+  isCodexAppServerPrewriteRequestCancellationError,
+} from "./client.js";
 import { assertCodexThreadForkResponse } from "./protocol-validators.js";
-import type { CodexThread } from "./protocol.js";
+import type { CodexThread, CodexThreadForkResponse } from "./protocol.js";
+import { CodexAppServerScopedRequestRejectedError } from "./request.js";
 import { sessionBindingIdentity, type CodexAppServerBindingStore } from "./session-binding.js";
 import { createImportedCodexSession } from "./session-history-import.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
@@ -19,17 +28,12 @@ import {
   resolveCodexUpstreamForkBoundary,
 } from "./upstream-fork-boundary.js";
 
-function readConnectionFingerprint(ref: unknown): string | undefined {
-  if (!isRecord(ref)) {
-    return undefined;
-  }
-  return typeof ref.connectionFingerprint === "string" && ref.connectionFingerprint.trim()
-    ? ref.connectionFingerprint
-    : undefined;
+function unavailable(message: string): AgentHarnessSessionForkResult {
+  return { status: "failed", code: "upstream-unavailable", message };
 }
 
 export async function forkCodexUpstreamSession(
-  params: AgentHarnessSessionForkParams,
+  params: Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0],
   options: {
     bindingStore: CodexAppServerBindingStore;
     controlFactory: CodexSessionCatalogControlFactory;
@@ -40,19 +44,16 @@ export async function forkCodexUpstreamSession(
 ): Promise<AgentHarnessSessionForkResult> {
   try {
     const sourceFingerprint =
-      params.upstream.kind === "codex-app-server"
-        ? readConnectionFingerprint(params.upstream.ref)
+      params.upstream.kind === "codex-app-server" && isRecord(params.upstream.ref)
+        ? readNonBlankString(params.upstream.ref.connectionFingerprint)
         : undefined;
     const requestControl = sourceFingerprint
       ? await options.controlFactory.forUpstream(params.source.agentId, sourceFingerprint)
       : undefined;
     if (!sourceFingerprint || !requestControl) {
-      return {
-        status: "failed",
-        code: "upstream-unavailable",
-        message:
-          "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
-      };
+      return unavailable(
+        "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
+      );
     }
     return await requestControl.withPinnedConnection(async (control) => {
       const sourceBinding = options.bindingStore.read(
@@ -87,12 +88,9 @@ export async function forkCodexUpstreamSession(
             (sourceBinding.pendingSupervisionBranch?.connectionFingerprint ??
               sourceBinding.appServerRuntimeFingerprint) !== sourceFingerprint))
       ) {
-        return {
-          status: "failed",
-          code: "upstream-unavailable",
-          message:
-            "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
-        };
+        return unavailable(
+          "This Codex thread is not available on the current connection. Reconnect to its host and try again.",
+        );
       }
       const resolved = await resolveCodexUpstreamForkBoundary({
         ...params.source,
@@ -126,23 +124,39 @@ export async function forkCodexUpstreamSession(
       if (!precheck.ok) {
         return { status: "failed", code: precheck.code, message: precheck.message };
       }
-      // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
-      const rawResponse = await control.forkThread({
-        threadId: sourceThreadId,
-        beforeTurnId: resolved.boundary.beforeTurnId,
-        ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
-        excludeTurns: true,
-      });
-      // Malformed responses do not establish ownership of any purported orphan id.
-      const response = assertCodexThreadForkResponse(rawResponse);
-      const threadId = response.thread.id.trim();
-      if (!threadId) {
-        throw new Error("Codex thread/fork response did not include a thread id");
-      }
-      // A contract-violating response reusing the source id would bind (and later
-      // archive) the original conversation; reject identity reuse outright.
-      if (threadId === sourceThreadId || threadId === sourceBinding?.threadId) {
-        throw new Error("Codex thread/fork response reused the source thread id");
+      let response: CodexThreadForkResponse;
+      let threadId: string;
+      try {
+        // beforeTurnId is experimental; the initialized shared client explicitly negotiates it.
+        const rawResponse = await control.forkThread(
+          {
+            threadId: sourceThreadId,
+            beforeTurnId: resolved.boundary.beforeTurnId,
+            ...(params.sandbox === "required" ? { sandbox: "workspace-write" as const } : {}),
+            excludeTurns: true,
+          },
+          params.assertCurrent,
+        );
+        // Malformed responses do not establish ownership of any purported orphan id.
+        response = assertCodexThreadForkResponse(rawResponse);
+        threadId = response.thread.id.trim();
+        if (!threadId) {
+          throw new Error("Codex thread/fork response did not include a thread id");
+        }
+        // Reusing the source id would bind and later archive the original conversation.
+        if (threadId === sourceThreadId || threadId === sourceBinding?.threadId) {
+          throw new Error("Codex thread/fork response reused the source thread id");
+        }
+      } catch (error) {
+        // Native fork can subscribe before its RPC response or catalog update fails.
+        if (
+          !(error instanceof CodexAppServerScopedRequestRejectedError) &&
+          !isCodexAppServerPrewriteRequestCancellationError(error) &&
+          !isCodexAppServerOverloadError(error)
+        ) {
+          control.retireConnection?.();
+        }
+        throw error;
       }
       const forkedThreadId = threadId;
       try {
@@ -225,24 +239,18 @@ export async function forkCodexUpstreamSession(
         if (!initializerOwnsFork) {
           await options.bindingStore.withThreadArchiveFence(() => archiveFreshFork(forkedThreadId));
         }
-        return {
-          status: "failed",
-          code: "upstream-unavailable",
-          message:
-            error instanceof Error
-              ? error.message
-              : "The Codex fork could not be imported. Refresh sessions and try again.",
-        };
+        return unavailable(
+          error instanceof Error
+            ? error.message
+            : "The Codex fork could not be imported. Refresh sessions and try again.",
+        );
       }
     });
   } catch (error) {
-    return {
-      status: "failed",
-      code: "upstream-unavailable",
-      message:
-        error instanceof Error
-          ? error.message
-          : "The Codex thread could not be forked. Check that Codex is available, then try again.",
-    };
+    return unavailable(
+      error instanceof Error
+        ? error.message
+        : "The Codex thread could not be forked. Check that Codex is available, then try again.",
+    );
   }
 }

@@ -2,19 +2,33 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
+import * as ancestry from "../../infra/restart-stale-pids.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   formatUpdateAncestryBlockMessage,
-  gatewayMaintenanceBlockMessage,
+  gatewayMaintenanceBlock,
+  handoffUpdateFromGateway,
 } from "./update-command-handoff.js";
 
+const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
+
 const tempDirs = createTrackedTempDirs();
-afterEach(() => tempDirs.cleanup());
+beforeEach(async () => {
+  const control = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-parent-control-"));
+  vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await tempDirs.cleanup();
+});
 
 it.runIf(process.platform === "darwin").each(["cancel", "cancel-output-first", "transfer"])(
   "settles the initiating CLI's owned handoff lifetime: %s",
@@ -25,7 +39,8 @@ it.runIf(process.platform === "darwin").each(["cancel", "cancel-output-first", "
     const tracePath = path.join(root, "trace.jsonl");
     const resultPath = path.join(root, "result.json");
     const managerPath = path.join(root, "manager-calls");
-    const leasePath = path.join(resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite");
+    const control = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-control-"));
+    const leasePath = path.join(control, "managed-update-handoffs.sqlite");
     await fs.mkdir(path.join(root, "dist"));
     await fs.writeFile(
       path.join(root, "package.json"),
@@ -58,6 +73,9 @@ if(process.argv[1]===${JSON.stringify(callerPath)} && ${mode !== "transfer"}) {
 } else if(process.argv[1]?.endsWith('/handoff.cjs')) {
   const params=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));
   if(params.updateLeaseKey===${JSON.stringify(root)}) {
+    if(params.updateLeaseDatabasePath!==${JSON.stringify(leasePath)} || params.updateLeaseDatabaseIdentity?.databasePath!==${JSON.stringify(leasePath)}) {
+      throw new Error("Fixture handoff escaped its private lease database");
+    }
     if(${mode === "cancel-output-first"}) {
       // Close only helper output before native exit; the initiating CLI has no keepalive.
       process.once('beforeExit',()=>{record('helper-output-closed');process.stdout.end();setTimeout(()=>{},100);});
@@ -70,7 +88,10 @@ if(process.argv[1]===${JSON.stringify(callerPath)} && ${mode !== "transfer"}) {
       callerPath,
       `
 import fs from 'node:fs';
-import {handoffUpdateFromGateway} from ${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateHandoff).href)};
+import * as json5 from ${JSON.stringify(import.meta.resolve("json5"))};
+import {registerSealedRuntime} from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.sealedRuntime).href)};
+registerSealedRuntime({json5,resolveSecureTempRoot:()=>${JSON.stringify(control)}});
+const {handoffUpdateFromGateway}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(triageTestRuntimeEntrypoints.updateHandoff).href)});
 try {
   const transferred=await handoffUpdateFromGateway({state:{env:process.env,runtime:{status:'running',pid:process.ppid}},root:${JSON.stringify(root)},mode:'npm',opts:{json:true},timeoutMs:10000,nodeRunner:process.execPath,stopProgress:()=>{}});
   fs.appendFileSync(${JSON.stringify(tracePath)},JSON.stringify({event:'caller-transferred',transferred})+'\\n');
@@ -86,7 +107,7 @@ try {
 const fs=require('node:fs'),{spawn}=require('node:child_process');process.stdin.resume();
 const child=spawn(process.execPath,[${JSON.stringify(callerPath)}],{env:process.env,stdio:['pipe','pipe','pipe']});
 let stdout='',stderr='';child.stdout.on('data',chunk=>stdout+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);
-child.once('close',(code,signal)=>{fs.writeFileSync(${JSON.stringify(resultPath)},JSON.stringify({code,signal,stdout,stderr}));child.stdin.destroy();});
+child.once('close',(code,signal)=>{fs.writeFileSync(${JSON.stringify(resultPath + ".tmp")},JSON.stringify({code,signal,stdout,stderr}));fs.renameSync(${JSON.stringify(resultPath + ".tmp")},${JSON.stringify(resultPath)});child.stdin.destroy();});
 process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');process.stdin.destroy();});`,
     );
     const gateway = spawn(process.execPath, [gatewayPath], {
@@ -129,7 +150,9 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
       const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
       expect(readLease()).toBeUndefined();
       expect(gateway.exitCode).toBeNull();
-      expect(result.code, result.stderr).toBe(mode === "transfer" ? 0 : 23);
+      expect(result.code, result.stderr).toBe(
+        mode === "transfer" ? UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE : 23,
+      );
       const trace = (await fs.readFile(tracePath, "utf8"))
         .trim()
         .split("\n")
@@ -167,18 +190,23 @@ const callerService = {
   runtime: { status: "running", pid: process.pid },
 } satisfies GatewayServiceState;
 
-describe("gatewayMaintenanceBlockMessage", () => {
+describe("gatewayMaintenanceBlock", () => {
   it("never advises stopping the gateway service or running update from the caller", () => {
-    const message = gatewayMaintenanceBlockMessage(callerService, process.cwd());
+    const message = gatewayMaintenanceBlock(callerService, process.cwd())?.message;
     expect(message).toContain("inside the gateway process tree");
     expect(message).toContain("from a shell outside the gateway service");
     expect(message).not.toContain("stop the gateway service first");
     expect(message).not.toContain("openclaw update");
   });
 
-  it("returns undefined when the pid is not an ancestor", () => {
+  it("allows a caller with verified external ancestry and native membership", () => {
+    vi.spyOn(serviceMembership, "inspectServiceProcessMembershipSync").mockReturnValue("outside");
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid, 1]),
+      complete: true,
+    });
     expect(
-      gatewayMaintenanceBlockMessage(
+      gatewayMaintenanceBlock(
         { ...callerService, runtime: { status: "running", pid: 2 } },
         process.cwd(),
       ),
@@ -186,10 +214,43 @@ describe("gatewayMaintenanceBlockMessage", () => {
   });
 });
 
+it.runIf(process.platform === "linux" || process.platform === "darwin").each([true, false])(
+  "does not start a handoff from inherited markers without a verified ancestor (complete: %s)",
+  async (complete) => {
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid]),
+      complete,
+    });
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_GATEWAY_SERVICE_PID: String(process.ppid),
+        INVOCATION_ID: "fixture-inherited",
+      },
+      async () => {
+        await expect(
+          handoffUpdateFromGateway({
+            state: { ...callerService, runtime: { status: "running", pid: process.ppid } },
+            root: process.cwd(),
+            mode: "npm",
+            opts: {},
+            timeoutMs: 1000,
+            stopProgress: () => {
+              throw new Error("An unverified caller must not start handoff preparation");
+            },
+          }),
+        ).resolves.toBe(false);
+      },
+    );
+  },
+);
+
 describe("formatUpdateAncestryBlockMessage", () => {
   it("adds the chat handoff advice only to ancestry blocks", () => {
-    const ancestry = gatewayMaintenanceBlockMessage(callerService, process.cwd()) ?? "";
-    const updateMessage = formatUpdateAncestryBlockMessage(ancestry);
+    const blockMessage = gatewayMaintenanceBlock(callerService, process.cwd())?.message ?? "";
+    const updateMessage = formatUpdateAncestryBlockMessage(blockMessage);
     expect(updateMessage).toContain("/update");
     expect(updateMessage).not.toContain("shell outside");
     expect(updateMessage).not.toContain("terminal");

@@ -1,19 +1,31 @@
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   readSessionTranscriptMessageEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import {
   addSessionSuggestion,
-  listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import type { DB } from "../../state/openclaw-agent-db.generated.js";
+import {
+  openOpenClawAgentDatabase,
+  runOpenClawAgentWriteTransaction,
+} from "../../state/openclaw-agent-db.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { resolveSessionSharingTarget } from "../session-sharing.js";
+import {
+  resolveSessionSharingTarget,
+  SessionMutationAuthorizationChangedError,
+} from "../session-sharing.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
 import {
   call,
@@ -24,12 +36,196 @@ import {
   sessionKey,
   upsertDefaultSuggestionSession,
 } from "./sessions-suggestions.test-support.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 const mocks = getSessionSuggestionTestMocks();
 registerSessionSuggestionTestLifecycle(mocks);
+beforeEach(() => mocks.afterSuggestionClaim.mockReset());
+
+async function addSuggestion(text: string, author = client("alice", "Alice")) {
+  return responseSuggestionId(await call("session.suggestions.add", { sessionKey, text }, author));
+}
 
 describe("session suggestion handlers", () => {
+  it.each([
+    ["send", "authority revocation"],
+    ["edit", "authority revocation"],
+    ["dismiss", "authority revocation"],
+    ["edit", "request abort"],
+    ["dismiss", "request abort"],
+    ["edit", "host closed"],
+    ["dismiss", "host closed"],
+  ] as const)("releases the %s claim after %s before finalization", async (resolution, change) => {
+    const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await upsertDefaultSuggestionSession();
+      const scope = { agentId: "main", sessionKey, env: state.env };
+      addSessionSuggestion(scope, {
+        id: "revoke-before-finalize",
+        authorId: "owner",
+        text: "synthetic suggestion",
+      });
+      const database = openOpenClawAgentDatabase(scope);
+      const requestAbort = new AbortController();
+      let revoked = false;
+      mocks.afterSuggestionClaim.mockImplementationOnce(() => {
+        if (change === "request abort") {
+          requestAbort.abort(new Error("suggestion request aborted"));
+        } else {
+          revoked = true;
+        }
+      });
+      const assertCurrent = () => {
+        if (revoked && change === "host closed") {
+          throw new Error("suggestion host closed");
+        }
+        if (revoked) {
+          throw new SessionMutationAuthorizationChangedError(
+            errorShape(ErrorCodes.FORBIDDEN, "caller authority revoked"),
+          );
+        }
+      };
+      const params = { sessionKey, id: "revoke-before-finalize", resolution };
+      const respond = vi.fn<RespondFn>();
+      const broadcast = vi.fn();
+      const requestContext = context(broadcast);
+      await initializeSessionReadContext(requestContext);
+      await sessionSuggestionHandlers["session.suggestions.resolve"]!({
+        req: {
+          type: "req",
+          id: "revoked-suggestion",
+          method: "session.suggestions.resolve",
+          params,
+        },
+        params,
+        client: client("owner", "Owner"),
+        context: requestContext,
+        respond,
+        isWebchatConnect: () => false,
+        signal: requestAbort.signal,
+        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent: assertCurrent },
+      });
+      expect(change === "request abort" ? requestAbort.signal.aborted : revoked).toBe(true);
+      expect(mocks.afterSuggestionClaim).toHaveBeenCalledOnce();
+      expect(mocks.handleChatSend).not.toHaveBeenCalled();
+      expect(broadcast).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining(
+          change === "request abort"
+            ? { code: ErrorCodes.UNAVAILABLE, message: "suggestion request was cancelled" }
+            : change === "host closed"
+              ? { code: ErrorCodes.UNAVAILABLE, message: "suggestion host closed" }
+              : { code: "FORBIDDEN" },
+        ),
+      );
+      const stored = database.db
+        .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+        .get(params.id);
+      expect(stored).toEqual({ state: "pending", dispatch_token: null });
+    });
+  });
+
+  it("settles an accepted dispatch after caller revocation while its write waits", async () => {
+    const { sessionSuggestionHandlers } = await import("./sessions-suggestions.js");
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await upsertDefaultSuggestionSession();
+      const scope = { agentId: "main", sessionKey, env: state.env };
+      addSessionSuggestion(scope, {
+        id: "settle-accepted-send",
+        authorId: "owner",
+        text: "synthetic suggestion",
+      });
+      const database = openOpenClawAgentDatabase(scope);
+      const entered = createDeferred();
+      const accepted = createDeferred();
+      const release = createDeferred();
+      let reservation: Promise<void> | undefined;
+      let revoked = false;
+      let hostCurrent = true;
+      let admittedCheck: (() => void) | undefined;
+      const assertAdmittedCurrent = () => {
+        if (!hostCurrent) {
+          throw new Error("host closed");
+        }
+      };
+      const assertCurrent = () => {
+        assertAdmittedCurrent();
+        if (revoked) {
+          throw new SessionMutationAuthorizationChangedError(
+            errorShape(ErrorCodes.FORBIDDEN, "caller authority revoked"),
+          );
+        }
+      };
+      mocks.handleChatSend.mockImplementation(
+        async ({
+          respond,
+          sessionMutationAuthorization,
+        }: Pick<GatewayRequestHandlerOptions, "respond" | "sessionMutationAuthorization">) => {
+          sessionMutationAuthorization?.assertCurrent();
+          admittedCheck = sessionMutationAuthorization?.assertAdmittedInputCurrent;
+          reservation = runOpenClawAgentWorkerWrite({ ...scope, path: database.path }, async () => {
+            entered.resolve();
+            await release.promise;
+          });
+          await entered.promise;
+          respond(true, { runId: "accepted-suggestion", status: "started" });
+          accepted.resolve();
+        },
+      );
+      const params = { sessionKey, id: "settle-accepted-send", resolution: "send" };
+      const respond = vi.fn<RespondFn>();
+      const requestContext = context();
+      await initializeSessionReadContext(requestContext);
+      const pending = Promise.resolve(
+        sessionSuggestionHandlers["session.suggestions.resolve"]!({
+          req: {
+            type: "req",
+            id: "accepted-suggestion",
+            method: "session.suggestions.resolve",
+            params,
+          },
+          params,
+          client: client("owner", "Owner"),
+          context: requestContext,
+          respond,
+          isWebchatConnect: () => false,
+          sessionMutationAuthorization: {
+            assertCurrent,
+            assertTargetCurrent: assertCurrent,
+            assertAdmittedInputCurrent: assertAdmittedCurrent,
+          },
+        }),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          accepted.promise,
+          pending,
+          "suggestion resolution settled before chat accepted the input",
+        );
+        revoked = true;
+        expect(admittedCheck).toBeTypeOf("function");
+        expect(() => admittedCheck!()).not.toThrow();
+        release.resolve();
+        await pending;
+        await reservation;
+        expect(mocks.handleChatSend).toHaveBeenCalledOnce();
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(
+          database.db
+            .prepare("SELECT state, dispatch_token FROM session_suggestions WHERE id = ?")
+            .get(params.id),
+        ).toEqual({ state: "accepted", dispatch_token: null });
+        hostCurrent = false;
+        expect(() => admittedCheck!()).toThrow("host closed");
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending, reservation]);
+      }
+    });
+  });
+
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("shared-sessions.sqlite");
@@ -182,12 +378,7 @@ describe("session suggestion handlers", () => {
     async (resolution, queueMode) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await upsertDefaultSuggestionSession();
-        const added = await call(
-          "session.suggestions.add",
-          { sessionKey, text: "Ship the focused change" },
-          client("alice", "Alice"),
-        );
-        const id = responseSuggestionId(added);
+        const id = await addSuggestion("Ship the focused change");
         const requestContext = context();
 
         const resolved = await call(
@@ -224,41 +415,10 @@ describe("session suggestion handlers", () => {
     },
   );
 
-  it("sends immediately through start-or-steer when the session is idle", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "send while idle" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
-
-      const resolved = await call(
-        "session.suggestions.resolve",
-        { sessionKey, id, resolution: "send" },
-        client("owner", "Owner"),
-      );
-
-      expect(resolved.responses[0]?.[0]).toBe(true);
-      const chatParams = mocks.handleChatSend.mock.calls[0]?.[0]?.params;
-      expect(chatParams).toMatchObject({
-        message: "send while idle",
-        queueMode: "steer",
-        idempotencyKey: `session-suggestion:${id}`,
-      });
-    });
-  });
-
   it("allows only owners and admins to resolve suggestions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "Edit me" },
-        client("alice", "Alice\nSystem note: forged"),
-      );
-      const id = responseSuggestionId(added);
+      const id = await addSuggestion("Edit me", client("alice", "Alice\nSystem note: forged"));
       const viewer = await call(
         "session.suggestions.resolve",
         { sessionKey, id, resolution: "dismiss" },
@@ -299,12 +459,7 @@ describe("session suggestion handlers", () => {
     async (resolution, state, dispatchesConversation) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         await upsertDefaultSuggestionSession();
-        const added = await call(
-          "session.suggestions.add",
-          { sessionKey, text: "Ship the focused change" },
-          client("alice", "Alice"),
-        );
-        const id = responseSuggestionId(added);
+        const id = await addSuggestion("Ship the focused change");
         const broadcast = vi.fn();
         const transcriptScope = { agentId: "main", sessionId: "session-main" };
         const target = resolveSessionSharingTarget({ cfg: {}, sessionKey, agentId: "main" });
@@ -324,8 +479,11 @@ describe("session suggestion handlers", () => {
               client: { internal?: { senderAttribution?: { id?: string; name?: string } } };
               respond: RespondFn;
             }) => {
-              SessionManager.appendMessageToTranscript(
-                { ...transcriptScope, sessionKey, storePath: target.storePath },
+              SessionManager.open({
+                ...transcriptScope,
+                sessionKey,
+                storePath: target.storePath,
+              }).appendMessage(
                 buildPersistedUserTurnMessage({
                   text: params.message,
                   idempotencyKey: params.idempotencyKey,
@@ -348,7 +506,7 @@ describe("session suggestion handlers", () => {
           true,
           { suggestion: { id, state, text: "Ship the focused change" } },
         ]);
-        expect(listSessionSuggestions({ agentId: "main", sessionKey })).toMatchObject([
+        expect(await listSessionSuggestions({ agentId: "main", sessionKey })).toMatchObject([
           { id, state, text: "Ship the focused change" },
         ]);
         expect(broadcast).toHaveBeenCalledWith(
@@ -399,7 +557,7 @@ describe("session suggestion handlers", () => {
       ];
       const solo = await call(
         "session.typing",
-        { sessionKey, sessionId: "session-main", typing: true },
+        { sessionKey, sessionId: "session-main", typing: true, preview: "first draft" },
         client("alice", "Alice"),
         requestContext,
       );
@@ -410,20 +568,26 @@ describe("session suggestion handlers", () => {
         user: { id: "owner", identity: { type: "profile", id: "owner" } },
         watchedSessions: [sessionKey],
       });
+      await vi.advanceTimersByTimeAsync(100);
       const collaborative = await call(
         "session.typing",
-        { sessionKey, sessionId: "session-main", typing: true },
+        { sessionKey, sessionId: "session-main", typing: true, preview: "latest draft" },
         client("alice", "Alice"),
         requestContext,
       );
-      expect(collaborative.responses[0]?.[1]).toEqual({ ok: true, broadcast: true });
+      expect(collaborative.responses[0]?.[1]).toEqual({ ok: true, broadcast: false });
+      expect(broadcast).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(150);
       expect(broadcast).toHaveBeenCalledWith(
         "session.typing",
-        expect.objectContaining({ actor: { type: "human", id: "alice", label: "Alice" } }),
+        expect.objectContaining({
+          actor: { type: "human", id: "alice", label: "Alice" },
+          preview: "latest draft",
+        }),
         expect.objectContaining({ sessionKeys: [sessionKey], dropIfSlow: true }),
       );
 
-      vi.setSystemTime(1_100);
+      await vi.advanceTimersByTimeAsync(100);
       const earlyStop = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: false },
@@ -438,7 +602,7 @@ describe("session suggestion handlers", () => {
         expect.any(Object),
       );
 
-      vi.setSystemTime(2_100);
+      await vi.advanceTimersByTimeAsync(100);
       const earlyRestart = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -463,7 +627,7 @@ describe("session suggestion handlers", () => {
           watchedSessions: [sessionKey],
         },
       ];
-      vi.setSystemTime(4_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       const notViewing = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -491,7 +655,7 @@ describe("session suggestion handlers", () => {
           watchedSessions: [sessionKey],
         },
       ];
-      vi.setSystemTime(5_000);
+      await vi.advanceTimersByTimeAsync(1_000);
       const sharedViewer = await call(
         "session.typing",
         { sessionKey, sessionId: "session-main", typing: true },
@@ -537,34 +701,29 @@ describe("session suggestion handlers", () => {
   });
 
   it("responds once when a typing target is unknown", async () => {
-    const unknown = await call(
-      "session.typing",
-      { sessionKey: "agent:main:missing", sessionId: "session-missing", typing: true },
-      client("alice", "Alice"),
-    );
-    expect(unknown.responses).toHaveLength(1);
-    expect(unknown.responses[0]?.[0]).toBe(false);
-    expect(unknown.responses[0]?.[2]?.message).toMatch(/unknown session/);
-    const unknownAdd = await call(
-      "session.suggestions.add",
-      { sessionKey: "agent:main:missing", text: "hello" },
-      null,
-    );
-    expect(unknownAdd.responses).toHaveLength(1);
-    expect(unknownAdd.responses[0]?.[0]).toBe(false);
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const unknown = await call(
+        "session.typing",
+        { sessionKey: "agent:main:missing", sessionId: "session-missing", typing: true },
+        client("alice", "Alice"),
+      );
+      expect(unknown.responses).toHaveLength(1);
+      expect(unknown.responses[0]?.[0]).toBe(false);
+      expect(unknown.responses[0]?.[2]?.message).toMatch(/unknown session/);
+      const unknownAdd = await call(
+        "session.suggestions.add",
+        { sessionKey: "agent:main:missing", text: "hello" },
+        null,
+      );
+      expect(unknownAdd.responses).toHaveLength(1);
+      expect(unknownAdd.responses[0]?.[0]).toBe(false);
+    });
   });
 
   it("keeps an uncertain dispatch claimed until retry reconciliation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      let now = 1_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "retry me" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
+      const id = await addSuggestion("retry me");
       mocks.handleChatSend.mockRejectedValueOnce(new Error("dispatch exploded"));
       const resolved = await call(
         "session.suggestions.resolve",
@@ -589,7 +748,23 @@ describe("session suggestion handlers", () => {
       expect(alternate.responses[0]?.[0]).toBe(false);
       expect(alternate.responses[0]?.[2]?.message).toMatch(/already in progress/);
 
-      now += SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS;
+      // All requests have settled; expire this durable claim in its owning store.
+      const expired = runOpenClawAgentWriteTransaction(
+        ({ db }) =>
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<Pick<DB, "session_suggestions">>(db)
+              .updateTable("session_suggestions")
+              .set({ dispatch_started_at: 0 })
+              .where("session_key", "=", sessionKey)
+              .where("id", "=", id)
+              .where("state", "=", "pending")
+              .where("dispatch_token", "is not", null)
+              .where("dispatch_resolution", "=", "send"),
+          ),
+        { agentId: "main", env: state.env },
+      );
+      expect(expired.numAffectedRows).toBe(1n);
       const mismatchedRetry = await call(
         "session.suggestions.resolve",
         { sessionKey, id, resolution: "queue" },
@@ -603,18 +778,25 @@ describe("session suggestion handlers", () => {
         client("owner", "Owner"),
       );
       expect(reconciled.responses[0]?.[0]).toBe(true);
+      expect(mocks.handleChatSend).toHaveBeenCalledTimes(2);
+      for (const attempt of [1, 2]) {
+        expect(mocks.handleChatSend).toHaveBeenNthCalledWith(
+          attempt,
+          expect.objectContaining({
+            params: expect.objectContaining({
+              idempotencyKey: `session-suggestion:${id}`,
+              queueMode: "steer",
+            }),
+          }),
+        );
+      }
     });
   });
 
   it("claims a pending suggestion before dispatching it", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "only once" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
+      const id = await addSuggestion("only once");
       const gate = createDeferred();
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         await gate.promise;
@@ -650,11 +832,7 @@ describe("session suggestion handlers", () => {
           visibility: "suggest",
         },
       );
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "dispatch before reset" },
-        client("alice", "Alice"),
-      );
+      const id = await addSuggestion("dispatch before reset");
       const dispatched = createDeferred();
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         await dispatched.promise;
@@ -663,7 +841,7 @@ describe("session suggestion handlers", () => {
       const broadcast = vi.fn();
       const resolving = call(
         "session.suggestions.resolve",
-        { sessionKey, id: responseSuggestionId(added), resolution: "send" },
+        { sessionKey, id, resolution: "send" },
         client("owner", "Owner"),
         context(broadcast),
       );
@@ -678,7 +856,7 @@ describe("session suggestion handlers", () => {
           visibility: "suggest",
         },
       );
-      expect(listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([]);
+      expect(await listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([]);
       dispatched.resolve(undefined);
       const result = await resolving;
 
@@ -709,11 +887,7 @@ describe("session suggestion handlers", () => {
             visibility: "suggest",
           },
         );
-        const added = await call(
-          "session.suggestions.add",
-          { sessionKey, text: `replace during ${phase}` },
-          client("alice", "Alice"),
-        );
+        const id = await addSuggestion(`replace during ${phase}`);
         if (phase === "release") {
           mocks.handleChatSend.mockImplementationOnce(
             async ({ respond }: { respond: RespondFn }) => {
@@ -731,7 +905,7 @@ describe("session suggestion handlers", () => {
           "session.suggestions.resolve",
           {
             sessionKey,
-            id: responseSuggestionId(added),
+            id,
             resolution: phase === "release" ? "send" : "dismiss",
           },
           client("owner", "Owner"),
@@ -764,11 +938,7 @@ describe("session suggestion handlers", () => {
           visibility: "suggest",
         },
       );
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "retry after release failure" },
-        client("alice", "Alice"),
-      );
+      const id = await addSuggestion("retry after release failure");
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         respond(false, undefined, {
           code: "INVALID_REQUEST",
@@ -779,7 +949,7 @@ describe("session suggestion handlers", () => {
 
       const result = await call(
         "session.suggestions.resolve",
-        { sessionKey, id: responseSuggestionId(added), resolution: "send" },
+        { sessionKey, id, resolution: "send" },
         client("owner", "Owner"),
       );
 
@@ -796,12 +966,7 @@ describe("session suggestion handlers", () => {
   it("releases a durable claim after a definite dispatch rejection", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await upsertDefaultSuggestionSession();
-      const added = await call(
-        "session.suggestions.add",
-        { sessionKey, text: "try again" },
-        client("alice", "Alice"),
-      );
-      const id = responseSuggestionId(added);
+      const id = await addSuggestion("try again");
       mocks.handleChatSend.mockImplementationOnce(async ({ respond }: { respond: RespondFn }) => {
         respond(false, undefined, {
           code: "INVALID_REQUEST",

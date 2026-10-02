@@ -2,6 +2,7 @@ import type {
   ConversationListItem,
   ConversationListResult,
 } from "../../packages/gateway-protocol/src/schema/agent.js";
+import { resolveChannelAccount } from "../channels/account-resolution.js";
 import type { ChannelDirectoryEntry } from "../channels/plugins/types.core.js";
 import {
   buildConversationIdentity,
@@ -10,7 +11,7 @@ import {
 import {
   listConversations,
   registerConversationAddresses,
-  resolveConversationRegistryScope,
+  prepareConversationRegistryScope,
   runConversationDatabaseWrite,
   type ConversationRecord,
   type ConversationRegistryScope,
@@ -140,7 +141,7 @@ async function discoverChannelAddresses(params: {
   }
   const identities = new Map<string, ConversationIdentity>();
   for (const accountId of new Set(plugin.config.listAccountIds(params.config).filter(Boolean))) {
-    const account = plugin.config.resolveAccount(params.config, accountId);
+    const account = await resolveChannelAccount({ plugin, cfg: params.config, accountId });
     if (plugin.config.isEnabled?.(account, params.config) === false) {
       continue;
     }
@@ -238,7 +239,7 @@ export async function runGatewayConversationList(
   },
   deps: ConversationListDeps = defaultDeps,
 ): Promise<ConversationListResult> {
-  const scope = resolveConversationRegistryScope(params);
+  const scope = await prepareConversationRegistryScope(params);
   const query = params.query?.trim() || undefined;
   const discovery = params.channel
     ? await discoverChannelAddresses({
@@ -252,7 +253,7 @@ export async function runGatewayConversationList(
         ...(params.readCurrentConfig ? { readCurrentConfig: params.readCurrentConfig } : {}),
       })
     : undefined;
-  const conversations = deps.listConversations(
+  const conversations = await deps.listConversations(
     scope,
     discovery ? { channel: discovery.channel } : {},
   );
