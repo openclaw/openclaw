@@ -83,7 +83,7 @@ describe("update-cli", () => {
     primeServiceCommand([serviceNode, entrypoint, "gateway"]);
     primeNpmChannelTag("latest", "2026.5.20");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "latest", version: "2026.5.20" }),
+      packageTargetStatus({ version: "2026.5.20" }),
     );
     vi.mocked(runCommandWithTimeout).mockImplementation(
       runtimeRecovery.runtimeRecoveryCommandFixture(serviceNode),
@@ -449,7 +449,6 @@ describe("update-cli", () => {
     primeNpmChannelTag("latest", "2026.7.1");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({
-        target: "latest",
         version: "2026.7.1",
         nodeEngine: ">=24.15.0 <25",
       }),
