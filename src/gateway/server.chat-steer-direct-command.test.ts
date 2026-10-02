@@ -96,7 +96,7 @@ installGatewayTestHooks({
 
 it.each([
   { source: "browser", disposition: "steered", expectation: "required" },
-  { source: "system", disposition: "followup", expectation: "optional" },
+  { source: "system", disposition: "followup", expectation: "required" },
 ] as const)(
   "routes browser corrections to a $source direct command as $disposition",
   async ({ source, disposition: expectedDisposition, expectation }) => {
