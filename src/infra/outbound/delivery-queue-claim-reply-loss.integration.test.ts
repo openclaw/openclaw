@@ -95,7 +95,7 @@ describe("recovery claim reply loss", () => {
       committedClaim = await Promise.race([
         reply.held,
         outcome.then((error) => {
-          throw error ?? new Error("Recovery settled before its committed claim reply");
+          throw new Error("Recovery settled before its committed claim reply", { cause: error });
         }),
       ]);
       await reply.lose();

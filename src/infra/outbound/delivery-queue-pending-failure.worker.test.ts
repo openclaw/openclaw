@@ -153,7 +153,7 @@ describe("pending delivery failure worker", () => {
       await Promise.race([
         reply.held,
         outcome.then((error) => {
-          throw error ?? new Error("Retirement settled before its committed worker reply");
+          throw new Error("Retirement settled before its committed worker reply", { cause: error });
         }),
       ]);
       await reply.lose();
