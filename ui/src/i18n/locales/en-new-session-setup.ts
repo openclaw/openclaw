@@ -143,6 +143,25 @@ const enNewSessionSetup = {
     local: "Local",
     folderPlaceholder: "Agent workspace",
     projects: "Projects",
+    workspaceRequired: "Choose an approved project before starting this session.",
+    workspaceThreadRequired: "This role requires a new thread in an approved workspace.",
+    workspaceIncognitoUnavailable: "Turn off Incognito to use the required project workspace.",
+    foregroundOnly:
+      "Each turn requires a new message. Unattended jobs and background continuation are disabled.",
+    foregroundRemoteUnavailable:
+      "Use this Gateway; remote execution cannot confirm foreground cleanup.",
+    foregroundTerminalUnavailable:
+      "Start a new chat on this Gateway; terminal sessions cannot confirm foreground cleanup.",
+    useGateway: "Use this Gateway",
+    workspacePolicyLoading: "Loading available workspaces…",
+    workspacePolicyFailed: "Couldn't load workspace access. Retry before starting the session.",
+    workspaceDiscoveryFailed:
+      "Couldn't load workspace choices. Retry or start with the current selection; the server will check its requirements.",
+    workspacesUnavailable:
+      "No projects are available for your access. Ask a maintainer to add an approved project.",
+    chooseWorkspace: "Choose a workspace",
+    approvedProjectSearch: "Search approved projects",
+    requiredWorktree: "Each new session gets a separate worktree and branch from {branch}.",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
     githubProjects: "GitHub",

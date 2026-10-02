@@ -146,6 +146,7 @@ export class PaletteSessionSettings {
       autoDevice: place.autoDevice,
       devicePlacement: place.devicePlacementRuntime()?.devicePlacement,
       deviceDisabledReason:
+        place.remotePlacementDisabledReason() ??
         place.modelControl.devicePlacementUnsupportedReason() ??
         gateway.deviceCatalogDisabledReason,
     });
@@ -166,6 +167,7 @@ export class PaletteSessionSettings {
       recents: [],
       projectQuery: "",
       freshWorkspace: place.freshWorkspace,
+      workspaceRequired: draft.browser.requiredWorkspace?.workspaceRequired,
     });
     const machines: MachineChoice[] = [
       {
@@ -200,7 +202,9 @@ export class PaletteSessionSettings {
         label: t("newSession.cloudWorker", { profile: profile.id }),
         remote: true,
         selected: place.cloudProfileId === profile.id,
-        disabledReason: place.modelControl.cloudRuntimeUnsupportedReason(profile),
+        disabledReason:
+          place.remotePlacementDisabledReason() ??
+          place.modelControl.cloudRuntimeUnsupportedReason(profile),
         select: () => place.selectCloudProfile(profile.id),
       })),
     ];
@@ -224,12 +228,16 @@ export class PaletteSessionSettings {
       .map((machine) => ({
         machine,
         choices: [
-          {
-            id: "",
-            label: machine.remote
-              ? t("newSession.newWorkspace")
-              : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
-          },
+          ...(!draft.browser.requiredWorkspace?.workspaceRequired
+            ? [
+                {
+                  id: "",
+                  label: machine.remote
+                    ? t("newSession.newWorkspace")
+                    : folderDisplayName(place.workspacePath()) || t("newSession.folderPlaceholder"),
+                },
+              ]
+            : []),
           ...draft.browser.projects.map((project) => ({
             id: project.id,
             label: project.displayName,
@@ -302,6 +310,14 @@ export class PaletteSessionSettings {
                     }}
                   />
                   <div class="palette-session-settings__choices">
+                    ${
+                      draft.browser.workspaceStatusMessage
+                        ? html`<div class="palette-session-settings__unavailable" role="status">
+                            ${draft.browser.workspaceStatusMessage}
+                            ${draft.browser.projectsRetryAvailable ? html`<button type="button" class="btn btn--sm" @click=${() => draft.browser.refreshProjects(true)}>${t("common.retry")}</button>` : nothing}
+                          </div>`
+                        : nothing
+                    }
                     ${groups.map(
                       ({ machine, choices }) => html` <section aria-label=${machine.label}>
                         <div class="palette-session-settings__machine">${machine.label}</div>
@@ -309,7 +325,7 @@ export class PaletteSessionSettings {
                         ${machine.disabledReason ? html`<div class="palette-session-settings__unavailable">${machine.disabledReason}</div>` : nothing}
                       </section>`,
                     )}
-                    ${!groups.length ? html`<div class="palette-session-settings__unavailable">${t("newSession.environmentSearchEmpty")}</div>` : nothing}
+                    ${!groups.length && !draft.browser.workspaceStatusMessage ? html`<div class="palette-session-settings__unavailable">${t("newSession.environmentSearchEmpty")}</div>` : nothing}
                     ${gateway.cloudProfilesPending ? html`<div role="status" class="palette-session-settings__unavailable">${t("common.loading")}</div>` : nothing}
                   </div>
                   ${place.isAdmin() ? html`<button class="palette-session-settings__row" type="button" ?disabled=${locked} @click=${options.onConnectMachine}><span class="palette-session-settings__icon">${icons.plus}</span><span>${t("newSession.connectMachine")}</span></button>` : nothing}
@@ -347,27 +363,44 @@ export class PaletteSessionSettings {
                     ><span class="palette-session-settings__chevron">${icons.chevronRight}</span>
                   </button>
                   ${
-                    place.checkoutVisible && !place.remoteRepository
-                      ? html`<button
-                          class="palette-session-settings__row palette-session-settings__worktree"
-                          type="button"
-                          role="switch"
-                          aria-checked=${String(place.worktree)}
-                          aria-label=${t("newSession.checkoutWorktree")}
-                          title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
-                          ?disabled=${locked || place.remotePlacement}
-                          @click=${() => {
-                            place.selectWorktree(!place.worktree);
-                            onChange();
-                          }}
+                    draft.browser.requiredWorkspace?.worktreeRequired
+                      ? html`<div
+                          class="palette-session-settings__unavailable"
+                          data-required-worktree
                         >
-                          <span class="palette-session-settings__icon">${icons.gitBranch}</span
-                          ><span>${t("newSession.checkoutWorktree")}</span
-                          ><span class="palette-session-settings__switch" aria-hidden="true"></span>
-                        </button>`
-                      : nothing
+                          ${t("newSession.requiredWorktree", { branch: draft.browser.requiredWorkspace.worktreeBaseRef })}
+                        </div>`
+                      : place.checkoutVisible && !place.remoteRepository
+                        ? html`<button
+                            class="palette-session-settings__row palette-session-settings__worktree"
+                            type="button"
+                            role="switch"
+                            aria-checked=${String(place.worktree)}
+                            aria-label=${t("newSession.checkoutWorktree")}
+                            title=${place.remotePlacement ? t("newSession.checkoutRemoteLocked") : !place.worktreeAvailable() ? t("newSession.gitCheckUnavailable") : nothing}
+                            ?disabled=${locked || place.remotePlacement}
+                            @click=${() => {
+                              place.selectWorktree(!place.worktree);
+                              onChange();
+                            }}
+                          >
+                            <span class="palette-session-settings__icon">${icons.gitBranch}</span
+                            ><span>${t("newSession.checkoutWorktree")}</span
+                            ><span
+                              class="palette-session-settings__switch"
+                              aria-hidden="true"
+                            ></span>
+                          </button>`
+                        : nothing
                   }
                 `
+          }
+          ${
+            draft.browser.creationPolicy?.execution === "foreground-only"
+              ? html`<div class="palette-session-settings__unavailable" data-execution-policy>
+                  ${t("newSession.foregroundOnly")}
+                </div>`
+              : nothing
           }
           ${
             !this.places || preferences.failed

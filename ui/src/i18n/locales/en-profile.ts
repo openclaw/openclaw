@@ -7,6 +7,27 @@ const enProfile = {
   profilePage: {
     access: {
       title: "Your access",
+      role: "Assigned role",
+      roleDescription:
+        "Your server configures this role. Its name does not grant additional permissions.",
+      sessionActions: "Edit and organize your own sessions",
+      archive: "Archive and restore your own sessions",
+      review: "Review your own isolated workspace",
+      publication: "Publish through shared GitHub access",
+      publicationDescription:
+        "Also requires access to the thread and the server's publication checks. When this grant is absent, ask a maintainer to review and publish from the same thread.",
+      serverSettings: "Manage server settings",
+      granted: "Granted",
+      notGranted: "Not granted",
+      workspace: "Approved workspaces",
+      workspaceDescription:
+        "Choose one for each new session. The server creates a separate worktree and branch from {branch}.",
+      noWorkspaces: "None available. Ask a maintainer to assign a project.",
+      workspaceUnavailable: "Workspace access could not be loaded. Retry to check your policy.",
+      workspaceLoading: "Loading approved workspaces…",
+      execution: "Foreground turns only",
+      foregroundOnly:
+        "Each turn requires a new message. Unattended jobs and background continuation are disabled. Stopping a turn keeps your history, drafts, and workspace.",
       admin: "You have permission to manage this server.",
       write: "You have permission to send messages and make changes.",
       read: "You have permission to view server information.",

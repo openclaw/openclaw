@@ -1,15 +1,93 @@
 import { expect, it } from "vitest";
+import type { ChatPendingInputsPage } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  requireRecord,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it("keeps a foreground restart input stopped until the user sends a new message", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const session = createControlUiSessionRow(
+          "agent:main:foreground-restart-proof",
+          "Retained work after restart",
+          Date.parse("2026-09-20T12:00:00.000Z"),
+          { sharingRole: "owner", execution: "foreground-only" },
+        );
+        const previousRunId = "accepted-before-restart";
+        const stoppedMessage = "Continue after the update.";
+        const pendingInputs: ChatPendingInputsPage = {
+          total: 1,
+          queuedCount: 0,
+          items: [
+            {
+              id: "retained-foreground-input",
+              runId: previousRunId,
+              acceptedAt: session.updatedAt,
+              state: "interrupted",
+              replayBlockedReason: "foreground-restart",
+              message: { role: "user", content: stoppedMessage, timestamp: session.updatedAt },
+            },
+          ],
+        };
+        const history = {
+          messages: [],
+          pendingInputs,
+          sessionId: session.sessionId,
+          sessionInfo: session,
+        };
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.sessions.write"],
+          sessionKey: session.key,
+          sessions: [session],
+          methodResponses: {
+            "chat.startup": history,
+            "chat.history": history,
+            "sessions.list": chatSessionListResponse([session]),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
+        await gateway.waitForRequest("chat.startup");
+        const stoppedNotice = page.getByText(
+          "Stopped when the Gateway restarted. This session requires a new message to continue; copy this message and send it again.",
+          { exact: true },
+        );
+        await stoppedNotice.waitFor();
+        expect(await page.getByText(stoppedMessage, { exact: true }).count()).toBe(1);
+        expect(await page.getByRole("button", { name: "Retry queued message" }).count()).toBe(0);
+        expect(await page.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await captureUiProof(suite, page, "foreground-restart", "01-stopped.png");
+
+        const newMessage = "Continue after restart and report current progress.";
+        await page.locator(".agent-chat__composer-combobox textarea").fill(newMessage);
+        // Editing a new draft must not replay the retained source or submit the new one.
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await page.getByRole("button", { name: "Send message", exact: true }).click();
+        const request = await gateway.waitForRequest("chat.send");
+        const params = requireRecord(request.params);
+        expect(params).toMatchObject({ sessionKey: session.key, message: newMessage });
+        expect(params.idempotencyKey).toEqual(expect.any(String));
+        expect(params.idempotencyKey).not.toBe(previousRunId);
+        await page.getByRole("button", { name: "Stop generating", exact: true }).waitFor();
+        await page.getByText(newMessage, { exact: true }).waitFor();
+        expect(await stoppedNotice.isVisible()).toBe(true);
+        expect(await page.getByText(stoppedMessage, { exact: true }).count()).toBe(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+        await captureUiProof(suite, page, "foreground-restart", "02-new-message.png");
+      },
+    );
+  });
+
   it("shows another client's accepted follow-up during an active turn and promotes it once", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },

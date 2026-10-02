@@ -3912,6 +3912,8 @@ export const en: TranslationMap & {
       waitingForWorkerSetup: "Received · waiting for worker setup",
       resuming:
         "Interrupted by a Gateway restart. This saved message will resume when the session is ready.",
+      stoppedForRestart:
+        "Stopped when the Gateway restarted. This session requires a new message to continue; copy this message and send it again.",
       cancelled:
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
@@ -4060,6 +4062,8 @@ export const en: TranslationMap & {
       realtimeTalkCapability: "Tap to talk",
       dictationCapability: "Dictation",
       realtimeTalkProviderUnavailable: "No realtime voice provider is configured.",
+      foregroundVoiceUnavailable:
+        "Talk and dictation cannot confirm foreground cleanup. Send a new chat message on this Gateway.",
       dictationProviderUnavailableShort: "No transcription provider is configured.",
       talkCapabilityChecking: "Checking provider availability…",
       talkCapabilityUnknown: "Provider availability could not be verified.",

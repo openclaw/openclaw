@@ -19,6 +19,115 @@ afterEach(() => {
 });
 
 describe("DraftSubmissionFlow submit gates", () => {
+  it("explains why execution-only foreground policy excludes native terminal startup", async () => {
+    const { place, flow, request } = createDraftFixture({
+      methods: ["sessions.catalog.startTerminal", "projects.list"],
+      scopes: ["operator.admin"],
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId: "native",
+        catalogLabel: "Native",
+        startTerminal: true,
+        terminalHosts: [{ hostId: "gateway", label: "Gateway" }],
+      },
+      request: async () => ({ projects: [], creationPolicy: { execution: "foreground-only" } }),
+    });
+    await place.browser.refreshProjects();
+    expect(flow.submitBlock()).toEqual({
+      gate: "execution-policy",
+      reason:
+        "Start a new chat on this Gateway; terminal sessions cannot confirm foreground cleanup.",
+    });
+    await flow.submit();
+    expect(request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal")).toBe(
+      false,
+    );
+  });
+
+  it("blocks a retained remote startup under foreground-only policy before any retry", async () => {
+    const { place, flow, context, request } = createDraftFixture({
+      methods: ["sessions.create", "sessions.dispatch", "projects.list"],
+      scopes: ["operator.admin"],
+      request: async () => ({ projects: [], creationPolicy: { execution: "foreground-only" } }),
+    });
+    await place.browser.refreshProjects();
+    const retained = flow.pendingPlacement.stageCreate({
+      agentId: "main",
+      target: { kind: "device", deviceId: "runner" },
+      message: "Keep original input",
+      gatewayUrl: "ws://gateway.example",
+      recoveryScope: "principal-a",
+      createParams: { agentId: "main", message: "", worktree: true },
+    });
+    expect(retained).not.toBeNull();
+    expect(flow.submitBlock()).toEqual({
+      gate: "execution-policy",
+      reason: "Use this Gateway; remote execution cannot confirm foreground cleanup.",
+    });
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method === "sessions.dispatch")).toBe(false);
+    expect(flow.pendingPlacement.message).toBe("Keep original input");
+  });
+
+  it("does not make a workspace requirement out of foreground-only execution", async () => {
+    const { place, flow } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: async () => ({ projects: [], creationPolicy: { execution: "foreground-only" } }),
+    });
+    await place.browser.refreshProjects();
+    flow.setMessage("Work here");
+    expect(place.browser.requiredWorkspace).toBeUndefined();
+    expect(flow.canSubmit()).toBe(true);
+  });
+
+  it.each(["terminal", "incognito"] as const)(
+    "explains why required workspaces exclude %s creation",
+    async (kind) => {
+      const { place, flow, context, request } = createDraftFixture({
+        methods: ["sessions.create", "sessions.catalog.startTerminal", "projects.list"],
+        scopes: ["operator.admin"],
+        ...(kind === "terminal"
+          ? {
+              data: {
+                agentId: "main",
+                requestedAgentId: "main",
+                catalogId: "native",
+                catalogLabel: "Native",
+                startTerminal: true,
+                terminalHosts: [{ hostId: "gateway", label: "Gateway" }],
+              },
+            }
+          : {}),
+        request: async () => ({
+          projects: [],
+          creationPolicy: {
+            workspaceRequired: true,
+            worktreeRequired: true,
+            worktreeBaseRef: "main",
+          },
+        }),
+      });
+      await place.browser.refreshProjects();
+      flow.setMessage("Keep this draft");
+      if (kind === "incognito") {
+        flow.setVisibility("incognito");
+      }
+      expect(flow.submitDisabledReason()).toBe(
+        kind === "terminal"
+          ? "This role requires a new thread in an approved workspace."
+          : "Turn off Incognito to use the required project workspace.",
+      );
+      await flow.submit();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+      expect(
+        request.mock.calls.some(([method]) => method === "sessions.catalog.startTerminal"),
+      ).toBe(false);
+      expect(flow.message).toBe("Keep this draft");
+    },
+  );
+
   it.each(["retry", "missing", "choose-workspace"] as const)(
     "retains a saved project after failed discovery until %s resolves the choice",
     async (recovery) => {
@@ -74,7 +183,7 @@ describe("DraftSubmissionFlow submit gates", () => {
     },
   );
 
-  it("does not block ordinary local submission when optional project discovery fails", async () => {
+  it("preserves a server-authorized creation attempt when optional discovery fails", async () => {
     const { place, flow, context } = createDraftFixture({
       methods: ["sessions.create", "projects.list"],
       request: () => Promise.reject(new Error("Project discovery unavailable")),
@@ -82,12 +191,92 @@ describe("DraftSubmissionFlow submit gates", () => {
     await place.browser.refreshProjects();
     place.restorePreferenceSelections();
     flow.setMessage("start locally");
+    expect(place.browser.workspaceStatusMessage).toBe(
+      "Couldn't load workspace choices. Retry or start with the current selection; the server will check its requirements.",
+    );
     expect(flow.canSubmit()).toBe(true);
     await flow.submit();
     expect(context.sessions.createResult).toHaveBeenCalledOnce();
     expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(
       "projectId",
     );
+  });
+
+  it("retains a confirmed required workspace policy when refreshing its choices fails", async () => {
+    const discovery = vi.fn(async () => ({
+      projects: [{ id: "approved", displayName: "Approved", source: "registered" as const }],
+      creationPolicy: {
+        workspaceRequired: true as const,
+        worktreeRequired: true as const,
+        worktreeBaseRef: "main",
+      },
+    }));
+    const { place, flow, context } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      request: discovery,
+    });
+    await place.browser.refreshProjects();
+    place.selectProjectId("approved");
+    flow.setMessage("Work on this project");
+    discovery.mockRejectedValue(new Error("unavailable"));
+    await place.browser.refreshProjects(true);
+    expect(flow.submitDisabledReason()).toBe(
+      "Couldn't load workspace access. Retry before starting the session.",
+    );
+    place.applyFolder("/workspace");
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(flow.message).toBe("Work on this project");
+  });
+
+  it("requires an approved project and leaves enforced checkout placement to the server", async () => {
+    let projects: ProjectsListResult = {
+      projects: [],
+      creationPolicy: { workspaceRequired: true, worktreeRequired: true, worktreeBaseRef: "main" },
+    };
+    const { place, flow, context, request } = createDraftFixture({
+      methods: ["sessions.create", "projects.list"],
+      scopes: ["operator.sessions.write"],
+      request: async (method) => (method === "projects.list" ? projects : {}),
+    });
+    flow.setMessage("Review this project");
+    await place.browser.refreshProjects();
+    expect(flow.submitDisabledReason()).toBe(
+      "No projects are available for your access. Ask a maintainer to add an approved project.",
+    );
+    await flow.submit();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+
+    projects = {
+      ...projects,
+      projects: [{ id: "approved", displayName: "Approved", source: "registered" }],
+    };
+    await place.browser.refreshProjects(true);
+    expect(flow.submitDisabledReason()).toBe(
+      "Choose an approved project before starting this session.",
+    );
+    place.selectProjectId("approved");
+    expect(place.worktree).toBe(true);
+    expect(place.checkoutVisible).toBe(false);
+    expect(place.browseAvailable()).toBe(false);
+    expect(flow.canSubmit()).toBe(true);
+    await flow.submit();
+    expect(context.sessions.createResult).toHaveBeenCalledOnce();
+    expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).toMatchObject({
+      projectId: "approved",
+      message: "Review this project",
+    });
+    for (const field of [
+      "cwd",
+      "repository",
+      "worktree",
+      "worktreeBaseRef",
+      "worktreeName",
+      "projectGitUrl",
+    ]) {
+      expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]).not.toHaveProperty(field);
+    }
+    expect(request.mock.calls.some(([method]) => method === "worktrees.branches")).toBe(false);
   });
 
   it.each([

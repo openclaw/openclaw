@@ -17,6 +17,19 @@ const projects = [
 ];
 
 describe("What chip state", () => {
+  it("asks for an approved workspace instead of presenting a retained folder as selected", () => {
+    const state = resolveProjectChip({
+      folder: "/workspace/old",
+      workspace: "/workspace",
+      projectId: "",
+      selectedRemoteProject: null,
+      projects,
+      recents: [],
+      projectQuery: "",
+      workspaceRequired: true,
+    });
+    expect(state.label).toBe("Choose a workspace");
+  });
   it.each([
     {
       name: "filters registered and workspace projects locally",

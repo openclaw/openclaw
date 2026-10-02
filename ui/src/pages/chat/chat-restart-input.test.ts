@@ -7,7 +7,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { listChatOutboxAttention } from "./chat-outbox-owner.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { admitQueuedMessageForSession } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { UNCONFIRMED_CHAT_SEND_ERROR } from "./chat-send-support.ts";
@@ -46,6 +46,49 @@ afterEach(() => {
 });
 
 describe("accepted input restart handoff", () => {
+  it.each(["foreground history", "off-page reconciliation"] as const)(
+    "retires foreground retry custody without replay through %s",
+    async (delivery) => {
+      const stopped = pending("interrupted");
+      stopped.items[0]!.replayBlockedReason = "foreground-restart";
+      const host = makeChatHost({
+        sessionKey,
+        currentSessionId: sessionId,
+        requestHandlers: {
+          "chat.history": (params: { pendingBefore?: number }) => ({
+            sessionId,
+            messages: [],
+            pendingInputs:
+              delivery === "off-page reconciliation" && params.pendingBefore === undefined
+                ? { items: [], total: 21, nextBefore: 21 }
+                : stopped,
+            inputReceipts: [{ runId: item.sendRunId, state: "pending" }],
+            sessionInfo: { key: sessionKey, sessionId, status: "done", hasActiveRun: false },
+          }),
+        },
+      });
+      expect(
+        admitQueuedMessageForSession(host, captureChatOutboxAdmission(host, sessionKey), {
+          ...item,
+          sessionId,
+        }),
+      ).toBe(true);
+      if (delivery === "foreground history") {
+        await loadChatHistory(host);
+        expect(getChatPendingInputs(host)?.page.items).toEqual(stopped.items);
+      } else {
+        await resumeStoredChatOutboxes(host);
+        expect(host.request).toHaveBeenCalledWith(
+          "chat.history",
+          expect.objectContaining({ pendingBefore: 21 }),
+        );
+      }
+      expect(listStoredChatOutboxes(host)).toEqual([]);
+      expect(host.chatQueue).toEqual([]);
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    },
+  );
+
   it.each(
     (["foreground history", "background reconciliation"] as const).flatMap((delivery) =>
       (["consumed", "cancelled"] as const).map((outcome) => ({ delivery, outcome })),

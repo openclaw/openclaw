@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -81,6 +82,7 @@ function pointer(type: string, pointerId = 7, x = 50, y = 50): Event {
 
 function createHarness(
   overrides: {
+    sessionKey?: string;
     enabled?: boolean;
     realtimeTalkActive?: boolean;
     dictationAvailable?: boolean;
@@ -93,6 +95,7 @@ function createHarness(
   const onDictationUnavailable = vi.fn();
   const options = {
     client: createClient(),
+    sessionKey: overrides.sessionKey,
     connected: true,
     enabled: overrides.enabled ?? true,
     dictationAvailable: overrides.dictationAvailable,
@@ -181,6 +184,28 @@ afterEach(() => {
 });
 
 describe("ComposerDictationController", () => {
+  it("retains the admitted chat target while microphone permission is pending", async () => {
+    const media = createDeferred<MediaStream>();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    getUserMedia.mockReturnValueOnce(media.promise);
+    const { controller, options } = createHarness({ sessionKey: "agent:main:original" });
+    try {
+      expect(controller.startDirect()).toBe(true);
+      controller.update({ ...options, sessionKey: "agent:main:replacement" });
+      media.resolve(stream);
+      await waitForFast(() =>
+        expect(request).toHaveBeenCalledWith("talk.session.create", {
+          sessionKey: "agent:main:original",
+          mode: "transcription",
+          transport: "gateway-relay",
+          brain: "none",
+        }),
+      );
+    } finally {
+      controller.dispose();
+    }
+  });
+
   it("keeps captured text and releases dictation on microphone loss when error delivery throws", async () => {
     const { controller, onCommit, onError } = createHarness();
     const track = Object.assign(new EventTarget(), { stop: vi.fn() });

@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -58,6 +59,7 @@ export function buildDraftSessionCreateParams(draft: {
   visibility?: NewSessionVisibility;
   attachments?: SessionCreateParams["attachments"];
   projectId?: string;
+  creationPolicy?: ProjectsListResult["creationPolicy"];
   projectGitUrl?: string;
   repository?: SessionCreateParams["repository"];
   worktree: boolean;
@@ -86,11 +88,13 @@ export function buildDraftSessionCreateParams(draft: {
     draft.deferInitialTurn && draft.visibility !== "incognito"
       ? truncateUtf16Safe(draft.message.trim(), 1_000)
       : undefined;
-  const emptyWorkspace = draft.worktreeSource === "empty";
-  const repository = emptyWorkspace ? undefined : draft.repository;
+  const workspaceRequired = draft.creationPolicy && "workspaceRequired" in draft.creationPolicy;
+  const emptyWorkspace = !workspaceRequired && draft.worktreeSource === "empty";
+  const repository = workspaceRequired || emptyWorkspace ? undefined : draft.repository;
   const projectId =
     emptyWorkspace || repository ? undefined : normalizeOptionalString(draft.projectId);
   const projectGitUrl =
+    !workspaceRequired &&
     !emptyWorkspace &&
     !repository &&
     !projectId &&
@@ -98,7 +102,13 @@ export function buildDraftSessionCreateParams(draft: {
       ? normalizeOptionalString(draft.projectGitUrl)
       : undefined;
   const customFolder =
-    !emptyWorkspace && !repository && !projectId && !projectGitUrl && cwd && cwd !== workspace
+    !workspaceRequired &&
+    !emptyWorkspace &&
+    !repository &&
+    !projectId &&
+    !projectGitUrl &&
+    cwd &&
+    cwd !== workspace
       ? cwd
       : undefined;
   return {
@@ -129,7 +139,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(repository ? { repository: { ...repository } } : {}),
     ...(customFolder ? { cwd: customFolder } : {}),
     ...(emptyWorkspace ? { worktree: true, worktreeSource: "empty" as const } : {}),
-    ...(draft.worktree && !repository && !emptyWorkspace
+    ...(draft.worktree && !workspaceRequired && !repository && !emptyWorkspace
       ? {
           worktree: true,
           // Passing the base explicitly also skips the create-time origin fetch.

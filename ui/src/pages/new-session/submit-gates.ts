@@ -40,6 +40,8 @@ type ReasonedSubmitGate =
   | "disconnected"
   | "access"
   | "folder"
+  | "workspace-policy"
+  | "execution-policy"
   | "placement-recovery"
   | "agents"
   | "agent-not-allowed"
@@ -149,6 +151,40 @@ export function resolveNewSessionSubmitBlock(
 ): NewSessionSubmitBlock | undefined {
   const kind = catalog.isTarget(snapshot.data) ? "terminal" : "session";
   const pendingPlacementActive = Boolean(draft.pendingPlacement.sessionKey);
+  const placementReason = place.remotePlacementDisabledReason();
+  if (
+    gateway.connected &&
+    kind === "terminal" &&
+    place.browser.creationPolicy?.execution === "foreground-only"
+  ) {
+    return { gate: "execution-policy", reason: t("newSession.foregroundTerminalUnavailable") };
+  }
+  if (
+    gateway.connected &&
+    placementReason &&
+    resolveDraftSessionPlacement(draft.pendingPlacement, place).target
+  ) {
+    return { gate: "execution-policy", reason: placementReason };
+  }
+  if (gateway.connected && !pendingPlacementActive) {
+    if (
+      place.browser.requiredWorkspace &&
+      (kind === "terminal" || draft.visibility === "incognito")
+    ) {
+      return {
+        gate: "workspace-policy",
+        reason: t(
+          kind === "terminal"
+            ? "newSession.workspaceThreadRequired"
+            : "newSession.workspaceIncognitoUnavailable",
+        ),
+      };
+    }
+    const reason = place.browser.workspaceBlockReason;
+    if (reason) {
+      return { gate: "workspace-policy", reason };
+    }
+  }
   if (
     draft.mentions.length > 0 &&
     (kind === "terminal" ||

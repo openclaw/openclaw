@@ -131,6 +131,46 @@ describe("pending session placement recovery state", () => {
     ).toMatchObject({ createParams: { permissionMode: "guarded" } });
   });
 
+  it("restores project-only creation with its original first turn before promoting custody", () => {
+    const owner = {};
+    const pending = new PendingSessionPlacementRecoveryState(() => owner);
+    const createParams = stageCreate(pending, {
+      target: { kind: "device", deviceId: "member-runner" },
+      message: "Review the selected project",
+      attachments: [{ type: "file", mimeType: "text/plain", content: "aGVsbG8=" }],
+      createParams: buildDraftSessionCreateParams({
+        agentId: "cloud",
+        message: "Review the selected project",
+        deferInitialTurn: true,
+        projectId: "approved-project",
+        worktree: true,
+        creationPolicy: {
+          workspaceRequired: true,
+          worktreeRequired: true,
+          worktreeBaseRef: "main",
+        },
+      }),
+    });
+    expect(createParams).toMatchObject({ projectId: "approved-project", message: "" });
+    expect(createParams).not.toHaveProperty("worktree");
+    const original = pending.capture();
+    pending.releaseClaim();
+    const restored = new PendingSessionPlacementRecoveryState(() => owner);
+    expect(restored.restore("ws://gateway.example", "principal-a")).toEqual(original);
+    expect(restored.createParams).toEqual(createParams);
+    expect(restored.retryAllowed).toBe(true);
+    expect(restored.promoteToDispatching("agent:cloud:accepted-project")).toBe(true);
+    expect(restored.capture()).toMatchObject({
+      sessionKey: "agent:cloud:accepted-project",
+      phase: "dispatching",
+      messageId: original?.messageId,
+      message: "Review the selected project",
+      attachments: original?.attachments,
+      target: { kind: "device", deviceId: "member-runner" },
+    });
+    expect(restored.createParams).toBeUndefined();
+  });
+
   it.each([undefined, "codex"])(
     "preserves draft model and runtime %s through recovery",
     (agentRuntime) => {

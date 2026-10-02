@@ -9,6 +9,7 @@ type ProjectCatalogSnapshot = {
   result: ProjectsListResult | null;
   repositories: readonly MarkdownGitHubRepositoryAliases[];
   ready: boolean;
+  failed: boolean;
 };
 export type ProjectCatalog = {
   readonly snapshot: ProjectCatalogSnapshot;
@@ -79,14 +80,27 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
   }
   const connection = createGatewayConnectionLifecycle(gateway.snapshot);
   const listeners = new Set<() => void>();
-  let snapshot: ProjectCatalogSnapshot = { result: null, repositories: [], ready: false };
+  let snapshot: ProjectCatalogSnapshot = {
+    result: null,
+    repositories: [],
+    ready: false,
+    failed: false,
+  };
   let signature = "";
   let pending: Promise<void> | null = null;
   let unsubscribe: (() => void) | undefined;
-  const retire = () => {
+  const retire = (preserveCreationPolicy = false) => {
+    const creationPolicy = preserveCreationPolicy ? snapshot.result?.creationPolicy : undefined;
     connection.invalidate();
     pending = null;
-    snapshot = { result: null, repositories: [], ready: false };
+    // An explicit refresh must not forget a known requirement when its read
+    // fails. Principal/connection changes retire it with the rest of the catalog.
+    snapshot = {
+      result: creationPolicy ? { projects: [], creationPolicy } : null,
+      repositories: [],
+      ready: false,
+      failed: false,
+    };
   };
   const notify = () => {
     for (const listener of listeners) {
@@ -115,7 +129,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
   const refresh = (invalidate = false): Promise<void> => {
     synchronize();
     if (invalidate) {
-      retire();
+      retire(true);
       notify();
     }
     if (pending) {
@@ -126,7 +140,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
       return Promise.resolve();
     }
     if (!canCallGatewayMethod(gateway.snapshot, "projects.list", "operator.read")) {
-      snapshot = { result: { projects: [] }, repositories: [], ready: true };
+      snapshot = { result: { projects: [] }, repositories: [], ready: true, failed: false };
       notify();
       return Promise.resolve();
     }
@@ -142,10 +156,14 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
             result,
             repositories: projectGitHubRepositories(result.projects),
             ready: true,
+            failed: false,
           };
         },
         () => {
           synchronize();
+          if (connection.isCurrent(scope)) {
+            snapshot = { ...snapshot, ready: false, failed: true };
+          }
         },
       )
       .finally(() => {

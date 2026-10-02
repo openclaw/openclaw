@@ -80,6 +80,29 @@ function harness() {
 }
 
 describe("registered project catalog", () => {
+  it("retains a required policy through refresh failure but retires it with the principal", async () => {
+    const h = harness();
+    await h.store.refresh();
+    const creationPolicy = {
+      workspaceRequired: true,
+      worktreeRequired: true,
+      worktreeBaseRef: "main",
+    } as const;
+    h.request.mockResolvedValue({ projects: [project], creationPolicy });
+    await h.store.refresh(true);
+    h.request.mockRejectedValue(new Error("unavailable"));
+    await h.store.refresh(true);
+    expect(h.store.snapshot).toMatchObject({
+      failed: true,
+      ready: false,
+      result: { projects: [], creationPolicy },
+    });
+    h.snapshot.hello!.auth!.recoveryScope = "principal-b";
+    h.emit();
+    expect(h.store.snapshot.result).toBeNull();
+    await h.store.refresh();
+    expect(h.store.snapshot.result).toBeNull();
+  });
   it("shares one cold read across chat and the picker, preserving recents", async () => {
     const h = harness();
     const picker = projectsForGateway(h.gateway);
@@ -113,13 +136,19 @@ describe("registered project catalog", () => {
     const invalidated = h.store.snapshot;
     failed.reject(new Error("catalog unavailable"));
     await refresh;
-    expect(invalidated).toEqual({ result: null, repositories: [], ready: false });
+    expect(invalidated).toEqual({ result: null, repositories: [], ready: false, failed: false });
     expect(listener).toHaveBeenCalledTimes(2);
-    expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: false });
+    expect(h.store.snapshot).toEqual({
+      result: null,
+      repositories: [],
+      ready: false,
+      failed: true,
+    });
     h.request.mockResolvedValue({
       projects: [{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }],
     });
     await h.store.refresh(true);
+    expect(h.store.snapshot.failed).toBe(false);
     expect(h.store.snapshot.repositories).toEqual([
       { owner: "replacement", repo: "clawsweeper", aliases: ["ClawSweeper"] },
     ]);

@@ -132,7 +132,9 @@ export function buildPendingInputItems(
       continue;
     }
     let pendingStatus: PendingInputStatus | undefined;
-    if (input.state === "queued") {
+    if (input.replayBlockedReason === "foreground-restart") {
+      pendingStatus = "stoppedForRestart";
+    } else if (input.state === "queued") {
       if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
         pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
       }
@@ -241,10 +243,15 @@ function reconcilePendingInputPage(
           receipt.state === "consumed" || (receipt.state === "pending" && receipt.cancelled),
       )
       .map((receipt) => receipt.runId),
-    ...displayPage.items.filter((input) => input.state === "cancelled").map((input) => input.runId),
+    ...displayPage.items
+      .filter(
+        (input) =>
+          input.state === "cancelled" || input.replayBlockedReason === "foreground-restart",
+      )
+      .map((input) => input.runId),
   ]);
-  // Acceptance keeps the browser's authenticated retry payload. Only consumption
-  // or explicit cancellation retires it; a restart may need a fresh admission.
+  // Server custody retains stopped inputs. Retire the browser's retry payload
+  // when that owner explicitly forbids replay, just as for consumption/cancel.
   for (const item of state.chatQueue) {
     const canonical = findChatSubmissionMessage(state.chatMessages, item.sendRunId, true);
     if (

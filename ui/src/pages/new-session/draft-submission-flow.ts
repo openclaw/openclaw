@@ -280,6 +280,9 @@ export class DraftSubmissionFlow {
   submitDisabledReason = (): string | undefined => this.submitBlock()?.reason;
 
   incognitoDisabledReason(): string | undefined {
+    if (this.place.browser.requiredWorkspace) {
+      return t("newSession.workspaceIncognitoUnavailable");
+    }
     const access = readSessionMethodAccess(this.read().context?.gateway.snapshot, {
       method: "sessions.create",
       params: this.buildDraftSessionCreateParams({ visibility: "incognito" }),

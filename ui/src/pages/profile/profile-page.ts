@@ -11,8 +11,9 @@ import {
   GIT_COAUTHOR_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
+import { isNavigationRouteVisible, subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import {
   applicationContext,
   type ApplicationContext,
@@ -40,6 +41,7 @@ import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accoun
 import { registerProfileEnglish } from "../../i18n/locales/en-profile.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
+import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
@@ -80,6 +82,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private connecting = false;
   private canWrite = false;
   private connectionScopes: readonly string[] | null = null;
+  private projectCatalog: ProjectCatalog | undefined;
   private readonly heroAvatarLoader = new IdentityAvatarController(this);
   private identityRequestId = 0;
   private subscriptions: Array<() => void> = [];
@@ -89,7 +92,9 @@ export class ProfilePage extends OpenClawLightDomElement {
   }
   override connectedCallback() {
     super.connectedCallback();
+    this.projectCatalog = projectsForGateway(this.context.gateway);
     this.subscriptions = [
+      this.projectCatalog.subscribe(() => this.requestUpdate()),
       this.context.gateway.subscribe((snapshot) => this.applyGatewaySnapshot(snapshot)),
       this.context.gateway.subscribeEvents((event) => {
         if (
@@ -119,6 +124,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     this.connecting = false;
     this.canWrite = false;
     this.connectionScopes = null;
+    this.projectCatalog = undefined;
     super.disconnectedCallback();
   }
 
@@ -374,6 +380,17 @@ export class ProfilePage extends OpenClawLightDomElement {
 
   private renderConnectionAccess() {
     const scopes = this.connectionScopes;
+    const catalog = this.projectCatalog?.snapshot;
+    const policy = catalog?.result?.creationPolicy;
+    const workspace = policy && "workspaceRequired" in policy ? policy : undefined;
+    const projects = catalog?.result?.projects ?? [];
+    const grants = [
+      ["sessionActions", ["operator.sessions.write"]],
+      ["archive", ["operator.sessions.write", "operator.sessions.archive"]],
+      ["review", ["operator.sessions.read"]],
+      ["publication", ["operator.write"]],
+      ["serverSettings", ["operator.admin"]],
+    ] as const;
     const summary =
       scopes === null
         ? "unknown"
@@ -396,6 +413,83 @@ export class ProfilePage extends OpenClawLightDomElement {
             title: t(`profilePage.access.${summary}`),
             description: t("profilePage.access.limits"),
           })}
+          ${
+            this.ownProfile?.role
+              ? renderSettingsRow({
+                  title: t("profilePage.access.role"),
+                  description: t("profilePage.access.roleDescription"),
+                  control: renderSettingsValue(this.ownProfile.role),
+                })
+              : nothing
+          }
+          ${
+            scopes === null
+              ? nothing
+              : grants.map(
+                  ([action, requestedScopes]) =>
+                    html`<div data-access-action=${action}>
+                      ${renderSettingsRow({
+                        title: t(`profilePage.access.${action}`),
+                        description:
+                          action === "publication"
+                            ? t("profilePage.access.publicationDescription")
+                            : undefined,
+                        control: renderSettingsValue(
+                          t(
+                            roleScopesAllow({
+                              role: this.context.gateway.snapshot.hello?.auth?.role ?? "operator",
+                              requestedScopes,
+                              allowedScopes: scopes,
+                            })
+                              ? "profilePage.access.granted"
+                              : "profilePage.access.notGranted",
+                          ),
+                        ),
+                      })}
+                    </div>`,
+                )
+          }
+          ${
+            catalog?.failed
+              ? renderSettingsRow({
+                  title: t("profilePage.access.workspaceUnavailable"),
+                  description: workspace?.workspaceRequired
+                    ? t("profilePage.access.workspaceDescription", {
+                        branch: workspace.worktreeBaseRef,
+                      })
+                    : undefined,
+                  control: html`<button
+                    type="button"
+                    class="btn"
+                    @click=${() => this.projectCatalog?.refresh(true)}
+                  >
+                    ${t("common.retry")}
+                  </button>`,
+                })
+              : workspace?.workspaceRequired
+                ? renderSettingsRow({
+                    title: t("profilePage.access.workspace"),
+                    description: t("profilePage.access.workspaceDescription", {
+                      branch: workspace.worktreeBaseRef,
+                    }),
+                    control: renderSettingsValue(
+                      !catalog?.ready
+                        ? t("profilePage.access.workspaceLoading")
+                        : projects.length
+                          ? projects.map((project) => project.displayName).join(", ")
+                          : t("profilePage.access.noWorkspaces"),
+                    ),
+                  })
+                : nothing
+          }
+          ${
+            policy?.execution === "foreground-only"
+              ? renderSettingsRow({
+                  title: t("profilePage.access.execution"),
+                  description: t("profilePage.access.foregroundOnly"),
+                })
+              : nothing
+          }
           ${renderSettingsRow({
             title: t("profilePage.access.help"),
             description: t("profilePage.access.nextStep"),
@@ -491,13 +585,17 @@ export class ProfilePage extends OpenClawLightDomElement {
           ? html`
               ${this.renderModelAccounts()}
               <openclaw-github-connections></openclaw-github-connections>
-              ${renderSettingsGroup(
-                renderSettingsNavRow({
-                  title: t("profilePage.usageStatistics"),
-                  description: t("profilePage.usageStatisticsDescription"),
-                  onClick: () => this.context.navigate("usage"),
-                }),
-              )}
+              ${
+                isNavigationRouteVisible("usage", this.connectionScopes ?? [])
+                  ? renderSettingsGroup(
+                      renderSettingsNavRow({
+                        title: t("profilePage.usageStatistics"),
+                        description: t("profilePage.usageStatisticsDescription"),
+                        onClick: () => this.context.navigate("usage"),
+                      }),
+                    )
+                  : nothing
+              }
             `
           : nothing
       }

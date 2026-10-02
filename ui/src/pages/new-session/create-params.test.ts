@@ -32,6 +32,28 @@ describe("create-as-draft availability", () => {
 });
 
 describe("buildDraftSessionCreateParams", () => {
+  it("sends only the approved project when the server owns worktree allocation", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "Work on the project",
+        projectId: "approved",
+        creationPolicy: {
+          workspaceRequired: true,
+          worktreeRequired: true,
+          worktreeBaseRef: "main",
+        },
+        worktree: true,
+        worktreeSource: "empty",
+        baseRef: "other",
+        worktreeName: "old-name",
+        cwd: "/workspace/old",
+        projectGitUrl: "https://github.com/example/other.git",
+        repository: { url: "https://github.com/example/other.git", ref: "other" },
+      }),
+    ).toEqual({ agentId: "main", message: "Work on the project", projectId: "approved" });
+  });
+
   it("creates an empty workspace without carrying a previous checkout source", () => {
     expect(
       buildDraftSessionCreateParams({
