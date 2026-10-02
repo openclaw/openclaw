@@ -270,13 +270,16 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `b3684189fe1f3592dfc5f9774060b405a243d9a6` with WebKit
+The pinned build pairs Bun `86bd9e19723d353b761451ac6f5f63b3f38e863e` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261002-b3684189fe-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `fc90aa4d9c` pin. The build fixes post-script
-`--` argument separators, hidden CommonJS data exports, and truncated large writes
-through native standard I/O pipes. It also switches Darwin file watches to kqueue;
-that change does not affect Linux CI.
+`openclaw-v1.4.3-20261002-86bd9e1972-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `b3684189fe` pin. The build fixes worker heap
+capacity reporting, OS-visible `process.title`, synchronous event-listener exception
+propagation, and delivery of queued WebSocket upgrades. Runtime auto-install defaults
+to off: fixtures must declare and install their dependencies. Darwin watch coalescing
+does not affect Linux CI.
+It retains fixes for post-script `--` argument separators, hidden CommonJS data
+exports, large native standard I/O writes, and Darwin kqueue file watches.
 It retains fixes for compile-cache idle wakeups, `v8.queryObjects`, idempotent
 native readable `ref`/`unref`, the default `module-sync` condition, and
 `process.once` wrapper identity.
