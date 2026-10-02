@@ -632,5 +632,5 @@ async function createDefaultSdkSessionManager(
   if (!created.ok) {
     throw new Error(`Failed to initialize SDK session transcript: ${created.error}`);
   }
-  return SessionManager.open(target, cwd);
+  return await SessionManager.openAsync(target, cwd);
 }

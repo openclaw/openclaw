@@ -14,7 +14,6 @@ import {
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
-import { SqliteReclamationWorker } from "../config/sessions/session-accessor.sqlite-reclamation-worker-lifetime.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
@@ -257,15 +256,16 @@ it.skipIf(process.platform !== "linux")(
             },
           }),
       );
-      const reclamationClose = vi.spyOn(SqliteReclamationWorker.prototype, "close");
+      const agentLeases = shared.prepare(
+        "SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id",
+      );
+      const writerLeases = agentLeases.all(agent.path);
+      expect(writerLeases).toHaveLength(2);
       await runSqliteSessionReclamation({
         forceInProcess: false,
         plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
       });
-      const hostLeaseCount = shared
-        .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
-        .get(agent.path)?.n;
-      expect(hostLeaseCount).toBe(3);
+      expect(agentLeases.all(agent.path)).toEqual(writerLeases);
       // External cleanup can outlive the stop budget; idle writers must not wait for it.
       const removeSidecar = kernel.registerConnectionDependentSidecars({
         async stop() {
@@ -306,13 +306,7 @@ it.skipIf(process.platform !== "linux")(
       ]);
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
       await writerReleased.promise;
-      expect(reclamationClose).toHaveBeenCalledOnce();
-      await reclamationClose.mock.results[0]?.value;
-      expect(
-        shared
-          .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
-          .get(agent.path)?.n,
-      ).toBe(1);
+      expect(agentLeases.all(agent.path)).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
       expect(agent.db.isOpen).toBe(true);

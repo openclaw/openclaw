@@ -130,7 +130,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
 
     const baseSessionManager = SessionManager.inMemory(params.cwd);
     for (const message of params.initialMessages ?? []) {
-      baseSessionManager.appendMessage(structuredClone(message));
+      await baseSessionManager.appendMessageAsync(structuredClone(message));
     }
 
     const transcriptRuntime = createWorkerTranscriptRuntime(params.transcript, params.signal);

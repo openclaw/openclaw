@@ -614,7 +614,7 @@ test.each(["path", "root"] as const)(
   },
 );
 
-test("retains maintenance Workers across alternating databases and retires all idle heaps under pressure", async () => {
+test("retains reclamation Workers across alternating databases and retires all idle heaps under pressure", async () => {
   const pressure = channel("openclaw.memory.critical");
   expect(pressure.hasSubscribers).toBe(false);
   const fixtures = [createFixture(), createFixture()];
@@ -627,11 +627,12 @@ test("retains maintenance Workers across alternating databases and retires all i
     const diagnostics: SqliteSessionReclamationDiagnostics = {};
     const plan =
       pass % 3 === 0
-        ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
+        ? fixture.plans[0]!
         : { kind: "maintenance-pages" as const, databaseOptions, materializedPlans: [] };
     await expect(
       runSqliteSessionReclamation({ forceInProcess: false, plan, diagnostics }),
     ).resolves.toMatchObject({ kind: plan.kind });
+    expect(diagnostics.workerThreadId).toBe(spawned[index]!.threadId);
     threads[index]!.add(diagnostics.workerThreadId!);
   }
   expect(spawned).toHaveLength(2);
@@ -654,10 +655,7 @@ test("retains maintenance Workers across alternating databases and retires all i
   const fixture = fixtures[0]!;
   await runSqliteSessionReclamation({
     forceInProcess: false,
-    plan: reclamation.createSessionMaintenanceStatisticsOperation({
-      ...fixture.options,
-      path: fixture.database.path,
-    }),
+    plan: fixture.plans[1]!,
   });
   expect(spawned).toHaveLength(3);
   expect(pressure.hasSubscribers).toBe(true);

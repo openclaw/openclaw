@@ -51,6 +51,7 @@ import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-hel
 import { handleChatSend } from "./chat-send-handler.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
 import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
@@ -468,7 +469,7 @@ describe("steering input custody", () => {
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
               replyOptions: { messageInjectionDisposition: "rejected" },
             });
-            expect(listSessionPendingInputs(fixture.scope)).toMatchObject({
+            expect(await listSessionPendingInputs(fixture.scope)).toMatchObject({
               total: 1,
               items: [{ runId: fixture.params.idempotencyKey, state: "queued" }],
             });
@@ -677,7 +678,7 @@ describe("steering input custody", () => {
         }
         expect(recorder.getAdmissionReceipt()).toBeUndefined();
         const persistFallback = vi.spyOn(recorder, "persistFallback");
-        const pending = listSessionPendingInputs(fixture.scope);
+        const pending = await listSessionPendingInputs(fixture.scope);
         expect(pending.total).toBe(inputState === "internal fresh" ? 0 : 1);
         expect(
           fixture.beforeApprove.mock.calls.filter(
@@ -702,6 +703,7 @@ describe("steering input custody", () => {
         if (sharedProfileCustody || inputState === "native custody") {
           linkEmail(email, target.id);
           if (inputState === "browser custody session ACL") {
+            await initializeSessionReadContext(fixture.context);
             const visibility = {
               agentId: fixture.scope.agentId,
               sessionKey: fixture.scope.sessionKey,
@@ -815,7 +817,7 @@ describe("steering input custody", () => {
             receipt: recorder.getAdmissionReceipt(),
             sourceTerminal: fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`),
             sourceErrors,
-            pendingInputs: listSessionPendingInputs(fixture.scope),
+            pendingInputs: await listSessionPendingInputs(fixture.scope),
             abortOwners: fixture.context.chatAbortControllers.size,
             queuedTurns: fixture.context.chatQueuedTurns.size,
           }).toMatchObject({
@@ -954,7 +956,7 @@ describe("steering input custody", () => {
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(transcript);
           expect(fixture.context.chatAbortControllers.size).toBe(0);
           expect(fixture.context.chatQueuedTurns.size).toBe(0);
-          expect(listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+          expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         }
       } catch (error) {
         failures.add(error);

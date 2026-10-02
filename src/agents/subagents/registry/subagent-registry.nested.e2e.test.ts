@@ -2,8 +2,9 @@
 // across orchestrator and leaf child sessions.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { callGateway } from "../../../gateway/call.js";
 import {
   countPendingDescendantRuns,
   buildSubagentSessionListReadIndex,
@@ -106,6 +107,13 @@ describe("subagent registry nested agent tracking", () => {
 
   it("countActiveRunsForSession only counts active children of the specific session", async () => {
     const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
+    const gateway = vi.mocked(callGateway);
+    const originalGateway = expectDefined(gateway.getMockImplementation(), "shared gateway mock");
+    onTestFinished(() => {
+      gateway.mockImplementation(originalGateway);
+    });
+    // The shared default completes runs; these children must remain active while counted.
+    gateway.mockResolvedValue({ status: "pending" });
 
     // Main spawns orchestrator (active)
     await registerSubagentRun({

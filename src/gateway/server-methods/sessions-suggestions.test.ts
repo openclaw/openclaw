@@ -9,9 +9,9 @@ import {
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import {
   addSessionSuggestion,
-  listSessionSuggestions,
   SESSION_SUGGESTION_DISPATCH_CLAIM_TTL_MS,
 } from "../../config/sessions/session-suggestion-store.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -506,7 +506,7 @@ describe("session suggestion handlers", () => {
           true,
           { suggestion: { id, state, text: "Ship the focused change" } },
         ]);
-        expect(listSessionSuggestions({ agentId: "main", sessionKey })).toMatchObject([
+        expect(await listSessionSuggestions({ agentId: "main", sessionKey })).toMatchObject([
           { id, state, text: "Ship the focused change" },
         ]);
         expect(broadcast).toHaveBeenCalledWith(
@@ -856,7 +856,7 @@ describe("session suggestion handlers", () => {
           visibility: "suggest",
         },
       );
-      expect(listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([]);
+      expect(await listSessionSuggestions({ agentId: "main", sessionKey })).toEqual([]);
       dispatched.resolve(undefined);
       const result = await resolving;
 

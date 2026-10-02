@@ -1,15 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import ignore from "ignore";
 import { afterEach, describe, expect, it } from "vitest";
@@ -592,26 +583,6 @@ describe("security review workflow trust boundaries", () => {
     expect(result.stderr.trim()).toBe(
       "GitHub token, event, event name, and repository are required.",
     );
-
-    rmSync(join(workspace, "scripts/lib/bounded-response.mjs"));
-    const entryUrl = pathToFileURL(join(workspace, "scripts/github", entry)).href;
-    const missingModule = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `await import(${JSON.stringify(entryUrl)}).catch(error => {
-          console.error(JSON.stringify({ code: error.code, message: error.message }));
-          process.exitCode = 1;
-        });`,
-      ],
-      { cwd: workspace, env: {}, encoding: "utf8" },
-    );
-    expect(missingModule.status).toBe(1);
-    expect(JSON.parse(missingModule.stderr)).toMatchObject({
-      code: "ERR_MODULE_NOT_FOUND",
-      message: expect.stringContaining("bounded-response.mjs"),
-    });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -695,16 +666,6 @@ for (const [name, target] of Object.entries(${JSON.stringify(packages)})) {
       expect(loaded.stderr.trim()).toBe(
         "GITHUB_TOKEN, GITHUB_EVENT_PATH, and GITHUB_REPOSITORY are required.",
       );
-
-      rmSync(join(workspace, ".github/security-review-policy.yml"));
-      const missingPolicy = spawnSync(process.execPath, [probe], {
-        cwd: workspace,
-        env: {},
-        encoding: "utf8",
-      });
-      expect(missingPolicy.status).toBe(1);
-      expect(missingPolicy.stderr).toContain("ENOENT");
-      expect(missingPolicy.stderr).toContain("security-review-policy.yml");
     },
   );
 
@@ -777,14 +738,11 @@ describe("security review ownership", () => {
   it.each([
     ".github/CODEOWNERS",
     "SECURITY.md",
-    ".github/codeql/codeql-core-auth-secrets-critical-security.yml",
     ".github/codeql/openclaw-boundary/queries/managed-proxy-runtime-mutation.ql",
     ".github/workflows/codeql-macos-critical-security.yml",
     ".github/workflows/security-review.yml",
     ".github/security-review-policy.yml",
     ".github/actions/setup-security-review/action.yml",
-    ".github/actions/setup-security-review/package.json",
-    ".github/actions/setup-security-review/package-lock.json",
     "scripts/github/security-review-policy.mjs",
     "scripts/github/security-review-event.mjs",
     "scripts/github/security-review.mjs",

@@ -41,22 +41,22 @@ import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-l
 import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
-export function appendCompletedToolWork(
+export async function appendCompletedToolWork(
   manager: SessionManager,
   runId: string,
-  beforeNested?: () => void,
+  beforeNested?: () => void | Promise<void>,
   suffix = "",
 ) {
   const original = guardSessionManager(manager, { runId });
-  original.appendMessage(
+  await original.appendMessageAsync(
     createAssistant(
       testModel,
       [{ type: "toolCall", id: "completed-read" + suffix, name: "read", arguments: {} }],
       "toolUse",
     ),
   );
-  beforeNested?.();
-  original.appendMessage(
+  await beforeNested?.();
+  await original.appendMessageAsync(
     createNestedToolActivity({
       runId,
       scopeId: "nested-scope" + suffix,
@@ -72,7 +72,7 @@ export function appendCompletedToolWork(
       timestamp: 3,
     }),
   );
-  original.appendMessage({
+  await original.appendMessageAsync({
     role: "toolResult",
     toolCallId: "completed-read" + suffix,
     toolName: "read",
@@ -80,7 +80,7 @@ export function appendCompletedToolWork(
     isError: false,
     timestamp: 4,
   });
-  original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 4 });
+  await original.appendCustomEntryAsync("openclaw.cache-ttl", { timestamp: 4 });
 }
 
 export async function appendOversizedCacheSnapshot(manager: SessionManager) {
@@ -135,30 +135,37 @@ export async function withInterruptedTurn(
       });
     if (options.settledPrefix) {
       // A completed earlier turn that fenced current-turn reads must still see.
-      const seed = SessionManager.open(target, state.workspaceDir);
-      seed.appendMessage({
+      const seed = await SessionManager.openAsync(target, state.workspaceDir);
+      await seed.appendMessageAsync({
         role: "user",
         content: "Earlier settled question",
         timestamp: 1,
         idempotencyKey: `${runId}:earlier`,
       } as never);
-      seed.appendMessage(
+      await seed.appendMessageAsync(
         createAssistant(testModel, [{ type: "text", text: "Earlier settled answer" }]),
       );
     }
     const previous = makeRecorder();
     await previous.stageApproved!({ runId, assertCurrent: () => {} });
-    const original = guardSessionManager(SessionManager.open(target, state.workspaceDir), {
-      runId,
-      preparedUserTurnMessage: await previous.resolveMessage(),
-      preparedUserTurnTranscriptRecorder: previous,
-    });
-    previous.withPendingInput!(() =>
-      original.appendMessage({ role: "user", content: "Finish this exact turn", timestamp: 1 }),
+    const original = guardSessionManager(
+      await SessionManager.openAsync(target, state.workspaceDir),
+      {
+        runId,
+        preparedUserTurnMessage: await previous.resolveMessage(),
+        preparedUserTurnTranscriptRecorder: previous,
+      },
+    );
+    await previous.withPendingInput!(() =>
+      original.appendMessageAsync({
+        role: "user",
+        content: "Finish this exact turn",
+        timestamp: 1,
+      }),
     );
     if (appendOnlyRuntimeContext) {
       const carrier = buildRuntimeContextCustomMessage("Original runtime context")!;
-      original.appendCustomMessageEntry(
+      await original.appendCustomMessageEntryAsync(
         carrier.customType,
         carrier.content,
         carrier.display,
@@ -166,21 +173,27 @@ export async function withInterruptedTurn(
       );
     }
     if (options.oversizedMetadata) {
-      appendCompletedToolWork(original, runId, undefined, "-before-window");
+      await appendCompletedToolWork(original, runId, undefined, "-before-window");
       await appendOversizedCacheSnapshot(original);
     }
     if (options.compactedInput) {
-      const firstKeptEntryId = original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 2 });
-      original.appendCompaction("Continue the unfinished request", firstKeptEntryId, 9_000);
+      const firstKeptEntryId = await original.appendCustomEntryAsync("openclaw.cache-ttl", {
+        timestamp: 2,
+      });
+      await original.appendCompactionAsync(
+        "Continue the unfinished request",
+        firstKeptEntryId,
+        9_000,
+      );
     }
     if (options.toolProgress) {
-      appendCompletedToolWork(original, runId);
+      await appendCompletedToolWork(original, runId);
     }
     if (options.interruptedTurn !== false) {
-      original.appendMessage(
+      await original.appendMessageAsync(
         createFailureMessage(testModel, createAgentRunRestartAbortError(), true),
       );
-      await appendInterruptedTurnMessage([], (event) => {
+      await appendInterruptedTurnMessage([], async (event) => {
         if (event.type !== "message_end") {
           return;
         }
@@ -188,7 +201,7 @@ export async function withInterruptedTurn(
         if (interrupted.role !== "custom") {
           throw new Error("expected interruption context");
         }
-        original.appendCustomMessageEntry(
+        await original.appendCustomMessageEntryAsync(
           interrupted.customType,
           interrupted.content,
           interrupted.display,

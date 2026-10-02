@@ -453,6 +453,29 @@ serveOwnedWorkerTasks(
         );
         return result.found ? result.value : [];
       }
+      if (request.kind === "session-suggestions") {
+        const { withOpenClawAgentDatabaseReadOnly } =
+          await import("../../state/openclaw-agent-db-readonly.js");
+        const { listSessionSuggestionsInDatabase } =
+          await import("./session-suggestion-store.kernel.js");
+        const result = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            listSessionSuggestionsInDatabase(database, request.sessionKey, request.params),
+          { ...request.database, env: request.env },
+        );
+        return {
+          kind: "session-suggestions" as const,
+          suggestions: result.found ? result.value : [],
+        };
+      }
+      if (request.kind === "session-pending-input-history") {
+        const { readPendingInputHistoryInWorker } =
+          await import("./session-pending-input-history-read.worker.js");
+        return {
+          kind: "session-pending-input-history",
+          snapshot: readPendingInputHistoryInWorker(request),
+        };
+      }
       if (request.kind === "session-pending-input-receipts") {
         const { listSessionPendingInputReceipts } =
           await import("./session-accessor.sqlite-pending-input-receipts.js");
@@ -581,6 +604,7 @@ serveOwnedWorkerTasks(
           }
           if (
             request.kind === "transcript-hydration" ||
+            request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
             request.kind === "recent-active-events" ||
             request.kind === "latest-active-message"

@@ -69,7 +69,9 @@ Methods an operator client calls on behalf of a person: helper reads, exec appro
   - The response includes eligibility, missing requirements, config checks,
     and sanitized install options without exposing raw secret values.
 - `skills.search` and `skills.detail` (`operator.read`) return ClawHub
-  discovery metadata.
+  discovery metadata. `skills.detail({ slug, version? })` accepts the publisher-qualified
+  `installRef` from search and reads that release's card and scan summary. See
+  [Skill registry details](/gateway/protocol/operator-methods#skill-registry-details).
 - `skills.upload.begin`, `skills.upload.chunk`, and `skills.upload.commit`
   (`operator.admin`) stage a private skill archive before installing it. This
   is a separate admin upload path for trusted clients, not the normal ClawHub
@@ -216,6 +218,44 @@ The Gateway advertises these published-read and details controls as
 capability before sending the new fields; an older Gateway requires an update
 or restart, not a silent local fallback. The model CLI uses this contract for
 `models list` and `models list --refresh`.
+
+## Skill registry details
+
+Use the exact `installRef` from `skills.search` when requesting details. For example:
+
+```json
+{ "slug": "@example-publisher/example-skill", "version": "1.2.0" }
+```
+
+Omitting `version` selects the latest published release. The response retains
+`skill`, `latestVersion`, `metadata`, and `owner`, and adds `registry`, `source`,
+`installRef`, and `selectedRelease`. `latestVersion` and `metadata` always describe
+the listing's latest release; `selectedRelease`, `card`, and `security` describe
+the requested release. Publisher and release mismatches never substitute another
+skill or version.
+
+`card` contains full card text when its `status` is `available`. Otherwise it has
+`status: "unavailable"` and a `reason`. `security` reports `scanStatus`,
+`hasWarnings`, `hasScanResult`, and any scan time, summary, or VirusTotal URL.
+Missing scans are explicitly unavailable. Optional release or card failures leave
+basic listing metadata readable and appear in the affected section or `warnings`.
+
+`requirements` reports the latest release's registry setup keys, operating
+systems, and systems when available. Its `scope: "registry-setup"` and `note`
+explain that setup keys combine environment and configuration requirements and do
+not include binary requirements. Structured requirements for older releases are
+unavailable because ClawHub only publishes these facts for latest. These are
+registry declarations, not checks of a local agent's eligibility; use
+`skills.status` for local requirements and configuration checks.
+
+`downloadability` is independent of card availability, listing visibility, and
+scan results. Missing or removed releases are `unavailable`; other skill releases
+are `unknown` because ClawHub does not publish an exact-release artifact
+availability assertion. Both states include a reason. Installation still performs
+its own resolution, integrity, and policy checks.
+
+External `skills-sh:` references remain install-only. `skills.detail` rejects
+them rather than returning a native registry skill with the same slug.
 
 ## Exec approvals
 

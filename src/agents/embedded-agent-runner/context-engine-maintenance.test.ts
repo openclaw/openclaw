@@ -39,7 +39,7 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
   rewrittenEntries: 1,
 }));
 const sessionManagerFixture = createMaintenanceSessionManagerOpenFixture();
-const sessionManagerOpenMock = sessionManagerFixture.open;
+const sessionManagerOpenAsyncMock = sessionManagerFixture.openAsync;
 const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
   agentId: scope.agentId ?? "main",
   sessionId: scope.sessionId,
@@ -61,7 +61,7 @@ vi.mock("./transcript-rewrite.js", () => ({
 
 vi.mock("../sessions/index.js", () => ({
   SessionManager: {
-    open: (target: SessionTranscriptRuntimeTarget) => sessionManagerOpenMock(target),
+    openAsync: (target: SessionTranscriptRuntimeTarget) => sessionManagerOpenAsyncMock(target),
   },
 }));
 
@@ -148,7 +148,7 @@ describe("runContextEngineMaintenance", () => {
         bytesFreed: 77,
         rewrittenEntries: 1,
       });
-      expect(sessionManagerOpenMock).toHaveBeenCalledWith(sessionTarget);
+      expect(sessionManagerOpenAsyncMock).toHaveBeenCalledWith(sessionTarget);
       expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
         sessionManager: sessionManagerFixture.current,
         replacements: [
@@ -216,7 +216,7 @@ describe("runContextEngineMaintenance", () => {
         { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
       ],
     });
-    expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+    expect(sessionManagerOpenAsyncMock).not.toHaveBeenCalled();
   });
 
   it("does not resolve or open a durable transcript when the rewrite owner rejects", async () => {
@@ -256,7 +256,7 @@ describe("runContextEngineMaintenance", () => {
 
     expect(withSessionManagerRewriteLock).toHaveBeenCalledOnce();
     expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
-    expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+    expect(sessionManagerOpenAsyncMock).not.toHaveBeenCalled();
     expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
   });
 
@@ -314,14 +314,14 @@ describe("runContextEngineMaintenance", () => {
         expect(published).toHaveBeenCalledOnce();
         rewriteTranscriptEntriesInSessionManagerMock.mockClear();
         resolveRuntimeTranscriptReadTargetMock.mockClear();
-        sessionManagerOpenMock.mockClear();
+        sessionManagerOpenAsyncMock.mockClear();
         published.mockClear();
 
         await expect(
           expectDefined(rewrite, "retained rewrite capability")(request),
         ).rejects.toMatchObject({ name: "AbortError" });
         expect(resolveRuntimeTranscriptReadTargetMock).not.toHaveBeenCalled();
-        expect(sessionManagerOpenMock).not.toHaveBeenCalled();
+        expect(sessionManagerOpenAsyncMock).not.toHaveBeenCalled();
         expect(rewriteTranscriptEntriesInSessionManagerMock).not.toHaveBeenCalled();
         expect(published).not.toHaveBeenCalled();
       } finally {

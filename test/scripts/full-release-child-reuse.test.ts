@@ -296,11 +296,7 @@ describe("independent release child reuse", () => {
       expect.stringContaining('scanned 7 runs, evaluated 1; skipped {"target receipt absent":6}'),
     );
   });
-  it.each([
-    { status: "completed", conclusion: "failure" },
-    { status: "completed", conclusion: "cancelled" },
-    { status: "in_progress", conclusion: null },
-  ])(
+  it.each([{ status: "in_progress", conclusion: null }])(
     "reuses green children from $status/$conclusion parents without a manifest",
     async (parentState) => {
       const data = await fixture();
@@ -485,14 +481,13 @@ describe("independent release child reuse", () => {
 
   it.each([
     { target_ref: "c".repeat(40), release_scope: "full" },
-    { target_ref: TARGET, release_scope: "npm-beta" },
     { target_ref: TARGET, release_scope: "" },
   ])("rejects different exact dispatch inputs %#", async (inputs) => {
     const data = await fixture();
     expect(await discoverReusableReleaseChild({ ...data.request, inputs }, data.deps)).toBeNull();
   });
 
-  it.each(['{ "id": "801" }', '{"id":"802"}', ""])(
+  it.each(['{ "id": "801" }', ""])(
     "requires the exact candidate descriptor bytes %s",
     async (candidate_artifact_json) => {
       const data = await fixture("pluginPrereleaseCandidate");

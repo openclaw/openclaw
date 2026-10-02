@@ -4,18 +4,16 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { compareSessionProviderReviewInWorker } from "../../config/sessions/provider-review-store.worker.js";
+import { compareSessionProviderReview } from "../../config/sessions/provider-review-store.js";
 import type { SessionProviderReview } from "../../config/sessions/provider-review.types.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import {
-  addSessionSuggestion,
-  listSessionSuggestions,
-} from "../../config/sessions/session-suggestion-store.js";
+import { addSessionSuggestion } from "../../config/sessions/session-suggestion-store.js";
+import { listSessionSuggestions } from "../../config/sessions/session-suggestion-store.read.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import * as agentWriteAdmission from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { getSessionSuggestionTestMocks } from "./sessions-suggestions.test-mocks.js";
@@ -65,7 +63,7 @@ describe("suggestions queued behind provider review", () => {
         const release = createDeferred();
         const metadataQueued = createDeferred();
         let blocker: Promise<void> | undefined;
-        let review: Promise<ReturnType<typeof compareSessionProviderReviewInWorker>> | undefined;
+        let review: ReturnType<typeof compareSessionProviderReview> | undefined;
         let request: ReturnType<typeof call> | undefined;
         const providerReview: SessionProviderReview = {
           id: "queued-provider-review",
@@ -77,26 +75,45 @@ describe("suggestions queued behind provider review", () => {
         };
         const queueReviewBeforeNextWrite = async () => {
           const entered = createDeferred();
-          blocker = runOpenClawAgentWorkerWrite(options, async () => {
+          blocker = agentWriteAdmission.runOpenClawAgentWorkerWrite(options, async () => {
             entered.resolve();
             await release.promise;
           });
           await withinTest(entered.promise, signal);
-          // Keep the canonical prepared postimage; a broad host invalidation would mask missing facts.
-          review = runOpenClawAgentWorkerWrite(options, async () =>
-            compareSessionProviderReviewInWorker(
-              database,
-              options,
+          const reviewQueued = createDeferred();
+          const enqueueWrite = agentWriteAdmission.runOpenClawAgentWorkerWrite;
+          const observeReview = vi
+            .spyOn(agentWriteAdmission, "runOpenClawAgentWorkerWrite")
+            .mockImplementationOnce((...args) => {
+              const pending = enqueueWrite(...args);
+              reviewQueued.resolve();
+              return pending;
+            });
+          try {
+            review = compareSessionProviderReview(
               {
-                sessionKey,
+                ...scope,
+                storePath: database.path,
                 sessionId: originalSessionId,
                 lifecycleRevision: originalEntry.lifecycleRevision,
+              },
+              {
                 expectedReview: undefined,
                 nextReview: providerReview,
+                assertCurrent: () => signal.throwIfAborted(),
               },
-              () => {},
-            ),
-          );
+            );
+            await withinTest(
+              awaitGateBeforeSettlement(
+                reviewQueued.promise,
+                review,
+                "provider review finished before its writer entered the queue",
+              ),
+              signal,
+            );
+          } finally {
+            observeReview.mockRestore();
+          }
         };
         if (action === "add") {
           const add = metadataWrites.addSessionSuggestionInWorker;
@@ -171,7 +188,7 @@ describe("suggestions queued behind provider review", () => {
             ]);
           }
           if (action === "add") {
-            expect(listSessionSuggestions(scope)).toEqual([]);
+            expect(await listSessionSuggestions(scope)).toEqual([]);
           } else {
             expect(
               database.db

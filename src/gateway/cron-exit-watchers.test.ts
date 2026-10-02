@@ -2,7 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import {
@@ -527,6 +531,77 @@ describe("createCronExitWatchers", () => {
     expect(supervisor.spawn).toHaveBeenCalledTimes(2);
     expect(scheduler.nextWakeAtMs).toBeNull();
     expect(watchers.activeJobIds()).toEqual([]);
+  });
+
+  it("restarts retries while a cancelled retry's publication is still settling", async ({
+    signal,
+  }) => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    supervisor.spawn
+      .mockRejectedValueOnce(new Error("initial spawn failed"))
+      .mockRejectedValueOnce(new Error("retry spawn failed"))
+      .mockRejectedValueOnce(new Error("replacement spawn failed"));
+    const firstRetryScheduled = createDeferred();
+    const retryFailure = createDeferred();
+    const releaseRetry = createDeferred();
+    const replacementRetryScheduled = createDeferred();
+    let restarting = false;
+    const fireOnExit = vi.fn(async () => {});
+    const watchers = createWatcherFixture({
+      getProcessSupervisor: () => supervisor as never,
+      reserveExit: vi.fn(async () => {}),
+      fireOnExit,
+      updateWatcherState: async (job, patch) => {
+        if (job.id === "job-a" && patch.consecutiveErrors === 2) {
+          retryFailure.resolve();
+          await releaseRetry.promise;
+        }
+      },
+      logger: {
+        ...noopLogger,
+        warn: () => (restarting ? replacementRetryScheduled : firstRetryScheduled).resolve(),
+      },
+      retryBackoffMs: [1_000],
+    });
+    let retry: Promise<void> | undefined;
+    let cancelling: Promise<void> | undefined;
+    try {
+      watchers.reconcile([onExitJob("job-a")]);
+      await withinTest(firstRetryScheduled.promise, signal);
+      retry = Promise.resolve(clock.advanceBy(1_000));
+      await withinTest(retryFailure.promise, signal);
+      cancelling = watchers.cancelAll();
+      expect(scheduler.nextWakeAtMs).toBeNull();
+
+      restarting = true;
+      watchers.reconcile([onExitJob("job-b")]);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          replacementRetryScheduled.promise,
+          cancelling,
+          "Watcher cancellation completed before its failure publication settled",
+        ),
+        signal,
+      );
+      expect(scheduler.nextWakeAtMs).toBe(2_000);
+      releaseRetry.resolve();
+      await withinTest(Promise.all([retry, cancelling]), signal);
+      expect(watchers.activeJobIds()).toEqual(["job-b"]);
+      expect(scheduler.nextWakeAtMs).toBe(2_000);
+
+      await withinTest(Promise.resolve(clock.advanceBy(1_000)), signal);
+      expect(supervisor.spawn).toHaveBeenCalledTimes(4);
+      expect(runs).toHaveLength(1);
+      expect(watchers.activeJobIds()).toEqual(["job-b"]);
+      expect(fireOnExit).not.toHaveBeenCalled();
+    } finally {
+      releaseRetry.resolve();
+      const closing = watchers.cancelAll();
+      for (const run of runs) {
+        run.deferred.resolve({ exitCode: null, reason: "manual-cancel" });
+      }
+      await Promise.all([retry, cancelling, closing]);
+    }
   });
 
   it("a fired job stays unarmed across a simulated restart (disabled in store → not re-run)", async () => {
