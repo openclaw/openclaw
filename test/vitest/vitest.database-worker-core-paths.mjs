@@ -157,7 +157,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/agent-tools.safe-bins.test.ts",
   "src/agents/agent-tools.workspace-paths.test.ts",
   "src/agents/agent-create.integration.test.ts",
-  "src/agents/agent-create.persistence.integration.test.ts",
   "src/agents/sandbox.resolveSandboxContext.test.ts",
   "src/agents/workspace-alias-rebind.test.ts",
   "src/agents/workspace-attestation.worker.test.ts",
