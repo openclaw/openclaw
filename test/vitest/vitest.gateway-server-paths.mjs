@@ -91,6 +91,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/managed-image-attachments.worker-custody.test.ts",
   "src/gateway/managed-image-record-store.test.ts",
   "src/gateway/managed-outgoing-gc-availability.test.ts",
+  "src/gateway/mcp-http.completion-lineage.test.ts",
   "src/gateway/mcp-http.exec-egress.test.ts",
   "src/gateway/mention-directory.test.ts",
   "src/gateway/mention-inbox.test.ts",

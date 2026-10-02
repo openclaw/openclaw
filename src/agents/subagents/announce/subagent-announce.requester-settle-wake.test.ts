@@ -580,10 +580,11 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
       },
     });
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([staleChild, ...children]);
-    registryRuntimeMock.getLatestSubagentRunByChildSessionKey.mockImplementation((sessionKey) =>
-      sessionKey === staleChild.childSessionKey
-        ? { runId: "run-replacement", requesterSessionKey: "agent:other:main" }
-        : undefined,
+    registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey.mockImplementation(
+      (sessionKey) =>
+        sessionKey === staleChild.childSessionKey
+          ? { ...staleChild, runId: "run-replacement", requesterSessionKey: "agent:other:main" }
+          : undefined,
     );
 
     expect(

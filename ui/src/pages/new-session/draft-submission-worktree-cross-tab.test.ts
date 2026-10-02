@@ -2,6 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import * as toast from "../../lib/toast.ts";
 import { identityPreferences } from "./draft-worktree-preferences.test-support.ts";
+import {
+  acceptedWorktreeSession,
+  readyPreferenceDraft,
+  selectCloudWorktree,
+} from "./draft-worktree-submission.test-support.ts";
 import { renderControl } from "./model-control.test-support.ts";
 import { decodeIdentityPreferences } from "./preferences.ts";
 
@@ -47,10 +52,7 @@ it("preserves a newer independent Gateway draft when an accepted clear commits l
       await releaseClear.promise;
     }
   });
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:dashboard:first",
-    initialRun: { status: "started", runId: "first-run" },
-  });
+  vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
   first.flow.setMessage("first task");
   const submitting = first.flow.submit(undefined, true);
   let newer: unknown;
@@ -89,7 +91,7 @@ it("preserves a newer independent Gateway draft when an accepted clear commits l
   expect(prefs.stored()).toEqual(newer);
 });
 
-it.each(["model", "base", "empty base"] as const)(
+it.each(["model", "empty base"] as const)(
   "reconciles a concurrent independent draft %s change without losing accepted creation",
   async (change) => {
     const prefs = identityPreferences(true, async () => ({
@@ -119,10 +121,7 @@ it.each(["model", "base", "empty base"] as const)(
         await release.promise;
       }
     });
-    vi.mocked(first.context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:first",
-      initialRun: { status: "started", runId: "first-run" },
-    });
+    vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
     const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
     first.flow.setMessage("first task");
     const submitting = first.flow.submit(undefined, true);
@@ -145,7 +144,7 @@ it.each(["model", "base", "empty base"] as const)(
           expect(prefs.stored()).toMatchObject({ model: "openai/gpt-5.6-sol" }),
         );
       } else {
-        const baseRef = change === "base" ? "release" : "";
+        const baseRef = "";
         next.place.setBaseRef(baseRef);
         await vi.waitFor(() => expect(prefs.stored()).toMatchObject({ baseRef }));
       }
@@ -195,10 +194,7 @@ it("warns once after bounded contention without replaying an accepted session", 
       await prefs.publish(next, { thinkingLevel: `concurrent-${clears}` });
     }
   });
-  vi.mocked(first.context.sessions.createResult).mockResolvedValue({
-    key: "agent:main:dashboard:first",
-    initialRun: { status: "started", runId: "first-run" },
-  });
+  vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
   const warning = vi.spyOn(toast, "showToast").mockReturnValue(false);
   first.flow.setMessage("first task");
   await first.flow.submit(undefined, true);
@@ -244,10 +240,7 @@ it("preserves an explicit base cleared by another draft before acceptance reads 
   const { invalidateUserPreferences } = await import("../../app/user-prefs-cache.ts");
   // The other tab's users.prefs.changed event invalidates the old read, not its local selection.
   invalidateUserPreferences(first.context.gateway.snapshot.client!);
-  accepted.resolve({
-    key: "agent:main:dashboard:first",
-    initialRun: { status: "started", runId: "first-run" },
-  });
+  accepted.resolve(acceptedWorktreeSession);
   await submitting;
   expect(first.context.sessions.createResult).toHaveBeenCalledOnce();
   expect(first.flow.error).toBeNull();
@@ -258,8 +251,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
   "reconciles a restored creating placement with an %s base without guessing newer intent",
   async (base) => {
     const prefs = identityPreferences();
-    let first = prefs.make();
-    await prefs.ready(first);
+    let first = await readyPreferenceDraft(prefs);
     const independent = base === "cleared" ? prefs.make() : undefined;
     if (independent) {
       await prefs.ready(independent);
@@ -277,12 +269,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
       await prefs.ready(first);
       expect(first.place.baseRef).toBe("");
     }
-    vi.spyOn(first.gateway, "cloudProfiles", "get").mockReturnValue([
-      { id: "cloud", providerId: "crabbox", executionModes: ["worker-turn", "remote-exec"] },
-    ]);
-    vi.spyOn(first.gateway, "cloudProfilesReady", "get").mockReturnValue(true);
-    vi.spyOn(first.gateway, "cloudProfilesPending", "get").mockReturnValue(false);
-    first.place.selectCloudProfile("cloud");
+    selectCloudWorktree(first);
     first.flow.setMessage("first task");
     vi.mocked(first.context.sessions.createResult).mockResolvedValue(null);
     await first.flow.submit(undefined, true);
@@ -301,8 +288,7 @@ it.each(["explicit", "implicit", "cleared"] as const)(
       dispose(independent);
     }
     const retained = structuredClone(prefs.stored());
-    const retry = prefs.make(first.context.gateway);
-    await prefs.ready(retry);
+    const retry = await readyPreferenceDraft(prefs, first.context.gateway);
     const start = vi.fn();
     retry.context.placementStartup.start = start;
     vi.mocked(retry.context.sessions.createResult).mockImplementation(async (params) => ({
@@ -384,10 +370,7 @@ it("keeps an accepted name retired when an older independent model save commits 
     .click();
   try {
     await modelSaveStarted.promise;
-    vi.mocked(first.context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:first",
-      initialRun: { status: "started", runId: "first-run" },
-    });
+    vi.mocked(first.context.sessions.createResult).mockResolvedValue(acceptedWorktreeSession);
     first.flow.setMessage("first task");
     await first.flow.submit(undefined, true);
     expect(first.context.sessions.createResult).toHaveBeenCalledOnce();

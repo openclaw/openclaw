@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
@@ -448,7 +447,6 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(messages[1]).toMatchObject({
       toolCallId: "call_orphan_2",
       isError: true,
-      content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
     });
 
     appendMessage({

@@ -8,7 +8,7 @@ import { getOpenClawSystemUpdateKind } from "../../packages/agent-core/src/opera
 import { escapeRegExp } from "../shared/regexp.js";
 
 export {
-  OPENCLAW_SYSTEM_UPDATE_CUSTOM_TYPE,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
   getOpenClawSystemUpdateKind,
   isOpenClawSystemUpdateMessage,
   orderSystemUpdateMessages,

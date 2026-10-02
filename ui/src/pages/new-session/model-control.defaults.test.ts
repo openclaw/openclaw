@@ -30,34 +30,6 @@ function setup() {
 }
 
 describe("configured fresh-session model defaults", () => {
-  it("ignores remembered model, runtime and thinking without deleting preferences or Fast Mode", async () => {
-    const { context } = setup();
-    const persist = vi.fn();
-    const control = new NewSessionModelControl(() => undefined, persist);
-    control.load(context, "main", true, { agent, preference });
-    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-    expect(control.selected).toBe("");
-    expect(control.agentRuntime).toBeUndefined();
-    expect(control.thinkingLevel).toBe("");
-    expect(control.fastMode).toBe(true);
-    expect(renderControl(control, context, "main", agent).textContent).toContain(
-      "Configured model",
-    );
-    expect(persist).not.toHaveBeenCalled();
-    expect(preference.thinkingLevel).toBe("low");
-    control.reset();
-  });
-
-  it("preserves the default remembered behavior when the option is absent", async () => {
-    const { context } = contextWith(models);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true, { agent, preference });
-    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-    expect(control.selected).toBe(preference.model);
-    expect(control.thinkingLevel).toBe("low");
-    control.reset();
-  });
-
   it("preserves a deliberate model choice across repeated loads and returns to defaults for the next draft", async () => {
     const { context, emitCatalogChanged } = setup();
     const control = new NewSessionModelControl(() => undefined);

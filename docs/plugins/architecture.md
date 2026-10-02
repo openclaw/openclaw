@@ -529,7 +529,9 @@ source so relative asset reads stay within that generation. Node executes compil
 JavaScript from a separate directory; its module URLs and CommonJS cache keys can
 differ from the source filenames.
 
-Bun 1.4.2 uses its native/Jiti loader with a separate captured source artifact for
+Node owns plugin resolution through `Module.registerHooks`; Bun keeps its native/Jiti loader and `Bun.plugin` resolver even when `Module.registerHooks` exists.
+
+Bun uses its native/Jiti loader with a separate captured source artifact for
 each managed instance. Reload prepares fresh TypeScript entries and helpers while
 existing consumers retain their old instance. Disposal removes that instance's
 captured cache records and files without evicting its replacement or the host SDK.

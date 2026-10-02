@@ -264,7 +264,6 @@ export async function writeConfigFileFromContext(
     snapshot.exists
       ? validatedCandidate
       : initializeNativeSessionCatalogPreferences(validatedCandidate),
-    undefined,
     options.lastTouchedVersionOverride,
     snapshot.exists ? previousSource : null,
   );
@@ -304,7 +303,6 @@ export async function writeConfigFileFromContext(
   });
   const stampedOutputConfig = stampConfigWriteMetadata(
     outputConfig,
-    undefined,
     options.lastTouchedVersionOverride,
   );
   rejectConfigNonFiniteNumbers(stampedOutputConfig);

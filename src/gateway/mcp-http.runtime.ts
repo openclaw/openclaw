@@ -67,6 +67,8 @@ type McpLoopbackScopeParams = {
   authProfileStoreAgentDir?: string;
   skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   rootedExecution?: PreparedRootedExecutionCapability;
+  /** Host-selected coding owners for pre-grant projection only. */
+  defaultMediatedToolNames?: readonly string[];
   messageActionTurnCapability?: string;
   grantToken?: string;
   /**
@@ -172,6 +174,7 @@ async function resolveNodeExecScope(
     !params.rootedExecution &&
     !params.context.trustedInternalHandoff &&
     params.context.nodeExecAllowed === true &&
+    !params.defaultMediatedToolNames?.length &&
     resolveMediatedNativeTools(params.context.toolsAllow, mode).size === 0;
   if (!shouldResolveExec) {
     return params;
@@ -303,6 +306,13 @@ function constructMcpLoopbackTools(
     params.rootedExecution || context.trustedInternalHandoff
       ? new Set(NATIVE_TOOL_EXCLUDE)
       : resolveMediatedNativeTools(toolsAllow, mode);
+  for (const toolName of params.defaultMediatedToolNames ?? []) {
+    const name = normalizeToolPolicyName(toolName);
+    if (!NATIVE_TOOL_EXCLUDE.has(name)) {
+      throw new Error(`Unknown host-owned coding tool: ${toolName}`);
+    }
+    mediatedNativeTools.add(name);
+  }
   for (const toolName of mediatedNativeTools) {
     excludeToolNames.delete(toolName);
   }
@@ -437,6 +447,7 @@ function buildMcpLoopbackToolCacheKey(params: McpLoopbackScopeParams): string {
         context.delegationCapability === "report_only" ? "report_only" : undefined,
     },
     admittedRunInstance: params.admittedRunContext?.operationalRunInstance,
+    defaultMediatedToolNames: params.defaultMediatedToolNames,
     sessionControlsAllowed: hasSessionControlAuthority(
       readAdmittedRunOperatorAuthority(params.admittedRunContext),
     ),

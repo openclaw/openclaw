@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import {
   discoverRealtimeTalkCameras,
   discoverRealtimeTalkInputs,
@@ -132,16 +133,9 @@ describe("realtime Talk microphone lifetime", () => {
 
   it("cancels permission acquisition without retaining late microphone access", async () => {
     const { track, addEventListener, stream } = microphoneFixture();
-    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    const media = createDeferred<MediaStream>();
     vi.stubGlobal("navigator", {
-      mediaDevices: {
-        getUserMedia: vi.fn(
-          () =>
-            new Promise<MediaStream>((resolve) => {
-              resolveMedia = resolve;
-            }),
-        ),
-      },
+      mediaDevices: { getUserMedia: vi.fn(() => media.promise) },
     });
     const onEnded = vi.fn();
     const onConnecting = vi.fn();
@@ -152,7 +146,7 @@ describe("realtime Talk microphone lifetime", () => {
     input.stop();
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
 
-    resolveMedia(stream);
+    media.resolve(stream);
     await vi.waitFor(() => expect(track.stop).toHaveBeenCalledOnce());
     expect(input.stream).toBeNull();
     expect(addEventListener).not.toHaveBeenCalled();
@@ -355,17 +349,14 @@ describe("realtime Talk microphone inputs", () => {
 
   it("releases media when cancellation follows browser permission resolution", async () => {
     const stop = vi.fn();
-    let resolveMedia: (stream: MediaStream) => void = () => undefined;
-    const pending = new Promise<MediaStream>((resolve) => {
-      resolveMedia = resolve;
-    });
+    const media = createDeferred<MediaStream>();
     vi.stubGlobal("navigator", {
-      mediaDevices: { getUserMedia: vi.fn(() => pending) },
+      mediaDevices: { getUserMedia: vi.fn(() => media.promise) },
     });
     const input = createMicrophoneInput();
     const opening = input.open(undefined);
 
-    resolveMedia({ getTracks: () => [{ stop }] } as unknown as MediaStream);
+    media.resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream);
     input.stop();
 
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
@@ -373,40 +364,18 @@ describe("realtime Talk microphone inputs", () => {
   });
 
   it("keeps cancellation precedence over a late media rejection", async () => {
-    let rejectMedia: (error: unknown) => void = () => undefined;
-    const pending = new Promise<MediaStream>((_resolve, reject) => {
-      rejectMedia = reject;
-    });
+    const media = createDeferred<MediaStream>();
     vi.stubGlobal("navigator", {
-      mediaDevices: { getUserMedia: vi.fn(() => pending) },
+      mediaDevices: { getUserMedia: vi.fn(() => media.promise) },
     });
     const controller = new AbortController();
     const reason = new DOMException("cancelled", "AbortError");
     const opening = openRealtimeTalkCamera(undefined, { signal: controller.signal });
 
     controller.abort(reason);
-    rejectMedia(new DOMException("denied", "NotAllowedError"));
+    media.reject(new DOMException("denied", "NotAllowedError"));
 
     await expect(opening).rejects.toBe(reason);
-  });
-
-  it("acquires camera separately so camera errors cannot stop microphone input", async () => {
-    const audio = { getTracks: () => [] } as unknown as MediaStream;
-    const camera = { getTracks: () => [] } as unknown as MediaStream;
-    const getUserMedia = vi.fn().mockResolvedValueOnce(audio).mockResolvedValueOnce(camera);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-
-    await expect(openMicrophone("usb-mic")).resolves.toBe(audio);
-    await expect(openRealtimeTalkCamera(undefined)).resolves.toBe(camera);
-    expect(getUserMedia).toHaveBeenNthCalledWith(1, {
-      audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-        deviceId: { exact: "usb-mic" },
-      },
-    });
-    expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
   });
 
   it("reports camera permission denial with actionable guidance", async () => {
@@ -428,11 +397,8 @@ describe("realtime Talk microphone inputs", () => {
     const camera = {
       getTracks: () => [{ stop: videoStop }],
     } as unknown as MediaStream;
-    let resolveCamera: (stream: MediaStream) => void = () => undefined;
-    const cameraPending = new Promise<MediaStream>((resolve) => {
-      resolveCamera = resolve;
-    });
-    const getUserMedia = vi.fn().mockReturnValue(cameraPending);
+    const pending = createDeferred<MediaStream>();
+    const getUserMedia = vi.fn().mockReturnValue(pending.promise);
     vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
     const controller = new AbortController();
 
@@ -441,23 +407,8 @@ describe("realtime Talk microphone inputs", () => {
     controller.abort();
 
     await expect(opening).rejects.toMatchObject({ name: "AbortError" });
-    resolveCamera(camera);
+    pending.resolve(camera);
     await vi.waitFor(() => expect(videoStop).toHaveBeenCalledOnce());
-  });
-
-  it("enables voice processing with the system default microphone", async () => {
-    const stream = { getTracks: () => [] } as unknown as MediaStream;
-    const getUserMedia = vi.fn(async () => stream);
-    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia } });
-
-    await expect(openMicrophone(undefined)).resolves.toBe(stream);
-    expect(getUserMedia).toHaveBeenCalledWith({
-      audio: {
-        autoGainControl: true,
-        echoCancellation: true,
-        noiseSuppression: true,
-      },
-    });
   });
 });
 

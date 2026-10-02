@@ -10,7 +10,7 @@ import {
   NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
 } from "../../infra/node-commands.js";
 import {
-  formatNodeRunnerInventoryIssue,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
@@ -366,9 +366,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
         (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION ||
           resolveNodeWorkerExecutionIssue(node.workerHost))
       ) {
-        throw new Error(
-          formatNodeRunnerInventoryIssue(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE),
-        );
+        throw createNodeRunnerInventoryIssueError(node.nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE);
       }
       // A retained environment already owns its slot. The node arbitrates new physical
       // launches atomically; its advertised free-slot count cannot reject turn reuse.
