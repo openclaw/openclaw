@@ -14,7 +14,6 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadGatewaySessionEntryReadOnly: vi.fn(actual.loadGatewaySessionEntryReadOnly),
     loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
       targetsBySessionKey: new Map(),
       durableTargets: [],
@@ -23,13 +22,23 @@ vi.mock("../session-utils.js", async () => {
     })),
   };
 });
+vi.mock("../session-utils-store-worker.js", async () => {
+  const actual = await vi.importActual<typeof import("../session-utils-store-worker.js")>(
+    "../session-utils-store-worker.js",
+  );
+  return {
+    resolveGatewaySessionStoreTargetInWorker: vi.fn(
+      actual.resolveGatewaySessionStoreTargetInWorker,
+    ),
+  };
+});
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
     "../../infra/session-cost-usage.js",
   );
   return {
     ...actual,
-    resolveExistingUsageSessionFile: vi.fn(actual.resolveExistingUsageSessionFile),
+    resolveUsageSessionSource: vi.fn(actual.resolveUsageSessionSource),
     discoverAllSessions: vi.fn(async ({ agentId }: { agentId?: string }) =>
       ["main", "opus"].includes(agentId ?? "")
         ? [
@@ -57,13 +66,12 @@ vi.mock("../../infra/session-cost-usage.js", async () => {
 import {
   discoverAllSessions,
   loadSessionCostSummariesFromCache,
+  loadSessionLogs,
   loadSessionUsageTimeSeries,
-  resolveExistingUsageSessionFile,
+  resolveUsageSessionSource,
 } from "../../infra/session-cost-usage.js";
-import {
-  loadCombinedSessionStoreForGatewayCore,
-  loadGatewaySessionEntryReadOnly,
-} from "../session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { usageHandlers } from "./usage.js";
 
 let TEST_RUNTIME_CONFIG = {
@@ -120,18 +128,17 @@ function mockStoredSession(
 ) {
   const entry = { sessionId, updatedAt: 1_000 };
   const storePath = "/tmp/agents/opus/agent/openclaw-agent.sqlite";
-  vi.mocked(loadGatewaySessionEntryReadOnly).mockReturnValueOnce({
-    cfg: TEST_RUNTIME_CONFIG,
+  vi.mocked(resolveGatewaySessionStoreTargetInWorker).mockResolvedValueOnce({
     agentId: "opus",
     canonicalKey: key,
-    entry,
-    legacyKey: undefined,
     store: { [key]: entry },
     storeKeys: [key],
     storePath,
   });
-  vi.mocked(resolveExistingUsageSessionFile).mockReturnValueOnce(
-    resolution === "missing" ? undefined : `sqlite:opus:${sessionId}:${storePath}`,
+  vi.mocked(resolveUsageSessionSource).mockResolvedValueOnce(
+    resolution === "missing"
+      ? undefined
+      : { entry, sessionFile: `sqlite:opus:${sessionId}:${storePath}` },
   );
 }
 
@@ -233,6 +240,19 @@ describe("sessions.usage", () => {
           ]),
         }),
       );
+      for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"] as const) {
+        const respond = await runSessionsUsageMethod(method, { key: "shared", agentId: "opus" });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        expect(
+          method === "sessions.usage.timeseries" ? loadSessionUsageTimeSeries : loadSessionLogs,
+        ).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            agentId: "opus",
+            sessionId: "shared",
+            sessionFile: fs.realpathSync(sessionFile),
+          }),
+        );
+      }
     });
   });
   it("rolls up known session family ids when historical usage is requested", async () => {

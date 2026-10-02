@@ -9,6 +9,8 @@ import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-mar
 import type { OpenClawConfig } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import * as usageFormat from "../utils/usage-format.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
@@ -26,7 +28,7 @@ import {
   loadSessionCostSummariesFromCache,
   loadSessionLogs,
   loadSessionUsageTimeSeries,
-  resolveExistingUsageSessionFile,
+  resolveUsageSessionSource,
 } from "./session-cost-usage.js";
 
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
@@ -88,45 +90,80 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-  it("resolves legacy markers only for the requested owner and session", async () => {
+  it("uses explicit usage artifacts and validates canonical targets in the worker", async () => {
     const sessionId = "session";
     const storePath = path.join(root, "sessions.json");
     const marker = `sqlite:main:${sessionId}:${storePath}`;
     const stale = `sqlite:main:stale:${storePath}`;
     const foreign = `sqlite:other:${sessionId}:${storePath}`;
-    const legacyJsonl = path.join(root, `${sessionId}.jsonl`);
-    const entry = (sessionFile: string) => ({ sessionFile, sessionId, updatedAt: 1 });
-    const resolve = (
-      params: Omit<Parameters<typeof resolveExistingUsageSessionFile>[0], "agentId"> & {
+    const artifact = path.join(root, `${sessionId}.jsonl`);
+    const resolve = async (
+      params: Omit<Parameters<typeof resolveUsageSessionSource>[0], "agentId"> & {
         agentId?: string;
       },
-    ) => resolveExistingUsageSessionFile({ agentId: "main", sessionId, ...params });
-    await fs.writeFile(legacyJsonl, "stale artifact");
-
-    expect(resolve({ sessionEntry: entry(marker), sessionFile: legacyJsonl })).toBe(marker);
-    const preferred = `sqlite:main:${sessionId}:${path.join(root, "entry-store.json")}`;
-    expect(resolve({ sessionEntry: entry(preferred), sessionFile: marker })).toBe(preferred);
-    expect(resolve({ sessionFile: foreign })).toBeUndefined();
-    expect(resolve({ sessionEntry: entry(foreign) })).toBeUndefined();
-    expect(resolve({ sessionFile: stale })).toBeUndefined();
-    expect(resolve({ sessionEntry: entry(stale), sessionFile: marker })).toBe(marker);
-    expect(resolve({ sessionEntry: entry(stale), sessionFile: legacyJsonl })).toBe(legacyJsonl);
-    expect(resolve({ sessionEntry: entry(stale) })).toBeUndefined();
+    ) => (await resolveUsageSessionSource({ agentId: "main", sessionId, ...params }))?.sessionFile;
+    await fs.writeFile(artifact, "explicit artifact");
+    const historicalInput = {
+      sessionEntry: { sessionFile: marker, sessionId, updatedAt: 1 },
+      sessionFile: artifact,
+    };
+    expect(await resolve(historicalInput)).toBe(artifact);
+    expect(await resolve({ ...historicalInput, sessionFile: foreign })).toBeUndefined();
+    expect(await resolve({ sessionFile: stale })).toBeUndefined();
+    expect(await resolve({ sessionFile: marker })).toBe(marker);
+    const historicalPath = {
+      sessionEntry: { sessionFile: artifact, sessionId, updatedAt: 1 },
+    };
+    expect(await resolve({ sessionId, ...historicalPath })).toBe(
+      path.join(sessionsDir, `${sessionId}.jsonl`),
+    );
     const sessionTarget = {
       agentId: "main",
       sessionId,
       sessionKey: "agent:main:cost",
       storePath,
     };
-    expect(
-      resolve({ sessionTarget: { ...sessionTarget, sessionKey: "agent:other:cost" } }),
-    ).toBeUndefined();
     const mismatchedTarget = { ...sessionTarget, sessionKey: "agent:main:other-cost" };
     await upsertSessionEntryCore(mismatchedTarget, { sessionId: "other-session", updatedAt: 1 });
-    expect(resolve({ sessionTarget: mismatchedTarget })).toBeUndefined();
-    expect(resolve({ sessionId: "other-session", sessionTarget })).toBeUndefined();
-    expect(resolve({ agentId: "other", sessionTarget })).toBeUndefined();
-    expect(resolve({ sessionId: "   ", sessionTarget })).toContain("sqlite:main:");
+    const sql = observeMainThreadSql();
+    try {
+      expect(
+        await resolve({ sessionTarget: { ...sessionTarget, sessionKey: "agent:other:cost" } }),
+      ).toBeUndefined();
+      expect(await resolve({ sessionTarget: mismatchedTarget })).toBeUndefined();
+      expect(await resolve({ sessionId: "other-session", sessionTarget })).toBeUndefined();
+      expect(await resolve({ agentId: "other", sessionTarget })).toBeUndefined();
+      expect(
+        await resolve({
+          sessionFile: marker,
+          sessionTarget: { ...sessionTarget, sessionKey: " " },
+        }),
+      ).toBeUndefined();
+      expect(await resolve({ sessionId: "   ", sessionFile: artifact, sessionTarget })).toBe(
+        `sqlite:main:${sessionId}:${nodeFs.realpathSync(path.join(root, "openclaw-agent.sqlite"))}`,
+      );
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    const unreadable = path.join(root, "unreadable.sqlite");
+    await fs.writeFile(unreadable, "not a SQLite database");
+    await expect(
+      resolve({
+        sessionFile: artifact,
+        sessionTarget: { ...sessionTarget, storePath: unreadable },
+      }),
+    ).rejects.toThrow();
+    expect(await fs.readFile(unreadable, "utf8")).toBe("not a SQLite database");
+    const work = new AsyncWorkScope();
+    const cancelled = new Error("usage request closed");
+    try {
+      const resolving = work.track(() => resolve({ sessionTarget }));
+      work.beginClose(cancelled);
+      await expect(resolving).rejects.toBe(cancelled);
+    } finally {
+      await work.drain();
+    }
   });
 
   it("aggregates daily totals with log cost and pricing fallback", async () => {

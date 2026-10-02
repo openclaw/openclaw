@@ -1,17 +1,12 @@
 import os from "node:os";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  resolveSessionFilePathCore,
-  resolveSessionFilePathOptions,
-} from "../config/sessions/paths.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { preparePhysicalSessionStorePath } from "../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { withTimeout } from "../infra/fs-safe.js";
 import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
-import {
-  loadSessionCostSummariesFromCache,
-  resolveExistingUsageSessionFile,
-} from "../infra/session-cost-usage.js";
+import { loadSessionCostSummariesFromCache } from "../infra/session-cost-usage.js";
 import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 
 export function buildStatusUptimeValue(): string {
@@ -33,15 +28,10 @@ async function resolveSessionCostLine(params: {
   }
   let sessionFile: string | undefined;
   try {
-    const pathOpts = resolveSessionFilePathOptions({
-      storePath: params.storePath,
-      agentId: params.agentId,
-    });
-    sessionFile = resolveExistingUsageSessionFile({
+    sessionFile = formatSqliteSessionFileMarker({
       sessionId,
-      sessionEntry: params.sessionEntry,
-      sessionFile: resolveSessionFilePathCore(sessionId, params.sessionEntry, pathOpts),
       agentId: params.agentId,
+      storePath: await preparePhysicalSessionStorePath(params, params.cfg),
     });
   } catch {
     return undefined;
