@@ -77,17 +77,17 @@ function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolea
 function resolveOpenAICompletionsMaxTokens(
   model: OpenAIModeModel,
   options: OpenAICompletionsOptions | undefined,
-): { maxTokens: number | undefined; clampToModelMaxTokens: boolean } {
+): { maxTokens: number | undefined; clampToModelMaxTokens: boolean; explicit: boolean } {
   if (options?.maxTokens) {
-    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true };
+    return { maxTokens: options.maxTokens, clampToModelMaxTokens: true, explicit: true };
   }
   const paramsMaxTokens = resolveMaxTokensParam(
     (model as { params?: Record<string, unknown> }).params,
   );
   if (paramsMaxTokens) {
-    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false };
+    return { maxTokens: paramsMaxTokens, clampToModelMaxTokens: false, explicit: true };
   }
-  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false };
+  return { maxTokens: model.maxTokens, clampToModelMaxTokens: false, explicit: false };
 }
 
 function resolveOpenAICompletionsModelMaxTokens(model: OpenAIModeModel): number | undefined {
@@ -483,7 +483,11 @@ export function buildOpenAICompletionsRequest(
   {
     const maxTokenBudget =
       policy.mode === "direct"
-        ? { maxTokens: options?.maxTokens, clampToModelMaxTokens: true }
+        ? {
+            maxTokens: options?.maxTokens,
+            clampToModelMaxTokens: true,
+            explicit: Boolean(options?.maxTokens),
+          }
         : resolveOpenAICompletionsMaxTokens(model, options);
     const effectiveMaxTokens = maxTokenBudget.maxTokens;
     const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
@@ -511,16 +515,31 @@ export function buildOpenAICompletionsRequest(
       effectiveContextTokens !== undefined
     ) {
       const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
-      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
-      if (clampedMaxTokens > remainingBudget) {
-        clampedMaxTokens = remainingBudget;
+      const remainingBudget = effectiveContextTokens - estimatedInputTokens - 1;
+      const explicitShortCompletion =
+        maxTokenBudget.explicit &&
+        effectiveMaxTokens !== undefined &&
+        effectiveMaxTokens > 0 &&
+        effectiveMaxTokens < MIN_USEFUL_OUTPUT_TOKENS;
+      if (remainingBudget < 1 && !explicitShortCompletion) {
+        throw Object.assign(
+          new Error(
+            `Context window exceeded: estimated input ${estimatedInputTokens} leaves only ` +
+              `${Math.max(0, remainingBudget)} output tokens within the ${effectiveContextTokens}-token context.`,
+          ),
+          { code: "context_length_exceeded" },
+        );
+      }
+      const outputBudget = Math.max(1, remainingBudget);
+      if (clampedMaxTokens > outputBudget) {
+        clampedMaxTokens = outputBudget;
         emitModelTransportDebug(
           log,
           `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
             `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
             `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
         );
-        if (remainingBudget < MIN_USEFUL_OUTPUT_TOKENS) {
+        if (outputBudget < MIN_USEFUL_OUTPUT_TOKENS) {
           if (model.reasoning && thinkingEnabled !== false) {
             throw Object.assign(
               new Error(

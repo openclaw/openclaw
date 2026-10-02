@@ -132,18 +132,44 @@ describe("OpenAI completions output budgets", () => {
     expect(params.max_completion_tokens).toBe(10_000 - inputTokens - 1);
   });
 
-  it("preserves non-reasoning short budgets and the exhausted-budget fallback", () => {
-    for (const [remaining, expected] of [
-      [-1, 1],
-      [15, 15],
-    ] as const) {
+  it("rejects exhausted non-reasoning budgets while preserving short replies", () => {
+    const context = emptyContext("x".repeat(3200));
+    for (const remaining of [-1, 0]) {
+      expect(() =>
+        buildOpenAICompletionsParams(
+          { ...proxy, contextTokens: 1001 + remaining },
+          context,
+          undefined,
+        ),
+      ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
+    }
+    for (const remaining of [1, 15]) {
       const params = buildOpenAICompletionsParams(
         { ...proxy, contextTokens: 1001 + remaining },
-        emptyContext("x".repeat(3200)),
+        context,
         undefined,
       );
-      expect(params.max_completion_tokens).toBe(expected);
+      expect(params.max_completion_tokens).toBe(remaining);
     }
+    for (const maxTokens of [1, 15]) {
+      expect(
+        buildOpenAICompletionsParams({ ...proxy, contextTokens: 1000 }, context, {
+          maxTokens,
+        }).max_completion_tokens,
+      ).toBe(1);
+    }
+    for (const key of ["maxTokens", "max_completion_tokens", "max_tokens"]) {
+      expect(
+        buildOpenAICompletionsParams(
+          { ...proxy, contextTokens: 1000, params: { [key]: 1 } },
+          context,
+          undefined,
+        ).max_completion_tokens,
+      ).toBe(1);
+    }
+    expect(() =>
+      buildOpenAICompletionsParams({ ...proxy, contextTokens: 1000 }, context, { maxTokens: 16 }),
+    ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
   });
 
   it("preserves the useful-output floor and intentionally short completions", () => {
@@ -261,11 +287,11 @@ describe("OpenAI completions reasoning", () => {
     expect(() =>
       buildOpenAICompletionsParams(nearCap, context, { reasoning: "medium" }),
     ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
-    expect(
+    expect(() =>
       buildOpenAICompletionsParams({ ...nearCap, contextWindow: 1000 }, context, {
         reasoning: "off",
       }),
-    ).toMatchObject({ enable_thinking: false, max_completion_tokens: 1 });
+    ).toThrowError(expect.objectContaining({ code: "context_length_exceeded" }));
   });
 
   it("maps Qwen chat-template thinking without a scalar effort", () => {
