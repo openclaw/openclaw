@@ -184,7 +184,7 @@ it(
               [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
         models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
