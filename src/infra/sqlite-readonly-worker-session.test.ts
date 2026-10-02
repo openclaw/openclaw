@@ -26,7 +26,7 @@ class MockChild extends EventEmitter {
   });
   kill = vi.fn<(_signal?: NodeJS.Signals) => boolean>(() => true);
 }
-const mock = vi.hoisted(() => ({ spawn: vi.fn<() => MockChild>() }));
+const mock = vi.hoisted(() => ({ spawn: vi.fn<(executable: string) => MockChild>() }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mock.spawn,
@@ -34,9 +34,14 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
-function createSession() {
+function createSession(unavailableRuntime?: string) {
   const child = new MockChild();
-  mock.spawn.mockReturnValueOnce(child);
+  mock.spawn.mockImplementationOnce((executable) => {
+    if (executable === unavailableRuntime) {
+      throw Object.assign(new Error(`spawn ${executable} EACCES`), { code: "EACCES" });
+    }
+    return child;
+  });
   const readBudget = vi.fn(() => ({ timeoutMs: 60_000, size: "fixture" }));
   const requestArgs = vi.fn((pathname: string, options: { mode: string }) => [
     options.mode,
@@ -89,11 +94,15 @@ afterEach(async () => {
 });
 
 describe("SQLite read-only session operation custody", () => {
-  it.each([false, true])(
-    "attributes errors to startup only before the spawn event (spawned=%s)",
-    async (spawned) => {
+  it.each(
+    ["EACCES", "ENOENT", "EPERM"].flatMap((code) =>
+      [false, true].map((spawned) => ({ code, spawned })),
+    ),
+  )(
+    "attributes $code to startup only before the spawn event (spawned=$spawned)",
+    async ({ code, spawned }) => {
       const { session, child } = createSession();
-      const failure = Object.assign(new Error("fixture process refusal"), { code: "EACCES" });
+      const failure = Object.assign(new Error("fixture process refusal"), { code });
       const result = session.run("/fixture/snapshot", { mode: "staging-create" });
       const observed = result.catch((error: unknown) => error);
       const settled = observeSettlement(result);
@@ -110,7 +119,11 @@ describe("SQLite read-only session operation custody", () => {
       if (spawned) {
         expect(error).toBe(failure);
       } else {
-        expect(error).toMatchObject({ code: "EACCES", cause: failure });
+        expect(error).toMatchObject({ code, cause: failure });
+        expect((error as Error).message).toContain(
+          `runtime binary not executable: ${process.execPath}`,
+        );
+        expect((error as Error).message).not.toMatch(/disk space|XDG_CACHE_HOME/);
         expect((error as Error).message).toContain(process.execPath);
         expect((error as Error).message).toContain("/fixture/launch");
         expect((error as Error).message).not.toContain("OPENCLAW_STATE_DIR");
@@ -345,7 +358,8 @@ it.each([
       setDiagnosticsEnabledForProcess(false);
       emitChildProcessSpawnSample();
       setDiagnosticsEnabledForProcess(true);
-      const { child } = createSession();
+      const { child } = createSession("/usr/bin/node");
+      expect(mock.spawn).toHaveBeenCalledWith(execPath, expect.any(Array), expect.any(Object));
       now = 60_000;
       emitChildProcessSpawnSample();
       expect(events).toEqual([]);
