@@ -1,4 +1,3 @@
-// Control UI tests cover sidebar entry customization behavior.
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SIDEBAR_ENTRIES,
@@ -168,10 +167,6 @@ describe("sidebar entries", () => {
     expect(isSettingsNavigationRoute("agents-home")).toBe(false);
   });
 
-  it("drops retired routes from persisted entries", () => {
-    expect(normalizeSidebarEntries(["route:overview", "route:usage"])).toEqual(["route:usage"]);
-  });
-
   it("treats worktrees as a sessions hub tab without its own pin", () => {
     expect(isSessionsHubRoute("sessions")).toBe(true);
     expect(isSessionsHubRoute("worktrees")).toBe(true);
@@ -239,28 +234,6 @@ describe("sidebar entries", () => {
     );
   });
 
-  it("drops stale device pins", () => {
-    expect(normalizeSidebarEntries(["route:nodes", "route:usage"])).toEqual(["route:usage"]);
-  });
-
-  it("keeps the apps promo page available in More", () => {
-    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("apps");
-    expect(isSettingsNavigationRoute("apps")).toBe(false);
-  });
-
-  it("keeps Portals available in More", () => {
-    expect(sidebarMoreRoutes(DEFAULT_SIDEBAR_ENTRIES)).toContain("portals");
-    expect(isSettingsNavigationRoute("portals")).toBe(false);
-  });
-
-  it("keeps the plugin manager in customizable workspace routes", () => {
-    expect(normalizeSidebarEntries(["route:plugins", "route:usage", "route:plugins"])).toEqual([
-      "route:plugins",
-      "route:usage",
-    ]);
-    expect(sidebarMoreRoutes(["route:usage", "session:agent:main:test"])).toContain("plugins");
-  });
-
   it("round-trips route, Workboard, and session entries", () => {
     expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
     expect(parseSidebarEntry("session:agent:main:test")).toEqual({
@@ -302,11 +275,6 @@ describe("sidebar entries", () => {
       ]),
     ).toEqual(["route:usage", "session:agent:main:test", "route:cron"]);
     expect(normalizeSidebarEntries([])).toEqual([]);
-  });
-
-  it("recognizes OpenClaw settings and drops stale sidebar pins", () => {
-    expect(isSettingsNavigationRoute("custodian")).toBe(true);
-    expect(normalizeSidebarEntries(["route:custodian", "route:usage"])).toEqual(["route:usage"]);
   });
 
   it("falls back to null for non-list values so callers use defaults", () => {

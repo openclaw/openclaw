@@ -2,13 +2,9 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  parseLiveCsvFilter,
-  parseProviderModelMap,
   resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
-
-export { parseProviderModelMap };
 
 // Default provider/model matrix for video live tests. Env/config filters can
 // override this without editing the live test source.
@@ -18,7 +14,9 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   deepinfra: "deepinfra/Pixverse/Pixverse-T2V",
   fal: "fal/fal-ai/minimax/video-01-live",
   google: "google/veo-3.1-fast-generate-preview",
+  kie: "kie/kling-2.6/text-to-video",
   minimax: "minimax/MiniMax-Hailuo-2.3",
+  novita: "novita/wan2.6-t2v",
   openrouter: "openrouter/google/veo-3.1-fast",
   pixverse: "pixverse/v6",
   qwen: "qwen/wan2.6-t2v",
@@ -26,6 +24,7 @@ export const DEFAULT_LIVE_VIDEO_MODELS: Record<string, string> = {
   together: "together/Wan-AI/Wan2.2-T2V-A14B",
   vydra: "vydra/veo3",
   xai: "xai/grok-imagine-video",
+  zai: "zai/cogvideox-3",
 };
 
 const REMOTE_URL_VIDEO_TO_VIDEO_PROVIDERS = new Set(["alibaba", "google", "qwen", "xai"]);
@@ -42,6 +41,9 @@ export function resolveLiveVideoResolution(params: {
   if (providerId === "minimax") {
     return "768P";
   }
+  if (providerId === "novita") {
+    return params.modelRef.includes("minimax-hailuo-") ? "768P" : "720P";
+  }
   if (providerId === "openrouter") {
     return "720P";
   }
@@ -52,10 +54,6 @@ export function resolveLiveVideoResolution(params: {
     return "720P";
   }
   return "480P";
-}
-
-export function parseVideoProviderFilter(raw?: string): Set<string> | null {
-  return parseLiveCsvFilter(raw);
 }
 
 export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {
@@ -93,6 +91,12 @@ export function canRunBufferBackedImageToVideoLiveLane(params: {
   const providerId = normalizeLowercaseStringOrEmpty(params.providerId);
   if (BUFFER_BACKED_IMAGE_TO_VIDEO_UNSUPPORTED_PROVIDERS.has(providerId)) {
     return false;
+  }
+  if (providerId === "alibaba" || providerId === "qwen") {
+    // The default T2V model routes a single local image to its I2V sibling.
+    // Wan 2.6 R2V still requires URL-backed images in reference_urls.
+    const model = params.modelRef.replace(/^[^/]+\//u, "");
+    return ["wan2.6-t2v", "wan2.6-i2v", "wan2.7-r2v"].includes(model);
   }
   if (providerId === "together") {
     return params.modelRef.includes(TOGETHER_BUFFER_BACKED_IMAGE_TO_VIDEO_MODEL);

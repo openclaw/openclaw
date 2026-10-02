@@ -29,7 +29,11 @@ and enable the **Cloud Worker Desktop** lab. The agent launches the application 
 the Desktop panel. When its model supports vision and tool policy permits
 `computer`, it can observe and control the same desktop using the attachment's
 `environmentId`. Taking manual control pauses agent input; observations remain
-available. Release manual control before asking the agent to interact again.
+available. When asked to resume, the agent can use `computer` with
+`action: "take_control"` under its existing computer-control authority. Your
+viewer returns to view-only, and the agent receives a fresh screenshot. No
+separate viewer-issued handoff token is required. You can reclaim control at any
+time or release it yourself; ordinary agent input never takes over automatically.
 
 For a web app, the agent starts a server and opens a [portal](/gateway/portals)
 in the side panel. A browser on the attached desktop can test that server with

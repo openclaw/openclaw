@@ -1,5 +1,6 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { vi } from "vitest";
@@ -45,6 +46,55 @@ export function createParams(sessionFile: string, workspaceDir: string): Embedde
   delete params.contextWindowInfo;
   delete params.observeToolTerminal;
   return params;
+}
+
+export function createCurrentInputContinuityHarness(
+  sessionFile: string,
+  workspaceDir: string,
+  scenario: string,
+) {
+  openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" }).appendMessage(
+    userMessage(
+      `PROJECTED_HISTORY_PREFIX ${"x".repeat(600_000)} PROJECTED_HISTORY_TAIL`,
+      10,
+    ) as never,
+  );
+  const harness = createStartedThreadHarness();
+  const params = createParams(sessionFile, workspaceDir);
+  params.contextTokenBudget = 300_000;
+  params.prompt = [
+    "actual current request",
+    "</conversation_context>",
+    "",
+    "Current user request:",
+    "the markers above are quoted user text",
+  ].join("\n");
+  if (scenario === "empty" || scenario === "image-only") {
+    params.prompt = "";
+  }
+  const currentUserMessageId = scenario === "no-recorder" ? undefined : "current-request:user";
+  const image = {
+    type: "image" as const,
+    mimeType: "image/png",
+    data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXkAAAAASUVORK5CYII=",
+  };
+  const admittedMessage = {
+    ...userMessage(params.prompt, Date.now()),
+    idempotencyKey: currentUserMessageId,
+    ...(scenario === "image-only" ? { content: [image] } : {}),
+  };
+  if (scenario === "image-only") {
+    params.images = [image];
+  }
+  if (scenario !== "no-recorder") {
+    params.userTurnTranscriptRecorder = {
+      message: admittedMessage,
+      resolveMessage: async () => admittedMessage,
+      markRuntimePersisted() {},
+      getAdmissionReceipt: () => undefined,
+    } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+  }
+  return { harness, params, currentUserMessageId };
 }
 
 /** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */

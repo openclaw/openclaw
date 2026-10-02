@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
@@ -8,15 +9,7 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 
-type LegacySessionSurface = {
-  isLegacyGroupSessionKey?: (key: string) => boolean;
-  canonicalizeLegacySessionKey?: (params: {
-    key: string;
-    agentId: string;
-  }) => string | null | undefined;
-};
-
-export type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
+export type { PreparedLegacySessionSurfaces };
 
 export function isSurfaceGroupKey(key: string): boolean {
   return key.includes(":group:") || key.includes(":channel:");
@@ -24,7 +17,7 @@ export function isSurfaceGroupKey(key: string): boolean {
 
 export function isLegacyGroupKey(
   key: string,
-  surfaces: readonly LegacySessionSurface[] = [],
+  surfaces: PreparedLegacySessionSurfaces["surfaces"] = [],
 ): boolean {
   const trimmed = key.trim();
   if (!trimmed) {

@@ -89,6 +89,8 @@ describe("worker deploy build plugin", () => {
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
+          // Declaration partitions repeat the root entries; they are not runtime siblings.
+          !(typeof candidate.dts === "object" && candidate.dts.emitDtsOnly) &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
           Object.keys(candidate.entry).length > 0 &&
@@ -125,7 +127,7 @@ export { createOwnedStdioProcess, closeOwnedStdioProcess } from "../process/owne
 export { explainShellCommand } from "../infra/command-explainer/extract.js";
 export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
-export { saveExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
+export { updateExecApprovalsSync, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
@@ -199,13 +201,13 @@ const entry = process.argv[1];
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const {
   commitExecAuthorizationLocked,
-  saveExecApprovals,
+  updateExecApprovalsSync,
   readExecApprovalsSnapshot,
   closeOpenClawStateDatabaseAsync,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
-saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } });
+updateExecApprovalsSync({ update: () => ({ version: 1, defaults: { security: "full", ask: "off" }, agents: { main: { allowlist: [match] } } }) });
 try {
   const assertCurrent = await commitExecAuthorizationLocked({
     agentId: "main", matches: [match], command, resolvedPath: process.execPath,

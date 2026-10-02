@@ -8,7 +8,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const simulatorId = "11111111-2222-3333-4444-555555555555";
 const keptCategories =
   "widgets,siri,icloud,store,pim,web,health,photos,apps,messaging,connectivity,telemetry,other";
-const checksum = "c7d33ba033488521eb42ec2057c3a069b13b6551c9ebfe4455128befe2ad9b19";
+const checksum = "eec00b27f0694fa899fb3bbc71362309a9da11ec670f430633cfae855eaf4a1d";
 type Command = { tool: string; args: string[] };
 
 function runFixture(
@@ -48,7 +48,7 @@ if (tool === "uname") {
   copyFileSync(path.join(root, "bin", "simslim"), path.join(args[args.indexOf("-C") + 1], "simslim"));
 } else if (tool === "simslim") {
   if (args[0] === "--version") {
-    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.8.0");
+    console.log(failure === "version" ? "simslim 0.9.0" : "simslim 0.10.0");
     if (failure === "version-exit") process.exit(23);
   } else if (args[0] === failure) {
     process.exit(23);
@@ -126,7 +126,7 @@ describe.skipIf(process.platform === "win32")("simslim installer", () => {
       "120",
       "--output",
       expect.stringContaining("simslim.tar.gz"),
-      "https://github.com/MobAI-App/simslim/releases/download/v0.8.0/simslim-v0.8.0-macos-arm64.tar.gz",
+      "https://github.com/MobAI-App/simslim/releases/download/v0.10.0/simslim-v0.10.0-macos-arm64.tar.gz",
     ]);
     expect(commands.find(({ tool }) => tool === "shasum")?.args).toEqual([
       "-a",

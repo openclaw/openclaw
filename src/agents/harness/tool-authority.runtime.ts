@@ -1,5 +1,6 @@
 import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import { getAttachedBackend } from "../../auto-reply/reply/reply-run-registry.state.js";
+import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import {
   prepareReplyToolAuthority,
   type ReplyToolAuthorityInput,
@@ -86,6 +87,9 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     assertActive();
   }
   const fingerprint = operation ? operation.bindToolAuthorityRoute(route) : direct?.fingerprint();
+  const personalToolParticipants = operation
+    ? operation.personalToolParticipants
+    : createReplyTurnParticipants(direct?.personalToolOwner);
   function assertActive() {
     if (
       !live ||
@@ -156,6 +160,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
         agentId,
         sessionKey,
         operationalRunInstance: instance,
+        personalToolParticipants,
         embeddedRunToolAuthorityBinding: (registration) => {
           assertActive();
           const { handle } = registration;
@@ -184,6 +189,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
               operation.toolAuthorityRoute.model === route.model);
           assertRegistered();
           return {
+            personalToolParticipants,
             source: operation ? "reply" : "attempt",
             sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
             assertActive: assertRegistered,
@@ -206,5 +212,8 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
   } finally {
     // Retained ALS callbacks do not extend the attempt's authority.
     live = false;
+    if (!operation) {
+      personalToolParticipants?.close();
+    }
   }
 }

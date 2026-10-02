@@ -8,7 +8,12 @@ import { assertFeishuApiSuccess } from "./api-response.js";
 import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
-import { BATCH_SIZE, insertBlocksInBatches } from "./docx-batch-insert.js";
+import {
+  BATCH_SIZE,
+  insertBlocksInBatches,
+  insertDocxDescendants,
+  type DocxDescendantCreateBlock,
+} from "./docx-batch-insert.js";
 import { updateColorText } from "./docx-color-text.js";
 import {
   createDocxMarkdownChunk,
@@ -94,12 +99,6 @@ type DocxChildrenCreatePayload = NonNullable<
 >;
 type DocxChildrenCreateChild = NonNullable<
   NonNullable<DocxChildrenCreatePayload["data"]>["children"]
->[number];
-type DocxDescendantCreatePayload = NonNullable<
-  Parameters<Lark.Client["docx"]["documentBlockDescendant"]["create"]>[0]
->;
-type DocxDescendantCreateBlock = NonNullable<
-  NonNullable<DocxDescendantCreatePayload["data"]>["descendants"]
 >[number];
 type DriveMediaUploadAllPayload = NonNullable<
   Parameters<Lark.Client["drive"]["media"]["uploadAll"]>[0]
@@ -267,41 +266,6 @@ async function chunkedConvertMarkdown(client: Lark.Client, chunks: readonly Docx
 
 type Logger = { info?: (msg: string) => void };
 
-/**
- * Insert blocks using the Descendant API (supports tables, nested lists, large docs).
- * Unlike the Children API, this supports block_type 31/32 (Table/TableCell).
- *
- * @param parentBlockId - Parent block to insert into (defaults to docToken = document root)
- * @param index - Position within parent's children (-1 = end, 0 = first)
- */
-async function insertBlocksWithDescendant(
-  client: Lark.Client,
-  docToken: string,
-  blocks: FeishuDocxBlock[],
-  firstLevelBlockIds: string[],
-  { parentBlockId = docToken, index = -1 }: { parentBlockId?: string; index?: number } = {},
-): Promise<{ children: FeishuDocxBlockChild[] }> {
-  const descendants = cleanBlocksForDescendant(blocks);
-  if (descendants.length === 0) {
-    return { children: [] };
-  }
-
-  const res = await client.docx.documentBlockDescendant.create({
-    path: { document_id: docToken, block_id: parentBlockId },
-    data: {
-      children_id: firstLevelBlockIds,
-      descendants: descendants as DocxDescendantCreateBlock[],
-      index,
-    },
-  });
-
-  if (res.code !== 0) {
-    throw new Error(`${res.msg} (code: ${res.code})`);
-  }
-
-  return { children: res.data?.children ?? [] };
-}
-
 async function deleteBlockChildren(
   client: Lark.Client,
   docToken: string,
@@ -448,7 +412,7 @@ async function editDoc(
   logger?.info?.(
     `feishu_doc: Converted to ${blocks.length} blocks, inserting${target ? ` at index ${target.index}` : ""}...`,
   );
-  const { children: inserted } =
+  const inserted =
     blocks.length > BATCH_SIZE
       ? await insertBlocksInBatches(
           client,
@@ -459,7 +423,14 @@ async function editDoc(
           target?.parentBlockId,
           target?.index,
         )
-      : await insertBlocksWithDescendant(client, docToken, orderedBlocks, rootIds, target);
+      : await insertDocxDescendants(
+          client,
+          docToken,
+          cleanBlocksForDescendant(orderedBlocks) as DocxDescendantCreateBlock[],
+          rootIds,
+          target?.parentBlockId,
+          target?.index,
+        );
   const imagesProcessed = await processImages(
     client,
     docToken,
@@ -481,28 +452,13 @@ async function editDoc(
 
 async function uploadImageBlock(
   client: Lark.Client,
-  docToken: string,
-  maxBytes: number,
-  imageReadTimeoutMs: number,
-  localRoots?: readonly string[],
-  url?: string,
-  filePath?: string,
-  parentBlockId?: string,
-  filename?: string,
-  index?: number,
-  imageInput?: string, // data URI, plain base64, or local path
+  {
+    doc_token: docToken,
+    parent_block_id: parentBlockId,
+    index,
+  }: Extract<FeishuDocParams, { action: "upload_image" }>,
+  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
 ) {
-  // Resolve first so rejected or stalled input cannot leave an empty document block behind.
-  const upload = await resolveDocxUploadInput({
-    url,
-    filePath,
-    image: imageInput,
-    maxBytes,
-    localRoots,
-    fileName: filename,
-    remoteReadTimeoutMs: imageReadTimeoutMs,
-  });
-
   // Create an empty image block (block_type 27).
   // Per Feishu FAQ: image token cannot be set at block creation time.
   const insertRes = await client.docx.documentBlockChildren.create({
@@ -543,25 +499,15 @@ async function uploadImageBlock(
 
 async function uploadFileBlock(
   client: Lark.Client,
-  docToken: string,
-  maxBytes: number,
-  localRoots?: readonly string[],
-  url?: string,
-  filePath?: string,
-  parentBlockId?: string,
-  filename?: string,
+  {
+    doc_token: docToken,
+    parent_block_id: parentBlockId,
+  }: Extract<FeishuDocParams, { action: "upload_file" }>,
+  upload: Awaited<ReturnType<typeof resolveDocxUploadInput>>,
 ) {
   const blockId = parentBlockId ?? docToken;
 
   // Feishu cannot create empty file blocks, so allocate a temporary Markdown placeholder.
-  const upload = await resolveDocxUploadInput({
-    url,
-    filePath,
-    maxBytes,
-    localRoots,
-    fileName: filename,
-  });
-
   const placeholderMd = "[file](https://example.com/placeholder)";
   const converted = await convertMarkdown(client, placeholderMd);
   const { orderedBlocks } = normalizeConvertedBlockTree(
@@ -1039,34 +985,24 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
           case "write_table_cells":
             return json(await writeTableCells(client, p.doc_token, p.table_block_id, p.values));
           case "upload_image":
+          case "upload_file": {
+            // Resolve input before either upload path can create a document block.
+            const upload = await resolveDocxUploadInput({
+              url: p.url,
+              filePath: p.file_path,
+              maxBytes: mediaMaxBytes,
+              localRoots: mediaLocalRoots,
+              fileName: p.filename,
+              ...(p.action === "upload_image"
+                ? { image: p.image, remoteReadTimeoutMs: imageReadTimeoutMs }
+                : {}),
+            });
             return json(
-              await uploadImageBlock(
-                client,
-                p.doc_token,
-                mediaMaxBytes,
-                imageReadTimeoutMs,
-                mediaLocalRoots,
-                p.url,
-                p.file_path,
-                p.parent_block_id,
-                p.filename,
-                p.index,
-                p.image, // data URI or plain base64
-              ),
+              await (p.action === "upload_image"
+                ? uploadImageBlock(client, p, upload)
+                : uploadFileBlock(client, p, upload)),
             );
-          case "upload_file":
-            return json(
-              await uploadFileBlock(
-                client,
-                p.doc_token,
-                mediaMaxBytes,
-                mediaLocalRoots,
-                p.url,
-                p.file_path,
-                p.parent_block_id,
-                p.filename,
-              ),
-            );
+          }
           case "color_text":
             return json(await updateColorText(client, p.doc_token, p.block_id, p.content));
           case "insert_table_row":

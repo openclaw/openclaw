@@ -144,17 +144,11 @@ internal class WearProxyBridge(
       }
 
       WearBridgeOperation.Overflow -> {
-        val overflow = takeOverflow()
-        var deliveredSequence = lastDeliveredSequence
-        for (terminal in overflow.terminalEvents.sortedBy { it.sequence }) {
-          sendEventPreservingActor(terminal)
-          deliveredSequence = terminal.sequence
+        val events = takeOverflow()
+        for (event in events) {
+          sendEventPreservingActor(event)
         }
-        overflow.resyncEvent?.let { resync ->
-          sendEventPreservingActor(resync)
-          deliveredSequence = resync.sequence
-        }
-        deliveredSequence
+        events.last().sequence
       }
 
       is WearBridgeOperation.Barrier -> {
@@ -266,22 +260,18 @@ internal class WearProxyBridge(
     }
   }
 
-  private fun takeOverflow(): WearOverflowSnapshot =
+  private fun takeOverflow(): List<WearMessage.Event> =
     synchronized(overflowLock) {
-      val resyncEvent =
-        if (resyncRequired) {
+      buildList {
+        addAll(pendingTerminalEvents)
+        add(
           WearMessage.Event(
             streamId = eventStreamId,
             sequence = nextSequence.incrementAndGet(),
             event = WearEventType.Resync,
-          )
-        } else {
-          null
-        }
-      WearOverflowSnapshot(
-        terminalEvents = pendingTerminalEvents.toList(),
-        resyncEvent = resyncEvent,
-      ).also {
+          ),
+        )
+      }.also {
         pendingTerminalEvents.clear()
         resyncRequired = false
       }
@@ -304,11 +294,6 @@ internal class WearProxyBridge(
       val completion: CompletableDeferred<Unit>,
     ) : WearBridgeOperation
   }
-
-  private data class WearOverflowSnapshot(
-    val terminalEvents: List<WearMessage.Event>,
-    val resyncEvent: WearMessage.Event?,
-  )
 
   private suspend fun sendEvent(event: WearMessage.Event) {
     val encoded = runCatching { WearProtocolCodec.encode(event) }.getOrNull() ?: return
@@ -415,13 +400,10 @@ internal class WearProxyBridge(
     try {
       sender.send(peer.nodeId, path, data)
       return true
-    } catch (err: CancellationException) {
+    } catch (err: Throwable) {
       // Custom senders may use cancellation for transport failure. Keep the actor
       // cancellation contract while retrying this peer normally.
-      currentCoroutineContext().ensureActive()
-      markPeerFailed(peer)
-      return false
-    } catch (_: Throwable) {
+      if (err is CancellationException) currentCoroutineContext().ensureActive()
       markPeerFailed(peer)
       return false
     }

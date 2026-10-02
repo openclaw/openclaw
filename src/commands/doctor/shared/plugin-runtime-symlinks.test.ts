@@ -78,12 +78,13 @@ describe("plugin runtime symlink health findings", () => {
   );
 
   it.each([
-    { code: "ENOENT", scope: "@slack" },
-    { code: "ENOTDIR", scope: "@slack" },
-    { code: "ENOENT", scope: "" },
+    { code: "ENOENT", scope: "@slack", hostOwned: false },
+    { code: "ENOTDIR", scope: "@slack", hostOwned: false },
+    { code: "ENOENT", scope: "", hostOwned: false },
+    { code: "ENOENT", scope: "@slack", hostOwned: true },
   ])(
-    "reports and removes dangling $scope links while preserving live shared-cache links ($code)",
-    async ({ code, scope }) => {
+    "repairs dangling $scope links only outside host-owned payloads ($code, hostOwned=$hostOwned)",
+    async ({ code, scope, hostOwned }) => {
       if (!(await canCreateDirectorySymlink(tempDir))) {
         return;
       }
@@ -103,6 +104,17 @@ describe("plugin runtime symlink health findings", () => {
       const liveLink = path.join(scopeRoot, "bolt");
 
       await fs.mkdir(packageRoot, { recursive: true });
+      if (hostOwned) {
+        await fs.writeFile(
+          path.join(packageRoot, "openclaw-install-owner.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            owner: "macos-app",
+            displayName: "OpenClaw.app",
+            updateHint: "Update OpenClaw.app to update this Gateway.",
+          }),
+        );
+      }
       await fs.mkdir(scopeRoot, { recursive: true });
       await fs.mkdir(liveTarget, { recursive: true });
       await fs.writeFile(path.join(liveTarget, "package.json"), '{"name":"live-runtime"}\n');
@@ -115,6 +127,18 @@ describe("plugin runtime symlink health findings", () => {
       const nestedLink = path.join(packageDirectory, "nested-stale-link");
       await fs.mkdir(packageDirectory);
       await fs.symlink(missingTarget, nestedLink, "dir");
+
+      if (hostOwned) {
+        expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([]);
+        expect(await removeStalePluginRuntimeSymlinks(packageRoot)).toEqual({
+          changes: [],
+          warnings: [],
+        });
+        await expectSymlinkPresent(staleLink);
+        await expectSymlinkPresent(liveLink);
+        await expectSymlinkPresent(nestedLink);
+        return;
+      }
 
       expect(await collectStalePluginRuntimeSymlinkHealthFindings({ packageRoot })).toEqual([
         {

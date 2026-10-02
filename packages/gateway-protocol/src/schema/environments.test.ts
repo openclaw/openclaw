@@ -344,6 +344,15 @@ describe("worker environment protocol schemas", () => {
     const slots = { total: 2, available: 1 };
     expect(Value.Check(WorkerSlotSummarySchema, slots)).toBe(true);
     expect(
+      Value.Check(WorkerSlotSummarySchema, { total: 1, available: 0, reclaimableIdle: 1 }),
+    ).toBe(true);
+    expect(
+      Value.Check(WorkerSlotSummarySchema, { total: 1, available: 1, reclaimableIdle: 1 }),
+    ).toBe(false);
+    expect(
+      Value.Check(WorkerSlotSummarySchema, { total: 4, available: 0, reclaimableIdle: 3 }),
+    ).toBe(false);
+    expect(
       Value.Check(EnvironmentSummarySchema, {
         id: "node:build-mac",
         type: "node",
@@ -404,6 +413,16 @@ describe("worker environment protocol schemas", () => {
       ...node,
       requiredNodeCommand: { command: "runtime.exec", state: "invocable" },
     };
+    expect(
+      Value.Check(EnvironmentSummarySchema, {
+        ...node,
+        requiredNodeCommand: {
+          command: "runtime.exec",
+          state: "undeclared",
+          message: "Enable the runtime plugin on the node, then reconnect it.",
+        },
+      }),
+    ).toBe(true);
     for (const schema of [
       EnvironmentsCreateResultSchema,
       EnvironmentsDestroyResultSchema,
@@ -415,6 +434,7 @@ describe("worker environment protocol schemas", () => {
       { command: "", state: "undeclared" },
       { command: "x".repeat(129), state: "undeclared" },
       { command: "runtime.exec", state: "unknown" },
+      { command: "runtime.exec", state: "undeclared", message: "" },
       { command: "runtime.exec", state: "invocable", pending: true },
     ]) {
       expect(Value.Check(EnvironmentSummarySchema, { ...node, requiredNodeCommand })).toBe(false);
@@ -592,6 +612,26 @@ describe("worker environment protocol schemas", () => {
       { machines: [{ id: "tiny", label: "Tiny", os: "x".repeat(65) }] },
     ]) {
       expect(accepts(choices)).toBe(false);
+    }
+  });
+
+  it("accepts bounded disabled-host diagnostics in list and status without arbitrary fields", () => {
+    const base = { id: "node:disabled", type: "node", status: "unavailable" };
+    for (const message of [
+      "state directory /srv/node is group-writable; run chmod go-w /srv/node",
+      "x".repeat(1_024),
+    ]) {
+      const summary = { ...base, issues: [{ code: "worker-host-unavailable", message }] };
+      expect(Value.Check(EnvironmentsListResultSchema, { environments: [summary] })).toBe(true);
+      expect(Value.Check(EnvironmentsStatusResultSchema, summary)).toBe(true);
+    }
+    for (const issue of [
+      { code: "worker-host-unavailable" },
+      { code: "worker-host-unavailable", message: "" },
+      { code: "worker-host-unavailable", message: "x".repeat(1_025) },
+      { code: "worker-host-unavailable", message: "unavailable", action: "repair" },
+    ]) {
+      expect(Value.Check(EnvironmentSummarySchema, { ...base, issues: [issue] })).toBe(false);
     }
   });
 

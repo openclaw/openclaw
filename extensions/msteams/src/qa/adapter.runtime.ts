@@ -186,8 +186,12 @@ export async function createMSTeamsQaTransportAdapter(
         ...(input.replyToId ? { replyToId: input.replyToId } : {}),
         channelData: {
           tenant: { id: TENANT_ID },
-          team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
-          channel: { id: conversationId },
+          ...(input.conversation.kind === "channel"
+            ? {
+                team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
+                channel: { id: conversationId },
+              }
+            : {}),
         },
       };
       if (!webhookUrl) {

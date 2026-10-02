@@ -122,24 +122,15 @@ class SystemHandler internal constructor(
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object with title/body",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object with title/body")
     if (params.title.isEmpty() && params.body.isEmpty()) {
-      return GatewaySession.InvokeResult.error(
-        code = "INVALID_REQUEST",
-        message = "INVALID_REQUEST: empty notification",
-      )
+      return nodeInvokeError("INVALID_REQUEST", "empty notification")
     }
     return try {
       poster.post(params)
       GatewaySession.InvokeResult.ok(null)
     } catch (_: SecurityException) {
-      GatewaySession.InvokeResult.error(
-        code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: enable OpenClaw notifications and the selected priority in Android Settings",
-      )
+      nodeInvokeError("NOT_AUTHORIZED", "enable OpenClaw notifications and the selected priority in Android Settings")
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "UNAVAILABLE",

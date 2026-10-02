@@ -59,6 +59,17 @@ export async function registerToolingTsx() {
   // to other checkouts' cache size. This flag retains its in-process Map and
   // reaches descendant tooling before their loaders initialize.
   process.env.TSX_DISABLE_CACHE = "1";
+  // Fixtures run this checkout's tooling from a cwd without a tsconfig, which
+  // disables tsx paths mapping for workspace imports. Pin this checkout's
+  // tsconfig only for that foreign cwd; explicit env and cwd tsconfigs win.
+  const checkoutTsconfig = path.join(SHIM_CHECKOUT_ROOT, "tsconfig.json");
+  if (
+    process.env.TSX_TSCONFIG_PATH === undefined &&
+    !existsSync(path.join(process.cwd(), "tsconfig.json")) &&
+    existsSync(checkoutTsconfig)
+  ) {
+    process.env.TSX_TSCONFIG_PATH = checkoutTsconfig;
+  }
   await import(resolveTsxImport(SHIM_CHECKOUT_ROOT));
 }
 

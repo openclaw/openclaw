@@ -16,12 +16,8 @@ import { killProcessTree } from "./kill-tree.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
-import {
-  brokerExecaOptions,
-  spawnBrokerCommand,
-  type CommandSubprocess,
-} from "./spawn-broker/execa-client.js";
-import type { CommandSpawnOptions } from "./spawn-broker/execa-types.js";
+import { brokerExecaOptions, spawnBrokerCommand } from "./spawn-broker/execa-client.js";
+import type { CommandSpawnOptions, CommandSubprocess } from "./spawn-broker/execa-types.js";
 import { recordChildProcessSpawn } from "./spawn-diagnostics.js";
 import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
@@ -300,6 +296,7 @@ export function shouldSpawnWithShell(params: {
 
 type SpawnCommandOptions = CommandSpawnOptions & {
   baseEnv?: NodeJS.ProcessEnv;
+  executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
 };
@@ -323,6 +320,7 @@ export function spawnCommandWithInvocation<
     env,
     windowsVerbatimArguments,
     cancelSignal,
+    executionTimeoutMs,
     inheritScopeCancellation = true,
     ...execaOptions
   } = sourceOptions;
@@ -349,6 +347,10 @@ export function spawnCommandWithInvocation<
   // CLI and other platforms have no broker scope. Independent applications and
   // native descriptors retain their explicitly selected in-process transport.
   const remoteOptions = broker ? brokerExecaOptions(commandOptions) : undefined;
+  if (remoteOptions && executionTimeoutMs !== undefined) {
+    // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
+    remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
+  }
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(

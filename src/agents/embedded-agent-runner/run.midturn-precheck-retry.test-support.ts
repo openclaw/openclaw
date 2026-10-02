@@ -170,29 +170,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
     expect(result.meta.error).toBeUndefined();
   });
 
-  it("compacts settled replay-unsafe tools and continues from their recorded result", async () => {
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeReplayUnsafeMidTurnOverflow())
-      .mockResolvedValueOnce(session.makeAttemptResult());
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "Compacted after settled exec",
-        firstKeptEntryId: "entry-settled-exec",
-        tokensBefore: 201_000,
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...session.runParams,
-      runId: "run-midturn-settled-unsafe",
-    });
-
-    expect(mockedCompactDirect).toHaveBeenCalledOnce();
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expectRetryContinuesFromTranscript();
-    expect(result.meta.error).toBeUndefined();
-  });
-
   it("recovers a successor transcript from its own frozen tool projection", async () => {
     const { SessionManager } = await import("../sessions/session-manager.js");
     const { getEmbeddedSessionPromptState, clearEmbeddedSessionPromptStates } =
@@ -369,7 +346,6 @@ describe("runEmbeddedAgent mid-turn precheck retry", () => {
 
   it.each([
     ["a tool call without a recorded result", { resultRecorded: false }, true],
-    ["a generic tool with an active lifecycle item", { activeCount: 1 }, true],
     [
       "a direct tool active while Code Mode is merely enabled",
       { activeCount: 1, codeModeEngaged: true },

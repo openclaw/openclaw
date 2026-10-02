@@ -12,7 +12,6 @@ import { isValidSecretRef } from "../../secrets/ref-contract.js";
 import type { WorkerEnvironmentBootstrapReceipt } from "./environment-record.js";
 import { workerEnvironmentStateRequiresLease, type WorkerEnvironmentState } from "./state.js";
 
-export const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
 const MAX_SSH_FALLBACK_PORTS = 10;

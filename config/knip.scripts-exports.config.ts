@@ -34,7 +34,15 @@ const repositoryToolEntries = [
 
 const config = {
   compilers: productionConfig.compilers,
-  ignoreWorkspaces: ["apps/**", "extensions/**", "packages/**", "ui"],
+  ignoreWorkspaces: [
+    "apps/**",
+    "extensions/**",
+    ...fs
+      .readdirSync("packages")
+      .filter((name) => name !== "gateway-protocol")
+      .map((name) => `packages/${name}`),
+    "ui",
+  ],
   ignore: ["scripts/**/*.d.{mts,cts,ts}", "scripts/**/*.test-support.{js,mjs,cjs,ts,mts,cts}"],
   // Script entrypoints import core and Plugin SDK APIs. Those owners are
   // checked by the application scans; this pass owns only scripts/** exports.
@@ -96,6 +104,10 @@ const config = {
         "src/plugin-sdk/api-baseline.ts!",
         "src/cli/update-cli/update-command-{git-admission,runtime}.ts!",
       ],
+    },
+    "packages/gateway-protocol": {
+      entry: ["scripts/native-codegen.ts!"],
+      project: ["scripts/native-codegen.ts!"],
     },
   },
 };

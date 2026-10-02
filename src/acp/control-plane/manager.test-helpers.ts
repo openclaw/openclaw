@@ -40,37 +40,54 @@ const hoistedMocks = vi.hoisted(() => {
   };
 });
 
+async function mockAcpSessionMetaUpsert(params: AcpMetaUpsertInput) {
+  let invoked = false;
+  const observed: AcpMetaUpsertInput = {
+    ...params,
+    mutate: (current, entry) => {
+      invoked = true;
+      const next = params.mutate(current, entry);
+      hoistedMocks.upsertObservations.set(observed, {
+        next: structuredClone(next),
+        skipMaintenance: params.skipMaintenance,
+        takeCacheOwnership: params.takeCacheOwnership,
+      });
+      return next;
+    },
+  };
+  const result = await hoistedMocks.upsertAcpSessionMetaMock(observed);
+  // Value-only persistence fixtures still evaluate the mutation while its actor is live.
+  if (!invoked) {
+    const current = readySessionMeta();
+    observed.mutate(current, {
+      sessionId: "session-1",
+      updatedAt: current.lastActivityAt,
+      acp: current,
+    });
+  }
+  return result;
+}
+
 vi.mock("../runtime/session-meta.js", () => ({
   listAcpSessionEntries: (params: unknown) => hoistedMocks.listAcpSessionEntriesMock(params),
   readAcpSessionEntry: (params: unknown) => hoistedMocks.readAcpSessionEntryMock(params),
   readAcpSessionEntryAsync: (params: unknown) => hoistedMocks.readAcpSessionEntryAsyncMock(params),
-  upsertAcpSessionMeta: async (params: AcpMetaUpsertInput) => {
-    let invoked = false;
-    const observed: AcpMetaUpsertInput = {
-      ...params,
-      mutate: (current, entry) => {
-        invoked = true;
-        const next = params.mutate(current, entry);
-        hoistedMocks.upsertObservations.set(observed, {
-          next: structuredClone(next),
-          skipMaintenance: params.skipMaintenance,
-          takeCacheOwnership: params.takeCacheOwnership,
-        });
-        return next;
-      },
-    };
-    const result = await hoistedMocks.upsertAcpSessionMetaMock(observed);
-    // Value-only persistence fixtures still evaluate the mutation while its actor is live.
-    if (!invoked) {
-      const current = readySessionMeta();
-      observed.mutate(current, {
-        sessionId: "session-1",
-        updatedAt: current.lastActivityAt,
-        acp: current,
-      });
-    }
-    return result;
-  },
+  prepareAcpSessionControlRead: async (
+    params: Parameters<typeof import("../runtime/session-meta.js").prepareAcpSessionControlRead>[0],
+  ) => ({
+    readCurrent: async () => {
+      params.assertCurrent?.();
+      const stored = await hoistedMocks.readAcpSessionEntryAsyncMock(params);
+      return {
+        session: stored,
+        entry: stored?.entry,
+      };
+    },
+    assertCurrent: () => params.assertCurrent?.(),
+    release: () => {},
+  }),
+  upsertAcpSessionMeta: mockAcpSessionMetaUpsert,
+  upsertAcpSessionMetaForControl: mockAcpSessionMetaUpsert,
 }));
 
 vi.mock("../runtime/registry.js", () => ({
@@ -274,6 +291,7 @@ export function mockParentedAcpSessionEntries(params: {
   childSessionKey: string;
   parentSessionKey: string;
   label?: string;
+  state?: { currentMeta: SessionAcpMeta | undefined };
 }): void {
   hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
     const sessionKey = (input as { sessionKey?: string }).sessionKey;
@@ -287,7 +305,7 @@ export function mockParentedAcpSessionEntries(params: {
           spawnedBy: params.parentSessionKey,
           ...(params.label === undefined ? {} : { label: params.label }),
         },
-        acp: readySessionMeta(),
+        acp: params.state ? params.state.currentMeta : readySessionMeta(),
       };
     }
     if (sessionKey === params.parentSessionKey) {

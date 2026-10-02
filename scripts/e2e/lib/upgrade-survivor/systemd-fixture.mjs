@@ -428,9 +428,29 @@ function recordCaller(file, parentPid, action) {
   for (let depth = 0; depth < 64 && Number.isSafeInteger(pid) && pid > 1; depth++) {
     try {
       // Commander replaces argv[0] with these titles before executing the action.
-      const title = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0];
+      const argv = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
+      const title = argv[0];
       if (title === "openclaw-doctor" || title === "openclaw-update") {
         roles.push(title.slice("openclaw-".length));
+      } else if (
+        path.basename(argv[1] ?? "") === "update-migrated-finalize.worker.js" &&
+        argv[2] === "--post-core"
+      ) {
+        try {
+          if (
+            fs
+              .readFileSync(`/proc/${pid}/environ`, "utf8")
+              .split("\0")
+              .includes("OPENCLAW_UPDATE_POST_CORE=1")
+          ) {
+            roles.push("update");
+          }
+        } catch (error) {
+          // An unreadable environment is unknown evidence; keep scanning ancestors.
+          if (!["ENOENT", "ESRCH", "EACCES", "EPERM"].includes(error.code)) {
+            throw error;
+          }
+        }
       }
       const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
       pid = Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]);
@@ -512,7 +532,7 @@ function run() {
     readUnit(true);
     return;
   }
-  if (["stop-policy", "stop-timeout-ms"].includes(operation) && !args.length) {
+  if (["stop-policy", "stop-timeout-ms", "stop-context"].includes(operation) && !args.length) {
     // A running generation keeps its loaded policy even if an on-disk edit is
     // invalid or removed. Only a successful reload replaces that snapshot.
     const unit = fs.existsSync(loadedPath)
@@ -529,7 +549,17 @@ function run() {
       if (!unit) {
         fail("Cannot stop an absent fixture unit.");
       }
-      console.log(unit.stopTimeoutMs);
+      if (operation === "stop-context") {
+        console.log(
+          JSON.stringify({
+            stopTimeoutMs: unit.stopTimeoutMs === Infinity ? "Infinity" : unit.stopTimeoutMs,
+            killMode: unit.killMode,
+            controlGroup: runtimePaths().controlGroup || "",
+          }),
+        );
+      } else {
+        console.log(unit.stopTimeoutMs);
+      }
     }
     return;
   }

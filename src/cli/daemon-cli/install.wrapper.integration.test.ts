@@ -6,6 +6,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
 import { resolveLaunchAgentEnvWrapperPath } from "../../daemon/launchd-service-files.js";
+import * as runtimePaths from "../../daemon/runtime-paths.js";
+import * as runtimePins from "../../daemon/runtime-pin-state.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceInstallArgs,
@@ -14,7 +16,8 @@ import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 
-const { defaultRuntime, runtimeErrors, resetRuntimeCapture } = createCliRuntimeCapture();
+const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
+  createCliRuntimeCapture();
 const service = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
@@ -31,6 +34,104 @@ vi.mock("../../runtime.js", () => ({ defaultRuntime }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let originalArgv: string[];
 let entrypoint: string;
+
+describe("registered gateway install runtime default", () => {
+  it.each([
+    "Bun-only first install",
+    "explicit Node without Node",
+    "recorded runtime",
+    "pinned runtime",
+  ])("handles %s", async (name) => {
+    const explicit = name === "explicit Node without Node";
+    const execPath = Object.getOwnPropertyDescriptor(process, "execPath")!;
+    const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+    const bunPath = "/opt/app/runtime/bun";
+    Object.defineProperty(process, "execPath", { configurable: true, value: bunPath });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
+    vi.spyOn(runtimePaths, "resolvePreferredNodePath").mockResolvedValue(undefined);
+    vi.spyOn(runtimePaths, "resolveSystemNodeInfo").mockResolvedValue(null);
+    const supported = {
+      status: "supported" as const,
+      version: "1.4.2",
+      sqliteVersion: "3.53.4",
+      sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+      nodeSharedSqlite: false,
+    };
+    const probe = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue(supported);
+    const retainedPath =
+      name === "recorded runtime" || name === "pinned runtime" ? "/opt/prior/bun" : undefined;
+    const pin =
+      name === "pinned runtime" ? { runtime: "bun" as const, path: "/opt/prior/bun" } : undefined;
+    if (retainedPath) {
+      service.readCommand.mockResolvedValue({
+        programArguments: [retainedPath, entrypoint, "gateway"],
+      });
+      vi.spyOn(runtimePaths, "resolveRecordedDaemonRuntime").mockResolvedValue({
+        ...supported,
+        runtime: "bun",
+        path: retainedPath,
+      });
+    }
+    if (pin) {
+      vi.spyOn(runtimePins, "readDaemonRuntimePinForInstall").mockReturnValue({
+        revision: "prior",
+        stored: true,
+        pin,
+      });
+      vi.spyOn(runtimePaths, "resolvePinnedDaemonRuntimePath").mockResolvedValue(pin.path);
+    }
+    try {
+      const program = new Command().name("openclaw");
+      addGatewayServiceCommands(program.command("gateway"));
+      const install = program.parseAsync(
+        [
+          "gateway",
+          "install",
+          "--force",
+          "--port",
+          "29453",
+          "--json",
+          ...(explicit ? ["--runtime", "node"] : []),
+        ],
+        { from: "user" },
+      );
+      if (explicit) {
+        await expect(install).rejects.toThrow("No supported Node runtime was selected");
+        expect(service.install).not.toHaveBeenCalled();
+      } else {
+        await install;
+        expect(runtimeErrors).toEqual([]);
+        expect(service.install).toHaveBeenCalledOnce();
+        const [installed] = service.install.mock.calls[0]!;
+        expect(installed.programArguments[0]).toBe(retainedPath ?? bunPath);
+        expect(installed.runtimePinUpdate?.pin).toEqual(pin);
+        if (!retainedPath) {
+          expect(installed.programArguments).toEqual([
+            bunPath,
+            entrypoint,
+            "gateway",
+            "--port",
+            "29453",
+          ]);
+          expect(probe).toHaveBeenCalledWith(bunPath, undefined, expect.any(Object));
+          expect(JSON.parse(runtimeLogs.at(-1)!).warnings).toEqual([
+            "No supported Node runtime was found; using the running Bun for the service.",
+          ]);
+        }
+      }
+      if (explicit || retainedPath) {
+        expect(probe).not.toHaveBeenCalled();
+      }
+    } finally {
+      Object.defineProperty(process, "execPath", execPath);
+      if (bunVersion) {
+        Object.defineProperty(process.versions, "bun", bunVersion);
+      } else {
+        delete process.versions.bun;
+      }
+    }
+  });
+});
 
 beforeEach(async () => {
   originalArgv = process.argv;

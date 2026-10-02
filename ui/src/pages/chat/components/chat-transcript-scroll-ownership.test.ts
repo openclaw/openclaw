@@ -435,7 +435,11 @@ describe("chat transcript scroll ownership", () => {
       key: `row:${index}`,
       content: html`<div>row ${index}</div>`,
     }));
-    const { container } = await mountTestTranscript("measurement-reader", rows, transcript);
+    const { container, renderRows } = await mountTestTranscript(
+      "measurement-reader",
+      rows,
+      transcript,
+    );
     try {
       const total = transcriptSize(container);
       let maxScrollTop = total + 84 - 600;
@@ -462,6 +466,8 @@ describe("chat transcript scroll ownership", () => {
       vi.useFakeTimers();
       container.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(150);
+      renderRows(rows);
+      await vi.advanceTimersByTimeAsync(0);
       const row = expectDefined(
         container.querySelector<HTMLElement>('[data-index="6"]'),
         "row above the viewport",

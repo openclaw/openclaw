@@ -7,7 +7,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { asBoolean, asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LLAMA_SERVER_DEFAULT_ORIGIN } from "./defaults.js";
 import { normalizeLlamaServerProviderConfig } from "./endpoint.js";
 
@@ -93,18 +93,16 @@ function buildCompat(
   props: LlamaServerPropsWire | undefined,
 ): NonNullable<ModelDefinitionConfig["compat"]> {
   const caps = props?.chat_template_caps;
-  const supportsTools = asBoolean(caps?.supports_tool_calls) === true;
-  const supportsTypedContent = asBoolean(caps?.supports_typed_content) === true;
   return {
     supportsStore: false,
     supportsDeveloperRole: false,
-    supportsReasoningEffort: asBoolean(caps?.supports_reasoning_effort) === true,
+    supportsReasoningEffort: caps?.supports_reasoning_effort === true,
     supportsTemperature: true,
     supportsUsageInStreaming: true,
-    supportsTools,
+    supportsTools: caps?.supports_tool_calls === true,
     supportsStrictMode: false,
     supportsJsonSchemaResponseFormat: true,
-    requiresStringContent: !supportsTypedContent,
+    requiresStringContent: caps?.supports_typed_content !== true,
     maxTokensField: "max_tokens",
   };
 }

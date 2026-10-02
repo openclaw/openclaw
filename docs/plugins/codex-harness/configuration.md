@@ -144,6 +144,12 @@ owns compaction. The native app-server harness supports context engines
 that need pre-prompt assembly; generic CLI backends, including `codex-cli`,
 do not provide that host capability.
 
+Fresh Codex threads, including ordinary **Fork conversation** sessions, receive
+recent saved history within a bounded continuity window. Conversation text and
+summaries that fit this window are preserved without a separate per-message
+cutoff; longer history keeps its newest tail. Tool payloads and restored
+attachments retain their own limits.
+
 For Codex-backed agents, `/compact` starts native Codex app-server
 compaction on the bound thread and waits for its terminal result. The shared
 `agents.defaults.compaction.timeoutSeconds` budget applies; on timeout,

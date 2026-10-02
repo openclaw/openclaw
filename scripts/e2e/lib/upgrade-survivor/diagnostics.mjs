@@ -50,6 +50,10 @@ const nativeAssignmentLogs = [
   "native-assignment-eligibility.json",
   "native-assignment-baseline.json",
   "native-assignment-first-hop.json",
+  "native-assignment-inventory-after-first-hop.json",
+  "native-assignment-inventory-before-recovery.json",
+  "native-assignment-inventory-after-recovery.json",
+  "native-assignment-inventory-live-final.json",
   "native-assignment-proof.json",
   "native-assignment-messages.jsonl",
   "native-assignment-server.log",
@@ -116,6 +120,7 @@ const logNames = [
   "legacy-operator-post-update-cron-history.json",
   "legacy-operator-candidate-cron-history.json",
   "dreaming-cron-proof.json",
+  "cron-owner-proof.json",
   "legacy-operator-baseline-turn.out",
   "legacy-operator-baseline-turn.err",
   "legacy-operator-candidate-turn.out",
@@ -975,11 +980,21 @@ function publishedSessionMigration(snapshot, sanitize) {
   return report;
 }
 
+function isPostCoreProcess() {
+  return (
+    process.env.OPENCLAW_UPDATE_POST_CORE === "1" &&
+    (process.argv[2] === "update" ||
+      (process.argv[2] === "--post-core" &&
+        path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js"))
+  );
+}
+
 function armUpgradeProcessCapture() {
   const delegatedDoctor =
     process.argv[2] === "--doctor" &&
     path.basename(process.argv[1] ?? "") === "update-migrated-finalize.worker.js";
-  const command = delegatedDoctor ? "doctor" : process.argv[2];
+  const postCore = isPostCoreProcess();
+  const command = delegatedDoctor ? "doctor" : postCore ? "update" : process.argv[2];
   const artifactRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   if (!isMainThread || !artifactRoot || !["update", "doctor"].includes(command)) {
     return;
@@ -1008,10 +1023,7 @@ function armUpgradeProcessCapture() {
       return;
     }
     const identity = {
-      role:
-        command === "update" && process.env.OPENCLAW_UPDATE_POST_CORE === "1"
-          ? "post-core"
-          : command,
+      role: postCore ? "post-core" : command,
       packageVersion: version,
       pid: process.pid,
       parentPid: process.ppid,
@@ -1054,11 +1066,7 @@ function armUpgradeProcessCapture() {
 }
 
 function armPostCoreCapture() {
-  if (
-    !isMainThread ||
-    process.argv[2] !== "update" ||
-    process.env.OPENCLAW_UPDATE_POST_CORE !== "1"
-  ) {
+  if (!isMainThread || !isPostCoreProcess()) {
     return;
   }
   try {
@@ -1815,6 +1823,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
             ]
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
+        ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)

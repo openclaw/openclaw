@@ -3,7 +3,7 @@ import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSet, resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners } from "../shared/listeners.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 
 /** Storage-neutral identity for the session transcript that changed. */
 type SessionTranscriptUpdateTarget = {
@@ -125,20 +125,14 @@ export function readSessionTranscriptUpdateVersion(): number {
 
 /** Registers a listener for normalized session transcript updates. */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
-  SESSION_TRANSCRIPT_LISTENERS.add(listener);
-  return () => {
-    SESSION_TRANSCRIPT_LISTENERS.delete(listener);
-  };
+  return registerListener(SESSION_TRANSCRIPT_LISTENERS, listener);
 }
 
 /** Registers an internal listener for identity-only or file-backed transcript updates. */
 export function onInternalSessionTranscriptUpdate(
   listener: InternalSessionTranscriptListener,
 ): () => void {
-  INTERNAL_SESSION_TRANSCRIPT_LISTENERS.add(listener);
-  return () => {
-    INTERNAL_SESSION_TRANSCRIPT_LISTENERS.delete(listener);
-  };
+  return registerListener(INTERNAL_SESSION_TRANSCRIPT_LISTENERS, listener);
 }
 
 /** Emits a normalized transcript update to all registered listeners. */

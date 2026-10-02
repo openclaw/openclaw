@@ -6,11 +6,15 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
-import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
+import {
+  AGENT_DATABASE_MAINTENANCE_LEASE,
+  assertNoOpenClawAgentDatabaseLeases,
+} from "./openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
 } from "./openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -189,6 +193,24 @@ it("drains an existing agent handle without migrating while its lease is release
   expect(f.agent?.db.isOpen).toBe(false);
   expect(atEntry?.version).toEqual({ user_version: 15 });
   expect(inspect(f.pathname).version).toEqual({ user_version: 15 });
+});
+
+it("waits through transient state contention before admitting existing-schema maintenance", async () => {
+  const f = source();
+  await withOpenClawStateLease(
+    { ...f.lease, ...AGENT_DATABASE_MAINTENANCE_LEASE, heartbeat: "worker" },
+    async (maintenance) => {
+      const holder = holdStateDatabaseWriteTransaction(f.pathname, 250);
+      try {
+        await holder.ready;
+        assertNoOpenClawAgentDatabaseLeases(maintenance, f.options);
+      } finally {
+        holder.release();
+        await holder.joined;
+      }
+    },
+  );
+  expect(inspect(f.pathname).leases).toEqual([]);
 });
 
 it("drains cached agent handles from another profile using their own lease database", async () => {

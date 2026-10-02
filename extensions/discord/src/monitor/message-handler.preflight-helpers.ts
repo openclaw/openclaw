@@ -168,13 +168,6 @@ export function matchesActiveDiscordMentionPatterns(
   return false;
 }
 
-export function resolvePreflightMentionRequirement(params: {
-  shouldRequireMention: boolean;
-  bypassMentionRequirement: boolean;
-}): boolean {
-  return params.shouldRequireMention && !params.bypassMentionRequirement;
-}
-
 export function shouldIgnoreBoundThreadWebhookMessage(params: {
   threadId?: string;
   webhookId?: string | null;

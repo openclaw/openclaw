@@ -329,15 +329,11 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,
           restartRecoveryDeliverySourceRunId: sourceTurnId,
-          restartRecoveryRequesterAccountId: sourceTurnId
-            ? normalizeOptionalString(params.requesterAccountId)
-            : undefined,
-          restartRecoveryRequesterSenderId: sourceTurnId
-            ? normalizeOptionalString(params.requesterSenderId)
-            : undefined,
+          restartRecoveryRequesterAccountId: normalizeOptionalString(params.requesterAccountId),
+          restartRecoveryRequesterSenderId: normalizeOptionalString(params.requesterSenderId),
           restartRecoverySameChannelThreadRequired:
-            sourceTurnId && params.sameChannelThreadRequired === true ? true : undefined,
-          restartRecoverySourceIngress: sourceTurnId ? "channel" : undefined,
+            params.sameChannelThreadRequired === true ? true : undefined,
+          restartRecoverySourceIngress: "channel",
           restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           runtimeMs: undefined,
           startedAt: updatedAt,

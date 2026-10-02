@@ -507,7 +507,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (shouldTouchStore) {
       locations.push("pairing store");
     }
-    const targetLabel = locations.length > 0 ? locations.join(" + ") : "no-op";
+    const targetLabel = locations.join(" + ");
     return commandReply(`✅ ${scopeLabel} allowlist ${actionLabel}: ${targetLabel}.`);
   }
 
@@ -537,6 +537,5 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
   });
 
   const actionLabel = parsed.action === "add" ? "added" : "removed";
-  const scopeLabel = parsed.scope === "group" ? "group" : "DM";
-  return commandReply(`✅ ${scopeLabel} allowlist ${actionLabel} in pairing store.`);
+  return commandReply(`✅ DM allowlist ${actionLabel} in pairing store.`);
 };

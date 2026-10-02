@@ -1,11 +1,12 @@
+import { resolveNonNegativeIntegerOption as readCount } from "openclaw/plugin-sdk/number-runtime";
 import {
   compareToolCallShape,
   compareToolResultShape,
   normalizeTextForParity,
   stableHash,
 } from "./parity-shared.js";
+import type { RuntimeId } from "./runtime-id.js";
 import type {
-  RuntimeId,
   RuntimeParityCell,
   RuntimeParityDrift,
   RuntimeParityUsage,
@@ -126,22 +127,15 @@ function countComparableTranscriptRecords(transcriptBytes: string) {
   return count;
 }
 
-function readPositiveNumber(value: unknown) {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function buildPromptStats(report: RuntimeParitySystemPromptReport | undefined) {
   const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
   return {
-    systemPromptChars: readPositiveNumber(report?.systemPrompt?.chars),
-    projectContextChars: readPositiveNumber(report?.systemPrompt?.projectContextChars),
-    nonProjectContextChars: readPositiveNumber(report?.systemPrompt?.nonProjectContextChars),
-    skillPromptChars: readPositiveNumber(report?.skills?.promptChars),
-    toolSummaryChars: toolEntries.reduce(
-      (sum, entry) => sum + readPositiveNumber(entry.summaryChars),
-      0,
-    ),
-    toolSchemaChars: readPositiveNumber(report?.tools?.schemaChars),
+    systemPromptChars: readCount(report?.systemPrompt?.chars, 0),
+    projectContextChars: readCount(report?.systemPrompt?.projectContextChars, 0),
+    nonProjectContextChars: readCount(report?.systemPrompt?.nonProjectContextChars, 0),
+    skillPromptChars: readCount(report?.skills?.promptChars, 0),
+    toolSummaryChars: toolEntries.reduce((sum, entry) => sum + readCount(entry.summaryChars, 0), 0),
+    toolSchemaChars: readCount(report?.tools?.schemaChars, 0),
     toolCount: toolEntries.length,
   };
 }
@@ -193,7 +187,6 @@ export function buildHarnessParityCell(params: {
   return {
     ...params.cell,
     variant: params.variant,
-    ...(report ? { systemPromptReport: report } : {}),
     promptStats,
     systemPromptHash: stableHash({
       systemPrompt: report?.systemPrompt ?? null,

@@ -264,6 +264,7 @@ describe("failed update recovery restart", () => {
   const windowsTaskAutoStartRecovery = {
     suspended: Promise.resolve(true),
     beginMutation: () => {},
+    assertRecoveryCurrent: () => {},
     restore: mocks.restoreWindowsAutoStart,
     handoff: () => {},
     complete: async () => {},
@@ -429,6 +430,7 @@ describe("failed update recovery restart", () => {
           windowsTaskAutoStartRecovery: {
             suspended: Promise.resolve(true),
             beginMutation: () => {},
+            assertRecoveryCurrent: () => {},
             restore,
             handoff: () => {},
             complete,

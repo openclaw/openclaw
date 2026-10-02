@@ -82,6 +82,15 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
         targets: [fileURLToPath(resolveTsxImport(root))],
       },
     ],
+    [
+      "scripts/tsdown-build.mts",
+      {
+        // Runtime-only live Gateway dist fence. Declaration writers import this
+        // file for constants/plan helpers and must not walk daemon service-layout.
+        expressions: ["liveGatewayDistFenceHref"],
+        targets: [generatorEntry],
+      },
+    ],
   ]);
   const observedDynamicOwners = new Set<string>();
   using parser = createNativeTypeScriptParser({ cwd: root });

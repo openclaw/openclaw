@@ -176,7 +176,7 @@ export async function persistRefreshedPluginIndex(params: {
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
   // Startup precedes plugin ownership; derive again after any pending installer settles.
   return await withPluginLifecycleLease(
-    { env: params.env, assertCurrent: params.assertCurrent },
+    { env: params.env, assertCurrent: params.assertCurrent, processBound: true },
     async (pluginLease) => {
       const fresh = await params.readPersistedSnapshot();
       assertPreflightConfigUnchanged(params.snapshotRead.snapshot, fresh.snapshot);

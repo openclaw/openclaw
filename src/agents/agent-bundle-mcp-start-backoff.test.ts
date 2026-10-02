@@ -208,7 +208,6 @@ it("invalidates a startup failure that completes after config publication", asyn
   const manager = createSessionMcpRuntimeManager({
     scheduler: createTestGatewayScheduler(),
     createRuntime: createSessionMcpRuntime,
-    enableIdleSweepTimer: false,
   });
   const { runtime, releaseLease } = await manager.acquire({
     sessionId: "reload-during-start",

@@ -2,6 +2,7 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import type { CronJob } from "../types.js";
 import {
   claimCronRunReceiptInDatabase,
+  claimLocalCronRunReceiptOwnership,
   findActiveCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "./run-receipt-store.js";
@@ -47,17 +48,28 @@ export function makeCronReceiptJob(id: string, agentId = "alpha"): CronJob {
 
 export function claimCronRunReceiptForTest(storePath: string, job: CronJob, startedAtMs: number) {
   const prepared = prepareCronRunReceiptClaim({
+    observed: inspectActiveCronRunReceipt({ storePath, jobId: job.id }),
     storePath,
     job,
     agentId: job.agentId!,
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
-      receiptSchema: prepareCronRunReceiptWriteSchema(db),
       prepared,
       resolveAgentId: (current) => current.agentId!,
     }),
   );
+}
+
+export function claimCronRunReceiptInDatabaseForTest(
+  params: Omit<Parameters<typeof claimCronRunReceiptInDatabase>[0], "receiptSchema">,
+) {
+  const handle = claimCronRunReceiptInDatabase({
+    ...params,
+    receiptSchema: prepareCronRunReceiptWriteSchema(params.database),
+  });
+  claimLocalCronRunReceiptOwnership(handle);
+  return handle;
 }

@@ -72,6 +72,7 @@ describe("litellm plugin", () => {
           },
         },
       } satisfies OpenClawConfig;
+      const authoredModels = structuredClone(config.models.providers.litellm.models);
       let result: OpenClawConfig | null | undefined;
       if (authMode === "non-interactive") {
         result = await auth?.runNonInteractive?.({
@@ -115,10 +116,7 @@ describe("litellm plugin", () => {
         baseUrl: "https://litellm.example/v1",
         api: "openai-completions",
         apiKey: "old-key",
-        models: [
-          ...config.models.providers.litellm.models,
-          ...(modelsMode === "replace" ? [LITELLM_DEFAULT_MODEL] : []),
-        ],
+        models: [...authoredModels, ...(modelsMode === "replace" ? [LITELLM_DEFAULT_MODEL] : [])],
       });
     },
   );

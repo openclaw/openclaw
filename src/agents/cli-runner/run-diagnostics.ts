@@ -88,13 +88,10 @@ function errorHarnessOutcome(
   if (failureKind === "timeout") {
     return "timed_out";
   }
-  if (failureKind === "aborted") {
+  if (failureKind === "aborted" || abortSignal?.aborted) {
     return abortSignal?.aborted && isSignalTimeoutReason(abortSignal.reason)
       ? "timed_out"
       : "aborted";
-  }
-  if (abortSignal?.aborted === true) {
-    return isSignalTimeoutReason(abortSignal.reason) ? "timed_out" : "aborted";
   }
   if (isTimeoutError(error)) {
     return "timed_out";

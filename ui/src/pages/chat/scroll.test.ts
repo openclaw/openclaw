@@ -3,6 +3,7 @@ import type { RenderLifecycle } from "./render-lifecycle.ts";
 import {
   CHAT_TRANSCRIPT_END_THRESHOLD_PX,
   cancelChatScroll,
+  canAutoFollowChat,
   type ChatScrollToEndOptions,
   getChatSessionScrollPosition,
   handleChatScroll,
@@ -586,7 +587,13 @@ describe("programmatic scroll ownership", () => {
 
     scheduleChatScroll(host, true, true, { source: "manual" });
     await host.updateComplete;
+    expect(canAutoFollowChat(host)).toBe(false);
     frames.runNext();
+    expect(canAutoFollowChat(host)).toBe(false);
+    expect(host.chatScrollToEnd).not.toHaveBeenCalled();
+    scheduleCommittedChatScroll(host, false, false, { source: "resize" });
+    frames.runNext();
+    expect(canAutoFollowChat(host)).toBe(true);
     expect(host.chatScrollToEnd).toHaveBeenCalledWith({ behavior: "smooth", source: "manual" });
     expect(frames.callbacks).toHaveLength(0);
     handleChatScroll(host, createScrollEvent(2000, 900, 400));
@@ -614,6 +621,9 @@ describe("programmatic scroll ownership", () => {
     const { host, container } = createScrollHost({ scrollTop: 500 + delta });
     host.chatLastScrollTop = 500;
     scheduleChatScroll(host, true, true, { source: "manual" });
+    // Reader input can arrive while the command waits for measured layout.
+    frames.runNext();
+    expect(canAutoFollowChat(host)).toBe(false);
 
     handleChatScrollTakeover(host);
     expect(frames.callbacks).toHaveLength(0);

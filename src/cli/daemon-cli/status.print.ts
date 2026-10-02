@@ -76,6 +76,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
+      extraServices: status.extraServices.map(({ sourcePath: _sourcePath, ...service }) => service),
       service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
     });
     return;
@@ -86,6 +87,8 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   const spacer = () => defaultRuntime.log("");
   const printError = (message: string) => defaultRuntime.error(errorText(message));
   const printWarning = (message: string) => defaultRuntime.error(warnText(message));
+  const printInfo = (name: string, value: string) =>
+    defaultRuntime.log(`${label(name)} ${infoText(value)}`);
   // Advice belongs to this shell, not the stored service environment or probe target.
   const installBlock = resolveDaemonInstallBlockMessage("gateway");
   const installCommand = formatCliCommand("openclaw gateway install");
@@ -113,22 +116,22 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
   const transport = service.runtime?.systemd?.transport;
   if (opts.deep && transport) {
-    defaultRuntime.log(
-      `${label("Systemd transport:")} ${infoText(`${transport.kind} (${transport.kind === "machine" ? transport.user : transport.address})`)}`,
+    printInfo(
+      "Systemd transport:",
+      `${transport.kind} (${transport.kind === "machine" ? transport.user : transport.address})`,
     );
   }
   if (status.logFile) {
-    defaultRuntime.log(`${label("File logs:")} ${infoText(shortenHomePath(status.logFile))}`);
+    printInfo("File logs:", shortenHomePath(status.logFile));
   }
   if (service.command?.programArguments?.length) {
-    defaultRuntime.log(
-      `${label(managerUnavailable ? "Recorded command:" : "Command:")} ${infoText(service.command.programArguments.join(" "))}`,
+    printInfo(
+      managerUnavailable ? "Recorded command:" : "Command:",
+      service.command.programArguments.join(" "),
     );
   }
   if (service.command?.sourcePath) {
-    defaultRuntime.log(
-      `${label("Service file:")} ${infoText(shortenHomePath(service.command.sourcePath))}`,
-    );
+    printInfo("Service file:", shortenHomePath(service.command.sourcePath));
   }
   if (service.command?.reloadPending) {
     const systemctl =
@@ -136,21 +139,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(warnText(`Systemd reload: pending (run ${systemctl} daemon-reload)`));
   }
   if (service.command?.workingDirectory) {
-    defaultRuntime.log(
-      `${label("Working dir:")} ${infoText(shortenHomePath(service.command.workingDirectory))}`,
-    );
+    printInfo("Working dir:", shortenHomePath(service.command.workingDirectory));
   }
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Service env:")} ${daemonEnvLines.join(" ")}`);
   }
   if (service.gatewayHeap) {
-    defaultRuntime.log(
-      `${label("Gateway heap:")} ${infoText(formatGatewayHeapLimitReport(service.gatewayHeap))}`,
-    );
+    printInfo("Gateway heap:", formatGatewayHeapLimitReport(service.gatewayHeap));
   }
-  const hostDesktopValue = formatHostDesktopStatus(status.hostDesktop);
-  defaultRuntime.log(`${label("Host desktop:")} ${infoText(hostDesktopValue)}`);
+  printInfo("Host desktop:", formatHostDesktopStatus(status.hostDesktop));
   spacer();
 
   if (service.configAudit?.issues.length) {
@@ -180,7 +178,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         continue;
       }
       const configPath = `${shortenHomePath(config.path)}${config.exists ? "" : " (missing)"}${config.valid ? "" : " (invalid)"}`;
-      defaultRuntime.log(`${label(`Config (${kind}):`)} ${infoText(configPath)}`);
+      printInfo(`Config (${kind}):`, configPath);
       if (!config.valid && config.issues?.length) {
         const issueLabel = kind === "cli" ? "Config issue:" : "Service config issue:";
         for (const issue of config.issues.slice(0, 5)) {
@@ -215,7 +213,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     defaultRuntime.log(
       `${label("Gateway:")} bind=${infoText(status.gateway.bindMode)} (${infoText(bindHost)}), port=${infoText(String(status.gateway.port))} (${infoText(status.gateway.portSource)})`,
     );
-    defaultRuntime.log(`${label("Probe target:")} ${infoText(status.gateway.probeUrl)}`);
+    printInfo("Probe target:", status.gateway.probeUrl);
     const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
@@ -229,10 +227,10 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           basePath: status.config?.daemon?.controlUi?.basePath,
           tlsEnabled: status.gateway.tlsEnabled === true,
         });
-      defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
+      printInfo("Dashboard:", links.httpUrl);
     }
     if (status.gateway.probeNote) {
-      defaultRuntime.log(`${label("Probe note:")} ${infoText(status.gateway.probeNote)}`);
+      printInfo("Probe note:", status.gateway.probeNote);
     }
     if (status.gateway.windowsFirewall?.severity === "warning") {
       printWarning(`Windows firewall: ${status.gateway.windowsFirewall.message}`);
@@ -327,7 +325,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     }
     const capability = rpc.capability ? rpc.capability.replaceAll("_", "-") : null;
     if (capability) {
-      defaultRuntime.log(`${label("Capability:")} ${infoText(capability)}`);
+      printInfo("Capability:", capability);
     }
     spacer();
   }
@@ -348,9 +346,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   }
 
   if (status.connections?.established.length) {
-    defaultRuntime.log(
-      `${label("Established clients:")} ${infoText(String(status.connections.established.length))}`,
-    );
+    printInfo("Established clients:", String(status.connections.established.length));
     for (const connection of status.connections.established.slice(0, 8)) {
       defaultRuntime.log(`  ${infoText(formatConnectionLine(connection))}`);
     }
@@ -512,7 +508,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (status.port) {
     const addrs = resolvePortListeningAddresses(status);
     if (addrs.length > 0) {
-      defaultRuntime.log(`${label("Listening:")} ${infoText(addrs.join(", "))}`);
+      printInfo("Listening:", addrs.join(", "));
     }
   }
 

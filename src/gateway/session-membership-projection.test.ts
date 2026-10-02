@@ -223,3 +223,30 @@ it.each(["key", "store"] as const)(
     }
   },
 );
+
+it("does not turn an owner reassignment into a membership snapshot invalidation", async () => {
+  const pending = createDeferredCore<SessionMembershipFacts>();
+  readFacts.mockReturnValueOnce(pending.promise);
+  const projection = createSessionMembershipProjection();
+  projection.updateTargets([target]);
+  try {
+    const preparing = projection.prepare();
+    projection.invalidate({
+      storePath: target.filename,
+      sessionKey,
+      facts: {
+        kind: "owner",
+        sessionId: "shared-session",
+        lifecycleRevision: null,
+        owner: { actor: { type: "human", id: "bob" } },
+      },
+    });
+    pending.resolve(snapshot(target.identity, ["alice"]));
+    await preparing;
+    expect(projection.membership(target.storePath, sessionKey)).toEqual(["alice"]);
+    expect(projection.needsPreparation).toBe(false);
+    expect(readFacts).toHaveBeenCalledOnce();
+  } finally {
+    projection.dispose();
+  }
+});

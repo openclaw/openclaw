@@ -38,6 +38,7 @@ import {
 } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatGatewayCrashLoopManualChannelStartHint } from "../infra/gateway-boot-lifecycle.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   createSubsystemLogger,
@@ -174,18 +175,8 @@ type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 };
 
-function createRuntimeStore(): ChannelRuntimeStore {
-  return {
-    lifetimes: new Map(),
-    routeHandoffs: new Map(),
-    starting: new Map(),
-    stops: new Map(),
-    tasks: new Map(),
-    runtimes: new Map(),
-  };
-}
-
 type ChannelManagerOptions = {
+  scheduler: GatewayScheduler;
   getRuntimeConfig: () => OpenClawConfig;
   getPluginRegistry: () => PluginRegistry;
   channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
@@ -222,12 +213,14 @@ async function waitForDeferredAccountStart(
   if (abortSignal.aborted) {
     return;
   }
-  await Promise.race([
-    deferred,
-    new Promise<void>((resolve) => {
-      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-    }),
-  ]);
+  const aborted = createDeferredCore();
+  const onAbort = () => aborted.resolve();
+  abortSignal.addEventListener("abort", onAbort, { once: true });
+  try {
+    await Promise.race([deferred, aborted.promise]);
+  } finally {
+    abortSignal.removeEventListener("abort", onAbort);
+  }
 }
 
 export type ChannelManager = {
@@ -380,7 +373,14 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (existing) {
       return existing;
     }
-    const next = createRuntimeStore();
+    const next: ChannelRuntimeStore = {
+      lifetimes: new Map(),
+      routeHandoffs: new Map(),
+      starting: new Map(),
+      stops: new Map(),
+      tasks: new Map(),
+      runtimes: new Map(),
+    };
     channelStores.set(channelId, next);
     return next;
   };
@@ -454,10 +454,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   };
 
   const getChannelRuntime = async (): Promise<PluginRuntimeChannel | undefined> => {
-    if (channelRuntime) {
-      return channelRuntime;
-    }
-    return await resolveChannelRuntime?.();
+    return channelRuntime ?? (await resolveChannelRuntime?.());
   };
   const createAccountContext = (
     channelId: ChannelId,
@@ -852,6 +849,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               `channels.${channelId}.approval-bootstrap`,
               () =>
                 startChannelApprovalHandlerBootstrap({
+                  scheduler: opts.scheduler,
                   plugin,
                   cfg,
                   accountId: id,

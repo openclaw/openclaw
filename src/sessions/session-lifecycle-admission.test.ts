@@ -631,6 +631,76 @@ it("rejects and releases an admission invalidated by an earlier store writer", a
   expect(isSessionWorkAdmissionActive(storePath, ["session-writer-revalidation"])).toBe(false);
 });
 
+it("admits an independent session while revalidating a conflicting writer's authority", async () => {
+  const scope = "store-keyed-admission";
+  const blockedKey = "agent:main:blocked";
+  const independentKey = "agent:main:independent";
+  const releaseWriter = createDeferred();
+  const initialValidation = createDeferred();
+  const independentEntered = createDeferred();
+  const releaseIndependent = createDeferred();
+  let allowed = true;
+  const validateBlocked = vi.fn(() => {
+    if (!allowed) {
+      throw new Error("session authority revoked");
+    }
+  });
+  const writer = runExclusiveSessionStoreWrite(
+    scope,
+    async () => {
+      await releaseWriter.promise;
+      allowed = false;
+    },
+    { identities: [blockedKey] },
+  );
+  const blocked = beginSessionWorkAdmission({
+    scope,
+    identities: [blockedKey, "blocked-id"],
+    storeWriterIdentities: [blockedKey],
+    assertAllowed: () => {
+      validateBlocked();
+      initialValidation.resolve();
+    },
+    revalidateAllowed: validateBlocked,
+  });
+  const blockedOutcome = expect(blocked).rejects.toThrow("session authority revoked");
+  await initialValidation.promise;
+  const independent = beginSessionWorkAdmission({
+    scope,
+    identities: [independentKey, "independent-id"],
+    storeWriterIdentities: [independentKey],
+    assertAllowed: () => {},
+    revalidateAllowed: async () => {
+      independentEntered.resolve();
+      await releaseIndependent.promise;
+    },
+  });
+
+  try {
+    await independentEntered.promise;
+    expect(validateBlocked).toHaveBeenCalledTimes(1);
+    releaseWriter.resolve();
+    await writer;
+    await blockedOutcome;
+    expect(validateBlocked).toHaveBeenCalledTimes(2);
+    expect(isSessionWorkAdmissionActive(scope, [blockedKey])).toBe(false);
+    expect(isSessionWorkAdmissionActive(scope, [independentKey])).toBe(true);
+    releaseIndependent.resolve();
+    const lease = await independent;
+    lease.release();
+  } finally {
+    releaseWriter.resolve();
+    releaseIndependent.resolve();
+    const results = await Promise.allSettled([blocked, independent]);
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        result.value.release();
+      }
+    }
+    await Promise.allSettled([writer, blockedOutcome]);
+  }
+});
+
 it("releases an admission aborted while waiting for the store writer barrier", async () => {
   const storePath = "store-writer-abort";
   const writerStarted = createDeferred();

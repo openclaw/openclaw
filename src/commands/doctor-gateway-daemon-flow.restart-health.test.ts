@@ -78,10 +78,8 @@ vi.mock("./daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: vi.fn(),
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
-vi.mock("./doctor-format.js", () => ({
-  buildGatewayRuntimeHints: vi.fn(() => []),
-  formatGatewayRuntimeSummary: vi.fn(() => null),
-}));
+vi.mock("../daemon/runtime-format.js", () => ({ formatRuntimeStatus: vi.fn(() => null) }));
+vi.mock("./doctor-format.js", () => ({ buildGatewayRuntimeHints: vi.fn(() => []) }));
 vi.mock("./gateway-install-token.js", () => ({ resolveGatewayInstallToken: vi.fn() }));
 vi.mock("./health.js", () => ({ healthCommandNonExiting: healthCommand }));
 

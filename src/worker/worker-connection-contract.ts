@@ -39,10 +39,10 @@ export type WorkerConnectionState =
   | { kind: "failed"; error: Error }
   | { kind: "stopped" };
 
-export type WorkerConnectionExit =
-  | { kind: "fenced"; reason: WorkerFencedReason }
-  | { kind: "failed"; error: Error }
-  | { kind: "stopped" };
+export type WorkerConnectionExit = Extract<
+  WorkerConnectionState,
+  { kind: "fenced" | "failed" | "stopped" }
+>;
 
 export type WorkerConnectionOptions = {
   endpoint: WorkerConnectionEndpoint;
@@ -108,8 +108,7 @@ export type WorkerAdmissionDeadlineResult = z.infer<typeof WorkerAdmissionDeadli
 export function parseWorkerAdmissionDeadlineResult(
   value: unknown,
 ): WorkerAdmissionDeadlineResult | undefined {
-  const parsed = WorkerAdmissionDeadlineResultSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return WorkerAdmissionDeadlineResultSchema.safeParse(value).data;
 }
 
 export class WorkerFencedError extends Error {

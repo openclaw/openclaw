@@ -58,25 +58,6 @@ describe("embedded run session permissions", () => {
     await state?.cleanup();
   });
 
-  it("prepares the exec mode with plugin-owned permission facts", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
-
-    await runEmbeddedAgent({
-      ...createPluginHarnessRunParams(state),
-      permissionMode: "workspace",
-      runId: "run-plugin-session-permissions",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentHarnessId: "codex",
-        execOverrides: expect.objectContaining({ mode: "auto" }),
-        permissionMode: "workspace",
-        sessionRoot: state.sessionsDir(),
-      }),
-    );
-  });
-
   it.each(["requireWorkspaceOnly", "requireWritableSandbox"] as const)(
     "preserves the host's %s requirement at attempt dispatch",
     async (requirement) => {
@@ -221,6 +202,8 @@ describe("embedded run session permissions", () => {
           return retained!.request("full");
         }),
       ).rejects.toThrow("not authorized");
+      expect(attempt.permissionMode).toBe("workspace");
+      expect(attempt.sessionRoot).toBe(state.sessionsDir());
       expect(attempt.execOverrides?.mode).toBe("auto");
       return makeAttemptResult({ assistantTexts: ["Still restricted"] });
     });

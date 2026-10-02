@@ -36,7 +36,12 @@ describe("project GitHub search", () => {
       json({
         total_count: 1,
         incomplete_results: false,
-        items: [repository("openclaw/openclaw", "2026-08-10T00:00:00Z")],
+        items: [
+          {
+            ...repository("openclaw/openclaw", "2026-08-10T00:00:00Z", "  public project  "),
+            html_url: "  https://github.com/openclaw/openclaw  ",
+          },
+        ],
       }),
     );
 
@@ -48,7 +53,13 @@ describe("project GitHub search", () => {
 
     expect(result).toMatchObject({
       credential: "missing",
-      projects: [{ fullName: "openclaw/openclaw" }],
+      projects: [
+        {
+          fullName: "openclaw/openclaw",
+          webUrl: "https://github.com/openclaw/openclaw",
+          description: "public project",
+        },
+      ],
     });
     expect(fetchImpl).toHaveBeenCalledOnce();
     expect(fetchImpl.mock.calls[0]?.[0]).toContain("/search/repositories?");

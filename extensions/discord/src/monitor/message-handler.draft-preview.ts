@@ -3,6 +3,7 @@ import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
+  resolveChannelDraftStreamingChunking,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
   resolveChannelStreamingProgressNarration,
@@ -18,10 +19,10 @@ import {
   stripInlineDirectiveTagsForDelivery,
   stripReasoningTagsFromText,
 } from "openclaw/plugin-sdk/text-chunking";
-import { resolveDiscordDraftStreamingChunking } from "../draft-chunking.js";
 import { createDiscordDraftStream } from "../draft-stream.js";
 import type { RequestClient } from "../internal/discord.js";
 import { withDiscordRequestAuthority } from "../internal/request-authority.js";
+import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-adapter.js";
 import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 
 type DraftReplyReference = {
@@ -82,7 +83,9 @@ export function createDiscordDraftPreviewController(params: {
     : undefined;
   const draftChunking =
     draftStream && discordStreamMode === "block"
-      ? resolveDiscordDraftStreamingChunking(params.cfg, params.accountId)
+      ? resolveChannelDraftStreamingChunking(params.cfg, "discord", params.accountId, {
+          fallbackLimit: DISCORD_TEXT_CHUNK_LIMIT,
+        })
       : undefined;
   const shouldSplitPreviewMessages = discordStreamMode === "block";
   const draftChunker = draftChunking ? new EmbeddedBlockChunker(draftChunking) : undefined;

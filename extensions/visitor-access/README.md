@@ -2,7 +2,7 @@
 
 Visitor Access is an internal OpenClaw plugin for granting individual people
 access to <https://team.openclaw.ai>. It manages one dedicated Cloudflare Access
-allow policy containing email addresses. Grants expire after 14 days by default;
+allow policy containing email addresses or verified GitHub account selectors. Grants expire after 14 days by default;
 administrators and designated owners can refresh or revoke them with agent tools.
 Ordinary invitations check the Gateway's restricted guest policy before granting
 admission and report the person's current Gateway access separately from the
@@ -40,12 +40,15 @@ account. Enable the plugin in the source-built Gateway configuration:
 
 Enabling the plugin or changing its configuration applies through plugin hot reload;
 no Gateway restart is required.
-Do not retarget `accountId`, `appId`, or `policyName` while grants exist: the
+Do not retarget `accountId`, `appId`, `policyName`, or the OIDC account-ID mapping while grants exist: the
 durable records belong to that policy, and changing targets could leave the old
 policy granting access without expiry sweeps. Revoke grants before retargeting.
 Call `visitor_list` from an administrator or designated-owner session to check
-policy access and the current Gateway role associated with each invited email.
-The first invite creates the named policy if it does not exist.
+policy access and the current Gateway role associated with each invited target.
+The first invite creates the named policy if it does not exist. GitHub invitations
+use the existing `gateway.auth.trustedProxy.cloudflareAccessOidc` provider and
+`githubAccountIdClaim` mapping. Configure that verified sign-in mapping first;
+the plugin does not create an identity provider or add a separate login flow.
 Tools require the running Gateway service; discovery alone never opens a separate
 grant manager. Tool calls and expiry sweeps share that service's mutation queue.
 
@@ -102,26 +105,71 @@ Guest admission or restore authority for unfinished work.
 
 ## Invite, inspect, and revoke visitors
 
-| Tool             | Input                                                 | Result                                                                                     |
-| ---------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `visitor_invite` | `github` and/or `email`; optional `days` or `forever` | Adds a grant or refreshes an existing email's expiry.                                      |
-| `visitor_list`   | `{}`                                                  | Shows grant emails, GitHub labels, dates, current Gateway access, and policy/record drift. |
-| `visitor_revoke` | `github` and/or `email`                               | Removes the matching visitor; an unknown email is a clean no-op.                           |
+| Tool             | Input                                                            | Result                                                                                      |
+| ---------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `visitor_invite` | Exactly one of `github` or `email`; optional `days` or `forever` | Adds a grant or refreshes the same target's expiry.                                         |
+| `visitor_list`   | `{}`                                                             | Shows targets, verified GitHub identities, selection IDs, Gateway access, and policy drift. |
+| `visitor_revoke` | `profileId`, `grantId`, or `github`/`email`                      | Removes a person's recorded grants or cancels a selected invitation.                        |
 
 Each tool also returns structured `details`, visible to Code Mode, with the same
-information as its text: invite returns `outcome`, `email`, optional `githubLogin`,
+information as its text: invite returns `outcome`, either `email` or `githubAccountId`, `grantId`, optional `githubLogin`,
 `expiresAt`, `gatewayAccess`, and `signInUrl`; revoke returns `outcome`, `emails`,
-and optional `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+and optional `githubAccountIds` and `githubLogin`; list returns `counts`, `grants`, `unmanaged`, and `omitted`.
+Recorded list rows include `grantId` when the invitation has a qualified lifetime,
+and `profileId` when its target belongs to a current canonical profile.
+
+Each listed grant's optional `githubLogin` is the selected verified identity from
+its current Gateway profile. The directory is read again on every listing,
+including identities linked after an invitation. Without a selected verified
+account, the field is omitted and the text reports identity as unavailable.
+An unlinked target also reports first sign-in as pending. Stored invitation
+handles remain invitation metadata and are not another identity source.
+When acting on a listed row, carry its `profileId` to revoke that person's grants
+or its `grantId` to cancel that invitation; do not substitute the displayed login.
+
+GitHub revocation resolves the login to its immutable account ID, then selects
+that account's canonical profile and recorded email or GitHub grants. It never
+selects by historical invitation handles or guesses from a public GitHub email.
+Before first sign-in, it can still cancel that exact account's invitation.
+If the current directory's selected GitHub login conflicts with that account,
+revocation refuses instead of choosing a different person after login reuse.
+Use `profileId` for a known canonical person or `grantId` to cancel one invitation
+without a GitHub lookup. Explicit email needs no profile-directory lookup and
+takes precedence when supplied with a GitHub login to `visitor_revoke`.
+
+Use `visitor_revoke` with `profileId` to select the recorded Visitor grants
+associated with that person's verified email aliases and GitHub accounts in an initial profile snapshot. Use `grantId` to
+cancel only that invitation, including when first sign-in is still pending and
+no profile exists. Copy the IDs from `visitor_list` or the invite result; do not
+combine either ID with another selector. An absent grant ID is a no-op and never
+falls back to another invitation. An unavailable or merged profile ID requires
+listing again and selecting the current canonical profile. Independent staff
+roles, saved work, and existing PRs remain intact. Unmanaged policy entries still
+require an explicit email or GitHub login; `profileId` revocation does not infer ownership
+for them. GitHub revocation also removes the specifically requested account from
+the managed policy, including an unmanaged entry for that account.
+
+Revocation by profile ID or GitHub login retains the selected email aliases' original binding
+lifetimes and checks current ownership of the selected GitHub account IDs. The profile owner revalidates them at local grant commit and immediately
+before each policy request. An email reassignment, including a move away and back, stops
+remaining mutations. Already committed expirations remain ended if later cleanup
+fails. An in-flight request may already have been accepted by Cloudflare; the
+existing cleanup path reconciles ended invitations without restoring them.
+This operation requires a Gateway with profile identity preparation support.
+
+An active renewal retains its grant ID. Expiry or revocation ends that lifetime;
+a new invitation gets a different ID, so canceling an old invitation cannot
+remove a later replacement or revive previously accepted queued work.
 
 For example, invite a visitor for seven days:
 
 ```json
-{ "github": "octocat", "email": "visitor@example.com", "days": 7 }
+{ "github": "octocat", "days": 7 }
 ```
 
-Invite results identify the visitor, email, grant expiry, Gateway access, and login
-URL. A repeat invite for the same email refreshes its expiry rather than creating
-a second grant, and checks the current role again even when the email is already
+Invite results identify the target, grant expiry, Gateway access, and login
+URL. A repeat invite for the same email or GitHub account refreshes its expiry rather than creating
+a second grant, and checks the current role again even when the target is already
 in the Access policy.
 Renewal before expiry preserves the grant attached to accepted shared GitHub
 publication requests. After expiry or revocation, a new invitation cannot revive
@@ -132,30 +180,32 @@ Permanent access requires `forever: true`. Invites beyond `maxVisitors` are
 refused; revoke an existing visitor or deliberately raise the configured cap.
 
 Visitors sign in at the normal <https://team.openclaw.ai> address through Team's
-existing login. Invite the email that login verifies. The address is a sign-in
+existing login. Invite either the email that login verifies or the GitHub account
+verified through the configured OIDC mapping. The address is a sign-in
 location, not a magic link: sharing it does not grant access and the plugin does
 not send invitation email or replace the identity provider.
 
 The Gateway owns profile identity and role assignment. Invitation and listing
-resolve the email through its existing profile directory, including linked
-emails. Existing assigned roles are preserved and reported explicitly; inviting
+resolve the target through its existing profile directory, including linked
+emails and verified GitHub account IDs. Existing assigned roles are preserved and reported explicitly; inviting
 a maintainer does not demote them or describe their access as restricted. An
 invitation for an email without a profile reports first sign-in as pending.
 An existing verified identity linked during sign-in keeps its assigned role;
 use `visitor_list` afterward to inspect the resulting access.
 
-When only `github` is supplied, the plugin looks up that account's public GitHub
-email. Many accounts have no public email. In that case, ask the visitor for the
-email they use to sign in to Team and pass it explicitly. A public GitHub email
-must match that sign-in email to be useful. The plugin cannot discover private
-account emails. The optional GitHub login is invitation metadata; it does not
-verify or link a Gateway identity or grant GitHub authorship credit.
+When `github` is supplied, the plugin resolves the login to GitHub's immutable
+numeric account ID. Public email is neither required nor used, and a login rename
+does not change the grant's target. Cloudflare must verify that account's ID under
+the configured provider and claim. A known canonical profile retains its current
+role; an unknown account reports first sign-in as pending. The stored login is a
+display label, not an identity binding or GitHub authorship credit.
 
 ## Expiry and drift
 
-Grants are recorded by lowercased email in the Gateway's durable keyed store.
+Email grants retain their lowercased email keys in the Gateway's durable keyed store.
+GitHub grants use `github:<accountId>` keys in that same store.
 The Gateway requires a current grant for the plugin-managed default visitor role,
-using the person's canonical email aliases. Known non-default staff roles and
+using the person's canonical email aliases or verified GitHub account IDs. Known non-default staff roles and
 the Gateway owner remain independent of visitor grants. The store has a fixed
 cap of 500 records and does not automatically expire them: a record must remain
 until policy cleanup succeeds.
@@ -174,9 +224,9 @@ If an older Visitor writer renews a row without its grant ID, this version must
 confirm policy membership and assign a new ID again. Requalification preserves
 the recorded metadata and deadline; it does not revive an ended grant capture.
 
-An invite activates or extends its grant only after Cloudflare confirms the email
+An invite activates or extends its grant only after Cloudflare confirms the target
 is in the policy. Until then, an existing grant keeps its previous deadline. A
-new email receives an already-expired cleanup record before the provider write;
+new target receives an already-expired cleanup record before the provider write;
 that record cannot grant Gateway access, including after restart. If the provider
 rejects the write or its response is lost, the record remains so a sweep can clean
 up any admission Cloudflare may have accepted. `visitor_list` reads the policy
@@ -195,13 +245,13 @@ changes, sessions, attribution, and existing PRs are retained. Renewing an activ
 grant extends its lifetime; renewing after it ends requires fresh admission and
 does not revive canceled work.
 
-The plugin also removes expired emails from the named Cloudflare Access policy
+The plugin also removes expired targets from the named Cloudflare Access policy
 on Gateway startup and hourly. Provider cleanup is best effort and retries while
 its durable record remains. A failed cleanup or a still-valid Access login does
 not restore Gateway access after the grant ends. This plugin does not separately
 revoke Cloudflare login sessions or change independent staff admission policies.
 
-Both list and sweep compare policy emails with recorded grants. Emails added
+Both list and sweep compare policy targets with recorded grants. Targets added
 manually in the Cloudflare dashboard are reported as **unmanaged** and are never
 automatically deleted. Remove them with an explicit `visitor_revoke`. Recorded
 grants missing from the policy are reported as drift; invite again to restore
@@ -212,7 +262,7 @@ existing Access session ends or remove access supplied by a separate maintainer
 policy. Listing reports policy membership and Gateway role separately, including
 expired grants still awaiting cleanup.
 
-Each Cloudflare mutation reads the policy again before writing its full email
+Each Cloudflare mutation reads the policy again before writing its full target
 include list. No include list is cached across calls. Keep one Gateway responsible
 for this policy and avoid concurrent dashboard edits: a full-list update cannot
 merge an external edit made between that read and write.

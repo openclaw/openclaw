@@ -592,42 +592,23 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
   );
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (
-      (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
-        expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
-      2
-    );
-  }
-  return expectDefined(sorted[mid], "middle CLI benchmark sample");
-}
-
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
 function summarizeNumbers(values: number[]): SummaryStats {
+  const sorted = values.toSorted((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
   const total = values.reduce((sum, value) => sum + value, 0);
-  const avg = values.length > 0 ? total / values.length : 0;
-  const min = values.length > 0 ? Math.min(...values) : 0;
-  const max = values.length > 0 ? Math.max(...values) : 0;
   return {
-    avg,
-    p50: median(values),
-    p95: percentile(values, 95),
-    min,
-    max,
+    avg: values.length > 0 ? total / values.length : 0,
+    p50:
+      sorted.length === 0
+        ? 0
+        : sorted.length % 2 === 0
+          ? (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
+              expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
+            2
+          : expectDefined(sorted[mid], "middle CLI benchmark sample"),
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
+    min: values.length > 0 ? Math.min(...values) : 0,
+    max: values.length > 0 ? Math.max(...values) : 0,
   };
 }
 

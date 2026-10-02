@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,6 +53,49 @@ function exited(child) {
     child.once("exit", resolve);
   });
 }
+
+test("forwardBurst rejects a non-DM scenario before acquiring credentials", (context) => {
+  // openclaw-temp-dir: allow the CLI reads its scenario and loader from disk.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-forward-burst-dm-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const scenario = path.join(root, "scenario.json");
+  fs.writeFileSync(
+    scenario,
+    JSON.stringify({ actions: [{ type: "forwardBurst", text: "burst", photo: "/fixture.png" }] }),
+  );
+  const preload = path.join(root, "preload.mjs");
+  fs.writeFileSync(
+    preload,
+    `import { registerHooks } from "node:module";
+    registerHooks({load(url, context, next) {
+      if (url.endsWith("/telegram-test-credential.mjs")) return {
+        format: "module", shortCircuit: true,
+        source: 'export async function acquireTelegramTestCredential() { throw new Error("unexpected credential acquisition"); }'
+      };
+      return next(url, context);
+    }});`,
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      "--import",
+      preload,
+      new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname,
+      "--backend",
+      "qa-mock",
+      "--chat",
+      "-1001",
+      "--scenario",
+      scenario,
+      "--record",
+      path.join(root, "events.ndjson"),
+    ],
+    { cwd: root, env: {}, encoding: "utf8" },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /forwardBurst actions require --dm/);
+  assert.doesNotMatch(result.stderr, /unexpected credential acquisition/);
+});
 
 test("config patches restart before releasing their scenario barrier", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-config-patch-"));
@@ -498,6 +541,19 @@ test("failed executable launches settle before credential release", async () => 
   );
   await currentTelegramRun().close();
   assert.equal(released, true);
+});
+
+test("command completion drains readiness stderr from an inherited pipe after parent exit", async () => {
+  const result = await runCommand(
+    process.execPath,
+    [
+      "-e",
+      `require('node:child_process').spawn(process.execPath, ['-e', 'process.stderr.write("late readiness diagnostic")'], {stdio: ['ignore', 'ignore', 'inherit']}).unref();`,
+    ],
+    { cwd: process.cwd(), env: {}, timeoutMs: 1_000 },
+  );
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, "late readiness diagnostic");
 });
 
 test("failed direct probe launches settle before credential release", async () => {

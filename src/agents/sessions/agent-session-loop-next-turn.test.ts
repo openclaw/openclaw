@@ -567,40 +567,58 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(scenario.messages(session)).toEqual([""]);
   });
 
-  it("cancels only an uncommitted steering confirmation after an aborted turn", async () => {
-    const { executeTool, requests, tool } = mockAbortableQueuedRun();
-    const { session } = await createTestSession({ customTools: [tool] });
-    const prompt = session.prompt("wait for operator cancellation");
-    await vi.waitFor(() => expect(requests).toHaveLength(1));
+  it.each([true, false])(
+    "cancels only an uncommitted steer after an aborted turn (wait: %s)",
+    async (waitForTranscriptCommit) => {
+      const { executeTool, requests, tool } = mockAbortableQueuedRun();
+      const { session } = await createTestSession({ customTools: [tool] });
+      const prompt = session.prompt("wait for operator cancellation");
+      await vi.waitFor(() => expect(requests).toHaveLength(1));
 
-    await session.steer("keep unrelated steering");
-    await session.followUp("keep unrelated follow-up");
-    const delivery = steerActiveSessionWithOptionalDeliveryWait(
-      session,
-      "cancel only this steering",
-      { deliveryTimeoutMs: 10_000, waitForTranscriptCommit: true },
-    ).then(
-      () => "committed",
-      (error: unknown) => (error instanceof Error ? error.message : String(error)),
-    );
-    await vi.waitFor(() =>
-      expect(session.getSteeringMessages()).toEqual([
-        "keep unrelated steering",
+      await session.steer("keep unrelated steering");
+      await session.followUp("keep unrelated follow-up");
+      const delivery = steerActiveSessionWithOptionalDeliveryWait(
+        session,
         "cancel only this steering",
-      ]),
-    );
+        { deliveryTimeoutMs: 10_000, waitForTranscriptCommit },
+      ).then(
+        () => (waitForTranscriptCommit ? "committed" : "admitted"),
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+      await vi.waitFor(() =>
+        expect(session.getSteeringMessages()).toEqual([
+          "keep unrelated steering",
+          "cancel only this steering",
+        ]),
+      );
 
-    await Promise.all([session.abort(), prompt]);
+      if (!waitForTranscriptCommit) {
+        await expect(delivery).resolves.toBe("admitted");
+      }
+      await Promise.all([session.abort(), prompt]);
 
-    await expect(delivery).resolves.toBe(
-      "active session ended before queued steering message was committed to the transcript",
-    );
-    expect(requests).toHaveLength(1);
-    expect(executeTool).not.toHaveBeenCalled();
-    expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
-    expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
-    expect(session.agent.hasQueuedMessages()).toBe(true);
-  });
+      await expect(delivery).resolves.toBe(
+        waitForTranscriptCommit
+          ? "active session ended before queued steering message was committed to the transcript"
+          : "admitted",
+      );
+      expect(requests).toHaveLength(1);
+      expect(executeTool).not.toHaveBeenCalled();
+      expect(session.getSteeringMessages()).toEqual(["keep unrelated steering"]);
+      expect(session.getFollowUpMessages()).toEqual(["keep unrelated follow-up"]);
+      expect(session.agent.hasQueuedMessages()).toBe(true);
+      const nextRequests: Context[] = [];
+      streamMocks.streamSimple.mockImplementation((model: Model, context: Context) => {
+        nextRequests.push(context);
+        return createAssistantResultStream(
+          createAssistant(model, [{ type: "text", text: "next answer" }]),
+        );
+      });
+      await session.prompt("new legitimate turn");
+      expect(nextRequests.length).toBeGreaterThan(0);
+      expect(JSON.stringify(nextRequests)).not.toContain("cancel only this steering");
+    },
+  );
 
   it("cancels a steering confirmation after the runtime drains it", async () => {
     const requests: Context[] = [];
@@ -658,6 +676,52 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
 
     expect(requests).toHaveLength(1);
     expect(session.getSteeringMessages()).toEqual([]);
+    expect(session.agent.hasQueuedMessages()).toBe(false);
+  });
+
+  it("does not answer a steer in place of a failed request", async () => {
+    const requests: Context[] = [];
+    const requestStarted = createDeferredCore();
+    const steerAccepted = createDeferredCore();
+    let failInitialResponse: (() => void) | undefined;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      requests.push(context);
+      if (requests.length === 1) {
+        const stream = createAssistantMessageEventStream();
+        failInitialResponse = () => {
+          const message = {
+            ...createAssistant(activeModel, [], "error"),
+            errorMessage: "Unknown error (no error details in response)",
+          };
+          stream.push({ type: "error", reason: "error", error: message });
+          stream.end();
+        };
+        requestStarted.resolve();
+        return stream;
+      }
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "answered only the steer" }]),
+      );
+    });
+    const { session } = await createTestSession();
+    const prompt = session.prompt("first question");
+    await requestStarted.promise;
+    const delivery = steerActiveSessionWithOptionalDeliveryWait(session, "second question", {
+      deliveryTimeoutMs: 10_000,
+      waitForTranscriptCommit: true,
+      onQueueAccepted: () => steerAccepted.resolve(),
+    });
+    await steerAccepted.promise;
+    expect(session.getSteeringMessages()).toEqual(["second question"]);
+
+    failInitialResponse?.();
+    // The run owner retries the failed request; the caller re-queues the steer.
+    await expect(delivery).rejects.toThrow(
+      "active session ended before queued steering message was committed",
+    );
+    await prompt;
+
+    expect(requests).toHaveLength(1);
     expect(session.agent.hasQueuedMessages()).toBe(false);
   });
 

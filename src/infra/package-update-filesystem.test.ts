@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
@@ -167,6 +168,60 @@ it("keeps the live launcher intact when its replacement copy is interrupted", as
   copy.mockRestore();
   await copyPackagePathEntry(source, destination);
   expect(await fs.readFile(destination, "utf8")).toBe("previous launcher\n");
+});
+
+it("keeps the live launcher intact when an ordinary copy cannot sync its staged file", async () => {
+  const root = await fs.realpath(dirs.make("package-launcher-copy-sync-"));
+  const source = path.join(root, "source");
+  const destination = path.join(root, "destination");
+  await fs.writeFile(source, "replacement launcher\n");
+  await fs.writeFile(destination, "live launcher\n");
+  const failure = Object.assign(new Error("staged launcher sync failed"), { code: "EIO" });
+  let refused = 0;
+  const refuseStagedFileSync = (fd: number) => {
+    const identity = fsSync.fstatSync(fd, { bigint: true });
+    if (!identity.isFile()) {
+      return;
+    }
+    const staged = fsSync
+      .readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith(".openclaw-shim-stage-"))
+      .some((directory) =>
+        fsSync.readdirSync(path.join(root, directory.name)).some((entry) => {
+          const current = fsSync.lstatSync(path.join(root, directory.name, entry), {
+            bigint: true,
+          });
+          return current.isFile() && current.dev === identity.dev && current.ino === identity.ino;
+        }),
+      );
+    if (staged) {
+      refused++;
+      throw failure;
+    }
+  };
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    const sync = handle.sync.bind(handle);
+    vi.spyOn(handle, "sync").mockImplementation(async () => {
+      refuseStagedFileSync(handle.fd);
+      await sync();
+    });
+    return handle;
+  });
+  // Native fs-safe copies flush raw descriptors; the fallback uses FileHandle.sync.
+  const fsync = fsSync.fsyncSync;
+  vi.spyOn(fsSync, "fsyncSync").mockImplementation((fd) => {
+    refuseStagedFileSync(fd);
+    fsync(fd);
+  });
+
+  await expect(copyPackagePathEntry(source, destination)).rejects.toHaveProperty("cause", failure);
+
+  expect(refused).toBe(1);
+  expect(await fs.readFile(source, "utf8")).toBe("replacement launcher\n");
+  expect(await fs.readFile(destination, "utf8")).toBe("live launcher\n");
+  expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
 });
 
 it("stages a complete directory with independent hardlinked files and preserved modes", async () => {
@@ -647,3 +702,57 @@ it.each([
     await expect(fs.lstat(staging)).rejects.toHaveProperty("code", "ENOENT");
   }
 });
+
+it.each(["publish", "revoke", "replace"] as const)(
+  "preserves live ownership through the journal publication hook: %s",
+  async (action) => {
+    const root = dirs.make("package-journal-publication-");
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const retained = path.join(root, "retained");
+    await fs.writeFile(source, "sealed launcher");
+    await fs.writeFile(destination, "live launcher");
+    const refusal = new Error("journal owner revoked");
+    let revoked = false;
+    const beforePublish = vi.fn((staged: string) => {
+      expect(fsSync.readFileSync(staged, "utf8")).toBe("sealed launcher");
+      expect(fsSync.readFileSync(destination, "utf8")).toBe("live launcher");
+      if (action === "revoke") {
+        revoked = true;
+      } else if (action === "replace") {
+        fsSync.renameSync(destination, retained);
+        fsSync.writeFileSync(destination, "foreign launcher");
+      }
+    });
+    const result = copyPackagePathEntry(
+      source,
+      destination,
+      () => {
+        if (revoked) {
+          throw refusal;
+        }
+      },
+      beforePublish,
+    );
+    if (action === "publish") {
+      await expect(result).resolves.toEqual({ ownershipPreserved: true });
+    } else if (action === "revoke") {
+      await expect(result).rejects.toBe(refusal);
+    } else {
+      await expect(result).rejects.toHaveProperty("code", "path-mismatch");
+      expect(await fs.readFile(retained, "utf8")).toBe("live launcher");
+    }
+    expect(beforePublish).toHaveBeenCalledOnce();
+    expect(await fs.readFile(source, "utf8")).toBe("sealed launcher");
+    expect(await fs.readFile(destination, "utf8")).toBe(
+      action === "publish"
+        ? "sealed launcher"
+        : action === "revoke"
+          ? "live launcher"
+          : "foreign launcher",
+    );
+    expect((await fs.readdir(root)).toSorted()).toEqual(
+      action === "replace" ? ["destination", "retained", "source"] : ["destination", "source"],
+    );
+  },
+);

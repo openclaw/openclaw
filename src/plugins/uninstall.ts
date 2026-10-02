@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isMissingPathError } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import { readOpenClawManagedNpmRootOverrides } from "../infra/npm-managed-root.js";
 import { pathMayExistSync } from "../infra/path-existence.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
@@ -521,8 +522,7 @@ export async function applyPluginUninstallDirectoryRemoval(
   if (removal.cleanup?.kind === "npm" && npmCleanupManifestExists && usesLegacySharedNpmRoot) {
     assertPersistentApply();
     const uninstall = await runCommandWithTimeout(
-      [
-        "npm",
+      resolveNpmCommand([
         "uninstall",
         "--loglevel=error",
         "--legacy-peer-deps",
@@ -530,7 +530,7 @@ export async function applyPluginUninstallDirectoryRemoval(
         "--no-audit",
         "--no-fund",
         removal.cleanup.packageName,
-      ],
+      ]),
       {
         cwd: removal.cleanup.npmRoot,
         timeoutMs: 300_000,

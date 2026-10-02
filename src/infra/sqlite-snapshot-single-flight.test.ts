@@ -1,6 +1,114 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { prepareSingleFlightSqliteSnapshot } from "./sqlite-snapshot-single-flight.js";
+import {
+  createRetainedOperation,
+  flatMapRetainedOperation,
+  mapRetainedOperation,
+} from "./retained-operation.js";
+import type {
+  PreparedSqliteReadOnlyLocation,
+  RetainedPreparedSqliteReadOnlyLocation,
+} from "./sqlite-readonly-location.types.js";
+import {
+  prepareSingleFlightSqliteSnapshot,
+  startSingleFlightSqliteSnapshot,
+} from "./sqlite-snapshot-single-flight.js";
+
+it("does not replay a synchronously refused producer even if a second attempt could succeed", () => {
+  const failure = new Error("snapshot producer admission refused");
+  let attempts = 0;
+  const pending = startSingleFlightSqliteSnapshot(
+    "refused-producer.sqlite",
+    "retained-test",
+    () => {
+      attempts++;
+      if (attempts === 1) {
+        throw failure;
+      }
+      const unexpected = createRetainedOperation<
+        PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
+      >(() => {});
+      unexpected.resolve({
+        location: "untracked-second-snapshot.sqlite",
+        cleanup: () => true,
+        cleanupAsync: async () => true,
+        startCleanup() {
+          const cleanup = createRetainedOperation<boolean>(() => {});
+          cleanup.resolve(true);
+          return cleanup.operation;
+        },
+      });
+      return {
+        ...unexpected.operation,
+        startClose: () =>
+          flatMapRetainedOperation(unexpected.operation, (prepared) =>
+            mapRetainedOperation(prepared.startCleanup(), (cleaned) => {
+              if (!cleaned) {
+                throw new Error("Unexpected snapshot cleanup failed");
+              }
+            }),
+          ),
+      };
+    },
+  );
+  pending.service();
+  expect(pending.read()).toEqual({ status: "rejected", error: failure });
+  expect(attempts).toBe(1);
+});
+
+it("services shared production and final cleanup without a host microtask turn", () => {
+  const production = createRetainedOperation<
+    PreparedSqliteReadOnlyLocation & RetainedPreparedSqliteReadOnlyLocation
+  >(() => {});
+  const removal = createRetainedOperation<boolean>(() => {});
+  const producer = {
+    ...production.operation,
+    startClose: () =>
+      mapRetainedOperation(removal.operation, (cleaned) => {
+        if (!cleaned) {
+          throw new Error("Retained producer cleanup failed");
+        }
+      }),
+  };
+  const controller = new AbortController();
+  const reason = new Error("one retained waiter stopped");
+  const cancelled = startSingleFlightSqliteSnapshot(
+    "retained-progress.sqlite",
+    "retained-test",
+    () => producer,
+    controller.signal,
+  );
+  const surviving = startSingleFlightSqliteSnapshot(
+    "retained-progress.sqlite",
+    "retained-test",
+    () => producer,
+  );
+  controller.abort(reason);
+  expect(cancelled.read()).toEqual({ status: "rejected", error: reason });
+  expect(surviving.read()).toEqual({ status: "pending" });
+  production.resolve({
+    location: "retained-snapshot.sqlite",
+    cleanup() {
+      throw new Error("A retained lease cannot substitute synchronous native cleanup");
+    },
+    cleanupAsync() {
+      throw new Error("A retained lease cannot depend on a Promise-only cleanup path");
+    },
+    startCleanup: () => removal.operation,
+  });
+  surviving.service();
+  const ready = surviving.read();
+  expect(ready.status).toBe("fulfilled");
+  if (ready.status !== "fulfilled") {
+    throw new Error("The retained snapshot did not become available");
+  }
+  const cleanup = ready.value.startCleanup();
+  cleanup.service();
+  expect(cleanup.read()).toEqual({ status: "pending" });
+  removal.resolve(true);
+  cleanup.service();
+  expect(cleanup.read()).toEqual({ status: "fulfilled", value: true });
+});
 
 it.each([1, 2])("withdraws %i cancelled waiters before admitting snapshot work", async (count) => {
   let copies = 0;

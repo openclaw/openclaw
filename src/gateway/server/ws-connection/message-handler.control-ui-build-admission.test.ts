@@ -46,6 +46,7 @@ vi.mock("../../../config/config.js", () => ({
 }));
 vi.mock("../../../config/io.js", () => ({ getRuntimeConfig: () => gatewayConfig }));
 vi.mock("../../../infra/system-presence.js", () => ({
+  commitPresence: vi.fn(),
   upsertPresence: upsertPresenceMock,
   listSystemPresence: vi.fn(() => []),
 }));

@@ -63,6 +63,7 @@ export async function handleAgentExecutionError(params: {
 }): Promise<ErrorAction> {
   const turn = params.turn;
   const err = params.error;
+  const useHeartbeatFailureCopy = turn.opts?.useHeartbeatFailureCopy;
   // A failed candidate leaves its backstop pending; settlement takes it before later work.
   // This keeps session-override failures from being mislabeled as model failures.
   const postCompactionModelFailure =
@@ -175,6 +176,7 @@ export async function handleAgentExecutionError(params: {
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
         isHeartbeat: turn.isHeartbeat,
+        useHeartbeatFailureCopy,
       },
     );
     const text =
@@ -260,6 +262,7 @@ export async function handleAgentExecutionError(params: {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
             isHeartbeat: turn.isHeartbeat,
+            useHeartbeatFailureCopy,
             replayPrevented,
             failoverFacts,
           },
@@ -278,7 +281,7 @@ export async function handleAgentExecutionError(params: {
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
           ? renderControlUiAgentFailureCopy(message)
-          : turn.isHeartbeat
+          : (useHeartbeatFailureCopy ?? turn.isHeartbeat)
             ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
             : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
   return await settleFailure(

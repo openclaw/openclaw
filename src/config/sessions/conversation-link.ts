@@ -15,5 +15,6 @@ export function normalizeSessionConversationLink(
   if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")) {
     return undefined;
   }
-  return { url: parsed.href, label };
+  // Parsing percent-encodes Unicode; the stored URL must fit the Gateway row.
+  return parsed.href.length <= 2048 ? { url: parsed.href, label } : undefined;
 }

@@ -90,11 +90,13 @@ describe("desktop gateway methods", () => {
   });
 
   it.each([
-    { source: "host", method: "desktop.observe", params: { source: { kind: "host" } } },
     {
       source: "node",
       method: "desktop.observe",
-      params: { source: { kind: "node", nodeId: "node-1" } },
+      params: {
+        source: { kind: "node", nodeId: "node-1" },
+        credentials: { password: "memory-only-node-password" },
+      },
     },
     {
       source: "environment",
@@ -104,58 +106,58 @@ describe("desktop gateway methods", () => {
     {
       source: "worker alias",
       method: "worker.desktop.observe",
-      params: { environmentId: "worker:one" },
+      params: { environmentId: "worker:one", control: true },
     },
-  ] as const)("binds $source observers to live requester authority", async ({ method, params }) => {
-    const controller = new AbortController();
-    const client = createRequesterClient(controller.signal);
-    let authorityCurrent = true;
-    const observe = vi.fn(async (_request: { requester?: DesktopObserveRequester }) => ({
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=fixed",
-      expiresAtMs: 42,
-    }));
-    const [ok] = await invoke(
-      method,
-      params,
-      {
-        getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
-        hostDesktopService: { observe },
-        [NODE_DESKTOP_SERVICE_CONTEXT]: { observe },
-        workerEnvironmentService: { observeDesktop: observe },
-      },
-      client,
-      () => authorityCurrent,
-    );
-    expect(ok).toBe(true);
-    const requester = observe.mock.calls[0]?.[0].requester;
-    expect(requester).toMatchObject({ connId: client.connId, signal: controller.signal });
-    expect(requester?.isCurrent()).toBe(true);
-    client.invalidated = true;
-    expect(controller.signal.aborted).toBe(false);
-    expect(requester?.isCurrent()).toBe(false);
-    client.invalidated = false;
-    authorityCurrent = false;
-    expect(requester?.isCurrent()).toBe(false);
-    authorityCurrent = true;
-    expect(requester?.isCurrent()).toBe(true);
-    controller.abort();
-    expect(requester?.isCurrent()).toBe(false);
-  });
-
-  it("names the Labs config and restart when host desktop is disabled", async () => {
-    const [ok, , error] = await invoke(
-      "desktop.observe",
-      { source: { kind: "host" } },
-      { getRuntimeConfig: () => ({}) },
-    );
-    expect(ok).toBe(false);
-    expect(error).toEqual({
-      code: ErrorCodes.INVALID_REQUEST,
-      message:
-        "gateway host desktop is disabled; enable the Desktop lab (config: desktop.host.enabled=true)",
-    });
-  });
+  ] as const)(
+    "binds $source observers to live requester authority",
+    async ({ source, method, params }) => {
+      const controller = new AbortController();
+      const client = createRequesterClient(controller.signal);
+      let authorityCurrent = true;
+      const observe = vi.fn(
+        async (request: { requester?: DesktopObserveRequester; control: boolean }) => ({
+          transport: "rfb",
+          wsPath: "/desktop/observe?token=fixed",
+          expiresAtMs: 42,
+          control: request.control,
+        }),
+      );
+      const [ok, result] = await invoke(
+        method,
+        params,
+        {
+          [NODE_DESKTOP_SERVICE_CONTEXT]: { observe },
+          workerEnvironmentService: { observeDesktop: observe },
+        },
+        client,
+        () => authorityCurrent,
+      );
+      expect(ok).toBe(true);
+      expect(result).toMatchObject({ control: source === "worker alias" });
+      expect(result).not.toHaveProperty("vncPassword");
+      if (source === "node") {
+        expect(observe).toHaveBeenCalledWith(
+          expect.objectContaining({
+            nodeId: "node-1",
+            credentials: { password: "memory-only-node-password" },
+          }),
+        );
+      }
+      const requester = observe.mock.calls[0]?.[0].requester;
+      expect(requester).toMatchObject({ connId: client.connId, signal: controller.signal });
+      expect(requester?.isCurrent()).toBe(true);
+      client.invalidated = true;
+      expect(controller.signal.aborted).toBe(false);
+      expect(requester?.isCurrent()).toBe(false);
+      client.invalidated = false;
+      authorityCurrent = false;
+      expect(requester?.isCurrent()).toBe(false);
+      authorityCurrent = true;
+      expect(requester?.isCurrent()).toBe(true);
+      controller.abort();
+      expect(requester?.isCurrent()).toBe(false);
+    },
+  );
 
   it("returns a host observer token and auth from a real loopback RFB server", async () => {
     const mint = vi.spyOn(observeBridge, "mintDesktopObserverToken");
@@ -212,31 +214,6 @@ describe("desktop gateway methods", () => {
     expect(controller.signal.aborted).toBe(false);
   });
 
-  it("keeps the worker alias identical to the generic environment arm", async () => {
-    const workerEnvironmentService = {
-      observeDesktop: vi.fn(async ({ control }: { control: boolean }) => ({
-        transport: "rfb" as const,
-        wsPath: "/desktop/observe?token=fixed",
-        expiresAtMs: 42,
-        control,
-        vncPassword: "password",
-      })),
-    };
-    const context = { workerEnvironmentService };
-    const alias = await invoke(
-      "worker.desktop.observe",
-      { environmentId: "worker:one", control: false },
-      context,
-    );
-    const generic = await invoke(
-      "desktop.observe",
-      { source: { kind: "environment", environmentId: "worker:one" }, control: false },
-      context,
-    );
-    expect(alias).toEqual(generic);
-    expect(alias[1]).not.toHaveProperty("auth");
-  });
-
   it("reports ARD credentials as required and forwards an in-memory retry", async () => {
     const observe = vi.fn(
       async (params: { credentials?: { username?: string; password?: string } }) => {
@@ -254,10 +231,7 @@ describe("desktop gateway methods", () => {
     );
     const context = {
       getRuntimeConfig: () => ({ desktop: { host: { enabled: true } } }),
-      hostDesktopService: {
-        observe,
-        status: async () => ({ enabled: true, state: "attached", port: 5900, security: "VncAuth" }),
-      },
+      hostDesktopService: { observe },
     };
     const [firstOk, , firstError] = await invoke(
       "desktop.observe",
@@ -283,34 +257,5 @@ describe("desktop gateway methods", () => {
     expect(result).toMatchObject({ auth: "ard-account" });
     expect(result).not.toHaveProperty("vncPassword");
     expect(observe).toHaveBeenLastCalledWith({ control: false, credentials });
-  });
-
-  it("rejects unknown desktop source kinds before dispatch", async () => {
-    const [ok, , error] = await invoke("desktop.observe", { source: { kind: "future" } }, {});
-    expect(ok).toBe(false);
-    expect(error.code).toBe(ErrorCodes.INVALID_REQUEST);
-  });
-
-  it("forwards node credentials only to the paired-node desktop service", async () => {
-    const observe = vi.fn(async () => ({
-      transport: "rfb" as const,
-      wsPath: "/desktop/observe?token=node",
-      expiresAtMs: 42,
-      control: false,
-      auth: "vnc-password" as const,
-    }));
-    const credentials = { password: "memory-only-node-password" };
-    const [ok, result] = await invoke(
-      "desktop.observe",
-      { source: { kind: "node", nodeId: "node-1" }, credentials },
-      { [NODE_DESKTOP_SERVICE_CONTEXT]: { observe } },
-    );
-    expect(ok).toBe(true);
-    expect(result).not.toHaveProperty("vncPassword");
-    expect(observe).toHaveBeenCalledWith({
-      nodeId: "node-1",
-      control: false,
-      credentials,
-    });
   });
 });

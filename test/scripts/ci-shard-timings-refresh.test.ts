@@ -41,6 +41,7 @@ const job = {
   started_at: "2026-09-01T01:00:00Z",
   completed_at: "2026-09-01T01:15:00Z",
   labels: ["ubuntu-24.04"],
+  steps: [{ name: "Run Node test shard" }],
 };
 function log(shard_name: string, timing_key?: string, files?: string[]) {
   const group = {
@@ -96,7 +97,7 @@ function execute(
 }
 
 describe("release shard timing refresh CLI", () => {
-  it("writes hosted full-job wall, preserves unrelated costs, and ignores failed or self-hosted jobs", () => {
+  it("writes hosted shard walls, preserves unrelated costs, and skips other jobs", () => {
     const { result, bytes } = execute({
       jobs: [
         job,
@@ -104,8 +105,19 @@ describe("release shard timing refresh CLI", () => {
         { ...job, id: 3, labels: ["ubuntu-24.04", "self-hosted"] },
         { ...job, id: 4, labels: ["blacksmith-4vcpu-ubuntu-2404"] },
         { ...job, id: 5 },
+        {
+          ...job,
+          id: 6,
+          name: "checks-node-compat-node24",
+          steps: [{ name: "Run Node 24 minimum compatibility" }],
+        },
+        { ...job, id: 7, name: "checks-node-compact-small-1" },
       ],
-      logs: { "1": log("fixture"), "5": log("retained", "release-full-retained") },
+      logs: {
+        "1": log("fixture"),
+        "5": log("retained", "release-full-retained"),
+        "6": "2026-09-01T01:04:00Z Node 24 compatibility succeeded\n",
+      },
     });
     expect(result.status, result.stderr).toBe(0);
     const written = JSON.parse(bytes);
@@ -139,6 +151,32 @@ describe("release shard timing refresh CLI", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(bytes).compactGroupSeconds.github["release-full-fixture"]).toBe(900);
   });
+
+  it.each([
+    {
+      label: "missing descriptor",
+      log: "2026-09-01T01:04:00Z [shard:fixture] end (exit 0)\n",
+      error: "one unambiguous shard descriptor",
+    },
+    {
+      label: "ambiguous descriptors",
+      log: log("fixture") + log("other"),
+      error: "one unambiguous shard descriptor",
+    },
+    {
+      label: "unsuccessful shard span",
+      log: log("fixture").replace("end (exit 0)", "end (exit 1)"),
+      error: "successful matching shard span",
+    },
+  ])(
+    "rejects a planned shard with $label without changing timing bytes",
+    ({ log: shardLog, error }) => {
+      const { result, before, bytes } = execute({ logs: { "1": shardLog } });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+      expect(bytes).toBe(before);
+    },
+  );
 
   it.each([
     { label: "run retry", after: { ...run, run_attempt: 2 } },

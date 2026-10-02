@@ -34,7 +34,6 @@ type TelegramOutboundMediaPlan = {
   isVideoNote: boolean;
   fileName: string;
   file: InputFile;
-  caption?: string;
   htmlCaption?: string;
   plainCaption?: string;
   followUpText?: string;
@@ -125,7 +124,6 @@ export function prepareTelegramOutboundMedia(params: {
     isVideoNote,
     fileName,
     file: new InputFile(params.media.buffer, fileName),
-    caption,
     htmlCaption,
     plainCaption: resolveTelegramPlainCaption(
       caption && params.textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption,
@@ -169,11 +167,7 @@ export function resolveTelegramOutboundMediaSenders(params: {
   let label: TelegramOutboundMediaKind = "document";
   if (params.plan.isGif && params.plan.deliveryKind !== "document") {
     label = "animation";
-  } else if (
-    params.plan.deliveryKind === "image" &&
-    !params.plan.isGif &&
-    params.sendImageAsPhoto !== false
-  ) {
+  } else if (params.plan.deliveryKind === "image" && params.sendImageAsPhoto !== false) {
     label = "photo";
   } else if (params.plan.deliveryKind === "video") {
     label = params.plan.isVideoNote ? "video_note" : "video";

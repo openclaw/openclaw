@@ -1,4 +1,7 @@
-import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  withSessionEntryReadOnlyInWorker,
+  type SessionEntryReadWorkerOwner,
+} from "../../config/sessions/session-entry-read-runtime.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -26,11 +29,23 @@ export type AcpSessionEntryReadInput = AcpSessionReadContextInput & {
 export async function readAcpSessionEntryAsync(
   params: AcpSessionEntryReadInput,
 ): Promise<AcpSessionStoreEntry | null> {
+  return withAcpSessionEntryRead(params, (entry) => entry);
+}
+
+/** The consuming owner can verify the exact selected physical source before custody ends. */
+export async function withAcpSessionEntryRead<T>(
+  params: AcpSessionEntryReadInput,
+  consume: (
+    entry: AcpSessionStoreEntry | null,
+    owner: SessionEntryReadWorkerOwner | undefined,
+  ) => T | Promise<T>,
+  options: { currentMetadata?: true } = {},
+): Promise<T> {
   const input = { ...params };
   const sessionKey = input.sessionKey.trim();
   input.assertCurrent?.();
   if (!sessionKey) {
-    return null;
+    return consume(null, undefined);
   }
   const { cfg, env, databasePath, assertCurrent } = await captureAcpSessionReadContext(input);
   assertCurrent();
@@ -39,39 +54,51 @@ export async function readAcpSessionEntryAsync(
   if (isIncognitoSessionKey(storeSessionKey)) {
     // Incognito retains its process-held native owner and nonyielding join until its cutover.
     const stored = readSessionEntryFromStore({ ...input, sessionKey, cfg, env });
-    const acp = readAcpSessionMetaForEntry({
-      sessionKey: stored.storeSessionKey,
-      agentId: stored.agentId,
-      cfg,
-      entry: stored.entry,
-      env,
-      databasePath,
-    });
+    const acp = readAcpSessionMetaForEntry(
+      {
+        sessionKey: stored.storeSessionKey,
+        agentId: stored.agentId,
+        cfg,
+        entry: stored.entry,
+        env,
+        databasePath,
+      },
+      { current: options.currentMetadata },
+    );
     assertCurrent();
-    return { ...target, ...stored, storePath: target.storePath, sessionKey, acp };
+    return consume(
+      { ...target, ...stored, storePath: target.storePath, sessionKey, acp },
+      { kind: "native", assertCurrent },
+    );
   }
   return await withSessionEntryReadOnlyInWorker(
     { agentId: target.agentId, storePath: target.storePath, sessionKey: storeSessionKey, env },
     assertCurrent,
-    async (read) => {
+    async (read, owner) => {
       const entry = read.ok ? read.value : undefined;
-      const [acp] = await readAcpSessionMetaForEntries({
-        entries: [{ sessionKey: storeSessionKey, agentId: target.agentId, entry }],
-        cfg,
-        env,
-        databasePath,
-      });
+      const [acp] = await readAcpSessionMetaForEntries(
+        {
+          entries: [{ sessionKey: storeSessionKey, agentId: target.agentId, entry }],
+          cfg,
+          env,
+          databasePath,
+        },
+        { current: options.currentMetadata },
+      );
       assertCurrent();
-      return {
-        cfg,
-        agentId: target.agentId,
-        storePath: target.storePath,
-        sessionKey,
-        storeSessionKey,
-        entry,
-        acp: acp ?? undefined,
-        ...(!read.ok ? { storeReadFailed: true } : {}),
-      };
+      return consume(
+        {
+          cfg,
+          agentId: target.agentId,
+          storePath: target.storePath,
+          sessionKey,
+          storeSessionKey,
+          entry,
+          acp: acp ?? undefined,
+          ...(!read.ok ? { storeReadFailed: true } : {}),
+        },
+        owner,
+      );
     },
   );
 }

@@ -8,16 +8,18 @@ import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budge
 import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import type { PortListener } from "../infra/ports-types.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { parseWindowsNativeCommandLine } from "../process/windows-command-line.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sleep } from "../utils.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
-import { parseCmdScriptCommandLine } from "./cmd-argv.js";
 import { NODE_SERVICE_KIND } from "./constants.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { readScheduledTaskCommand, resolveTaskName } from "./schtasks-layout.js";
@@ -92,8 +94,9 @@ export function findInstalledProcessPid(
     if (!commandLine) {
       continue;
     }
-    const argv = parseCmdScriptCommandLine(entry.CommandLine ?? "");
+    const argv = parseWindowsNativeCommandLine(entry.CommandLine ?? "");
     if (
+      !argv ||
       !matchesProcess(argv) ||
       parseTcpPortFromArgs(argv) !== port ||
       !matchesInstalledProgramArguments(comparableArguments(argv), installedArguments)
@@ -180,7 +183,7 @@ export function resolveGatewayListenerPids(listeners: PortListener[]): number[] 
       listeners.flatMap((listener) =>
         typeof listener.pid === "number" &&
         listener.commandLine &&
-        classifyOpenClawArgv(parseCmdScriptCommandLine(listener.commandLine), {
+        classifyOpenClawArgv(parseWindowsNativeCommandLine(listener.commandLine) ?? [], {
           command: "gateway",
           pid: listener.pid,
         }).kind === "openclaw"
@@ -362,7 +365,7 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
       continue;
     }
     const argv = listener.commandLine
-      ? parseCmdScriptCommandLine(listener.commandLine)
+      ? parseWindowsNativeCommandLine(listener.commandLine)
       : process.platform === "win32"
         ? readWindowsProcessArgsSync(listener.pid)
         : null;
@@ -379,37 +382,6 @@ async function resolveLegacyScheduledTaskOwnedGatewayPids(
     }
   }
   return Array.from(ownedPids);
-}
-
-export async function describeUnverifiedPortListeners(
-  port: number,
-  probeHosts?: readonly string[],
-): Promise<string> {
-  const diagnostics = await inspectPortUsage(port, probeHosts ? { probeHosts } : undefined).catch(
-    () => null,
-  );
-  const listeners = diagnostics?.status === "busy" ? diagnostics.listeners : [];
-  if (!listeners || listeners.length === 0) {
-    return "";
-  }
-  const described = listeners.map((listener) => {
-    const pid = typeof listener.pid === "number" ? listener.pid : null;
-    const argv = listener.commandLine ? parseCmdScriptCommandLine(listener.commandLine) : null;
-    const identity = argv
-      ? classifyOpenClawArgv(argv, { command: "gateway" }).kind === "openclaw"
-        ? "openclaw gateway"
-        : "not an openclaw gateway"
-      : "argv unavailable";
-    const name = listener.command ?? "unknown";
-    return pid ? `pid ${pid} (${name}, ${identity})` : `${name} (${identity})`;
-  });
-  const pids = listeners
-    .map((listener) => listener.pid)
-    .filter((pid): pid is number => typeof pid === "number");
-  const hint = pids.length
-    ? ` If one of these is this gateway, stop it with "Stop-Process -Id <pid> -Force" and retry.`
-    : "";
-  return ` Remaining listener(s): ${described.join(", ")}. If gateway.cmd redirects output, quote the entire redirection target, including environment variables.${hint}`;
 }
 
 /** A completed native snapshot distinguishes no match from unavailable inspection. */
@@ -544,7 +516,15 @@ export async function terminateScheduledTaskGatewayListeners(
     return [];
   }
   const exclusion = ownership.acquireTerminationExclusion();
-  try {
+  // Authority checks read shared state while an ownerless Task is excluded.
+  // Keep those reads admitted across settlement awaits, then drain before release.
+  const resources = exclusion
+    ? createOpenClawDatabaseMaintenanceScope({
+        assertOwnerCurrent: exclusion.assertCurrent,
+        assertDatabaseAccess: exclusion.assertDatabaseAccess,
+      })
+    : undefined;
+  const terminate = async () => {
     const settle = stop && windows ? prepareScheduledTaskSettlement(resolveTaskName(env)) : null;
     try {
       const owner = ownership.owner;
@@ -622,14 +602,26 @@ export async function terminateScheduledTaskGatewayListeners(
       }
     }
     return ownership.pids;
+  };
+  const errors: unknown[] = [];
+  try {
+    return await (resources ? resources.run(terminate) : terminate());
   } catch (error) {
+    errors.push(error);
     if (!stop || error !== ownership.changed) {
       throw error;
     }
     stop.warn("Gateway replacement or unverified process preserved during stop.");
     return null;
   } finally {
-    exclusion?.release();
+    // Failed drainage is terminal for native CLI control; retain exclusion until process exit.
+    try {
+      await resources?.close();
+      exclusion?.release();
+    } catch (error) {
+      errors.push(error);
+      throwSqliteLifecycleErrors(errors, "Scheduled Task stop and state cleanup failed");
+    }
   }
 }
 

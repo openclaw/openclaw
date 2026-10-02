@@ -6,10 +6,10 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
+import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
+import { resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramResolvedGroupConfig } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
@@ -94,11 +94,7 @@ export type TelegramCommandDispatch = TelegramCommandExecutorParams &
     telegramDeps: TelegramNativeCommandDeps;
     runtimeCfg: OpenClawConfig;
     runtimeTelegramCfg: TelegramAccountConfig;
-    turnSettings: ReturnType<typeof resolveTelegramMessageTurnSettings>;
     threadParams: ReturnType<typeof buildTelegramThreadParams>;
-    route: ReturnType<typeof inspectTelegramConversationRoute>["route"];
-    mediaLocalRoots: readonly string[] | undefined;
-    targetSessionKey: string;
     nativeCommandRuntime: TelegramNativeCommandRuntime;
     buildDeliveryBaseOptions: (params?: {
       sessionKeyForInternalHooks?: string;
@@ -307,14 +303,11 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+  const { effectiveAllow: dmAllow } = await resolveTelegramDmAllow({
     cfg,
     allowFrom: groupAllowOverride ?? params.allowFrom,
     accountId,
     senderId,
-  });
-  const dmAllow = normalizeDmAllowFromWithStore({
-    allowFrom: expandedDmAllowFrom,
     storeAllowFrom: isGroup ? [] : storeAllowFrom,
     dmPolicy: effectiveDmPolicy,
   });
@@ -391,7 +384,7 @@ export async function prepareTelegramCommandDispatch(
   if (!auth) {
     return null;
   }
-  const { route, bindingMode, targetSessionKey } = auth;
+  const { route, bindingMode } = auth;
   const nativeCommandRuntime = await loadTelegramNativeCommandRuntime();
   auth.assertOwnerCurrent?.();
   await touchTelegramConversationRoute(auth.inspectedRoute);
@@ -459,12 +452,8 @@ export async function prepareTelegramCommandDispatch(
     telegramDeps,
     runtimeCfg,
     runtimeTelegramCfg,
-    turnSettings,
     ...auth,
     threadParams: buildTelegramThreadParams(auth.threadSpec),
-    route,
-    mediaLocalRoots,
-    targetSessionKey,
     nativeCommandRuntime,
     buildDeliveryBaseOptions,
     loadDeliveryRuntime: loadTelegramNativeCommandDeliveryRuntime,

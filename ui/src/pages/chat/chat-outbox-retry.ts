@@ -14,7 +14,7 @@ type RetryState = {
   timers: Map<string, RetryTimer>;
 };
 
-const RETRY_DEFAULT_MS = 500;
+export const CHAT_OUTBOX_RETRY_DEFAULT_MS = 500;
 const RETRY_MAX_MS = 30_000;
 const retryStates = new WeakMap<GatewayBrowserClient, RetryState>();
 
@@ -36,7 +36,7 @@ export function retryableGatewayDelayMs(err: unknown): number | null {
   if (!(err instanceof GatewayRequestError) || !err.retryable) {
     return null;
   }
-  return Math.min(Math.max(err.retryAfterMs ?? RETRY_DEFAULT_MS, 100), RETRY_MAX_MS);
+  return Math.min(Math.max(err.retryAfterMs ?? CHAT_OUTBOX_RETRY_DEFAULT_MS, 100), RETRY_MAX_MS);
 }
 
 export function scheduleChatOutboxRetry(

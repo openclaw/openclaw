@@ -180,17 +180,15 @@ export async function cleanupAmbientCommentTypingReaction(params: {
     return false;
   }
   const key = buildCommentTypingReactionKey({
-    fileToken: target.fileToken,
-    fileType: target.fileType,
+    ...target,
     replyId,
   });
   return cleanupCommentTypingReactionByKey({
     key,
     performDelete: () =>
       requestCommentTypingReactionWithClient({
+        ...target,
         client: params.client,
-        fileToken: target.fileToken,
-        fileType: target.fileType,
         replyId,
         action: "delete",
         runtime: params.runtime,
@@ -209,8 +207,7 @@ export function createCommentTypingReactionLifecycle(params: {
 }) {
   const key = params.replyId?.trim()
     ? buildCommentTypingReactionKey({
-        fileToken: params.fileToken,
-        fileType: params.fileType,
+        ...params,
         replyId: params.replyId.trim(),
       })
     : undefined;
@@ -223,13 +220,9 @@ export function createCommentTypingReactionLifecycle(params: {
         return;
       }
       state.active = await requestCommentTypingReaction({
-        cfg: params.cfg,
-        fileToken: params.fileToken,
-        fileType: params.fileType,
+        ...params,
         replyId,
         action: "add",
-        accountId: params.accountId,
-        runtime: params.runtime,
       });
     },
     cleanup: async (): Promise<void> => {
@@ -241,13 +234,9 @@ export function createCommentTypingReactionLifecycle(params: {
         key,
         performDelete: () =>
           requestCommentTypingReaction({
-            cfg: params.cfg,
-            fileToken: params.fileToken,
-            fileType: params.fileType,
+            ...params,
             replyId,
             action: "delete",
-            accountId: params.accountId,
-            runtime: params.runtime,
           }),
       });
     },

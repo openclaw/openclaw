@@ -1,9 +1,12 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { UpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
+import * as tmpOpenClawDir from "../infra/tmp-openclaw-dir.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -89,9 +92,165 @@ beforeEach(() => {
   });
 });
 
+describe("Bun private node runtime installation", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+  const platform = process.platform;
+  const archive = Buffer.from("synthetic registry archive");
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  const registryUrl = "http://127.0.0.1:4873/";
+  const tarballUrl = `${registryUrl}openclaw/-/openclaw-${VERSION}.tgz`;
+  const fetchMock = vi.fn<typeof fetch>();
+
+  function serveManifest(dist = { integrity, tarball: tarballUrl }) {
+    fetchMock.mockResolvedValueOnce(
+      Response.json({
+        name: "openclaw",
+        version: VERSION,
+        openclaw: metadata.packageOpenClaw,
+        dist,
+      }),
+    );
+    fetchMock.mockResolvedValueOnce(new Response(archive));
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    Object.defineProperty(process.versions, "bun", { value: "1.4.3", configurable: true });
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw");
+    vi.stubEnv("NPM_CONFIG_REGISTRY", registryUrl);
+    vi.stubGlobal("fetch", fetchMock);
+    fetchMock.mockReset();
+  });
+
+  afterEach(() => {
+    if (bunVersion) {
+      Object.defineProperty(process.versions, "bun", bunVersion);
+    } else {
+      Reflect.deleteProperty(process.versions, "bun");
+    }
+    Object.defineProperty(process, "platform", { value: platform });
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("prepares and retains a Bun generation without npm or user-global bins", async () => {
+    const stateDir = tempDirs.make("openclaw-node-bun-");
+    serveManifest();
+    mocks.command.mockImplementation(
+      async (argv: string[], options: { env: NodeJS.ProcessEnv; cwd?: string }) => {
+        if (options.cwd) {
+          // A real spawn fails with ENOENT when its working directory is missing.
+          await fs.access(options.cwd);
+        }
+        const { BUN_INSTALL_GLOBAL_DIR: project, BUN_INSTALL_BIN: bin } = options.env;
+        if (argv.join(" ") === [process.execPath, "pm", "bin", "-g"].join(" ")) {
+          // Bun requires its global project manifest before any global command.
+          await fs.access(path.join(project!, "package.json"));
+          return { code: 0, stdout: `${bin}\n`, stderr: "" };
+        }
+        if (argv[0] === process.execPath && argv[1] === "add" && project && bin) {
+          const archiveSpec = argv.find((arg) => arg.startsWith("openclaw@file:"));
+          expect(archiveSpec).toBeDefined();
+          expect(await fs.readFile(archiveSpec!.slice("openclaw@file:".length))).toEqual(archive);
+          const root = path.join(project, "node_modules", "openclaw");
+          await writeCandidate(root);
+          await fs.symlink(path.join(root, "openclaw.mjs"), path.join(bin, "openclaw"));
+          return { code: 0, stdout: "installed", stderr: "" };
+        }
+        throw new Error(`Unexpected external command: ${argv.join(" ")}`);
+      },
+    );
+
+    const candidate = await prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir });
+    expect(candidate).toMatchObject({ version: VERSION, integrity });
+    expect(candidate.packageRoot).toBe(
+      path.join(candidate.runtimeRoot, "lib", "node_modules", "openclaw"),
+    );
+    expect(mocks.resolve).not.toHaveBeenCalled();
+    expect(mocks.pack).not.toHaveBeenCalled();
+    expect(mocks.command.mock.calls.some(([argv]) => argv[0].startsWith("npm"))).toBe(false);
+    const install = mocks.command.mock.calls.find(([argv]) => argv[1] === "add");
+    expect(install?.[0]).toEqual([
+      process.execPath,
+      "add",
+      "-g",
+      "--trust",
+      expect.stringMatching(/^openclaw@file:.*\.tgz$/u),
+    ]);
+    for (const [, options] of mocks.command.mock.calls) {
+      expect(
+        options.env.BUN_INSTALL_GLOBAL_DIR.startsWith(`${candidate.runtimeRoot}${path.sep}`),
+      ).toBe(true);
+      expect(options.env.BUN_INSTALL_BIN.startsWith(`${candidate.runtimeRoot}${path.sep}`)).toBe(
+        true,
+      );
+      expect(options.env.OPENCLAW_PACKAGE_BUN_LAUNCHER).toBe(process.execPath);
+      // Npm freshness policy would probe `npm config get globalconfig`.
+      expect(options.env.npm_config_before).toBeUndefined();
+      expect(options.env.npm_config_min_release_age).toBeUndefined();
+    }
+    expect(await fs.realpath(path.join(candidate.runtimeRoot, "bin", "openclaw"))).toBe(
+      path.join(candidate.packageRoot, "openclaw.mjs"),
+    );
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `${registryUrl}openclaw/${VERSION}`,
+      tarballUrl,
+    ]);
+    mocks.command.mockClear();
+    serveManifest();
+    expect(await prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).toEqual(candidate);
+    expect(mocks.command).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([
+    { integrity: metadata.integrity!, tarball: tarballUrl, error: "integrity mismatch" },
+    { integrity, tarball: "https://other.example/openclaw.tgz", error: "registry origin" },
+    { integrity: "sha256-unsupported", tarball: tarballUrl, error: "sha512 integrity" },
+    { integrity: "", tarball: tarballUrl, error: "requested release and integrity" },
+  ])("rejects $error before installing", async ({ error, ...dist }) => {
+    const stateDir = tempDirs.make("openclaw-node-bun-invalid-");
+    serveManifest(dist);
+    await expect(prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).rejects.toThrow(
+      error,
+    );
+    expect(mocks.command).not.toHaveBeenCalled();
+    expect(mocks.resolve).not.toHaveBeenCalled();
+    expect(mocks.pack).not.toHaveBeenCalled();
+    expect(await fs.readdir(stateDir)).toEqual([]);
+  });
+
+  it("keeps npm metadata and packing on Windows under Bun", async () => {
+    const stateDir = tempDirs.make("openclaw-node-bun-windows-");
+    // Simulating Windows must not change the host filesystem's temp-path semantics.
+    vi.spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("openclaw-node-bun-windows-tmp-"),
+    );
+    Object.defineProperty(process, "platform", { value: "win32" });
+    mocks.pack.mockResolvedValue({ ok: false, error: "synthetic npm pack failure" });
+    await expect(prepareNodeRuntimeUpdate({ targetVersion: VERSION, stateDir })).rejects.toThrow(
+      "synthetic npm pack failure",
+    );
+    expect(mocks.resolve).toHaveBeenCalledWith({ spec: `openclaw@${VERSION}`, signal: undefined });
+    expect(mocks.pack).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
 afterEach(() => vi.unstubAllEnvs());
 
 describe("private node runtime installation", () => {
+  beforeEach(() => {
+    vi.stubGlobal("process", {
+      ...process,
+      versions: { ...process.versions, bun: undefined },
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
   it("installs a verified generation without changing the global runtime or live state", async () => {
     await withTestDir({ prefix: "openclaw-node-install-" }, async (directory) => {
       const globalPrefix = path.join(directory, "global");

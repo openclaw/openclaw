@@ -17,7 +17,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 RUN corepack enable
-RUN npm install -g tsx@4.23.13 --no-fund --no-audit
+RUN npm install -g tsx@4.23.15 --no-fund --no-audit
 
 # Mounted survivor helpers resolve compiler tooling independently of installed packages.
 COPY package.json /tmp/openclaw-e2e-package.json

@@ -12,23 +12,16 @@ async function runAudioTranscribe(params: {
   prompt?: string;
   agent?: string;
 }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
+  const { requireProviderModelOverride, resolveLocalCapabilityAgent } = await import("./shared.js");
   const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
   const { transcribeAudioFile } = await import("../../media-understanding/runtime.js");
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
+  const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
     commandName: "infer audio transcribe",
     targetIds: getModelsCommandSecretTargetIds(),
+    agent: params.agent,
   });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer audio transcribe");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
   const result = await transcribeAudioFile({
-    agentDir: resolveAgentDir(cfg, agentId),
+    agentDir,
     activeModel: requireProviderModelOverride(params.model),
     filePath: path.resolve(params.file),
     cfg,

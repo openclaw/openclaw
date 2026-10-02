@@ -116,6 +116,8 @@ export type RunEmbeddedAgentParams = {
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
+  /** Setup can reject unavailable endpoints without spending the session retry budget. */
+  retryConnectionErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */

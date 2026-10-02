@@ -219,14 +219,14 @@
 }
 
 .oc-action-primary {
-  border-color: var(--oc-accent-primary);
-  background: var(--oc-accent-primary);
+  border-color: var(--primary);
+  background: var(--primary);
   color: var(--oc-text-on-accent);
 }
 
 .oc-action-primary:hover {
-  border-color: var(--oc-accent-primary-hover);
-  background: var(--oc-accent-primary-hover);
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
   color: var(--oc-text-on-accent);
 }
 

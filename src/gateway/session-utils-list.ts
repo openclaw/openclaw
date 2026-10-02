@@ -11,7 +11,10 @@ import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-sto
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
+import {
+  SESSIONS_LIST_OWNER_LIMIT,
+  SESSIONS_LIST_TRANSCRIPT_LIMIT,
+} from "../shared/session-list-limits.js";
 import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveAssistantIdentity } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
@@ -114,7 +117,9 @@ function buildSessionsListResult(
   // the requested agent when scoped, otherwise the legacy compatibility agent.
   // Legacy plain-array catalogs (direct list callers) pass through
   // unchanged; per-agent maps resolve by the same identity.
-  const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, opts.agentId);
+  const defaultsAgentId = normalizeAgentId(
+    opts.agentId || (tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID),
+  );
   const preparedDefaultsCatalog =
     modelCatalog instanceof Map ? modelCatalog.get(defaultsAgentId) : undefined;
   const defaultsCatalog =
@@ -158,15 +163,6 @@ function buildSessionsListResult(
   };
 }
 
-function resolveSessionsListDefaultsAgentId(
-  cfg: OpenClawConfig,
-  requestedAgentId?: string,
-): string {
-  return requestedAgentId
-    ? normalizeAgentId(requestedAgentId)
-    : normalizeAgentId(tryResolveLegacyCompatibilityAgentId(cfg) ?? LEGACY_IMPLICIT_AGENT_ID);
-}
-
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
 type SelectionTarget = Pick<
   RecordRow,
@@ -193,6 +189,7 @@ export function prepareSessionRowSelection(
   prepared?: Pick<SessionRowQuery, "key" | "sessionIdOrKey"> & {
     now?: number;
     rowContext?: SessionListRowContext;
+    metadataPrepared?: boolean;
   },
 ) {
   const { cfg, modelCatalog, scope, revision, rowContext: residentContext } = projection.state;
@@ -203,18 +200,25 @@ export function prepareSessionRowSelection(
     subagentRuns: residentContext.subagentRuns.atTime(now),
   };
   const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  // Person references resolve against the full visible roster before child filtering.
+  const parentSessionKey = !keyed && !opts.involvingProfileId ? opts.spawnedBy : undefined;
+  const broad = !keyed && !parentSessionKey;
   const activeOnly = opts.activeOnly === true;
-  let selection = keyed
-    ? undefined
-    : sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly);
+  let selection = broad
+    ? sessionRowSelections.get(revision)?.get(selectedScope)?.get(activeOnly)
+    : undefined;
   if (!selection) {
     const rows = projection
-      .selectEntries({
-        agentId: selectedScope.agentId,
-        key: prepared?.key,
-        sessionIdOrKey: prepared?.sessionIdOrKey,
-        sortBy: null,
-      })
+      .selectEntries(
+        {
+          agentId: selectedScope.agentId,
+          key: prepared?.key,
+          sessionIdOrKey: prepared?.sessionIdOrKey,
+          parentSessionKey,
+          sortBy: null,
+        },
+        prepared?.metadataPrepared === true,
+      )
       .filter(
         (row) =>
           selectedScope.paths.has(row.storeTarget.storePath) &&
@@ -270,7 +274,7 @@ export function prepareSessionRowSelection(
       ),
       entries,
     };
-    if (!keyed) {
+    if (broad) {
       const currentRevision = projection.state.revision;
       let scopes = sessionRowSelections.get(currentRevision);
       if (!scopes) {
@@ -314,9 +318,11 @@ export function prepareSessionRowSelection(
       };
       return {
         ...winner,
-        ...(opts.search ? { materialized: projection.capture(query)?.materialized } : {}),
+        ...(opts.search && projection.isMaterialized(query)
+          ? { materialized: projection.capture(query)?.materialized }
+          : {}),
         ...(key !== winner.key ? { storeKey: winner.key } : {}),
-        getModelFacts: () => projection.modelFacts(query),
+        getModelFacts: () => projection.modelFacts(query, prepared?.metadataPrepared === true),
       };
     },
   };
@@ -337,8 +343,9 @@ export function filterAndSortSessionEntries(params: SessionListFilterParams): Se
 export async function prepareSessionSearchIdentityNames(
   projection: SessionRowProjection,
   opts: SessionsListParams,
+  metadataPrepared = false,
 ) {
-  const prepared = prepareSessionRowSelection(projection, opts);
+  const prepared = prepareSessionRowSelection(projection, opts, { metadataPrepared });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
   for (const [key] of prepared.entries) {
@@ -376,6 +383,7 @@ export function prepareProjectedSessionList(params: {
   context?: GatewayRequestContext;
   client?: GatewayClient | null;
   now: number;
+  metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
@@ -397,6 +405,7 @@ export function prepareProjectedSessionList(params: {
     key: exactKey,
     now,
     rowContext: presentation.rowContext,
+    metadataPrepared: params.metadataPrepared,
   });
   const { getTarget } = prepared;
   const { active } = presentation;
@@ -463,140 +472,151 @@ export async function listProjectedSessions(params: {
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
   const { projection, opts, key: exactKey, context, client, diagnostics } = params;
-  const dirtyRowCount = projection.dirtyRowCount;
-  const materializedBefore = projection.materializedCount;
-  diagnostics?.mark("materialize");
-  const waitStarted = performance.now();
-  let yieldCount = 0;
-  let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
-  do {
-    yieldCount++;
-    await projection.ensureMaterialized();
-    if (opts.search?.trim()) {
-      searchIdentities = await prepareSessionSearchIdentityNames(projection, opts);
-    }
-  } while (
-    projection.needsMaterialization ||
-    (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
-  );
-  let prepareSyncMs = 0;
-  const selectPage = () => {
-    const started = performance.now();
-    const syncCpu = diagnostics?.startSyncCpu();
-    try {
-      diagnostics?.mark("storeLoad");
-      const now = Date.now();
-      const { presentation, prepared, filters } = prepareProjectedSessionList({
-        projection,
-        opts,
-        key: exactKey,
-        context,
-        client,
-        now,
-        searchIdentities,
-      });
-      diagnostics?.mark("filterSetup");
-      const selection = withAgentRosterFactsBatch(prepared.cfg, () =>
-        runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
-      );
-      return { now, presentation, prepared, selection };
-    } finally {
-      diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);
-      prepareSyncMs += performance.now() - started;
-      if (diagnostics) {
-        diagnostics.projection.prepareSyncMs = prepareSyncMs;
+  return projection.withSelectionPreparation(async () => {
+    const dirtyRowCount = projection.dirtyRowCount;
+    const materializedBefore = projection.materializedCount;
+    diagnostics?.mark("materialize");
+    const waitStarted = performance.now();
+    let yieldCount = 0;
+    let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
+    do {
+      yieldCount++;
+      await projection.prepareSelection(true);
+      if (opts.search?.trim()) {
+        searchIdentities = await prepareSessionSearchIdentityNames(projection, opts, true);
       }
-      diagnostics?.mark("materialize");
-    }
-  };
-  let page: ReturnType<typeof selectPage>;
-  return withReadySessionRows(
-    projection,
-    () => {
-      page = selectPage();
-      return page.selection.entries.flatMap(([key]) => {
-        const target = page.prepared.getTarget(key);
-        return target
-          ? [{ agentId: target.agentId, key: target.key, storePath: target.storeTarget.storePath }]
-          : [];
-      });
-    },
-    () => {
-      const resumed = performance.now();
-      const { now, presentation, prepared, selection } = page;
-      const { cfg, getTarget } = prepared;
-      diagnostics?.mark("sharing");
-      diagnostics?.mark("rows");
-      const rowsStarted = performance.now();
-      let syncCpu = diagnostics?.startSyncCpu();
+    } while (
+      projection.needsSelectionPreparation() ||
+      (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+    );
+    let prepareSyncMs = 0;
+    const selectPage = () => {
+      const started = performance.now();
+      const syncCpu = diagnostics?.startSyncCpu();
       try {
-        let materializedRowCount = 0;
-        projection.setArchivePageSize(selection.entries.length);
-        const sessions = selection.entries.flatMap(([key], index) => {
-          const target = getTarget(key);
-          const record =
-            target &&
-            projection.describe({
-              agentId: target.agentId,
-              key: target.key,
-              storePath: target.storeTarget.storePath,
-            });
-          if (!record) {
-            return [];
-          }
-          const includeTranscriptFields = index < 100 + selection.ownerCount;
-          const row = presentation.present(record, {
-            includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
-            includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
-            includeActivitySummary: opts.includeActivitySummary === true,
-          });
-          if (!row) {
-            return [];
-          }
-          bindSessionListRowRead(row, { projection, record, client });
-          if ((record.materializedSequence ?? 0) > materializedBefore) {
-            materializedRowCount++;
-          }
-          if (opts.activeOnly && sentinel(record.key)) {
-            row.childSessions = undefined;
-            row.hasActiveSubagentRun = undefined;
-          }
-          return [row];
-        });
-        diagnostics?.mark("decoration");
-        const result = buildSessionsListResult(
-          prepared,
-          { ...selection, now, storePath: prepared.storePath },
-          sessions,
-          context?.getCommittedRuntimeConfig?.() ?? cfg,
+        diagnostics?.mark("storeLoad");
+        const now = Date.now();
+        const { presentation, prepared, filters } = prepareProjectedSessionList({
+          projection,
+          opts,
+          key: exactKey,
+          context,
           client,
+          now,
+          searchIdentities,
+          metadataPrepared: true,
+        });
+        diagnostics?.mark("filterSetup");
+        const selection = withAgentRosterFactsBatch(prepared.cfg, () =>
+          runSynchronousWork(selectSessionEntries({ ...filters, defaultLimit: 100 })),
         );
-        if (client !== undefined) {
-          result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
-            callerScopes: client?.connect?.scopes ?? [],
-            cfg,
-          }).target;
-        }
-        diagnostics?.mark("visibilityRepair");
-        if (diagnostics) {
-          Object.assign(diagnostics.projection, {
-            prepareSyncMs,
-            rowSyncMs: performance.now() - rowsStarted,
-            yieldWaitMs: resumed - waitStarted - prepareSyncMs,
-            yieldCount,
-            selectedRowCount: sessions.length,
-            dirtyRowCount,
-            materializedRowCount,
-            reusedRowCount: sessions.length - materializedRowCount,
-          });
-        }
-        diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
-        syncCpu = undefined;
-        params.onResult?.(result);
-        return result;
+        return { now, presentation, prepared, selection };
       } finally {
-        diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
+        diagnostics?.finishSyncCpu("prepareThreadCpuMs", syncCpu);
+        prepareSyncMs += performance.now() - started;
+        if (diagnostics) {
+          diagnostics.projection.prepareSyncMs = prepareSyncMs;
+        }
+        diagnostics?.mark("materialize");
       }
-    },
-  );
+    };
+    let page: ReturnType<typeof selectPage>;
+    return withReadySessionRows(
+      projection,
+      () => {
+        page = selectPage();
+        return page.selection.entries.flatMap(([key]) => {
+          const target = page.prepared.getTarget(key);
+          return target
+            ? [
+                {
+                  agentId: target.agentId,
+                  key: target.key,
+                  storePath: target.storeTarget.storePath,
+                },
+              ]
+            : [];
+        });
+      },
+      () => {
+        const resumed = performance.now();
+        const { now, presentation, prepared, selection } = page;
+        const { cfg, getTarget } = prepared;
+        diagnostics?.mark("sharing");
+        diagnostics?.mark("rows");
+        const rowsStarted = performance.now();
+        let syncCpu = diagnostics?.startSyncCpu();
+        try {
+          let materializedRowCount = 0;
+          projection.setArchivePageSize(selection.entries.length);
+          const sessions = selection.entries.flatMap(([key], index) => {
+            const target = getTarget(key);
+            const record =
+              target &&
+              projection.describe({
+                agentId: target.agentId,
+                key: target.key,
+                storePath: target.storeTarget.storePath,
+              });
+            if (!record) {
+              return [];
+            }
+            const includeTranscriptFields =
+              index < SESSIONS_LIST_TRANSCRIPT_LIMIT + selection.ownerCount;
+            const row = presentation.present(record, {
+              includeDerivedTitles: opts.includeDerivedTitles && includeTranscriptFields,
+              includeLastMessage: opts.includeLastMessage && includeTranscriptFields,
+              includeActivitySummary: opts.includeActivitySummary === true,
+            });
+            if (!row) {
+              return [];
+            }
+            bindSessionListRowRead(row, { projection, record, client });
+            if ((record.materializedSequence ?? 0) > materializedBefore) {
+              materializedRowCount++;
+            }
+            if (opts.activeOnly && sentinel(record.key)) {
+              row.childSessions = undefined;
+              row.hasActiveSubagentRun = undefined;
+            }
+            return [row];
+          });
+          diagnostics?.mark("decoration");
+          const result = buildSessionsListResult(
+            prepared,
+            { ...selection, now, storePath: prepared.storePath },
+            sessions,
+            context?.getCommittedRuntimeConfig?.() ?? cfg,
+            client,
+          );
+          if (client !== undefined) {
+            result.defaults.modelSelectionTarget = resolveGatewayModelSelectionPolicy({
+              callerScopes: client?.connect?.scopes ?? [],
+              cfg,
+            }).target;
+          }
+          diagnostics?.mark("visibilityRepair");
+          if (diagnostics) {
+            Object.assign(diagnostics.projection, {
+              prepareSyncMs,
+              rowSyncMs: performance.now() - rowsStarted,
+              yieldWaitMs: resumed - waitStarted - prepareSyncMs,
+              yieldCount,
+              selectedRowCount: sessions.length,
+              dirtyRowCount,
+              materializedRowCount,
+              reusedRowCount: sessions.length - materializedRowCount,
+            });
+          }
+          diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
+          syncCpu = undefined;
+          params.onResult?.(result);
+          return result;
+        } finally {
+          diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
+        }
+      },
+      { selection: true },
+    );
+  });
 }

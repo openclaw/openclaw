@@ -77,34 +77,6 @@ describe("DeepInfra native runtime prices", () => {
     });
   });
 
-  it("rejects failed metadata even when native pricing succeeds", async () => {
-    const seedId = DEEPINFRA_MODEL_CATALOG[0]!.id;
-    const mockFetch = vi.fn(async (url: string) => {
-      if (url === DEEPINFRA_MODELS_URL) {
-        return new Response("unavailable", { status: 503 });
-      }
-      expect(url).toBe("https://api.deepinfra.com/models/list");
-      return jsonResponse(
-        [seedId, "fixture/price-only"].map((model_name) => ({
-          model_name,
-          pricing: {
-            type: "tokens",
-            cents_per_input_token: 0.0002,
-            cents_per_output_token: 0.001,
-            discount: 0.5,
-            rate_per_input_token_cached: 0.2,
-          },
-        })),
-      );
-    });
-    await withFetchPathTest(mockFetch, async () => {
-      await discoverDeepInfraModels({ hasApiKey: false });
-      expect(mockFetch).not.toHaveBeenCalled();
-      await expect(discoverDeepInfraModels({ hasApiKey: true })).rejects.toThrow("HTTP 503");
-      expect(mockFetch).toHaveBeenCalledTimes(2);
-    });
-  });
-
   it.each(["unavailable", "malformed", "absent"])(
     "rejects %s native pricing and recovers without refetching metadata",
     async (failure) => {

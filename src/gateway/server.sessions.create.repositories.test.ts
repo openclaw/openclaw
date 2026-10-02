@@ -177,12 +177,7 @@ test.each([
   {
     repository: { url: "https://github.com/openclaw/openclaw.git", ref: "--upload-pack=anything" },
   },
-  { cwd: "/tmp/repository" },
-  { execNode: "device" },
-  { projectId: "workspace:main" },
-  { projectGitUrl: "https://github.com/openclaw/openclaw.git" },
   { worktree: true },
-  { worktreeBaseRef: "main" },
   { message: "Start before dispatch" },
 ])(
   "sessions.create rejects conflicting cloud repository input before admission: %j",

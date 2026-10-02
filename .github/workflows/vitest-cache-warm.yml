@@ -97,6 +97,7 @@ jobs:
         id: setup-node-env
         uses: ./.github/actions/setup-node-env
         with:
+          semantic-checks: "true"
           build-all-cache-scope: ${{ matrix.platform == 'linux' && 'full' || '' }}
           cache-mode: read-write
           dependency-cache: ${{ matrix.platform == 'linux' && 'true' || 'false' }}
@@ -124,11 +125,11 @@ jobs:
           path: .artifacts/vitest-worker-cache
           key: ${{ steps.setup-node-env.outputs.vitest-worker-cache-key }}
 
-      # Seal this owner before the full build creates sibling package dist trees.
-      # Those trees are resolution topology, but intentionally are not in this payload.
+      # Hosted Linux SDK publication belongs to CI lint stripe 1. Other owners seal
+      # before the full build changes resolution topology outside this payload.
       - name: Restore native SDK boundary cache
         id: extension-package-boundary-cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' }}
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && (matrix.platform == 'macos' || runner.environment != 'github-hosted') }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -141,10 +142,11 @@ jobs:
             ${{ runner.os }}-extension-package-boundary-v4-
 
       - name: Prepare native SDK boundary cache
+        if: ${{ matrix.platform == 'macos' || runner.environment != 'github-hosted' }}
         run: node --import ./scripts/tsx.mjs scripts/prepare-extension-package-boundary-artifacts.mts --mode=package-boundary
 
       - name: Save native SDK boundary cache
-        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
+        if: ${{ steps.setup-node-env.outputs.cache-mode == 'read-write' && (matrix.platform == 'macos' || runner.environment != 'github-hosted') && steps.extension-package-boundary-cache.outputs.cache-hit != 'true' }}
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

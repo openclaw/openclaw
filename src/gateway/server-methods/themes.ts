@@ -27,6 +27,7 @@ import {
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listPluginThemes } from "../../plugins/theme-catalog.js";
@@ -47,14 +48,18 @@ function requestOwner(options: ThemeRequest) {
   const { client, context } = options;
   const runtimeIdentity = client?.internal?.agentRuntimeIdentity;
   const caller = getGatewayToolCallerIdentity();
-  const capturedProfile = runtimeIdentity
-    ? runtimeIdentity.gatewayUiCommandTarget?.profileId
-    : client?.internal?.syntheticClient
-      ? caller?.gatewayUiCommandTarget?.profileId
-      : client?.authenticatedUserProfile?.profileId;
+  const participant = resolveGatewayPersonalToolParticipant(runtimeIdentity);
+  const capturedProfile = participant
+    ? participant.profileId
+    : runtimeIdentity
+      ? runtimeIdentity.gatewayUiCommandTarget?.profileId
+      : client?.internal?.syntheticClient
+        ? caller?.gatewayUiCommandTarget?.profileId
+        : client?.authenticatedUserProfile?.profileId;
   const assertCaller = captureGatewayToolCallerAssertion();
   const profileId = capturedProfile ? resolveUserProfileId(capturedProfile) : undefined;
   const assertCurrent = () => {
+    participant?.assertCurrent();
     options.signal?.throwIfAborted();
     options.sessionMutationCommitGuard?.();
     options.sessionMutationAuthorization?.assertCurrent();
@@ -67,6 +72,7 @@ function requestOwner(options: ThemeRequest) {
     }
     if (
       !runtimeIdentity &&
+      !participant &&
       !client?.internal?.syntheticClient &&
       client?.authenticatedUserProfile?.profileId !== capturedProfile
     ) {

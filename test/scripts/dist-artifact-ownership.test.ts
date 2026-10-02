@@ -18,7 +18,7 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
@@ -33,6 +33,35 @@ const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
 const tsgoArgs = ["-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"];
 const buildArgs = ["--config", "fixture.tsdown.config.ts", "--out-dir", "dist"];
+
+function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
+  // closes before death, so only a PID observation can certify the orphan's exit.
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
+    const check = () => {
+      if (!isProcessAlive(pid)) {
+        finish();
+      } else if (signal.aborted) {
+        abort();
+      } else {
+        timer = setTimeout(check, 5);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
+}
 
 function write(root: string, relative: string, content: string) {
   const target = path.join(root, relative);
@@ -164,7 +193,7 @@ async function runWithProcesses(
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
-        [...checkpointPids].map((pid) => waitForDead(pid, 2_000)),
+        [...checkpointPids].map((pid) => waitForForeignProcessExit(pid, signal)),
       );
       for (const socket of sockets) {
         socket.destroy();
@@ -215,6 +244,8 @@ async function runWithProcesses(
           cwd: root,
           env: {
             ...process.env,
+            // Synthetic artifact writers do not inspect the host's installed Gateway.
+            OPENCLAW_ALLOW_LIVE_DIST_BUILD: "1",
             ...(resourceOwner
               ? { TMPDIR: resourceOwner.root, TMP: resourceOwner.root, TEMP: resourceOwner.root }
               : {}),
@@ -550,6 +581,86 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
     expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "owner.json"))).toBe(false);
     expect(fs.existsSync(path.join(resolveDistArtifactLockPath(root), "unjoined"))).toBe(false);
   });
+
+  it.for([false, true])(
+    "retains ownership when recording uncertainty fails (nested=%s)",
+    async (nested, { signal }) => {
+      await withProcesses(async ({ start }) => {
+        const root = createCheckout();
+        const moduleUrl = pathToFileURL(
+          path.join(sourceRoot, "scripts/lib/dist-artifact-lock.mts"),
+        ).href;
+        const body = `
+        import assert from 'node:assert/strict';
+        import fs from 'node:fs';
+        import path from 'node:path';
+        import { withDistArtifactOwnership } from ${JSON.stringify(moduleUrl)};
+        const write = fs.writeFileSync;
+        const original = Object.assign(new Error('uncertain compiler'), { processTreeState: 'indeterminate' });
+        const diskError = Object.assign(new Error('fixture storage failure'), { code: 'ENOSPC' });
+        let attempts = 0;
+        fs.writeFileSync = (file, ...args) => {
+          if (path.basename(String(file)) === 'unjoined') { attempts++; throw diskError; }
+          return write(file, ...args);
+        };
+        const error = await withDistArtifactOwnership(process.cwd(), async () => { throw original; }).catch(error => error);
+        assert(error instanceof AggregateError);
+        assert.deepEqual(error.errors, [original, diskError]);
+        if (${nested}) {
+          const again = await withDistArtifactOwnership(process.cwd(), async () => { throw new Error('unsafe second generation'); }).catch(error => error);
+          assert.equal(again, error);
+        }
+        assert.equal(attempts, 1);
+        // Model a CLI catching the failure before returning to its entry launcher.
+        fs.writeFileSync = write;
+      `;
+        const child = write(root, "retention-failure.mts", body);
+        const probe = nested
+          ? write(
+              root,
+              "retention-owner.mts",
+              `
+        import { withDistArtifactOwnership, runOwnedDistArtifactEntry } from ${JSON.stringify(moduleUrl)};
+        await withDistArtifactOwnership(process.cwd(), () => runOwnedDistArtifactEntry(${JSON.stringify(pathToFileURL(child).href)}, []));
+      `,
+            )
+          : child;
+        const result = await start(root, probe).done;
+        expect(result.code, result.output).toBe(0);
+        const directory = resolveDistArtifactLockPath(root);
+        expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(true);
+        expect(fs.existsSync(path.join(directory, "unjoined"))).toBe(false);
+        expect(fs.readdirSync(directory).filter((name) => name.startsWith("child-"))).toHaveLength(
+          nested ? 1 : 0,
+        );
+        const owner = fs.readFileSync(path.join(directory, "owner.json"), "utf8");
+        const artifact = write(root, "dist/retained-artifact.txt", "previous generation");
+        const nextWriter = write(
+          root,
+          "next-writer.mts",
+          `
+        import fs from 'node:fs';
+        import { withDistArtifactOwnership } from ${JSON.stringify(moduleUrl)};
+        await withDistArtifactOwnership(process.cwd(), async () => {
+          fs.writeFileSync(${JSON.stringify(artifact)}, 'next generation');
+        });
+      `,
+        );
+        const denied = await start(root, nextWriter).done;
+        expect(denied.code, denied.output).toBe(1);
+        expect(denied.output).toContain("Could not acquire");
+        expect(fs.readFileSync(artifact, "utf8")).toBe("previous generation");
+        expect(fs.readFileSync(path.join(directory, "owner.json"), "utf8")).toBe(owner);
+
+        // Every fixture process has exited; the synthetic failure started no detached compiler.
+        fs.rmSync(directory, { recursive: true });
+        const recovered = await start(root, nextWriter).done;
+        expect(recovered.code, recovered.output).toBe(0);
+        expect(fs.readFileSync(artifact, "utf8")).toBe("next generation");
+        expect(fs.existsSync(path.join(directory, "owner.json"))).toBe(false);
+      }, signal);
+    },
+  );
 
   it.for(["cause", "error", "cyclic aggregate", "bundler errors"])(
     "retains ownership for unjoined work nested in %s",
@@ -892,7 +1003,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       );
       expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       compilerGate.write("continue");
-      await waitForDead(compilerPid, 2_000);
+      await waitForForeignProcessExit(compilerPid, signal);
     }, signal);
   }, 30_000);
 
@@ -936,7 +1047,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         compilerGate.write("continue");
-        await waitForDead(compiler.pid, 2_000);
+        await waitForForeignProcessExit(compiler.pid, signal);
       }
     }, signal);
   }, 30_000);

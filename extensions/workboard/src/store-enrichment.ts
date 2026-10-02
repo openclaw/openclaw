@@ -141,7 +141,6 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
           assertCurrent,
         );
         if (!updated.metadata?.attachments?.some((entry) => entry.id === attachment.id)) {
-          await this.attachmentStore.delete(attachment.id);
           throw new Error("attachment metadata was trimmed before it could be indexed.");
         }
         return updated;

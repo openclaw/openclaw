@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GatewayClient } from "../gateway/client.js";
 import {
@@ -26,11 +32,21 @@ import { handleInvoke } from "./invoke.js";
 import type { NodeWorkerBundleInstallerControl } from "./node-worker-bundle-installer.js";
 import { NodeWorkerCapacityExhaustedError } from "./node-worker-capacity.js";
 import type { NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
+import { invokeNodeWorkerSupervisorCommand } from "./node-worker-supervisor-commands.js";
 import type { NodeWorkerSupervisorControl } from "./node-worker-supervisor-contract.js";
 import { testWorkerLaunchInput } from "./node-worker-supervisor.test-support.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
@@ -154,6 +170,22 @@ async function invokePrivate(params: {
 }
 
 describe("node-host worker supervisor commands", () => {
+  it("passes a bounded status wait and its connection cancellation to the supervisor", async () => {
+    const supervisor = supervisorWith(fullReceipt());
+    const controller = new AbortController();
+    const { result } = await invokePrivate({
+      command: NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+      paramsJSON: JSON.stringify({ launchId: "launch-1", waitMs: 20_000 }),
+      supervisor,
+      signal: controller.signal,
+    });
+    expect(supervisor.status).toHaveBeenCalledExactlyOnceWith("launch-1", {
+      waitMs: 20_000,
+      signal: controller.signal,
+    });
+    expect(result).toMatchObject({ ok: true });
+  });
+
   it("settles environment teardown only after the exact owner has stopped", async () => {
     const receipt = fullReceipt();
     const supervisor = supervisorWith(receipt);
@@ -315,13 +347,18 @@ describe("node-host worker supervisor commands", () => {
 
   it.runIf(process.platform !== "win32")(
     "kills an in-flight desktop launcher when its invoke owner closes",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("node-worker-desktop-launch-abort-");
-      const executablePath = path.join(root, "launcher");
+      const executablePath = path.join(root, "launcher.mjs");
       const pidPath = `${executablePath}.pid`;
       fs.writeFileSync(
         executablePath,
-        '#!/bin/sh\nprintf \'%s\\n\' "$$" > "$0.pid"\nexec sleep 300\n',
+        `#!${process.execPath}\n${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+sendReceipt(${JSON.stringify(pidPath)}, "ready");
+setInterval(() => {}, 1000);
+`,
         { mode: 0o755 },
       );
       const controller = new AbortController();
@@ -332,19 +369,34 @@ describe("node-host worker supervisor commands", () => {
         supervisor: supervisorWith(fullReceipt()),
         signal: controller.signal,
       });
-      await vi.waitFor(() => expect(fs.existsSync(pidPath)).toBe(true));
-      const pid = Number(fs.readFileSync(pidPath, "utf8").trim());
+      let pid: number | undefined;
       try {
+        // The durable PID write protects readiness when exit overtakes receipt delivery.
+        const settled = running.then(
+          () => expect(fs.existsSync(pidPath)).toBe(true),
+          (error: unknown) => {
+            if (!fs.existsSync(pidPath)) {
+              throw error;
+            }
+          },
+        );
+        await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+        const launcherPid = Number(fs.readFileSync(pidPath, "utf8").trim());
+        pid = launcherPid;
         controller.abort(new Error("desktop owner closed"));
 
         await expect(running).resolves.toMatchObject({ result: undefined });
-        await vi.waitFor(() => expect(() => process.kill(pid, 0)).toThrow());
+        await vi.waitFor(() => expect(() => process.kill(launcherPid, 0)).toThrow());
       } finally {
+        controller.abort();
         try {
-          process.kill(pid, "SIGKILL");
+          if (pid) {
+            process.kill(pid, "SIGKILL");
+          }
         } catch {
           // The expected path already reaped the launcher.
         }
+        await running;
       }
     },
   );
@@ -893,3 +945,10 @@ describe("node-host worker supervisor commands", () => {
     expect(message.length).toBeLessThanOrEqual(1_024);
   });
 });
+
+it.each(["worker.desktop.computer.v1", " worker.status.v1", "system.run"])(
+  "leaves %s outside supervisor dispatch",
+  async (command) => {
+    expect(await invokeNodeWorkerSupervisorCommand({ command })).toEqual({ handled: false });
+  },
+);

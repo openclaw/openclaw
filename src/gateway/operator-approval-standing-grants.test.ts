@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import {
   deleteCronJobRowInDatabase,
@@ -13,7 +13,9 @@ import {
 } from "../cron/store/row-codec.js";
 import type { CronStoredJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -26,17 +28,18 @@ import {
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
   buildCronExecOperationBinding,
   consumeCronStandingGrant,
-  listCronStandingGrants,
   mintCronStandingGrantLocked,
   parseCronExecOperationBinding,
-  revokeCronStandingGrant,
 } from "./operator-approval-standing-grants.js";
 import {
   closeOrphanedOperatorApprovals,
+  listCronStandingGrants,
+  revokeCronStandingGrant,
   insertOperatorApproval,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
@@ -81,6 +84,7 @@ function createDatabaseOptions(): OpenClawStateDatabaseOptions {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -299,7 +303,7 @@ describe("cron standing grant mint", () => {
     const revision = seedCronJob(databaseOptions);
     await mintGrant({ databaseOptions, jobConfigRevision: revision });
     const pathname = openOpenClawStateDatabase(databaseOptions).path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
 
     const previousReader = new DatabaseSync(pathname);
     try {
@@ -627,7 +631,7 @@ describe("cron standing grant consumption", () => {
       stateDb.selectFrom("cron_jobs").selectAll().where("job_id", "=", "job-1"),
     ).rows[0]!;
     const pathname = database.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const previousWriter = new DatabaseSync(pathname);
     try {
       previousWriter.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("job-1");
@@ -833,9 +837,62 @@ describe("standing grant operator surfaces", () => {
     return { databaseOptions, revision };
   }
 
+  it("keeps grant listing and revocation off the calling thread", async () => {
+    const { databaseOptions } = await seedListedGrant();
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
+    try {
+      sql.calibrate();
+      const [grant] = await listCronStandingGrants({ databaseOptions });
+      expect(grant).toMatchObject({ cronJobId: "job-1", revokedAtMs: null, useCount: 0 });
+      expect(
+        await revokeCronStandingGrant({
+          grantId: grant!.grantId,
+          revokedBy: "reviewer",
+          databaseOptions,
+        }),
+      ).toMatchObject({ outcome: "revoked" });
+      expect(await listCronStandingGrants({ databaseOptions })).toMatchObject([
+        { grantId: grant!.grantId, revokedBy: "reviewer" },
+      ]);
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it("rolls back revocation when authority is revoked at worker commit", async () => {
+    const { databaseOptions } = await seedListedGrant();
+    const [before] = await listCronStandingGrants({ databaseOptions });
+    let current = true;
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            current = false;
+          }
+          return admit(request, grant);
+        }, attachment),
+    );
+    const pending = revokeCronStandingGrant({
+      grantId: before!.grantId,
+      revokedBy: "reviewer",
+      databaseOptions,
+      assertCurrent() {
+        if (!current) {
+          throw new Error("synthetic grant authority revoked");
+        }
+      },
+    });
+    await expect(pending).rejects.toThrow("synthetic grant authority revoked");
+    vi.restoreAllMocks();
+    expect(await listCronStandingGrants({ databaseOptions })).toEqual([before]);
+  });
+
   it("lists grants with the owning job name and parseable operation", async () => {
     const { databaseOptions } = await seedListedGrant();
-    const grants = listCronStandingGrants({ databaseOptions });
+    const grants = await listCronStandingGrants({ databaseOptions });
     expect(grants).toHaveLength(1);
     const grant = grants[0]!;
     expect(grant.cronJobId).toBe("job-1");
@@ -847,16 +904,16 @@ describe("standing grant operator surfaces", () => {
     expect(operation?.command).toBe("echo standing");
   });
 
-  it("returns an empty list before any grant created the table", () => {
+  it("returns an empty list before any grant created the table", async () => {
     const databaseOptions = createDatabaseOptions();
     seedCronJob(databaseOptions);
-    expect(listCronStandingGrants({ databaseOptions })).toEqual([]);
+    expect(await listCronStandingGrants({ databaseOptions })).toEqual([]);
   });
 
   it("revokes once, reports already-revoked after, and fails closed at consume", async () => {
     const { databaseOptions, revision } = await seedListedGrant();
-    const grantId = listCronStandingGrants({ databaseOptions })[0]!.grantId;
-    const revoked = revokeCronStandingGrant({
+    const grantId = (await listCronStandingGrants({ databaseOptions }))[0]!.grantId;
+    const revoked = await revokeCronStandingGrant({
       grantId,
       revokedBy: "operator-cli",
       nowMs: NOW_MS + 2_000,
@@ -874,9 +931,10 @@ describe("standing grant operator surfaces", () => {
       }).outcome,
     ).toBe("revoked");
     expect(
-      revokeCronStandingGrant({ grantId, revokedBy: "someone-else", databaseOptions }).outcome,
+      (await revokeCronStandingGrant({ grantId, revokedBy: "someone-else", databaseOptions }))
+        .outcome,
     ).toBe("already-revoked");
-    const listed = listCronStandingGrants({ databaseOptions })[0]!;
+    const listed = (await listCronStandingGrants({ databaseOptions }))[0]!;
     expect(listed.revokedAtMs).toBe(NOW_MS + 2_000);
     expect(listed.revokedBy).toBe("operator-cli");
   });
@@ -884,15 +942,17 @@ describe("standing grant operator surfaces", () => {
   it("reports not-found for unknown grants and before the table exists", async () => {
     const databaseOptions = createDatabaseOptions();
     expect(
-      revokeCronStandingGrant({ grantId: "missing", revokedBy: "x", databaseOptions }).outcome,
+      (await revokeCronStandingGrant({ grantId: "missing", revokedBy: "x", databaseOptions }))
+        .outcome,
     ).toBe("not-found");
     await seedListedGrant();
     expect(
-      revokeCronStandingGrant({ grantId: "missing", revokedBy: "x", databaseOptions }).outcome,
+      (await revokeCronStandingGrant({ grantId: "missing", revokedBy: "x", databaseOptions }))
+        .outcome,
     ).toBe("not-found");
   });
 
-  it("rebuilds the unshipped mandatory-expiry table shape on first use", () => {
+  it("rebuilds the unshipped mandatory-expiry table shape on first use", async () => {
     const databaseOptions = createDatabaseOptions();
     const revision = seedCronJob(databaseOptions);
     const database = openOpenClawStateDatabase(databaseOptions);
@@ -932,7 +992,7 @@ describe("standing grant operator surfaces", () => {
         },
       }),
     ).toMatchObject({ outcome: "resolved" });
-    const grants = listCronStandingGrants({ databaseOptions });
+    const grants = await listCronStandingGrants({ databaseOptions });
     expect(grants).toHaveLength(1);
     expect(grants[0]!.expiresAtMs).toBeNull();
   });

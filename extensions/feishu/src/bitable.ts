@@ -18,7 +18,6 @@ function ensureLarkSuccess(res: { code?: number; msg?: string }, api: string): v
   }
 }
 
-/** Field type ID to human-readable name */
 const FIELD_TYPE_NAMES: Record<number, string> = {
   1: "Text",
   2: "Number",
@@ -43,9 +42,6 @@ const FIELD_TYPE_NAMES: Record<number, string> = {
   1005: "AutoNumber",
 };
 
-// ============ Core Functions ============
-
-/** Parse bitable URL and extract tokens */
 function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki: boolean } | null {
   try {
     const u = new URL(url);
@@ -59,7 +55,6 @@ function parseBitableUrl(url: string): { token: string; tableId?: string; isWiki
   }
 }
 
-/** Get app_token from wiki node_token */
 async function getAppTokenFromWiki(client: Lark.Client, nodeToken: string): Promise<string> {
   const res = await client.wiki.space.getNode({
     params: { token: nodeToken },
@@ -77,7 +72,6 @@ async function getAppTokenFromWiki(client: Lark.Client, nodeToken: string): Prom
   return node.obj_token!;
 }
 
-/** Get bitable metadata from URL (handles both /base/ and /wiki/ URLs) */
 async function getBitableMeta(client: Lark.Client, url: string) {
   const parsed = parseBitableUrl(url);
   if (!parsed) {
@@ -86,13 +80,11 @@ async function getBitableMeta(client: Lark.Client, url: string) {
 
   const appToken = parsed.isWiki ? await getAppTokenFromWiki(client, parsed.token) : parsed.token;
 
-  // Get bitable app info
   const res = await client.bitable.app.get({
     path: { app_token: appToken },
   });
   ensureLarkSuccess(res, "bitable.app.get");
 
-  // List tables if no table_id specified
   let tables: { table_id: string; name: string }[] = [];
   if (!parsed.tableId) {
     const tablesRes = await client.bitable.appTable.list({
@@ -120,7 +112,6 @@ async function getBitableMeta(client: Lark.Client, url: string) {
 
 type CleanupLogger = { debug: (msg: string) => void };
 
-/** Default field types created for new Bitable tables (to be cleaned up) */
 const DEFAULT_CLEANUP_FIELD_TYPES = new Set([3, 5, 17]); // SingleSelect, DateTime, Attachment
 
 function isDefaultEmptyBitableFieldValue(value: unknown): boolean {
@@ -145,11 +136,9 @@ function isPlaceholderBitableRecord(fields: unknown): boolean {
   if (!fields || typeof fields !== "object" || Array.isArray(fields)) {
     return true;
   }
-  const values = Object.values(fields);
-  return values.every(isDefaultEmptyBitableFieldValue);
+  return Object.values(fields).every(isDefaultEmptyBitableFieldValue);
 }
 
-/** Clean up default placeholder rows and fields in a newly created Bitable table */
 async function cleanupNewBitable(
   client: Lark.Client,
   appToken: string,
@@ -160,17 +149,14 @@ async function cleanupNewBitable(
   let cleanedRows = 0;
   let cleanedFields = 0;
 
-  // Step 1: Clean up default fields
   const fieldsRes = await client.bitable.appTableField.list({
     path: { app_token: appToken, table_id: tableId },
   });
 
   if (fieldsRes.code === 0 && fieldsRes.data?.items) {
-    // Step 1a: Rename primary field to the table name (works for both Feishu and Lark)
     const primaryField = fieldsRes.data.items.find((f) => f.is_primary);
     if (primaryField?.field_id) {
       try {
-        const newFieldName = tableName.length <= 20 ? tableName : "Name";
         const response = await client.bitable.appTableField.update({
           path: {
             app_token: appToken,
@@ -178,7 +164,7 @@ async function cleanupNewBitable(
             field_id: primaryField.field_id,
           },
           data: {
-            field_name: newFieldName,
+            field_name: tableName.length <= 20 ? tableName : "Name",
             type: 1,
           },
         });
@@ -189,7 +175,6 @@ async function cleanupNewBitable(
       }
     }
 
-    // Step 1b: Delete default placeholder fields by type (works for both Feishu and Lark)
     const defaultFieldsToDelete = fieldsRes.data.items.filter(
       (f) => !f.is_primary && DEFAULT_CLEANUP_FIELD_TYPES.has(f.type ?? 0),
     );
@@ -213,7 +198,6 @@ async function cleanupNewBitable(
     }
   }
 
-  // Step 2: Delete empty placeholder rows (batch when possible)
   const recordsRes = await client.bitable.appTableRecord.list({
     path: { app_token: appToken, table_id: tableId },
     params: { page_size: 100 },
@@ -306,8 +290,6 @@ async function createApp(
   };
 }
 
-// ============ Schemas ============
-
 const BITABLE_APP_TOKEN_DESCRIPTION =
   "Bitable application token (the /base/ URL identifier, or app_token from metadata). Not the node token in a /wiki/ URL.";
 const BITABLE_RECORD_FIELDS_DESCRIPTION =
@@ -325,8 +307,7 @@ const ListFieldsSchema = Type.Object({
 });
 
 const ListRecordsSchema = Type.Object({
-  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...ListFieldsSchema.properties,
   page_size: optionalPositiveIntegerSchema({
     description: "Number of records per page (1-500, default 100)",
     maximum: 500,
@@ -337,8 +318,7 @@ const ListRecordsSchema = Type.Object({
 });
 
 const GetRecordSchema = Type.Object({
-  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...ListFieldsSchema.properties,
   record_id: Type.String({ description: "Record ID to retrieve" }),
 });
 
@@ -349,8 +329,7 @@ const BitableFieldValueSchema = Type.Unsafe<BitableRecordFields[string]>({
 });
 
 const CreateRecordSchema = Type.Object({
-  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...ListFieldsSchema.properties,
   fields: Type.Record(Type.String(), BitableFieldValueSchema, {
     description: BITABLE_RECORD_FIELDS_DESCRIPTION,
   }),
@@ -368,8 +347,7 @@ const CreateAppSchema = Type.Object({
 });
 
 const CreateFieldSchema = Type.Object({
-  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...ListFieldsSchema.properties,
   field_name: Type.String({ description: "Name for the new field" }),
   field_type: Type.Number({
     description:
@@ -384,15 +362,10 @@ const CreateFieldSchema = Type.Object({
 });
 
 const UpdateRecordSchema = Type.Object({
-  app_token: Type.String({ description: BITABLE_APP_TOKEN_DESCRIPTION }),
-  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  ...ListFieldsSchema.properties,
   record_id: Type.String({ description: "Record ID to update" }),
-  fields: Type.Record(Type.String(), BitableFieldValueSchema, {
-    description: BITABLE_RECORD_FIELDS_DESCRIPTION,
-  }),
+  fields: CreateRecordSchema.properties.fields,
 });
-
-// ============ Tool Registration ============
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
   const registerBitableTool = <TSchemaType extends TSchema>(tool: {
@@ -440,9 +413,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "List all fields (columns) in a Bitable table with their types and properties",
     parameters: ListFieldsSchema,
     async execute({ params, client }) {
-      const { app_token: appToken, table_id: tableId } = params;
+      const { app_token, table_id } = params;
       const res = await client.bitable.appTableField.list({
-        path: { app_token: appToken, table_id: tableId },
+        path: { app_token, table_id },
       });
       ensureLarkSuccess(res, "bitable.appTableField.list");
 
@@ -467,16 +440,16 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "List records (rows) from a Bitable table with pagination support",
     parameters: ListRecordsSchema,
     async execute({ params, client }) {
-      const { app_token: appToken, table_id: tableId, page_token: pageToken } = params;
+      const { app_token, table_id, page_token } = params;
       const pageSize = readPositiveIntegerParam(params, "page_size", {
         max: 500,
         message: "page_size must be a positive integer between 1 and 500",
       });
       const res = await client.bitable.appTableRecord.list({
-        path: { app_token: appToken, table_id: tableId },
+        path: { app_token, table_id },
         params: {
           page_size: pageSize ?? 100,
-          ...(pageToken && { page_token: pageToken }),
+          ...(page_token && { page_token }),
         },
       });
       ensureLarkSuccess(res, "bitable.appTableRecord.list");
@@ -496,9 +469,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "Get a single record by ID from a Bitable table",
     parameters: GetRecordSchema,
     async execute({ params, client }) {
-      const { app_token: appToken, table_id: tableId, record_id: recordId } = params;
+      const { app_token, table_id, record_id } = params;
       const res = await client.bitable.appTableRecord.get({
-        path: { app_token: appToken, table_id: tableId, record_id: recordId },
+        path: { app_token, table_id, record_id },
       });
       ensureLarkSuccess(res, "bitable.appTableRecord.get");
 
@@ -514,9 +487,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "Create a new record (row) in a Bitable table",
     parameters: CreateRecordSchema,
     async execute({ params, client }) {
-      const { app_token: appToken, table_id: tableId, fields } = params;
+      const { app_token, table_id, fields } = params;
       const res = await client.bitable.appTableRecord.create({
-        path: { app_token: appToken, table_id: tableId },
+        path: { app_token, table_id },
         data: { fields },
       });
       ensureLarkSuccess(res, "bitable.appTableRecord.create");
@@ -533,9 +506,9 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "Update an existing record (row) in a Bitable table",
     parameters: UpdateRecordSchema,
     async execute({ params, client }) {
-      const { app_token: appToken, table_id: tableId, record_id: recordId, fields } = params;
+      const { app_token, table_id, record_id, fields } = params;
       const res = await client.bitable.appTableRecord.update({
-        path: { app_token: appToken, table_id: tableId, record_id: recordId },
+        path: { app_token, table_id, record_id },
         data: { fields },
       });
       ensureLarkSuccess(res, "bitable.appTableRecord.update");
@@ -564,18 +537,12 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     description: "Create a new field (column) in a Bitable table",
     parameters: CreateFieldSchema,
     async execute({ params, client }) {
-      const {
-        app_token: appToken,
-        table_id: tableId,
-        field_name: fieldName,
-        field_type: fieldType,
-        property,
-      } = params;
+      const { app_token, table_id, field_name, field_type, property } = params;
       const res = await client.bitable.appTableField.create({
-        path: { app_token: appToken, table_id: tableId },
+        path: { app_token, table_id },
         data: {
-          field_name: fieldName,
-          type: fieldType,
+          field_name,
+          type: field_type,
           ...(property && { property }),
         },
       });

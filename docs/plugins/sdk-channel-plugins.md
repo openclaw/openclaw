@@ -166,6 +166,11 @@ and JavaScript, keep their existing contract.
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
     them. `createChatChannelPlugin` defaults omitted capabilities to direct
     messages; declare `capabilities.chatTypes` when the channel supports more.
+    Set `capabilities.reactions` when the channel supports reactions. Channels
+    limited to one bot reaction per message set `capabilities.reactionSlots` to
+    `"single"`; `"multiple"` or omission means independent emoji. When a Control UI
+    reaction is removed from a single-slot channel, the mirror restores the newest
+    remaining emoji or clears the slot when none remain.
 
     `config.inspectAccount` is synchronous and returns metadata
     for read-only diagnostics, including disabled or configured-but-unavailable
@@ -305,6 +310,12 @@ and JavaScript, keep their existing contract.
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    For channel-specific secret activation, `createChannelSecretContract` from
+    `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
+    `account`/`channel` registry specs, and a `collect` callback. The callback receives
+    `config`, `defaults`, `context`, `channelKey`, `channel`, and the resolved account
+    `surface`; it runs only when the channel record exists. Keep activation rules in the callback.
+
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
     `accountId`, and the plugin-owned `fields` to remove. It returns
@@ -407,6 +418,14 @@ and JavaScript, keep their existing contract.
       Channel turn adapters can forward the same plan through
       `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
       `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      Both durable inbound helpers accept an optional synchronous
+      `prepareRuntimeHandoff(cfg)` callback for final replies after an unrelated
+      plugin reload. The channel must reject a changed admitted sender and return
+      a config that pins the verified credential for all parts of that delivery.
+      Core requires the exact retained channel registration and unchanged channel,
+      shared-default, and owning-plugin settings; channels without this callback
+      cannot transfer a final reply to a successor registry. The callback must not
+      persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation
       to avoid reparsing literal text in its own normalization code.

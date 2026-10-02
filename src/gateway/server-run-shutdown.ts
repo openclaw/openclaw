@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { captureGatewayReplyRunRestartAbort } from "../auto-reply/reply/reply-run-registry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -88,13 +89,6 @@ function formatRestartReplyDrainDetails(counts: {
   return details.length > 0 ? details.join(", ") : "no pending reply work";
 }
 
-async function sleepForRestartReplyDrain(delayMs: number): Promise<void> {
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, delayMs);
-    timer.unref?.();
-  });
-}
-
 export type GatewayRunShutdownParams = {
   resolveGatewayContext: GatewayContextResolver;
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
@@ -143,7 +137,9 @@ async function waitForRestartReplyDrain(params: {
     if (elapsedMs >= timeoutMs) {
       return { drained: false, elapsedMs, counts };
     }
-    await sleepForRestartReplyDrain(Math.min(RESTART_REPLY_DRAIN_POLL_MS, timeoutMs - elapsedMs));
+    await sleep(Math.min(RESTART_REPLY_DRAIN_POLL_MS, timeoutMs - elapsedMs), undefined, {
+      ref: false,
+    });
     counts = getRestartReplyDrainCounts(params);
     if (counts.pendingReplies <= 0 && counts.activeRuns <= 0 && counts.queuedTurns <= 0) {
       return { drained: true, elapsedMs: Date.now() - startedAt, counts };

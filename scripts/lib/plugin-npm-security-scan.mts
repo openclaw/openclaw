@@ -282,6 +282,22 @@ for (const [key, count] of [
   CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
 }
 
+const RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS = new Map(
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+);
+// Post-9.6 test-only drift: the Codex auth-refresh harness spawns its checked-in
+// child stub over real pipes, iMessage adds a real child for Contacts
+// diagnostics (#156334), the Feishu proxy test sets HTTPS_PROXY beside a mocked
+// request, and Signal keeps one stale-socket probe after #159648.
+for (const [key, count] of [
+  ["@openclaw/codex:dangerous-exec:src/app-server/auth-refresh-authority.integration.test.ts", 1],
+  ["@openclaw/feishu:env-harvesting:src/client.test.ts", 1],
+  ["@openclaw/imessage:dangerous-exec:src/client.test.ts", 4],
+  ["@openclaw/signal:dangerous-exec:src/socket-path.test.ts", 1],
+] as const) {
+  CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS.set(key, count);
+}
+
 const CURRENT_SECURITY_INVENTORY_POLICY: PluginSecurityInventoryPolicy = {
   layout: CURRENT_REVIEWED_RELEASE_LAYOUT,
   optionalPackedFindingCounts: CURRENT_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
@@ -387,7 +403,14 @@ const FROZEN_RELEASE_SECURITY_INVENTORY_POLICIES = new Map<string, PluginSecurit
       requiredSourceFindingCounts: RELEASE_2026_9_5_REQUIRED_REVIEWED_SOURCE_FINDING_COUNTS,
     },
   ],
-  ["release/2026.9.6", CURRENT_SECURITY_INVENTORY_POLICY],
+  [
+    "release/2026.9.6",
+    {
+      ...CURRENT_SECURITY_INVENTORY_POLICY,
+      optionalPackedFindingCounts: RELEASE_2026_9_6_OPTIONAL_REVIEWED_PACKED_FINDING_COUNTS,
+    },
+  ],
+  ["release/2026.9.7", CURRENT_SECURITY_INVENTORY_POLICY],
   [
     "extended-stable/2026.6.33",
     {

@@ -611,6 +611,21 @@ describe("registered node workspace service", () => {
     expect(openDuplex).not.toHaveBeenCalled();
   });
 
+  it("preserves structured node refusals for file growth and symlinks", async () => {
+    await service.start(context());
+    const bridge = getAgentWorkspaceAccess(local)!.bridge;
+    const filePath = path.join(local, "AGENTS.md");
+    expect(await bridge.stat({ filePath })).toMatchObject({ type: "file", size: 20 });
+    await fs.writeFile(path.join(remote, "AGENTS.md"), "x".repeat(33));
+    await expect(bridge.readFile({ filePath, maxBytes: 32 })).rejects.toMatchObject({
+      code: "FILE_TOO_LARGE",
+    });
+    await fs.symlink("AGENTS.md", path.join(remote, "link.md"));
+    await expect(bridge.stat({ filePath: path.join(local, "link.md") })).rejects.toMatchObject({
+      code: "SYMLINK_REDIRECT",
+    });
+  });
+
   it("fails large reads explicitly when duplex is unavailable", async () => {
     await fs.writeFile(path.join(remote, "output.bin"), "");
     await fs.truncate(path.join(remote, "output.bin"), 17 * 1024 * 1024);
@@ -692,7 +707,7 @@ describe("registered node workspace service", () => {
       const entries = await getAgentWorkspaceAccess(local)!.bridge.readDirectory!({
         filePath: ".",
       });
-      expect(entries).toEqual([
+      expect(entries).toMatchObject([
         { name: "AGENTS.md", isDirectory: false },
         { name: "draft\\old.txt", isDirectory: false },
       ]);
@@ -721,9 +736,18 @@ describe("registered node workspace service", () => {
     await expect(access.bridge.readFile({ filePath: "missing" })).rejects.toMatchObject({
       code: "ENOENT",
     });
-    expect(await access.bridge.readDirectory!({ filePath: local })).toEqual([
-      { name: "AGENTS.md", isDirectory: false },
+    await fs.symlink("AGENTS.md", path.join(remote, "link.md"));
+    expect(await access.bridge.readDirectory!({ filePath: local })).toMatchObject([
+      {
+        name: "AGENTS.md",
+        isDirectory: false,
+        isFile: true,
+        size: 20,
+        mtimeMs: expect.any(Number),
+      },
+      { name: "link.md", isDirectory: false, isFile: false, size: 9 },
     ]);
+    await expect(access.bridge.readFile({ filePath: "link.md" })).rejects.toThrow(/SYMLINK/);
     await access.bridge.writeFile({ filePath, data: "Live owner edit" });
     expect(await fs.readFile(path.join(remote, "AGENTS.md"), "utf8")).toBe("Live owner edit");
     expect(await fs.readFile(filePath, "utf8")).toBe("Gateway decoy");
@@ -751,7 +775,9 @@ describe("registered node workspace service", () => {
     const entries = await getAgentWorkspaceAccess(local)!.bridge.readDirectory!({ filePath: "." });
     expect(entries).toHaveLength(4101);
     expect(new Set(entries.map((entry) => entry.name))).toEqual(new Set(await fs.readdir(remote)));
-    expect(entries).toContainEqual({ name: "AGENTS.md", isDirectory: false });
+    expect(entries).toContainEqual(
+      expect.objectContaining({ name: "AGENTS.md", isDirectory: false }),
+    );
   });
 
   it("rejects a directory continuation that makes no progress", async () => {

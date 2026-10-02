@@ -13,6 +13,7 @@ import * as stateDatabaseHandles from "../state/openclaw-state-db-handle.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -455,7 +456,7 @@ describe("deferred configured-plugin migrations", () => {
     };
 
     await recordDeferredPluginMigrations({ env, pending: [alpha, beta] });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const sharedStateDir = path.join(stateDir, "state");
     const snapshot = () =>
       Object.fromEntries(

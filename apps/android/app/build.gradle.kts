@@ -1,12 +1,44 @@
 import com.android.build.api.variant.impl.VariantOutputImpl
+import groovy.json.JsonSlurper
 import org.gradle.api.tasks.Exec
 import org.gradle.api.tasks.PathSensitivity
+import org.gradle.process.ExecOperations
+import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.Properties
 import java.util.zip.ZipFile
+import javax.inject.Inject
+
+@CacheableTask
+abstract class GenerateNativeI18n
+  @Inject
+  constructor(
+    private val execOperations: ExecOperations,
+  ) : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val sourceFiles: ConfigurableFileCollection
+
+    @get:Internal
+    abstract val repositoryDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val kotlinDirectory: DirectoryProperty
+
+    @get:OutputDirectory
+    abstract val resourceDirectory: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+      execOperations.exec {
+        workingDir(repositoryDirectory.get().asFile)
+        commandLine("node", "scripts/android-app-i18n.ts", "generate")
+      }
+    }
+  }
 
 abstract class ExtractCloudflareSodium : DefaultTask() {
   @get:InputFile
@@ -51,6 +83,11 @@ abstract class ExtractCloudflareSodium : DefaultTask() {
       }
     }
   }
+}
+
+abstract class GenerateGatewayProtocol : Exec() {
+  @get:OutputDirectory
+  abstract val outputDirectory: DirectoryProperty
 }
 
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
@@ -153,6 +190,51 @@ plugins {
   alias(libs.plugins.ksp)
 }
 
+val generateGatewayProtocol =
+  tasks.register<GenerateGatewayProtocol>("generateGatewayProtocol") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    val manifest = repositoryRoot.resolve("scripts/native-protocol-inputs.json")
+    val protocolInputs = JsonSlurper().parse(manifest) as Map<*, *>
+    val directories = protocolInputs["directories"] as List<*>
+    val files = protocolInputs["files"] as List<*>
+    inputs
+      .files(
+        directories.map { directory ->
+          fileTree(repositoryRoot.resolve(directory as String)) {
+            include("**/*.ts", "**/*.mts", "**/*.mjs", "**/*.json")
+            exclude("**/node_modules/**", "**/*.test.*", "**/*.spec.*", "**/.*", "**/.*/**")
+          }
+        },
+        files.map { file -> repositoryRoot.resolve(file as String) },
+      ).withPathSensitivity(PathSensitivity.RELATIVE)
+    outputDirectory.set(layout.buildDirectory.dir("generated/openclaw-protocol"))
+    val nodeName = if (System.getProperty("os.name").startsWith("Windows")) "node.exe" else "node"
+    val nodeCandidates =
+      providers
+        .environmentVariable("PATH")
+        .orNull
+        .orEmpty()
+        .split(File.pathSeparator)
+        .map { directory -> File(directory, nodeName) } +
+        listOf(File("/opt/homebrew/bin/node"), File("/usr/local/bin/node"))
+    val node =
+      nodeCandidates.firstOrNull { it.isFile && it.canExecute() }
+        ?: error("Node.js is required to build the Gateway protocol models.")
+    workingDir(repositoryRoot)
+    commandLine(
+      node.absolutePath,
+      repositoryRoot.resolve("scripts/prepare-native-protocol.mjs").path,
+      "--language",
+      "kotlin",
+      "--out",
+      outputDirectory.get().asFile.absolutePath,
+    )
+  }
+
+androidComponents.onVariants { variant ->
+  variant.sources.kotlin?.addGeneratedSourceDirectory(generateGatewayProtocol, GenerateGatewayProtocol::outputDirectory)
+}
+
 // NuGet is used only as an upstream native artifact container, never as a managed/runtime dependency.
 val cloudflareSodiumArchive =
   configurations.create("cloudflareSodiumArchive") {
@@ -210,8 +292,47 @@ val extractCloudflareSodiumTest =
     entries.set(mapOf("runtimes/$runtime/native/$upstreamFilename" to filename))
     outputDirectory.set(layout.buildDirectory.dir("generated/cloudflare-sodium/test-$runtime"))
   }
+val generateNativeI18n =
+  tasks.register<GenerateNativeI18n>("generateNativeI18n") {
+    val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
+    repositoryDirectory.set(repositoryRoot)
+    sourceFiles.from(
+      listOf(
+        "scripts/android-app-i18n.ts",
+        "scripts/native-i18n-locales.ts",
+        "scripts/lib/direct-run.mjs",
+        "packages/normalization-core/src/expect.ts",
+        "apps/.i18n/native-source.json",
+        "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
+      ).map(repositoryRoot::resolve),
+      fileTree(repositoryRoot.resolve("apps/android")) {
+        include(
+          "app/src/main/res/values/strings.xml",
+          "app/src/main/res/values/assistant.xml",
+          "app/src/thirdParty/res/values/accessibility_strings.xml",
+          "wear/src/main/res/values/strings.xml",
+        )
+      },
+      fileTree(repositoryRoot.resolve("apps/.i18n/native")) { include("*.json") },
+      listOf(
+        "apps/android/app/src/main/java",
+        "apps/android/app/src/play/java",
+        "apps/android/app/src/thirdParty/java",
+        "apps/android/wear/src/main/java",
+      ).map { relativePath ->
+        fileTree(repositoryRoot.resolve(relativePath)) {
+          include("**/*.kt")
+          exclude("**/NativeStringResources.kt")
+        }
+      },
+    )
+    kotlinDirectory.set(layout.projectDirectory.dir("build/generated/native-i18n/kotlin"))
+    resourceDirectory.set(layout.projectDirectory.dir("build/generated/native-i18n/res"))
+  }
 androidComponents.onVariants { variant ->
   variant.sources.jniLibs?.addGeneratedSourceDirectory(extractCloudflareSodium, ExtractCloudflareSodium::outputDirectory)
+  variant.sources.kotlin?.addGeneratedSourceDirectory(generateNativeI18n, GenerateNativeI18n::kotlinDirectory)
+  variant.sources.res?.addGeneratedSourceDirectory(generateNativeI18n, GenerateNativeI18n::resourceDirectory)
 }
 
 ksp {
@@ -498,6 +619,8 @@ dependencies {
 
 tasks.withType<Test>().configureEach {
   useJUnitPlatform()
+  // This platform fixture is loaded by Robolectric, not by JUnit's unsandboxed test discovery.
+  exclude("**/ControlUiAuthWebViewShadow.class")
   if (sodiumTestHost != null) {
     dependsOn(extractCloudflareSodiumTest)
     val nativeDirectory = extractCloudflareSodiumTest.flatMap { it.outputDirectory }

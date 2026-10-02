@@ -112,20 +112,11 @@ export function execApprovalAllowlistMissingTarget(agentId: string | undefined):
     : execApprovalsPolicyUri(`agents/${ocPathSegment(agentId)}/allowlist`);
 }
 
-export function formatExecApprovalAllowlistRequirement(
-  entry: ExecApprovalAllowlistRequirement,
-): string {
-  return formatExecApprovalAllowlistParts(entry.pattern, entry.argPattern);
-}
-
 export function formatExecApprovalAllowlistEntry(
-  entry: PolicyExecApprovalEvidence | undefined,
+  entry: Pick<PolicyExecApprovalEvidence, "pattern" | "argPattern"> | undefined,
 ): string {
-  return formatExecApprovalAllowlistParts(entry?.pattern ?? "", entry?.argPattern);
-}
-
-function formatExecApprovalAllowlistParts(pattern: string, argPattern: string | undefined): string {
-  return argPattern === undefined ? pattern : `${pattern} argPattern=${argPattern}`;
+  const pattern = entry?.pattern ?? "";
+  return entry?.argPattern === undefined ? pattern : `${pattern} argPattern=${entry.argPattern}`;
 }
 
 export function effectiveExecApprovalAgentSecurityEntry(

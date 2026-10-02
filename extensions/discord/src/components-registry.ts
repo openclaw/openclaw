@@ -239,25 +239,6 @@ async function registerPersistentRegistryEntries<T extends { id: string }>(param
   );
 }
 
-async function registerPersistentEntries(params: {
-  entries: DiscordComponentEntry[];
-  modals: DiscordModalEntry[];
-  ttlMs: number;
-}): Promise<void> {
-  await Promise.all([
-    registerPersistentRegistryEntries({
-      entries: params.entries,
-      ttlMs: params.ttlMs,
-      openStore: getPersistentComponentStore,
-    }),
-    registerPersistentRegistryEntries({
-      entries: params.modals,
-      ttlMs: params.ttlMs,
-      openStore: getPersistentModalStore,
-    }),
-  ]);
-}
-
 async function deletePersistentEntry<T extends { id: string }>(params: {
   id: string;
   openStore: () => DiscordRegistryStore<T> | undefined;
@@ -342,11 +323,18 @@ export function registerDiscordComponentEntries(params: {
     for (const entry of normalizedModals) {
       discordComponentRegistryState.modalEntries.set(entry.id, entry);
     }
-    await registerPersistentEntries({
-      entries: normalizedEntries,
-      modals: normalizedModals,
-      ttlMs,
-    });
+    await Promise.all([
+      registerPersistentRegistryEntries({
+        entries: normalizedEntries,
+        ttlMs,
+        openStore: getPersistentComponentStore,
+      }),
+      registerPersistentRegistryEntries({
+        entries: normalizedModals,
+        ttlMs,
+        openStore: getPersistentModalStore,
+      }),
+    ]);
   });
 }
 

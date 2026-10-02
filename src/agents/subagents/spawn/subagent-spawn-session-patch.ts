@@ -10,102 +10,16 @@ import type { GatewaySessionStoreTargetWithStore } from "../../../gateway/sessio
 import { waitForSessionParticipantRecording } from "../../../sessions/session-participant-recording.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
-import {
-  inheritedToolAllowPatch,
-  inheritedToolDenyPatch,
-  normalizeInheritedToolAllowlist,
-  normalizeInheritedToolDenylist,
-} from "../../inherited-tool-deny.js";
+import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
+import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
-import { splitModelRef } from "./subagent-spawn-plan.js";
+import { type resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
   resolveGatewaySessionStoreTargetInWorker,
   upsertSessionEntryCore,
   withSessionEntryReadOnlyInWorker,
 } from "./subagent-spawn.runtime.js";
-
-function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<SessionEntry> {
-  const entry: Partial<SessionEntry> = {};
-  const spawnDepth = patch.spawnDepth;
-  if (typeof spawnDepth === "number" && Number.isFinite(spawnDepth) && spawnDepth >= 0) {
-    entry.spawnDepth = Math.floor(spawnDepth);
-  }
-  if (patch.subagentRole === "orchestrator" || patch.subagentRole === "leaf") {
-    entry.subagentRole = patch.subagentRole;
-  }
-  if (patch.subagentControlScope === "children" || patch.subagentControlScope === "none") {
-    entry.subagentControlScope = patch.subagentControlScope;
-  }
-  if (patch.inheritedToolPolicyVersion === 1) {
-    entry.inheritedToolPolicyVersion = 1;
-  }
-  if (patch.incognito === true) {
-    entry.incognito = true;
-  }
-  for (const key of [
-    "spawnedBy",
-    "completionOwnerSessionKey",
-    "parentSessionKey",
-    "spawnedWorkspaceDir",
-    "spawnedCwd",
-  ] as const) {
-    const value = normalizeOptionalString(patch[key]);
-    if (value) {
-      entry[key] = value;
-    }
-  }
-  const inheritedToolDeny = normalizeInheritedToolDenylist(patch.inheritedToolDeny);
-  if (inheritedToolDeny.length > 0) {
-    entry.inheritedToolDeny = inheritedToolDeny;
-  }
-  const inheritedToolAllow = normalizeInheritedToolAllowlist(patch.inheritedToolAllow);
-  if (inheritedToolAllow.length > 0) {
-    entry.inheritedToolAllow = inheritedToolAllow;
-  }
-  if (typeof patch.thinkingLevel === "string" && patch.thinkingLevel.trim()) {
-    entry.thinkingLevel = patch.thinkingLevel.trim();
-  }
-  const authProfileOverride = normalizeOptionalString(patch.authProfileOverride);
-  if (authProfileOverride) {
-    entry.authProfileOverride = authProfileOverride;
-    entry.authProfileOverrideSource = patch.authProfileOverrideSource === "auto" ? "auto" : "user";
-  }
-  if (patch.fastMode === true || patch.fastMode === false || patch.fastMode === "auto") {
-    entry.fastMode = patch.fastMode;
-  }
-  if (typeof patch.swarmGroupId === "string" && patch.swarmGroupId.trim()) {
-    entry.swarmGroupId = patch.swarmGroupId.trim();
-  }
-  if (patch.swarmCollector === true) {
-    entry.swarmCollector = true;
-  }
-  if (patch.swarmOutputSchema && typeof patch.swarmOutputSchema === "object") {
-    entry.swarmOutputSchema = patch.swarmOutputSchema as Record<string, unknown>;
-  }
-  if (typeof patch.model === "string" && patch.model.trim()) {
-    const { provider, model } = splitModelRef(patch.model.trim());
-    if (model) {
-      entry.model = model;
-      entry.modelOverride = model;
-      entry.modelOverrideSource = patch.modelOverrideSource === "auto" ? "auto" : "user";
-      entry.modelOverrideRouteResolution = "resolved";
-      const fallbackOriginProvider = normalizeOptionalString(
-        patch.modelOverrideFallbackOriginProvider,
-      );
-      const fallbackOriginModel = normalizeOptionalString(patch.modelOverrideFallbackOriginModel);
-      if (fallbackOriginProvider && fallbackOriginModel) {
-        entry.modelOverrideFallbackOriginProvider = fallbackOriginProvider;
-        entry.modelOverrideFallbackOriginModel = fallbackOriginModel;
-      }
-      if (provider) {
-        entry.modelProvider = provider;
-        entry.providerOverride = provider;
-      }
-    }
-  }
-  return entry;
-}
 
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
@@ -120,32 +34,74 @@ export async function createInitialSubagentSession(params: {
   spawnedWorkspaceDir?: string;
   spawnedCwd?: string;
   sessionPermissionPolicy?: PreparedSessionPermissionPolicy;
-  admissionPatch?: Record<string, unknown>;
+  admissionPatch?: Extract<
+    ReturnType<typeof resolveSpawnAdmission>,
+    { ok: true }
+  >["childSessionPatch"];
   inheritedToolAllowlist?: string[];
   inheritedToolDenylist?: string[];
-  modelPatch: Record<string, unknown>;
+  modelPatch: Partial<
+    Extract<
+      Awaited<ReturnType<typeof resolveSubagentModelAndThinkingPlan>>,
+      { status: "ok" }
+    >["initialSessionPatch"]
+  >;
   swarmGroupId?: string;
   collect: boolean;
   outputSchema?: Record<string, unknown>;
 }): Promise<{ status: "ok"; entry?: SessionEntry } | { status: "error"; error: string }> {
-  const initialChildSessionPatch: Record<string, unknown> = {
-    spawnedBy: params.requesterInternalKey,
-    completionOwnerSessionKey: params.completionOwnerSessionKey,
-    // Navigation and control lineage commit with the creation stamp so a
-    // launch failure cannot leave a durable but parentless child row.
-    parentSessionKey: params.requesterInternalKey,
-    ...(params.spawnedWorkspaceDir ? { spawnedWorkspaceDir: params.spawnedWorkspaceDir } : {}),
-    ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
-    ...params.admissionPatch,
+  const { subagentRole, ...admissionPatch } = params.admissionPatch ?? {};
+  const {
+    model: modelRef,
+    modelOverrideSource,
+    modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel,
+    ...modelPatch
+  } = params.modelPatch;
+  const { provider, model } = splitModelRef(modelRef);
+  const fallbackOriginProvider = normalizeOptionalString(modelOverrideFallbackOriginProvider);
+  const fallbackOriginModel = normalizeOptionalString(modelOverrideFallbackOriginModel);
+  const initialChildSessionPatch: Partial<SessionEntry> = {
+    ...admissionPatch,
+    ...(subagentRole ? { subagentRole } : {}),
     inheritedToolPolicyVersion: 1,
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
-    ...params.modelPatch,
-    ...(params.swarmGroupId ? { swarmGroupId: params.swarmGroupId } : {}),
+    ...modelPatch,
+    ...(model
+      ? {
+          model,
+          modelOverride: model,
+          modelOverrideSource: modelOverrideSource === "auto" ? "auto" : "user",
+          modelOverrideRouteResolution: "resolved",
+          ...(provider ? { modelProvider: provider, providerOverride: provider } : {}),
+          ...(fallbackOriginProvider && fallbackOriginModel
+            ? {
+                modelOverrideFallbackOriginProvider: fallbackOriginProvider,
+                modelOverrideFallbackOriginModel: fallbackOriginModel,
+              }
+            : {}),
+        }
+      : {}),
     ...(params.collect ? { swarmCollector: true } : {}),
     ...(params.outputSchema ? { swarmOutputSchema: params.outputSchema } : {}),
     ...(params.incognito ? { incognito: true } : {}),
   };
+  // Navigation and control lineage commit with the creation stamp so a
+  // launch failure cannot leave a durable but parentless child row.
+  for (const [key, raw] of [
+    ["spawnedBy", params.requesterInternalKey],
+    ["completionOwnerSessionKey", params.completionOwnerSessionKey],
+    ["parentSessionKey", params.requesterInternalKey],
+    ["spawnedWorkspaceDir", params.spawnedWorkspaceDir],
+    ["spawnedCwd", params.spawnedCwd],
+    ["swarmGroupId", params.swarmGroupId],
+  ] as const) {
+    const value = normalizeOptionalString(raw);
+    if (value) {
+      initialChildSessionPatch[key] = value;
+    }
+  }
   try {
     const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
       cfg: params.cfg,
@@ -199,7 +155,7 @@ export async function createInitialSubagentSession(params: {
         sessionKey: target.canonicalKey,
       },
       {
-        ...buildDirectChildSessionPatch(initialChildSessionPatch),
+        ...initialChildSessionPatch,
         // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
         ...(params.label ? { label: params.label } : {}),
         ...(params.sessionPermissionPolicy

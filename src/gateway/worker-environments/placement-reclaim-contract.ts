@@ -2,9 +2,9 @@ import type {
   WorkerSessionPlacementIdentity,
   WorkerSessionPlacementRecord,
 } from "./placement-record.js";
+import type { WorkerPlacementCancellationTarget } from "./placement-target.js";
 import type {
   WorkerPlacementAuthorization,
-  WorkerPlacementCancellationTarget,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
@@ -35,18 +35,6 @@ export type WorkerReclaimPlacement = Extract<
   WorkerSessionPlacementRecord,
   { state: "local" | "reclaimed" }
 >;
-
-export function matchesWorkerPlacementTarget(
-  current: WorkerPlacementCancellationTarget | undefined,
-  expected: WorkerPlacementCancellationTarget | undefined,
-): boolean {
-  return (
-    current?.state === expected?.state &&
-    current?.generation === expected?.generation &&
-    current?.environmentId === expected?.environmentId &&
-    current?.activeOwnerEpoch === expected?.activeOwnerEpoch
-  );
-}
 
 export type WorkerPlacementPendingOperations = {
   isCurrent: () => boolean;

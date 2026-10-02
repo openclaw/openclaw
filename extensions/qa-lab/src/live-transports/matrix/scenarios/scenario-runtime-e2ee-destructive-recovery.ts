@@ -1,4 +1,3 @@
-// QA Lab Matrix destructive E2EE CLI recovery helpers.
 import {
   createMatrixQaOpenClawCliRuntime,
   type MatrixQaCliRunResult,
@@ -7,42 +6,13 @@ import { buildMatrixQaCliE2eeAccountConfig } from "./scenario-runtime-e2ee-cli-c
 import {
   loginMatrixQaCliDevice,
   parseMatrixQaCliJson,
+  type MatrixQaCliBackupRestoreStatus,
+  type MatrixQaCliVerificationStatus,
   writeMatrixQaCliOutputArtifacts,
 } from "./scenario-runtime-e2ee-cli-shared.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
 export type MatrixQaCliRuntime = Awaited<ReturnType<typeof createMatrixQaOpenClawCliRuntime>>;
-
-export type MatrixQaCliBackupStatus = {
-  backup?: {
-    decryptionKeyCached?: boolean | null;
-    keyLoadError?: string | null;
-    matchesDecryptionKey?: boolean | null;
-    trusted?: boolean | null;
-  };
-  backupVersion?: string | null;
-  error?: string;
-  imported?: number;
-  loadedFromSecretStorage?: boolean;
-  success?: boolean;
-  total?: number;
-};
-
-export type MatrixQaCliVerificationStatus = {
-  backup?: MatrixQaCliBackupStatus["backup"];
-  crossSigningVerified?: boolean;
-  deviceId?: string | null;
-  serverDeviceKnown?: boolean | null;
-  error?: string;
-  recoveryKeyAccepted?: boolean;
-  backupUsable?: boolean;
-  deviceOwnerVerified?: boolean;
-  recoveryKeyStored?: boolean;
-  signedByOwner?: boolean;
-  success?: boolean;
-  userId?: string | null;
-  verified?: boolean;
-};
 
 export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
   if (!context.outputDir) {
@@ -140,7 +110,7 @@ export async function runMatrixQaCliJson<T>(params: {
 }
 
 export function assertMatrixQaCliBackupRestoreSucceeded(
-  restore: MatrixQaCliBackupStatus,
+  restore: MatrixQaCliBackupRestoreStatus,
   label: string,
 ) {
   if (restore.success !== true) {
@@ -158,7 +128,7 @@ export function assertMatrixQaCliBackupRestoreSucceeded(
 
 export function assertMatrixQaCliBackupRestoreFailed(
   restore: {
-    payload: MatrixQaCliBackupStatus;
+    payload: MatrixQaCliBackupRestoreStatus;
     result: Pick<MatrixQaCliRunResult, "exitCode">;
   },
   params: {

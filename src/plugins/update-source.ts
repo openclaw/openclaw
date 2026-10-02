@@ -164,7 +164,10 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     (packageName !== undefined &&
       packageName !== params.pluginId &&
       unscopedPackageName(packageName) === params.pluginId) ||
-    officialInstallRecords.hasOfficialNpmIdReplacement(params)
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId: params.pluginId,
+      record: params.record,
+    })?.replacementPluginId !== undefined
   );
 }
 
@@ -437,7 +440,8 @@ export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec =
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

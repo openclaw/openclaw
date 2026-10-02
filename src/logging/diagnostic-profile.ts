@@ -12,6 +12,8 @@ let capturing = false;
 let cleanupUncertain = false;
 
 type FailureReason =
+  | "cooldown"
+  | "heap-too-large"
   | "busy"
   | "unsupported"
   | "conflict"
@@ -150,7 +152,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     return unavailable("busy");
   }
   capturing = true;
-  let session: import("node:inspector/promises").Session | undefined;
+  let session: Session | undefined;
   let connected = false;
   let startAttempted = false;
   let stopAttempted = false;

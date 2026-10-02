@@ -77,7 +77,7 @@ type ActiveNodeHostRuntime = {
   invoke(frame: NodeInvokeRequestPayload): Promise<void>;
   handleInput(invokeId: string, seq: number, payloadJSON: string): void;
   cancel(invokeId: string): void;
-  cancelAll(): void;
+  cancelAll(): Promise<void>;
   tryPauseForUpdate(): Promise<boolean>;
   resumeAfterUpdate(): void;
   updateGatewayConnection(connection?: {
@@ -104,6 +104,19 @@ function ensureNodePathEnv(): string {
   }
   process.env.PATH = DEFAULT_NODE_PATH;
   return DEFAULT_NODE_PATH;
+}
+
+async function settleNodeHostCleanup(owners: Array<Promise<unknown> | undefined>): Promise<void> {
+  const results = await Promise.allSettled(owners.filter((owner) => owner !== undefined));
+  const errors = [
+    ...new Set(results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))),
+  ];
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, "node-host runtime cleanup failed");
+  }
 }
 
 export async function prepareNodeHostRuntime(params?: {
@@ -162,14 +175,14 @@ export async function prepareNodeHostRuntime(params?: {
     params?.enableWorkerRuns === true &&
     (params.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
   const workspaceOptions = { env, ephemeral: params?.ephemeral };
-  let preparedContainerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
+  let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
   let preparedContainerInitialized = false;
   let workerCleanupIncomplete = false;
   let publishContainerCapacity: ((capacity: NodeWorkerCapacitySnapshot) => void) | undefined;
   let workerHostingDisabledReason: string | undefined;
-  const disablePreparedContainerHosting = async (error: unknown) => {
+  const disablePreparedWorkerHosting = async (error: unknown) => {
     let failure = error;
     workerCleanupIncomplete ||= error instanceof NodeWorkerContainerContextMismatchError;
     try {
@@ -181,11 +194,19 @@ export async function prepareNodeHostRuntime(params?: {
       }
     }
     workerRunsEnabled = false;
-    preparedContainerWorkspace = undefined;
+    preparedWorkerWorkspace = undefined;
     preparedContainerSupervisor = undefined;
     preparedContainerCapacity = undefined;
     workerHostingDisabledReason = failure instanceof Error ? failure.message : String(failure);
   };
+  if (workerRunsEnabled) {
+    try {
+      preparedWorkerWorkspace = new NodeWorkerWorkspaceRuntime(workspaceOptions);
+      await preparedWorkerWorkspace.checkAdmission();
+    } catch (error) {
+      await disablePreparedWorkerHosting(error);
+    }
+  }
   if (workerRunsEnabled && config.nodeHost?.workerRuns?.isolation === "container") {
     try {
       if (platform === "win32") {
@@ -194,11 +215,10 @@ export async function prepareNodeHostRuntime(params?: {
         );
       }
       const containerEngine = await resolveNodeWorkerContainerEngine({ env });
-      preparedContainerWorkspace = new NodeWorkerWorkspaceRuntime(workspaceOptions);
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
-        workspace: preparedContainerWorkspace,
+        workspace: preparedWorkerWorkspace,
         containerEngine,
         ...(config.nodeHost?.workerRuns?.containerImage
           ? { containerImage: config.nodeHost.workerRuns.containerImage }
@@ -214,13 +234,13 @@ export async function prepareNodeHostRuntime(params?: {
         preparedContainerInitialized = true;
       } catch (error) {
         if (error instanceof NodeWorkerContainerContextMismatchError) {
-          await disablePreparedContainerHosting(error);
+          await disablePreparedWorkerHosting(error);
         } else {
           logDebug(`node-host: worker capacity reconciliation failed: ${String(error)}`);
         }
       }
     } catch (error) {
-      await disablePreparedContainerHosting(error);
+      await disablePreparedWorkerHosting(error);
     }
   }
   const skills =
@@ -266,9 +286,7 @@ export async function prepareNodeHostRuntime(params?: {
       let supervisorClose: Promise<void> | undefined;
       let mcpClose: Promise<void> | undefined;
       let initializationRetry: ReturnType<typeof setTimeout> | undefined;
-      const workerWorkspace =
-        preparedContainerWorkspace ??
-        (workerRunsEnabled ? new NodeWorkerWorkspaceRuntime(workspaceOptions) : undefined);
+      const workerWorkspace = preparedWorkerWorkspace;
       const workerBundleInstaller = workerRunsEnabled
         ? new NodeWorkerBundleInstaller({ env })
         : undefined;
@@ -320,9 +338,9 @@ export async function prepareNodeHostRuntime(params?: {
       }
       let skillBins = new SkillBinsCache(client, pathEnv);
       const activeInvokes = new Map<string, ActiveNodeInvoke>();
-      let pluginDisconnectCleanup: Promise<void> = Promise.resolve();
-      let pendingPluginDisconnectCleanups = 0;
-      let pluginDisconnectCleanupFailed = false;
+      let disconnectCleanup: Promise<void> = Promise.resolve();
+      let pendingDisconnectCleanups = 0;
+      let disconnectCleanupFailed = false;
       const pluginCommandContext: OpenClawPluginNodeHostCommandContext = {
         sendNodeEvent: async (event, payload) =>
           await client.request("node.event", buildNodeEventParams(event, payload)),
@@ -401,11 +419,17 @@ export async function prepareNodeHostRuntime(params?: {
           closing ||
           !mcpStartupComplete ||
           inFlightInvokes > 0 ||
-          pendingPluginDisconnectCleanups > 0 ||
-          pluginDisconnectCleanupFailed ||
+          pendingDisconnectCleanups > 0 ||
+          disconnectCleanupFailed ||
           hasRegisteredNodeHostCommandActiveWork() ||
           workerCleanupIncomplete,
-        hasWorkerActiveWork: () => workerSupervisor?.hasActiveWork(),
+        hasWorkerActiveWork: async () => {
+          if (await workerSupervisor?.hasActiveWork()) {
+            return true;
+          }
+          await workerSupervisor?.retireIdle();
+          return false;
+        },
       });
       return {
         async invoke(frame) {
@@ -422,20 +446,13 @@ export async function prepareNodeHostRuntime(params?: {
           try {
             const generation = connectionGeneration;
             try {
-              await pluginDisconnectCleanup;
+              await disconnectCleanup;
             } catch {
               if (!closing && generation === connectionGeneration) {
-                await client
-                  .request("node.invoke.result", {
-                    id: frame.id,
-                    nodeId: frame.nodeId,
-                    ok: false,
-                    error: {
-                      code: "UNAVAILABLE",
-                      message: "Node plugin cleanup failed. Reconnect the node to retry cleanup.",
-                    },
-                  })
-                  .catch(() => {});
+                await createNodeInvokeResponder(client, frame).error(
+                  "UNAVAILABLE",
+                  "Node disconnect cleanup failed. Reconnect the node to retry cleanup.",
+                );
               }
               return;
             }
@@ -594,32 +611,34 @@ export async function prepareNodeHostRuntime(params?: {
           // Retired refreshes may still finish; their cache must never serve the next connection.
           skillBins = new SkillBinsCache(client, pathEnv);
           // Close can reenter from an abort listener and must see this cleanup barrier.
-          pendingPluginDisconnectCleanups += 1;
-          const cleanup = pluginDisconnectCleanup
-            .catch(() => {})
-            .then(async () => await notifyRegisteredNodeHostCommandDisconnect())
-            .finally(() => {
-              pendingPluginDisconnectCleanups -= 1;
-            });
-          pluginDisconnectCleanup = cleanup;
+          pendingDisconnectCleanups += 1;
+          const idleCleanup = workerSupervisor?.retireIdle();
+          const cleanup = settleNodeHostCleanup([
+            disconnectCleanup.catch(() => {}).then(notifyRegisteredNodeHostCommandDisconnect),
+            idleCleanup,
+          ]).finally(() => {
+            pendingDisconnectCleanups -= 1;
+          });
+          disconnectCleanup = cleanup;
           // Logging observes the failure; invocation and shutdown retain the rejected result.
           void cleanup.then(
             () => {
-              if (pluginDisconnectCleanup === cleanup) {
-                pluginDisconnectCleanupFailed = false;
+              if (disconnectCleanup === cleanup) {
+                disconnectCleanupFailed = false;
               }
             },
             (error: unknown) => {
-              if (pluginDisconnectCleanup === cleanup) {
-                pluginDisconnectCleanupFailed = true;
+              if (disconnectCleanup === cleanup) {
+                disconnectCleanupFailed = true;
               }
-              logDebug(`node-host: plugin disconnect cleanup failed: ${String(error)}`);
+              logDebug(`node-host: disconnect cleanup failed: ${String(error)}`);
             },
           );
           for (const active of activeInvokes.values()) {
             active.controller.abort();
           }
           activeInvokes.clear();
+          return cleanup;
         },
         tryPauseForUpdate: updatePause.tryPauseForUpdate,
         resumeAfterUpdate: updatePause.resumeAfterUpdate,
@@ -636,19 +655,18 @@ export async function prepareNodeHostRuntime(params?: {
           const completion = createDeferredCore();
           closePromise = completion.promise;
           const closeOwners = async () => {
-            if (!wasClosing) {
-              if (initializationRetry) {
-                clearTimeout(initializationRetry);
-                initializationRetry = undefined;
-              }
-              this.cancelAll();
-            } else if (pluginDisconnectCleanupFailed) {
-              this.cancelAll();
+            if (!wasClosing && initializationRetry) {
+              clearTimeout(initializationRetry);
+              initializationRetry = undefined;
+            }
+            if (!wasClosing || disconnectCleanupFailed) {
+              // cancelAll publishes the cleanup barrier joined below.
+              void this.cancelAll();
             }
             const watcherClose = stopAvailabilityWatch();
             // Startup observes this signal before either independent owner is joined.
             mcpAbort.abort();
-            const disconnectClose = pluginDisconnectCleanup;
+            const disconnectClose = disconnectCleanup;
             supervisorClose ??= Promise.resolve()
               .then(() => workerSupervisor?.close())
               .catch((error: unknown) => {
@@ -658,23 +676,7 @@ export async function prepareNodeHostRuntime(params?: {
               });
             // MCP close is terminal: another call after failure can return an empty success.
             mcpClose ??= startup.then((resolved) => resolved?.close());
-            const results = await Promise.allSettled([
-              watcherClose,
-              disconnectClose,
-              supervisorClose,
-              mcpClose,
-            ]);
-            const errors = [
-              ...new Set(
-                results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-              ),
-            ];
-            if (errors.length === 1) {
-              throw errors[0];
-            }
-            if (errors.length > 1) {
-              throw new AggregateError(errors, "node-host runtime close failed");
-            }
+            await settleNodeHostCleanup([watcherClose, disconnectClose, supervisorClose, mcpClose]);
           };
           void closeOwners().then(completion.resolve, (error: unknown) => {
             closePromise = undefined;

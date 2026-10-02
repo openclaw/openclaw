@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   type PluginSdkApiDiffSurface,
 } from "../src/plugin-sdk/api-diff.ts";
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
@@ -241,6 +243,14 @@ async function renderWorker(argv: string[]): Promise<boolean> {
   const outputPath = argv[2] === "--output" ? argv[3] : undefined;
   if (!repoRoot || !outputPath || argv.length !== 4) {
     throw new Error("Invalid Plugin SDK API renderer invocation");
+  }
+  // Tagged revisions retain their checked-in declaration inputs.
+  if (
+    !["state", "agent"].every((name) =>
+      existsSync(path.join(repoRoot, `src/state/openclaw-${name}-db.generated.d.ts`)),
+    )
+  ) {
+    await ensureKyselyTypes(repoRoot);
   }
   await writeFile(outputPath, JSON.stringify(await renderPluginSdkApiRoot(repoRoot)));
   return true;

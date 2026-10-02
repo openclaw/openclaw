@@ -21,10 +21,24 @@ export type QaMockRequestSnapshot = {
   toolOutputStructuredError?: true;
 };
 
+/** Provider observation only; Gateway run/receipt identity must be collected separately. */
+export type QaMockContinuationCheckpoint = Readonly<{
+  cursor: number;
+  sessionId: string;
+  toolOutputCallId: string;
+}>;
+
+export type QaMockContinuationHold = {
+  reached: Promise<QaMockContinuationCheckpoint>;
+  release(): void;
+  cancel(): void;
+};
+
 export type QaMockProviderServer = {
   baseUrl: string;
   sessionObserverUrl?: string;
   terminalRequesters?: QaTerminalRequesterSettlement;
+  holdNextContinuation?: (sessionId: string, signal: AbortSignal) => QaMockContinuationHold;
   stop(): Promise<void>;
 };
 

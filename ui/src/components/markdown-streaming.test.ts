@@ -1,4 +1,3 @@
-import DOMPurify from "dompurify";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import * as markdownDetails from "./markdown-details.ts";
@@ -7,9 +6,31 @@ import * as markdownText from "./markdown-text.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
+const sanitizedInputLengths = vi.hoisted(() => {
+  // Cached markdown sanitizers must be created through this file's factory wrapper.
+  vi.resetModules();
+  const lengths: number[] = [];
+  return lengths;
+});
+
+vi.mock(import("dompurify"), async (importOriginal) => {
+  const actual = await importOriginal();
+  const createDOMPurify = (...factoryArgs: Parameters<typeof actual.default>) => {
+    const purifier = actual.default(...factoryArgs);
+    const sanitize = purifier.sanitize.bind(purifier);
+    vi.spyOn(purifier, "sanitize").mockImplementation((...args) => {
+      const [input] = args;
+      sanitizedInputLengths.push(typeof input === "string" ? input.length : 0);
+      return sanitize(...args);
+    });
+    return purifier;
+  };
+  return { ...actual, default: Object.assign(createDOMPurify, actual.default) };
+});
+
 describe("toStreamingMarkdownParts", () => {
   it("renders completed paragraphs with linear sanitizer input", () => {
-    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    sanitizedInputLengths.length = 0;
     let source = "";
     try {
       for (let index = 0; index < 40; index++) {
@@ -20,13 +41,11 @@ describe("toStreamingMarkdownParts", () => {
         expect(fragment.querySelectorAll("p")).toHaveLength(index + 1);
         expect(fragment.querySelectorAll("strong")).toHaveLength(index + 1);
       }
-      const sanitizedChars = sanitize.mock.calls.reduce(
-        (total, [input]) => total + (typeof input === "string" ? input.length : 0),
-        0,
-      );
+      expect(sanitizedInputLengths.length).toBeGreaterThan(0);
+      const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);
       expect(sanitizedChars).toBeLessThan(source.length * 2);
     } finally {
-      sanitize.mockRestore();
+      sanitizedInputLengths.length = 0;
     }
   });
 
@@ -57,7 +76,7 @@ export function sample${index}(value: number): number {
     );
     const prefixes = sections.map((_, index) => sections.slice(0, index + 1).join(""));
     const expected = prefixes.map((prefix) => toSanitizedMarkdownHtml(prefix));
-    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    sanitizedInputLengths.length = 0;
     let offset = 0;
     try {
       for (const [index, prefix] of prefixes.entries()) {
@@ -68,13 +87,11 @@ export function sample${index}(value: number): number {
           expected[index],
         );
       }
-      const sanitizedChars = sanitize.mock.calls.reduce(
-        (total, [input]) => total + (typeof input === "string" ? input.length : 0),
-        0,
-      );
+      expect(sanitizedInputLengths.length).toBeGreaterThan(0);
+      const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);
       expect(sanitizedChars).toBeLessThan(prefixes.at(-1)!.length * 20);
     } finally {
-      sanitize.mockRestore();
+      sanitizedInputLengths.length = 0;
     }
   });
 

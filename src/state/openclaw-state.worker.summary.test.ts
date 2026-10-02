@@ -57,7 +57,10 @@ it("retains the shared native handle until its last actor closes and preserves r
     createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
   );
   const second = runWithSqliteWorkerStateContext(context, () =>
-    openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+    openExistingSqliteWorkerBackend(undefined, {
+      databasePath: context.admission.databasePath,
+      existingIdentity: captureOpenClawStateWorkerContext().admission.identity.key,
+    }),
   );
   backends.add(first).add(second);
   await first[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.register");
@@ -135,7 +138,10 @@ it.each(["kv", "health"] as const)(
     const databasePath = context.admission.databasePath;
     const key = { pluginId: "borrow-fixture", namespace: "shared", key: "answer" };
     const kv = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath }),
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath,
+        existingIdentity: context.admission.identity.key,
+      }),
     );
     backends.add(kv);
     await kv[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");
@@ -275,10 +281,16 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
     const initialBytes = readFileSync(databasePath);
     const context = captureOpenClawStateWorkerContext({ path: databasePath, env: state.env });
     const first = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath: context.admission.databasePath,
+        existingIdentity: context.admission.identity.key,
+      }),
     );
     const second = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath: context.admission.databasePath,
+        existingIdentity: context.admission.identity.key,
+      }),
     );
     backends.add(first).add(second);
     await first[SQLITE_WORKER_PREPARE_COMMAND]?.("config.health.read");

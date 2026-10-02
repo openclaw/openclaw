@@ -1,6 +1,9 @@
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { decodeXml } from "../src/shared/xml.ts";
+import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { compareAscii as compareCodeUnits } from "./lib/canonical-json.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -344,14 +347,6 @@ function formatTokens(value: string): string[] {
   return [...value.matchAll(FORMAT_RE)].map((match) => match[0]).toSorted();
 }
 
-function stringsLiteral(value: string): string {
-  return JSON.stringify(value);
-}
-
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export function serializeAppleCatalog(catalog: Catalog): string {
   const topLevelEntries = Object.entries(catalog);
   const lines = ["{"];
@@ -374,15 +369,6 @@ export function serializeAppleCatalog(catalog: Catalog): string {
 
   lines.push("}", "");
   return lines.join("\n");
-}
-
-function decodeXml(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&amp;", "&");
 }
 
 function parseInfoPlistStrings(source: string): Array<{ key: string; source: string }> {
@@ -424,7 +410,7 @@ export function selectInfoPlistTranslation(
     (candidate) => candidate.trim() && candidate.trim() !== source.trim(),
   );
   if (translatedCandidates.length > 0) {
-    return chooseTranslation(source, translatedCandidates);
+    return selectDeterministicTranslation(source, translatedCandidates);
   }
   return existing?.source === source && existing.value.trim() ? existing.value : source;
 }
@@ -463,8 +449,8 @@ function renderInfoPlistStrings(
     const candidates = infoPlistTranslationCandidates(artifact, sourceId, source);
     const value = selectInfoPlistTranslation(source, candidates, existing.get(key));
     return [
-      `/* OpenClaw source: ${stringsLiteral(source)} */`,
-      `${stringsLiteral(key)} = ${stringsLiteral(value)};`,
+      `/* OpenClaw source: ${JSON.stringify(source)} */`,
+      `${JSON.stringify(key)} = ${JSON.stringify(value)};`,
     ].join("\n");
   });
   return `${lines.join("\n")}\n`;
@@ -529,21 +515,6 @@ function appleCatalogValue(value: string): string {
   );
 }
 
-function chooseTranslation(source: string, translations: readonly string[]): string {
-  // Apple catalogs key by source, so duplicate native contexts must converge.
-  // Preserve shipped values first; otherwise choose deterministically and report every conflict.
-  const counts = new Map<string, number>();
-  for (const translation of translations) {
-    counts.set(translation, (counts.get(translation) ?? 0) + 1);
-  }
-  return (
-    [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
-      const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
-      return sourcePenalty || rightCount - leftCount || compareCodeUnits(leftValue, rightValue);
-    })[0]?.[0] ?? source
-  );
-}
-
 function buildAppleCatalog(
   existingCatalog: Catalog,
   nativeSource: NativeSourceArtifact,
@@ -601,7 +572,8 @@ function buildAppleCatalog(
         };
         continue;
       }
-      const value = chooseTranslation(source, candidates);
+      const value =
+        candidates.length === 0 ? source : selectDeterministicTranslation(source, candidates);
       localizations[locale] = {
         stringUnit: {
           state: value === source ? "new" : "translated",
@@ -990,7 +962,7 @@ export async function compileMacosLocalizations(outputDir: string) {
             `Apple catalog ${MACOS_CATALOG_PATH} is missing ${locale} for ${JSON.stringify(key)}`,
           );
         }
-        return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
+        return `${JSON.stringify(key)} = ${JSON.stringify(value)};`;
       });
     await mkdir(lprojDir, { recursive: true });
     await writeFile(path.join(lprojDir, "Localizable.strings"), `${lines.join("\n")}\n`, "utf8");

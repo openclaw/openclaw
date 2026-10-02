@@ -2,10 +2,7 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  PluginCatalogEntry,
-  PluginsListResult,
-} from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type { PluginCatalogEntry } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -18,8 +15,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
   resolveTrustedOfficialClawHubPackageName,
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogManifest,
@@ -41,7 +38,6 @@ import {
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 export type ManagedPluginCatalogEntry = PluginCatalogEntry;
-export type ManagedPluginCatalog = PluginsListResult;
 
 export type ManagedPluginIconSource = { kind: "file"; path: string; rootPath: string };
 export type ManagedPluginClawHubIconSource = {
@@ -326,8 +322,30 @@ export function normalizeFeaturedAt(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
 
+/** Keep authored purpose separate from capability-derived discovery memberships. */
+export function projectPluginCatalogCategoryFacts(
+  manifest: PluginManifestRecord | undefined,
+  enabled: boolean,
+): Pick<PluginCatalogEntry, "categories" | "category" | "capabilityCategories"> {
+  const category = deriveLegacyPluginCategory(manifest);
+  const categories = manifest?.categories;
+  // Speech/transcription alone belongs in Voice; only generation contracts add Media.
+  const mediaGeneration =
+    enabled &&
+    Boolean(
+      manifest?.contracts?.imageGenerationProviders?.length ||
+      manifest?.contracts?.videoGenerationProviders?.length ||
+      manifest?.contracts?.musicGenerationProviders?.length,
+    );
+  return {
+    ...(categories?.length ? { categories: [...categories] } : {}),
+    ...(category ? { category } : {}),
+    ...(mediaGeneration ? { capabilityCategories: ["media"] } : {}),
+  };
+}
+
 /** Preserve the shipped coarse category projection for older catalog clients. */
-export function deriveLegacyPluginCategory(
+function deriveLegacyPluginCategory(
   manifest: PluginManifestRecord | undefined,
 ): string | undefined {
   if (!manifest) {
@@ -460,16 +478,16 @@ export function resolveInstalledHostedOfficialEntry(params: {
 } {
   const identityPluginId = params.installOwner ?? params.record.pluginId;
   const trustedOfficialClawHubSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialClawHubSpec({
+    ? resolveTrustedSourceLinkedOfficialClawHubInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.clawhubSpec
     : undefined;
   const trustedOfficialNpmSpec = params.installRecord
-    ? resolveTrustedSourceLinkedOfficialNpmSpec({
+    ? resolveTrustedSourceLinkedOfficialNpmInstall({
         pluginId: identityPluginId,
         record: params.installRecord,
-      })
+      })?.npmSpec
     : undefined;
   const sourceLinkedOfficialClawHubPackage = trustedOfficialClawHubSpec
     ? parseClawHubPluginSpec(trustedOfficialClawHubSpec)?.name

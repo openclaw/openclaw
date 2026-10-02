@@ -112,19 +112,23 @@ export async function recoverWorkspaceBeforeTurn(params: {
     return;
   }
   const localWorkspaceDir = params.workspace.path;
-  const journal = createWorkspaceResultJournal(params).adapter;
+  const assertCurrent = () => {
+    if (!params.placements.validateTurnClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace recovery lost its turn claim");
+    }
+  };
+  const journal = createWorkspaceResultJournal({ ...params, assertCurrent }).adapter;
   try {
     await params.workspaceOperations.run(params.placement.environmentId, async () => {
-      if (!params.placements.validateTurnClaim(params.turnClaim)) {
-        throw new Error("Cloud worker workspace recovery lost its turn claim");
-      }
-      const pending = journal.load();
+      assertCurrent();
+      const pending = await journal.load();
       if (pending) {
         await recoverWorkerWorkspaceReconciliation({
           root: localWorkspaceDir,
           journal: pending,
+          assertCurrent,
         });
-        journal.abort();
+        await journal.abort();
       }
     });
   } catch (error) {
@@ -183,10 +187,16 @@ export async function reconcileWorkspaceAfterTurn(params: {
   if (!pendingWorkspaceResult()) {
     throw new Error("Cloud worker completed without a durable workspace-result fence");
   }
+  const assertWorkspaceResultCurrent = () => {
+    if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+      throw new Error("Cloud worker workspace result lost its placement owner");
+    }
+  };
   const journal = createWorkspaceResultJournal({
     placement: currentPlacement,
     placements: params.placements,
     turnClaim: params.turnClaim,
+    assertCurrent: assertWorkspaceResultCurrent,
   });
   let workspaceConflict: WorkspaceConflictReport | undefined;
   try {
@@ -213,13 +223,10 @@ export async function reconcileWorkspaceAfterTurn(params: {
                   params.workspace.kind === "repository"
                     ? params.workspace.repository.workspaceId
                     : undefined,
+                  assertWorkspaceResultCurrent,
                 ),
             },
-            assertCurrent: () => {
-              if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
-                throw new Error("Cloud worker workspace result lost its placement owner");
-              }
-            },
+            assertCurrent: assertWorkspaceResultCurrent,
           }),
         );
         const applied = await verifyReconciledWorkspaceFinal(reconciliation, quiescence);
@@ -353,10 +360,11 @@ export async function executeRemoteExecTurn(params: {
   await recoverWorkspaceBeforeTurn(params);
   params.assertRunCurrent?.();
   const tunnel = await waitForTurnOperation({
-    operation: params.environments.startTunnel({
-      environmentId: params.placement.environmentId,
-      ownerEpoch: params.placement.activeOwnerEpoch,
-    }),
+    start: () =>
+      params.environments.startTunnel({
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+      }),
     ...(params.turn.abortSignal ? { signal: params.turn.abortSignal } : {}),
     timeoutMs: params.turn.timeoutMs,
   });
@@ -505,12 +513,8 @@ export async function executeRemoteExecTurn(params: {
     workspace: params.workspace,
     transcriptTarget,
     tunnel,
-    ...(params.prepareAcceptedWorkspacePublication
-      ? { prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication }
-      : {}),
-    ...(params.publishAcceptedWorkspace
-      ? { publishAcceptedWorkspace: params.publishAcceptedWorkspace }
-      : {}),
+    prepareAcceptedWorkspacePublication: params.prepareAcceptedWorkspacePublication,
+    publishAcceptedWorkspace: params.publishAcceptedWorkspace,
   }).catch((reconciliationError: unknown) => {
     const currentEnvironment = params.environments.get(params.placement.environmentId);
     if (

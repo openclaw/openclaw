@@ -1,8 +1,3 @@
-/**
- * Built-in edit session tool.
- *
- * Applies exact targeted replacements with queued file mutation, diff previews, and TUI renderers.
- */
 import { constants } from "node:fs";
 import {
   access as fsAccess,
@@ -17,7 +12,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../../infra/errno.js";
 import { captureAgentToolSourceExecutionGuard } from "../../agent-tool-source-execution-guard.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
-import type { AgentTool } from "../../runtime/index.js";
+import type { AgentTool, AgentToolResult } from "../../runtime/index.js";
 import { textResult } from "../../tools/tool-results.js";
 import { decodeUtf8File } from "../../utf8-file.js";
 import type { ToolDefinition } from "../extensions/types.js";
@@ -130,16 +125,6 @@ function prepareEditArguments(input: unknown): EditToolInput {
   return { path: args.path, edits } as EditToolInput;
 }
 
-function validateEditInput(input: EditToolInput): {
-  path: string;
-  edits: Edit[];
-} {
-  if (!Array.isArray(input.edits) || input.edits.length === 0) {
-    throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
-  }
-  return { path: input.path, edits: input.edits };
-}
-
 function appendMismatchHint(error: Error, currentContent: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
@@ -158,16 +143,6 @@ type RenderableEditArgs = {
   edits?: Edit[];
   oldText?: string;
   newText?: string;
-};
-
-type EditToolResultLike = {
-  content: Array<{
-    type: string;
-    text?: string;
-    data?: string;
-    mimeType?: string;
-  }>;
-  details?: EditToolDetails;
 };
 
 type EditCallRenderComponent = Box & {
@@ -244,7 +219,7 @@ function formatEditCall(
 
 function formatEditResult(
   preview: EditPreview | undefined,
-  result: EditToolResultLike,
+  result: AgentToolResult<EditToolDetails>,
   theme: typeof import("../../modes/interactive/theme/theme.js").interactiveAgentTheme,
   isError: boolean,
 ): string | undefined {
@@ -261,7 +236,7 @@ function formatEditResult(
     return theme.fg("error", errorText);
   }
 
-  const resultDiff = result.details?.changed === true ? result.details.diff : undefined;
+  const resultDiff = result.details?.changed ? result.details.diff : undefined;
   if (resultDiff && resultDiff !== previewDiff) {
     return renderDiff(resultDiff);
   }
@@ -350,7 +325,10 @@ export function createEditToolDefinition(
     prepareArguments: prepareEditArguments,
     async execute(_toolCallId, input, signal, _onUpdate, _ctx) {
       const assertCurrent = captureAgentToolSourceExecutionGuard();
-      const { path, edits: originalEdits } = validateEditInput(input);
+      if (!Array.isArray(input.edits) || input.edits.length === 0) {
+        throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
+      }
+      const { path, edits: originalEdits } = input;
       const absolutePath = resolvePath(path, cwd);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
@@ -478,11 +456,8 @@ export function createEditToolDefinition(
       const argsKey = previewInput
         ? JSON.stringify({ path: previewInput.path, edits: previewInput.edits })
         : undefined;
-      const typedResult = result as EditToolResultLike;
       const resultDiff =
-        !context.isError && typedResult.details?.changed === true
-          ? typedResult.details.diff
-          : undefined;
+        !context.isError && result.details?.changed ? result.details.diff : undefined;
       let changed = false;
       if (callComponent) {
         if (typeof resultDiff === "string") {
@@ -491,10 +466,9 @@ export function createEditToolDefinition(
               callComponent,
               {
                 diff: resultDiff,
-                firstChangedLine:
-                  typedResult.details?.changed === true
-                    ? typedResult.details.firstChangedLine
-                    : undefined,
+                firstChangedLine: result.details?.changed
+                  ? result.details.firstChangedLine
+                  : undefined,
               },
               argsKey,
             ) || changed;
@@ -512,7 +486,7 @@ export function createEditToolDefinition(
         }
       }
 
-      const output = formatEditResult(callComponent?.preview, typedResult, theme, context.isError);
+      const output = formatEditResult(callComponent?.preview, result, theme, context.isError);
       const component = (context.lastComponent as Container | undefined) ?? new Container();
       component.clear();
       if (!output) {

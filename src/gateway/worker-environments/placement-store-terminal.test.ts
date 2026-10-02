@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
@@ -18,7 +16,7 @@ import {
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
 import { completeReclaimedWorkspaceTeardown } from "./placement-teardown.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement-terminal",
@@ -27,63 +25,30 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker placement terminal persistence", () => {
+  const tempDirs = useStateDatabaseTempDirs();
   let root: string;
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
   let nowMs: number;
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-terminal-"));
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-terminal-");
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     nowMs = 1_000;
     store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
 
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  async function advanceToActive(
+  function advanceToActive(
     identity: WorkerSessionPlacementIdentity = SESSION,
     environmentId = `environment-${identity.sessionId}`,
     executionMode: "worker-turn" | "remote-exec" = "worker-turn",
   ) {
-    let placement = await store.startDispatch({ ...identity, executionMode });
-    for (const step of [
-      { to: "provisioning", patch: { environmentId } },
-      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-      {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
-        },
-      },
-    ] as const) {
-      placement = store.transition({
-        sessionId: identity.sessionId,
-        from: placement.state,
-        expectedGeneration: placement.generation,
-        ...step,
-      });
-    }
-    seedAttachedPlacementEnvironment(database, {
-      environmentId,
-      sessionId: identity.sessionId,
-      ownerEpoch: 7,
-    });
-    placement = store.transition({
-      sessionId: identity.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (placement.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    return placement;
+    return advancePlacementFixtureToActive(
+      store,
+      database,
+      { ...identity, executionMode },
+      { environmentId, remoteWorkspaceDir: `/workspace/${identity.sessionId}` },
+    );
   }
 
   async function pendingResult(identity = SESSION) {
@@ -114,7 +79,7 @@ describe("worker placement terminal persistence", () => {
     expect(() => store.completeWorkspaceResultAndReleaseTurn(claim)).toThrow(
       "workspace result was not accepted",
     );
-    store.updateWorkspaceBaseManifest({ claim, manifestRef: `sha256:${"e".repeat(64)}` });
+    await store.updateWorkspaceBaseManifest({ claim, manifestRef: `sha256:${"e".repeat(64)}` });
     store.acceptWorkspaceResult(claim);
 
     expect(
@@ -251,10 +216,13 @@ describe("worker placement terminal persistence", () => {
       if (resultState === "accepted") {
         store.acceptWorkspaceResult(claim);
       } else if (resultState === "staged") {
-        store.recordStagedWorkspaceResult(claim, "refs/openclaw/worker-results/preserved-result");
+        await store.recordStagedWorkspaceResult(
+          claim,
+          "refs/openclaw/worker-results/preserved-result",
+        );
       } else if (resultState === "journaled") {
         const basePack = Buffer.from("pending remote workspace snapshot");
-        store.beginWorkspaceReconciliation(
+        await store.beginWorkspaceReconciliation(
           {
             sessionId: active.sessionId,
             environmentId: active.environmentId,
@@ -301,9 +269,9 @@ describe("worker placement terminal persistence", () => {
     await advanceToActive();
     const { claim, pending } = await pendingResult();
     const binding = claim;
-    store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
+    await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
-      store.beginWorkerSessionToolOperation({
+      await store.beginWorkerSessionToolOperation({
         claim: binding,
         toolName: "sessions_send",
         toolCallId: "call-pending-send",
@@ -323,7 +291,7 @@ describe("worker placement terminal persistence", () => {
     ]);
 
     expect(
-      store.completeWorkerSessionToolOperation({
+      await store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "call-pending-send",

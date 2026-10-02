@@ -13,7 +13,7 @@ const suite = createControlUiE2eSuite({ name: "Session conversation return link"
 
 suite.define(() => {
   it("leaves saved conversation links invisible without a plugin UI contribution", async () => {
-    await suite.withPage({}, async ({ page }) => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const session = {
         key: "agent:main:discord-link-without-plugin",
         kind: "direct",
@@ -41,6 +41,7 @@ suite.define(() => {
       await expectBrowser(
         page.getByRole("link", { name: "Discord Thread ↗", exact: true }),
       ).toHaveCount(0);
+      await page.screenshot({ path: path.join(suite.artifactDir, "no-plugin.png") });
     });
   });
 
@@ -133,11 +134,17 @@ suite.define(() => {
           new URL(session.conversationLink.url).protocol !== "https:"
         ) {
           await expectBrowser(link).toHaveCount(0);
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `${session.key.split(":").at(-1)}.png`),
+          });
           continue;
         }
         await expectBrowser(link).toHaveCount(1);
         await expectBrowser(link).toHaveAccessibleName(`${session.conversationLink.label} ↗`);
         await expectBrowser(link).toHaveAttribute("href", session.conversationLink.url);
+        await page.screenshot({
+          path: path.join(suite.artifactDir, `${session.key.split(":").at(-1)}.png`),
+        });
         const opened = page.waitForEvent("popup");
         await link.click();
         const destination = await opened;

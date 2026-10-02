@@ -323,19 +323,15 @@ function renderTextStep(props: WizardStepControlsProps) {
 function renderOptionsStep(props: WizardStepControlsProps) {
   const options = props.step.options ?? [];
   const multiple = props.step.type === "multiselect";
-  if (!multiple && props.presentation !== "channels") {
-    return html`
-      ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
-      ${props.leadingAction ?? nothing}
-    `;
-  }
-  if (props.presentation === "channels" && !multiple) {
+  if (!multiple) {
     return html`
       ${renderMessage(props)} ${renderWizardSingleChoice(props, options)}
       ${
-        props.busy
-          ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
-          : nothing
+        props.presentation !== "channels"
+          ? (props.leadingAction ?? nothing)
+          : props.busy
+            ? renderAnswerButton(props, t("modelSetup.wizard.continue"), undefined, true)
+            : nothing
       }
     `;
   }

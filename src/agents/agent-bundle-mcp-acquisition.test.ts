@@ -9,9 +9,9 @@ import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   getSessionMcpRuntimeManagerForTesting,
-  releaseSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
+import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { createMcpProbeFixture, probeMcpServer } from "./agent-bundle-mcp-probe.test-support.js";
 import {

@@ -39,6 +39,7 @@ import type {
   AgentDatabaseExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionOpen,
+  AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
 } from "./openclaw-agent-execution-contract.js";
@@ -80,11 +81,13 @@ async function settleAgentRegistration<T>(
 export type AgentDatabaseExecutionScope = Pick<Store, "execute">;
 export type AgentDatabaseNativeGeneration = {
   failed(): boolean;
+  captureClaim(): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
+    signal?: AbortSignal,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };
@@ -262,6 +265,13 @@ export function createAgentDatabaseNativeGeneration(
           quickCheckPending = true;
           return undefined;
         }
+        if (request.stage === "prepare" && isRecord(facts) && facts.kind === "agent-open-resume") {
+          assertSourceCurrent();
+          if (!lease || !isDeepStrictEqual(facts.lease, lease)) {
+            throw new Error("Agent open resume differs from its captured native lease");
+          }
+          return undefined;
+        }
         if (request.stage === "open") {
           if (!isDeepStrictEqual(facts, input)) {
             throw new Error("Agent database open differs from its captured owner");
@@ -355,6 +365,7 @@ export function createAgentDatabaseNativeGeneration(
     source: AgentDatabaseRequestExecutionSource,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
+    signal?: AbortSignal,
   ): Promise<Store | undefined> => {
     assertCurrent();
     source.assertCurrent();
@@ -368,8 +379,15 @@ export function createAgentDatabaseNativeGeneration(
             onRegistryChange: source.onRegistryChange,
           })
         : undefined;
-      const openStore = () =>
-        openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
+      const openStore = async () => {
+        const assertOpening = () => {
+          assertCurrent();
+          source.assertCurrent();
+          assertCallerCurrent?.();
+          signal?.throwIfAborted();
+        };
+        const createAdmission = admission(source, registration, assertCallerCurrent);
+        return await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
           {
             moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
             databasePath: pathname,
@@ -379,14 +397,16 @@ export function createAgentDatabaseNativeGeneration(
           {
             stateContext: context,
             stateDatabasePath: context.admission.databasePath,
-            assertCurrent,
-            createAdmission: admission(source, registration, assertCallerCurrent),
+            assertCurrent: assertOpening,
+            signal,
+            createAdmission,
             onNativeStopped: (stopped, readReceipt) => {
               nativeStopped = stopped;
               readCloseReceipt = readReceipt;
             },
           },
         );
+      };
       const store = registration
         ? await settleAgentRegistration(registration, openStore)
         : await openStore();
@@ -417,7 +437,7 @@ export function createAgentDatabaseNativeGeneration(
         opening = undefined;
       }
       if (!store && createIfMissing) {
-        return open(source, assertCallerCurrent, true);
+        return open(source, assertCallerCurrent, true, signal);
       }
       return store;
     });
@@ -427,12 +447,16 @@ export function createAgentDatabaseNativeGeneration(
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing = false,
+    signal?: AbortSignal,
   ): Promise<T | undefined> {
-    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing));
-    assertCurrent();
-    source.assertCurrent();
-    assertCurrent();
-    assertCallerCurrent?.();
+    const assertOperationCurrent = () => {
+      assertCurrent();
+      source.assertCurrent();
+      assertCallerCurrent?.();
+      signal?.throwIfAborted();
+    };
+    const store = openedStore ?? (await open(source, assertCallerCurrent, createIfMissing, signal));
+    assertOperationCurrent();
     if (!store) {
       return undefined;
     }
@@ -444,12 +468,13 @@ export function createAgentDatabaseNativeGeneration(
         onRegistryChange: source.onRegistryChange,
       });
       await settleAgentRegistration(registration, async () => {
+        const createAdmission = admission(source, registration, assertCallerCurrent);
         await runSqliteWorkerStoreOperation(
           store,
-          (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }),
+          (scope) => scope.execute({ type: "database.prepareWrite", input: undefined }, { signal }),
           undefined,
-          assertCurrent,
-          admission(source, registration, assertCallerCurrent),
+          assertOperationCurrent,
+          createAdmission,
         );
         assertCurrent();
         source.assertCurrent();
@@ -463,7 +488,7 @@ export function createAgentDatabaseNativeGeneration(
       store,
       operation,
       undefined,
-      assertCurrent,
+      assertOperationCurrent,
       admission(source, undefined, assertCallerCurrent),
     );
   }
@@ -501,6 +526,23 @@ export function createAgentDatabaseNativeGeneration(
   return {
     failed: () =>
       openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
+    captureClaim() {
+      assertCurrent();
+      const captured = nativeIdentity;
+      if (!captured) {
+        throw new Error("Agent database generation has not been admitted");
+      }
+      return {
+        identity: captured.physicalIdentity,
+        incarnation: captured.incarnation,
+        assertCurrent() {
+          assertCurrent();
+          if (nativeIdentity !== captured) {
+            throw new Error("Agent database generation changed");
+          }
+        },
+      };
+    },
     run,
     close() {
       retiring = true;

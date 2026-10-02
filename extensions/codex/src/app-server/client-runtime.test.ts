@@ -178,11 +178,15 @@ describe("Codex app-server client runtime", () => {
     });
   });
 
-  it("rejects a refreshed token from a different previous ChatGPT workspace", async () => {
+  it("requests retirement when its auth owner rejects a workspace change", async () => {
+    vi.useFakeTimers();
+    mocks.refreshAuth.mockRejectedValueOnce(new Error("ChatGPT workspace changed"));
     const harness = createHarness();
+    const onAuthRefreshFailure = vi.fn();
     ensureCodexAppServerClientRuntime(harness.client, {
       agentDir: "/tmp/agent",
       authProfileId: "openai:default",
+      onAuthRefreshFailure,
     });
 
     harness.send({
@@ -194,7 +198,8 @@ describe("Codex app-server client runtime", () => {
       },
     });
 
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThan(0));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onAuthRefreshFailure).toHaveBeenCalledOnce();
     expect(JSON.parse(harness.writes.at(-1) ?? "{}")).toMatchObject({
       id: "refresh-other-workspace",
       error: { message: expect.stringContaining("ChatGPT workspace changed") },
@@ -1021,5 +1026,31 @@ describe("Codex app-server client runtime", () => {
     await expect(
       consumeCodexAppServerLiveThread(harness.client, "thread-stale"),
     ).resolves.toBeUndefined();
+  });
+
+  it("keeps the exact retained owner when a same-build plugin module copy resumes the client", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const addCloseHandler = vi.spyOn(harness.client, "addCloseHandler");
+    ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    const release = vi.fn(async () => undefined);
+    await retainCodexAppServerLiveThread(harness.client, "copy-retained", release);
+    expect(hasCodexAppServerLiveThread(harness.client, "copy-retained")).toBe(true);
+
+    vi.resetModules();
+    const nextCopy = await import("./client-runtime.js");
+    nextCopy.ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
+    expect(addCloseHandler).toHaveBeenCalledTimes(1);
+    expect(nextCopy.isCodexAppServerClientRuntimeLive(harness.client)).toBe(true);
+    expect(nextCopy.hasCodexAppServerLiveThread(harness.client, "copy-retained")).toBe(true);
+    const claimed = await nextCopy.claimCodexAppServerLiveThread(harness.client, "copy-retained");
+    expect(claimed).toBeDefined();
+    await expect(
+      retainCodexAppServerLiveThread(harness.client, "copy-retained", claimed?.release),
+    ).resolves.toBe(true);
+    await expect(
+      nextCopy.releaseCodexAppServerLiveThread(harness.client, "copy-retained"),
+    ).resolves.toBe(true);
+    expect(release).toHaveBeenCalledExactlyOnceWith("copy-retained");
   });
 });

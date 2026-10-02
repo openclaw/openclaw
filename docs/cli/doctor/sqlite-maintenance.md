@@ -66,6 +66,10 @@ compatible backup or upgrade OpenClaw for a newer schema.
 
 ## Session SQLite migration
 
+Canonical session-key repair follows complete transcript-owner alias chains, including
+long chains in large databases. It preserves the terminal owner's session key and
+retained transcript history; shortening history is not required to bound the repair's stack.
+
 Runtime session rows and transcripts live in SQLite, by default at
 `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway startup uses
 Doctor's exclusive maintenance owner to migrate legacy session JSON/JSONL files
@@ -85,6 +89,13 @@ registry. Configured session stores and retained legacy databases are also check
 If a configured database still needs a schema migration after `--fix`, Doctor reports
 its path and exits non-zero instead of printing `Doctor complete`.
 
+Before an agent schema migration, Doctor checks database integrity in a read-only
+child process. Long checks print a progress line every 10 seconds with the database
+size, elapsed time, and current phase. Ctrl+C or SIGTERM records the interruption,
+cancels the inspection, and waits for admitted repairs and cleanup before exiting.
+An interrupted check does not authorize the next schema migration; rerun Doctor
+to finish. Pre-migration backups remain available.
+
 `openclaw doctor --session-sqlite <mode>` provides targeted inspection,
 import, validation, and SQLite maintenance. Legacy `sessions.json` files are
 migration sources. Hot transcript JSONL files are imported and archived after
@@ -93,14 +104,24 @@ runtime fallbacks.
 
 When a plugin migration is deferred, the verified import receipt also captures
 unreferenced JSONL inputs. Completing the plugin migration archives those originals
-with the same identity and byte checks as indexed transcripts. Files created after
-capture and changed originals are verified separately before settlement.
+with the same identity and byte checks as indexed transcripts. A transcript's
+`.trajectory-path.json` pointer moves with it. If an earlier settlement archived the
+transcript but left its receipt-verified pointer behind, the next `doctor --fix`
+archives the pointer too. Files created after capture and changed originals are
+verified separately before settlement.
 File-era session path repair preserves those originals until their verified import
 receipts finish archival, even after the pending plugin migration records clear.
 Retries and read-only checks reuse the verified receipt, including transcripts
 discovered outside `sessions.json`. Doctor reports one pending-plugin warning
 for these retained inputs; they do not fail the completed core migration or
 require `doctor --session-sqlite recover`. Warning-only results exit successfully.
+After verified archival, Doctor retires the deferral receipt while keeping the
+archive manifest for recovery. Disabling or uninstalling the owning plugin also
+releases its pending obligation on the next import or repair. An enabled plugin
+that is temporarily unavailable remains pending. Later explicit imports can
+discover new legacy transcripts normally. While a receipt is still active, new
+files outside that receipt remain in place; Doctor names the receipt, plugin,
+and commands needed to finish the old migration and retry their import.
 An active legacy JSONL outside that receipt is an advisory awaiting verification.
 `doctor --fix` and `--session-sqlite recover` verify that its event identities and
 contents are present in the owning agent's SQLite transcript. A prefix or subset
@@ -158,6 +179,17 @@ core import completed. Doctor owns the repair and the Gateway keeps serving SQLi
 `inspect` reports the actual SQLite row count even when retained input needs repair.
 Recovery reports include every remaining issue code and distinguish unresolved
 findings from completed validation.
+
+For a zero-byte retained transcript, recovery lists its `.jsonl.bak-<pid>-<timestamp>`
+siblings and verifies the largest backup against the canonical session. Missing
+suffix events use the existing historical importer; current session settings and
+deleted sessions are not replayed. All backup candidates must be covered before
+Doctor archives the empty original with a recoverable warning. The backup files
+remain untouched. Without backups, an identified canonical session with transcript
+rows can establish that the empty source is superseded. If neither source proves
+the history, Doctor preserves the file and names the exact transcript and database
+paths to restore from a verified backup before retrying recovery. Keep moved
+transcripts and their backups together at the reported original paths.
 
 When both a recorded legacy index and its archive are missing, Doctor verifies
 the remaining transcripts against canonical SQLite before reporting that the

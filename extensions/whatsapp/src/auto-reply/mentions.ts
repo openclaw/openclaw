@@ -69,23 +69,8 @@ function isBotMentionedFromTargets(
     return false;
   }
 
-  // Fallback: detect body containing our own number (with or without +, spacing)
-  if (targets.self.e164) {
-    const selfDigits = targets.self.e164.replace(/\D/g, "");
-    if (selfDigits) {
-      const bodyDigits = bodyClean.replace(/[^\d]/g, "");
-      if (bodyDigits.includes(selfDigits)) {
-        return true;
-      }
-      const bodyNoSpace = msg.payload.body.replace(/[\s-]/g, "");
-      const pattern = new RegExp(`\\+?${selfDigits}`, "i");
-      if (pattern.test(bodyNoSpace)) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  const selfDigits = targets.self.e164?.replace(/\D/g, "");
+  return Boolean(selfDigits && bodyClean.replace(/\D/g, "").includes(selfDigits));
 }
 
 export function debugMention(

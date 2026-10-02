@@ -1,5 +1,9 @@
 /* @vitest-environment jsdom */
-import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import type {
+  BackupStatusResult,
+  EnvironmentSummary,
+  SystemInfoResult,
+} from "@openclaw/gateway-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -79,6 +83,11 @@ function harness(
       },
     },
   ],
+  backups: () => Promise<BackupStatusResult> = async () => ({
+    targets: [],
+    schedules: [],
+    locations: [],
+  }),
 ) {
   const request = vi.fn(async (method: string) => {
     if (method === "environments.list") {
@@ -89,6 +98,12 @@ function harness(
     }
     if (method === "node.list") {
       return { nodes: nodes() };
+    }
+    if (method === "backup.status") {
+      return backups();
+    }
+    if (method === "storage.locations.probe") {
+      return { state: "ok", freeBytes: 1024 ** 3 };
     }
     if (method === "desktop.observe") {
       return {
@@ -135,6 +150,245 @@ async function mount(controller: SystemsController) {
 }
 
 describe("Systems workspace", () => {
+  it("shows and refreshes backup health on the landing view without machines", async () => {
+    vi.useFakeTimers();
+    const { controller, request } = harness(
+      async () => [],
+      () => [],
+    );
+    const { page } = await mount(controller);
+    expect(page.querySelector(".systems-heading h1")?.textContent).toBe("Systems");
+    expect(page.querySelectorAll(".systems-backups")).toHaveLength(1);
+    expect(page.querySelector(".systems-backups")?.textContent).toContain("No backups recorded —");
+    const backupReads = () => request.mock.calls.filter(([method]) => method === "backup.status");
+    expect(backupReads()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(backupReads()).toHaveLength(2);
+  });
+
+  it("shows backup success, failure and schedule facts, and checks a location only on request", async () => {
+    const now = Date.UTC(2026, 8, 30, 12);
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const success = {
+      id: "backup-ok",
+      createdAt: now - 3_600_000,
+      archivePath: "/scratch/backup.tar.gz",
+      kind: "archive" as const,
+      status: "ok" as const,
+      target: "offsite",
+      location: {
+        name: "offsite",
+        provider: "filesystem",
+        locationId: "fixture-location",
+        namespace: "gateway",
+        key: "20260930T110000Z-12345678.tar.gz",
+        plaintextBytes: 1024,
+        storedBytes: 2048,
+      },
+    };
+    const { controller, request } = harness(undefined, undefined, async () => ({
+      targets: [
+        {
+          kind: "archive",
+          target: "offsite",
+          namespace: "gateway",
+          latest: {
+            ...success,
+            id: "backup-failed",
+            status: "failed",
+            createdAt: now,
+            error: "Disk disconnected. Run openclaw storage test offsite.",
+          },
+          latestOk: success,
+        },
+        {
+          kind: "external",
+          target: "restic",
+          latest: {
+            id: "external-ok",
+            createdAt: now,
+            kind: "external",
+            status: "ok",
+            archivePath: "restic",
+            bytes: 4096,
+          },
+          latestOk: {
+            id: "external-ok",
+            createdAt: now,
+            kind: "external",
+            status: "ok",
+            archivePath: "restic",
+            bytes: 4096,
+          },
+        },
+      ],
+      schedules: [
+        {
+          id: "scheduled",
+          mode: "offsite",
+          target: "offsite",
+          namespace: "gateway",
+          enabled: true,
+          everyMs: 86_400_000,
+          nextRunAtMs: now + 3_600_000,
+        },
+      ],
+      locations: [
+        {
+          name: "offsite",
+          provider: "filesystem",
+          displayTarget: "/Volumes/Archive/openclaw",
+          encrypted: true,
+        },
+      ],
+    }));
+    const { page } = await mount(controller);
+    const section = page.querySelector(".systems-backups")!;
+    expect(section.textContent).toMatch(/Last success: .*ago/);
+    expect(section.textContent).toContain("2 KB");
+    expect(section.textContent).toContain("/Volumes/Archive/openclaw");
+    expect(section.textContent).toContain("Next run:");
+    expect(section.textContent).toContain("Disk disconnected. Run openclaw storage test offsite.");
+    expect(section.querySelectorAll('[data-status="ok"]')).toHaveLength(1);
+    expect(
+      request.mock.calls.filter(([method]) => method === "storage.locations.probe"),
+    ).toHaveLength(0);
+    const probe = createDeferred<{ state: "ok"; freeBytes: number }>();
+    request.mockReturnValueOnce(probe.promise);
+    section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!.click();
+    await page.updateComplete;
+    expect(section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')?.disabled).toBe(
+      true,
+    );
+    probe.resolve({ state: "ok", freeBytes: 1024 ** 3 });
+    await probe.promise;
+    await page.updateComplete;
+    expect(section.textContent).toContain("Available");
+    expect(section.textContent).toContain("1 GB free");
+    expect(request).toHaveBeenCalledWith(
+      "storage.locations.probe",
+      { name: "offsite" },
+      expect.anything(),
+    );
+    controller.select(worker.id);
+    await page.updateComplete;
+    expect(page.querySelector(".systems-backups")).toBeNull();
+  });
+
+  it.each(["host-a", undefined])(
+    "does not attach the active namespace schedule to namespace %s history",
+    async (namespace) => {
+      const success = {
+        id: "other-namespace-ok",
+        createdAt: Date.now(),
+        archivePath: "storage://offsite/backup.tar.gz",
+        kind: "archive" as const,
+        status: "ok" as const,
+        target: "offsite",
+        namespace,
+      };
+      const { controller } = harness(undefined, undefined, async () => ({
+        targets: [
+          { kind: "archive", target: "offsite", namespace, latest: success, latestOk: success },
+        ],
+        schedules: [
+          {
+            id: "host-b-schedule",
+            mode: "offsite",
+            target: "offsite",
+            namespace: "host-b",
+            enabled: true,
+            everyMs: 86_400_000,
+            nextRunAtMs: Date.now() + 3_600_000,
+          },
+        ],
+        locations: [],
+      }));
+      const { page } = await mount(controller);
+      expect(page.querySelector(".systems-backup")?.textContent).not.toContain("Next run:");
+      expect(page.querySelector(".systems-backups__hint")?.textContent).toContain("Next run:");
+    },
+  );
+
+  it.each([undefined, "Git remote rejected the push: permission denied."])(
+    "shows a failed Git push while preserving local backup success (%s)",
+    async (error) => {
+      const now = Date.UTC(2026, 8, 30, 12);
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const localSuccess = {
+        id: "git-push-failed",
+        createdAt: now - 3_600_000,
+        archivePath: "/backups/git",
+        target: "/backups/git",
+        kind: "git" as const,
+        status: "ok" as const,
+        pushFailed: true as const,
+        ...(error ? { error } : {}),
+      };
+      const { controller } = harness(undefined, undefined, async () => ({
+        targets: [
+          {
+            kind: "git",
+            target: localSuccess.target,
+            latest: localSuccess,
+            latestOk: localSuccess,
+          },
+        ],
+        schedules: [],
+        locations: [],
+      }));
+      const { page } = await mount(controller);
+      const backup = page.querySelector('.systems-backup[data-status="failed"]');
+      expect(backup?.querySelector(".systems-backup__state")?.textContent?.trim()).toBe(
+        "Push failed",
+      );
+      expect(backup?.textContent).toMatch(/Last local success: .*ago/);
+      expect(backup?.querySelector(".systems-backup__error")?.textContent).toBe(
+        error ??
+          "Local backup succeeded, but pushing to the Git remote failed. Check the remote and retry.",
+      );
+    },
+  );
+
+  it("shows loading and actionable failure, then the empty backup state after retry", async () => {
+    const pending = createDeferred<BackupStatusResult>();
+    const backups = vi
+      .fn<() => Promise<BackupStatusResult>>()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ targets: [], schedules: [], locations: [] });
+    const { controller } = harness(undefined, undefined, backups);
+    const { page } = await mount(controller);
+    expect(page.querySelector(".systems-backups")?.textContent).toContain("Loading backups…");
+    pending.reject(new Error("Backup history unavailable"));
+    await pending.promise.catch(() => {});
+    await page.updateComplete;
+    expect(page.querySelector('.systems-backups [role="alert"]')?.textContent).toContain(
+      "Backup history unavailable",
+    );
+    await controller.refreshBackups();
+    await page.updateComplete;
+    expect(page.querySelector(".systems-backups")?.textContent).toContain("No backups recorded —");
+    expect(page.querySelector(".systems-backups code")?.textContent).toBe(
+      "openclaw backup enable --to <location>",
+    );
+  });
+
+  it("discards a backup response from the previous connection", async () => {
+    const pending = createDeferred<BackupStatusResult>();
+    const { controller, gateway } = harness(undefined, undefined, () => pending.promise);
+    const { page } = await mount(controller);
+    gateway.publish({ phase: "offline" });
+    pending.resolve({
+      targets: [],
+      schedules: [],
+      locations: [{ name: "old-host", provider: "filesystem", encrypted: false }],
+    });
+    await pending.promise;
+    await page.updateComplete;
+    expect(controller.backups).toBeNull();
+    expect(page.querySelector(".systems-backups")?.textContent).not.toContain("old-host");
+  });
+
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {
     vi.useFakeTimers();
     let visibility: DocumentVisibilityState = "hidden";

@@ -39,8 +39,9 @@ vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
 });
 vi.mock("./subagent-registry-state.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
-  const { saveSubagentRegistryToSqlite } = await import("./subagent-registry.store.sqlite.js");
-  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryToSqlite };
+  const { saveSubagentRegistryChangesToSqlite } =
+    await import("./subagent-registry.store.sqlite.js");
+  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryChangesToSqlite };
 });
 
 describe("subagent timing completion", () => {
@@ -75,9 +76,11 @@ describe("subagent timing completion", () => {
     envSnapshot.restore();
   });
 
-  it.for(["wait-only", "sequential", "overlap"] as const)("%s", async (mode, { signal }) => {
-    const runId = `timing-repro-${mode}`;
-    const childSessionKey = `agent:main:subagent:${mode}`;
+  it("persists overlapping completion timing without warnings or duplicate announcements", async ({
+    signal,
+  }) => {
+    const runId = "timing-repro-overlap";
+    const childSessionKey = "agent:main:subagent:overlap";
     const requesterSessionKey = "agent:main:main";
     const seededAt = Date.now();
     const terminalReply = { disposition: "visible" as const, text: "Synthetic completed result." };
@@ -96,8 +99,8 @@ describe("subagent timing completion", () => {
     // Seed through the real accessor, suppressing only setup maintenance so
     // pending FIFO jobs below can only be the two terminal timing writes.
     for (const [sessionKey, sessionId] of [
-      [childSessionKey, `session-${mode}`],
-      [requesterSessionKey, `requester-${mode}`],
+      [childSessionKey, "session-overlap"],
+      [requesterSessionKey, "requester-overlap"],
     ] as const) {
       const entry = { sessionId, updatedAt: seededAt - 1 };
       await patchSessionEntryCore({ storePath, sessionKey }, () => entry, {
@@ -138,68 +141,56 @@ describe("subagent timing completion", () => {
         listener(event);
       }
     };
-    const waitForCleanup = async () => {
-      await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
-      expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
-    };
-    if (mode === "overlap") {
-      const entered = createDeferred();
-      const released = createDeferred();
-      // Hold the real FIFO with a no-op patch. There is no open SQLite
-      // transaction during this await and no production function is replaced.
-      const blocker = patchSessionEntryCore(
-        { storePath, sessionKey: childSessionKey },
-        async () => {
-          entered.resolve();
-          await released.promise;
-          return null;
-        },
-        { skipMaintenance: true },
-      );
+    const entered = createDeferred();
+    const released = createDeferred();
+    // Hold the real FIFO with a no-op patch. There is no open SQLite
+    // transaction during this await and no production function is replaced.
+    const blocker = patchSessionEntryCore(
+      { storePath, sessionKey: childSessionKey },
+      async () => {
+        entered.resolve();
+        await released.promise;
+        return null;
+      },
+      { skipMaintenance: true },
+    );
+    try {
+      await entered.promise;
+      const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
+      if (!queue) {
+        throw new Error("session writer did not retain its queue");
+      }
+      const lifecycleQueued = createDeferred();
+      const waiterQueued = createDeferred();
+      const push = queue.pending.push.bind(queue.pending);
+      // Task finalization awaits a worker before these writes reach the FIFO.
+      const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
+        const depth = push(...tasks);
+        if (depth === 1) {
+          lifecycleQueued.resolve();
+        } else if (depth === 2) {
+          waiterQueued.resolve();
+        }
+        return depth;
+      });
       try {
-        await entered.promise;
-        const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);
-        if (!queue) {
-          throw new Error("session writer did not retain its queue");
-        }
-        const lifecycleQueued = createDeferred();
-        const waiterQueued = createDeferred();
-        const push = queue.pending.push.bind(queue.pending);
-        // Task finalization awaits a worker before these writes reach the FIFO.
-        const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
-          const depth = push(...tasks);
-          if (depth === 1) {
-            lifecycleQueued.resolve();
-          } else if (depth === 2) {
-            waiterQueued.resolve();
-          }
-          return depth;
-        });
-        try {
-          expect(queue.pending.length).toBe(0);
-          emitTerminal();
-          await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
-          expect(queue.pending.length).toBe(1);
-          waiting.resolve(terminal);
-          await racePromiseWithAbortSignal(waiterQueued.promise, signal);
-          expect(queue.pending.length).toBe(2);
-        } finally {
-          enqueueObserver.mockRestore();
-        }
-      } finally {
-        waiting.resolve(terminal);
-        released.resolve();
-        await blocker;
-      }
-      await waitForCleanup();
-    } else {
-      waiting.resolve(terminal);
-      await waitForCleanup();
-      if (mode === "sequential") {
+        expect(queue.pending.length).toBe(0);
         emitTerminal();
-        await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
+        await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
+        expect(queue.pending.length).toBe(1);
+        waiting.resolve(terminal);
+        await racePromiseWithAbortSignal(waiterQueued.promise, signal);
+        expect(queue.pending.length).toBe(2);
+      } finally {
+        enqueueObserver.mockRestore();
       }
+    } finally {
+      waiting.resolve(terminal);
+      released.resolve();
+      await blocker;
     }
+    await settleSubagentRegistryPersistenceWork(() => settleRootWork(true));
+    expect(readRun()?.cleanupCompletedAt).toEqual(expect.any(Number));
 
     // Read the durable projection, not a mock return or the registry's memory.
     const session = (await readSubagentSessionStore(storePath))[childSessionKey];

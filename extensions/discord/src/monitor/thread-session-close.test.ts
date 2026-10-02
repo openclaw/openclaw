@@ -1,5 +1,6 @@
 // Discord tests cover thread session close plugin behavior.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { closeDiscordThreadSessions } from "./thread-session-close.js";
 
 type ResolveStorePath = typeof import("openclaw/plugin-sdk/session-store-runtime").resolveStorePath;
 
@@ -21,8 +22,6 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     resolveStorePath: hoisted.resolveStorePath,
   };
 });
-
-let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
 
 function setupStore(store: Record<string, { sessionId?: string; updatedAt: number }>) {
   hoisted.listSessionEntries.mockImplementation(() =>
@@ -57,10 +56,6 @@ const MATCHED_KEY = `agent:main:discord:channel:${THREAD_ID}`;
 const UNMATCHED_KEY = `agent:main:discord:channel:${OTHER_ID}`;
 
 describe("closeDiscordThreadSessions", () => {
-  beforeAll(async () => {
-    ({ closeDiscordThreadSessions } = await import("./thread-session-close.js"));
-  });
-
   beforeEach(() => {
     hoisted.deleteSessionEntry.mockReset();
     hoisted.listSessionEntries.mockReset();

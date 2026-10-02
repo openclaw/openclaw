@@ -6,10 +6,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   prepareGatewaySessionStoreTargetReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
-  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 
 /** Acquire the ordered lookup's data while its discovery and physical readers remain current. */

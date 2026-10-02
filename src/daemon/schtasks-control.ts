@@ -2,19 +2,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { classifyOpenClawArgv } from "../infra/gateway-process-argv.js";
+import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { sleep } from "../utils.js";
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
+import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "./program-args.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import {
   readScheduledTaskCommand,
   resolveTaskName,
   resolveTaskScriptPath,
-  writeTaskXmlTempFile,
 } from "./schtasks-layout.js";
+import { describeUnverifiedPortListeners } from "./schtasks-port-diagnostics.js";
 import {
-  describeUnverifiedPortListeners,
   findInstalledProcessPid,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
@@ -44,10 +46,17 @@ import {
   terminateInstalledStartupRuntime,
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
-import { probeScheduledTaskExists, type ScheduledTaskSettlement } from "./schtasks-state-probe.js";
+import {
+  probeScheduledTaskExists,
+  probeScheduledTaskState,
+  ScheduledTaskInspectionError,
+  type ScheduledTaskSettlement,
+} from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
+import { writeTaskXmlTempFile } from "./schtasks-xml.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
+import { fingerprintGatewayServiceDefinition } from "./service-rebind.js";
 import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
@@ -276,8 +285,8 @@ export async function restoreScheduledTaskDefinition(params: {
 async function changeScheduledTaskEnabledState(params: {
   env: GatewayServiceEnv;
   enabled: boolean;
-  beforeMutation?: () => Promise<void>;
-  assertCurrent?: () => void;
+  beforeMutation?: (phase?: "restore") => Promise<void>;
+  assertCurrent?: (phase?: "restore") => void;
   restoreOnFailure?: boolean;
 }): Promise<boolean> {
   const taskName = resolveTaskName(params.env);
@@ -312,8 +321,8 @@ async function changeScheduledTaskEnabledState(params: {
     if (!params.enabled && params.restoreOnFailure !== false) {
       // A timeout can follow a committed /DISABLE, so restore the proven prior state.
       try {
-        await params.beforeMutation?.();
-        params.assertCurrent?.();
+        await params.beforeMutation?.("restore");
+        params.assertCurrent?.("restore");
         const restore = await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
         if (restore.code !== 0) {
           const restoreDetail = (restore.stderr || restore.stdout).trim() || "unknown error";
@@ -335,8 +344,8 @@ async function changeScheduledTaskEnabledState(params: {
 export async function suspendScheduledTaskAutoStartForUpdate(
   env: GatewayServiceEnv = process.env as GatewayServiceEnv,
   options?: {
-    beforeMutation?: () => Promise<void>;
-    assertCurrent?: () => void;
+    beforeMutation?: (phase?: "restore") => Promise<void>;
+    assertCurrent?: (phase?: "restore") => void;
     restoreOnFailure?: boolean;
   },
 ): Promise<boolean> {
@@ -346,9 +355,9 @@ export async function suspendScheduledTaskAutoStartForUpdate(
       env,
       enabled: false,
       ...options,
-      assertCurrent: () => {
+      assertCurrent: (phase) => {
         assertNative();
-        assertCaller?.();
+        assertCaller?.(phase);
       },
     }),
   );
@@ -488,6 +497,84 @@ export async function startScheduledTask({
     return;
   }
   const taskName = resolveTaskName(effectiveEnv);
+  const policy = preserveAutoStart ? null : probeScheduledTaskState(taskName);
+  if (policy?.status === "unknown") {
+    throw new ScheduledTaskInspectionError(policy);
+  }
+  if (policy?.status === "missing") {
+    throw new Error("Selected Scheduled Task registration is unavailable.");
+  }
+  if (policy?.status === "found" && policy.enabled === false) {
+    const serviceKind = shouldManageGatewayListenerPort(effectiveEnv) ? "gateway" : "node";
+    const readSelectedCommand = async () => {
+      const paths: string[] = [];
+      const command = await readScheduledTaskCommand(effectiveEnv, {
+        requireEffective: true,
+        requireLoaded: true,
+        onLauncherContent: (_content, sourcePath) => paths.push(sourcePath),
+      });
+      if (!command) {
+        throw new Error("Selected Scheduled Task command is unavailable; refusing to enable it.");
+      }
+      const classified = classifyOpenClawArgv(command.programArguments, {
+        command: serviceKind,
+        cwd: command.workingDirectory,
+        requirePackageIdentity: true,
+      });
+      if (classified.kind === "openclaw" && classified.packageIdentity) {
+        paths.push(
+          classified.packageIdentity.entrypoint,
+          path.join(classified.packageIdentity.root, "package.json"),
+        );
+      } else {
+        // Installed wrappers carry explicit operator intent in the launcher, not the caller's shell.
+        const wrapper = resolveEnvironmentValue(
+          command.environment,
+          OPENCLAW_WRAPPER_ENV_KEY,
+          "win32",
+        )?.trim();
+        const executable = command.programArguments[0] ?? "";
+        const selectedCommand = getRootOptionAwareCommandPath(
+          ["node", ...command.programArguments],
+          1,
+        )[0];
+        if (
+          !wrapper ||
+          !path.win32.isAbsolute(wrapper) ||
+          path.win32.parse(wrapper).root.length === 1 ||
+          path.win32.normalize(wrapper).toLowerCase() !==
+            path.win32.normalize(executable).toLowerCase() ||
+          selectedCommand !== serviceKind
+        ) {
+          throw new Error(
+            "Selected Scheduled Task is not the requested OpenClaw service; refusing to enable it.",
+          );
+        }
+        await resolveOpenClawWrapperPath(wrapper);
+        paths.push(wrapper);
+      }
+      // Stronger local start evidence must not change old drivers' serialized command fingerprints.
+      return {
+        ...command,
+        definitionPaths: [...new Set([...(command.definitionPaths ?? []), ...paths])],
+      };
+    };
+    const before = await fingerprintGatewayServiceDefinition(await readSelectedCommand());
+    const assertSelected = async () => {
+      if ((await fingerprintGatewayServiceDefinition(await readSelectedCommand())) !== before) {
+        throw new Error("Selected Scheduled Task command changed before start.");
+      }
+      assertCurrent?.();
+    };
+    await changeScheduledTaskEnabledState({
+      env: effectiveEnv,
+      enabled: true,
+      beforeMutation: assertSelected,
+      assertCurrent,
+    });
+    reportMutation("enable");
+    await assertSelected();
+  }
   await runScheduledTaskOrThrow({
     taskName,
     assertCurrent,

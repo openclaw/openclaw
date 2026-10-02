@@ -37,6 +37,34 @@ detached descendants stopped. Before manually removing an abandoned lock directo
 inspect its `owner.json` and verify all associated build, compiler, and lint
 processes, including detached descendants, have stopped; then retry the command.
 
+Runtime-consuming tests prepare checkout artifacts through the explicit build owner,
+not by launching the CLI with `--version`. Preparation reuses source-runner freshness
+checks and checkout artifact ownership, without updater service or database-maintenance
+custody. Current artifacts need no writable checkout or service inspection.
+`build-all` fingerprints production inputs in the existing stamps. Test preparation
+can reuse a coherent runtime after a source refresh or test-only correction,
+including a new private transport commit. Ordinary CLI and immutable deployment
+HEAD checks remain strict; UI E2E preparation also keeps its current-head checks.
+Changed production inputs, build configuration, dependencies, compiler identity,
+or required missing outputs still require preparation. Partial postbuilds that skip
+static assets cannot satisfy readers requiring those assets. A full build before E2E
+checks should use `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build`; scope that flag to the
+build command so its artifacts satisfy the strongest test prerequisite.
+
+Before writing, automatic preparation requires verified artifact separation or an
+observed offline managed Gateway. On Linux it reads the loaded command location without reading service
+environment files, using the existing native manager binding. A native `GetUnit`
+not-loaded result establishes no loaded runtime, not absence of its saved definition.
+An unloaded saved unit does not make an otherwise writable source checkout immutable;
+this is admission-time inspection, not service-start exclusion or a sandbox.
+Physically shared `dist` paths, unreadable artifact paths, incomplete discovery, and
+unknown service state never grant permission to rebuild. Immutable deployments and
+known live overlap remain refused. No new CLI flag or configuration is needed for
+ordinary separate worktrees; use the [existing isolated runner](/help/testing/suites#network-isolated-local-e2e)
+when native separation cannot be established. This inspection is not a sandbox.
+Explicit `pnpm build`, automatic source-CLI rebuilds, and actual update publication
+retain their existing admission policies.
+
 Lint reports its final failure on stderr after child joins and artifact ownership
 have settled, including retained ownership when cleanup is uncertain. Standalone
 Oxlint and its shard CLI end with `[oxlint] FAILED (exit N)`; `pnpm lint` owns the

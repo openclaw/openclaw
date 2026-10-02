@@ -334,7 +334,7 @@ describe("ReefMessageFlow inbound", () => {
       order.push("ingress");
     });
     relay.acknowledge.mockImplementation(async () => {
-      await expect(stores.delivered.has(id)).resolves.toBe(true);
+      await expect(stores.delivered.status(id)).resolves.toBe("delivered");
       order.push("ack");
       return { result: "deleted" };
     });
@@ -349,7 +349,7 @@ describe("ReefMessageFlow inbound", () => {
 
     await flow.processEntries([entry]);
     expect(order).toEqual(["ingress", "ack"]);
-    await expect(stores.delivered.has(id)).resolves.toBe(true);
+    await expect(stores.delivered.status(id)).resolves.toBe("delivered");
 
     await flow.processEntries([{ ...entry, seq: 2 }]);
     expect(order).toEqual(["ingress", "ack", "ack"]);
@@ -593,7 +593,7 @@ describe("ReefMessageFlow delivery-store capacity", () => {
     const bob = reefKeys();
     const id = "01JZ0000000000000000000204";
     const stores = flowStores(1);
-    await stores.delivered.add("occupied"); // delivered namespace full
+    await stores.delivered.confirm("occupied"); // delivered namespace full
     const onIngress = vi.fn(async () => {});
     const relay = transport();
     const flow = new ReefMessageFlow({

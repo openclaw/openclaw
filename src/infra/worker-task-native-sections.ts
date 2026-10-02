@@ -101,7 +101,7 @@ export function observeWorkerTaskCancellation(
 export function waitForWorkerNativeSections(
   state: WorkerNativeSectionState,
 ): Promise<void> | undefined {
-  if (Atomics.load(state, 0) < SECTION) {
+  if (areWorkerNativeSectionsSettled(state)) {
     return undefined;
   }
   return (async () => {
@@ -113,6 +113,11 @@ export function waitForWorkerNativeSections(
       await Atomics.waitAsync(state, 0, observed).value;
     }
   })();
+}
+
+/** Cancellation must close admission before this fact permits native termination. */
+export function areWorkerNativeSectionsSettled(state: WorkerNativeSectionState): boolean {
+  return Atomics.load(state, 0) < SECTION;
 }
 
 export function releaseWorkerNativeSectionsOnExit(state: WorkerNativeSectionState): void {

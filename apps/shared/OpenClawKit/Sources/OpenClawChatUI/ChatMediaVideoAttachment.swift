@@ -18,7 +18,6 @@ struct ChatMediaVideoAttachment: View {
     let label: String
     let width: Int?
     let height: Int?
-    let playback: OpenClawChatPlaybackMode?
     let resolverReady: Bool
     let playbackAllowed: @MainActor @Sendable () -> Bool
     let load: @MainActor @Sendable (String) async throws -> OpenClawChatLoadedMedia?

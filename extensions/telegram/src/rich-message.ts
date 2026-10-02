@@ -137,13 +137,6 @@ export function buildTelegramRichMarkdownPlan(
   };
 }
 
-export function buildTelegramRichMarkdown(
-  markdown: string,
-  options?: TelegramRichMessageOptions,
-): TelegramInputRichMessage {
-  return buildTelegramRichMarkdownPlan(markdown, options).richMessage;
-}
-
 export function buildTelegramRichBlocksPlan(
   blocks: InputRichBlock[],
   options?: Pick<TelegramRichMessageOptions, "skipEntityDetection">,

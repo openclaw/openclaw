@@ -222,19 +222,9 @@ final class ShareViewController: UIViewController {
             timeoutSeconds: nil,
             key: UUID().uuidString)
         let data = try JSONEncoder().encode(params)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw NSError(
-                domain: "OpenClawShare",
-                code: 12,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload."])
-        }
+        let json = String(bytes: data, encoding: .utf8)!
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
-        guard let nodeEventParams = String(data: eventData, encoding: .utf8) else {
-            throw NSError(
-                domain: "OpenClawShare",
-                code: 13,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to encode node event payload."])
-        }
+        let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
         _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
     }
 

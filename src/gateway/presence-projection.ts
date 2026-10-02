@@ -1,4 +1,4 @@
-import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";

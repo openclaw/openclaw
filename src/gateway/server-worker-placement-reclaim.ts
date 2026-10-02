@@ -15,13 +15,10 @@ import {
   resolveWorkerPlacementSessionTarget,
   WorkerDispatchTargetChangedError,
 } from "./server-worker-placement-session-target.js";
-import {
-  matchesWorkerPlacementTarget,
-  type WorkerPlacementReclaimBarriers,
-} from "./worker-environments/placement-reclaim-contract.js";
+import type { WorkerPlacementReclaimBarriers } from "./worker-environments/placement-reclaim-contract.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { matchesWorkerPlacementTarget } from "./worker-environments/placement-target.js";
 import type { WorkerPlacementReclaimRequest } from "./worker-environments/service-contract.js";
-import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 type SessionUtilsRuntime = typeof import("./session-utils.js");
 export type WorkerPlacementSessionRuntime = {
@@ -180,8 +177,8 @@ export function createGatewayWorkerPlacementReclaimBarriers(
       assertCurrent();
       return await run(assertCurrent);
     }
-    // This lease blocks ingress without a mutex: cancellation recovery must still be able
-    // to acquire lifecycle and placement fences before Stop reserves its teardown turn.
+    // This lease blocks ingress without a mutex: predecessors must still be able to
+    // settle their lifecycle work before Stop enters session cleanup.
     const release = closeSessionWorkAdmissions({
       scope: target.storePath,
       identities: lifecycleIdentities,
@@ -239,14 +236,14 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         sessionKey,
         agentId,
       });
-    let workspace: WorkerSessionWorkspace | undefined;
+    let assertBindingCurrent: (() => void) | undefined;
     let reclaimedPlacement: Awaited<ReturnType<typeof reclaim>> | undefined;
     await runExclusiveSessionLifecycleMutation({
       scope: target.storePath,
       identities: lifecycleIdentities,
       prepare: async (lifecycle) => {
         beforeDrain?.();
-        const resolved = resolveWorkerPlacementSessionTarget({
+        const resolved = await resolveWorkerPlacementSessionTarget({
           sessionRuntime,
           config: getRuntimeConfig(),
           sessionId,
@@ -265,32 +262,34 @@ export function createGatewayWorkerPlacementReclaimBarriers(
             `Session ${sessionKey} cannot stop cloud worker from placement ${placement?.state ?? "missing"}`,
           );
         }
-        workspace = resolved.workspace;
-        const assertCurrent = () => {
+        assertBindingCurrent = () => {
           authorize?.();
-          resolveWorkerPlacementSessionTarget({
-            sessionRuntime,
-            config: getRuntimeConfig(),
-            sessionId,
-            sessionKey,
-            agentId,
-            expectedTarget: target,
-            errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
-          });
+          resolved.assertBindingCurrent(getRuntimeConfig());
         };
-        await cancelAndDrain(lifecycle.closeWorkAdmissions, assertCurrent);
+        await cancelAndDrain(lifecycle.closeWorkAdmissions, assertBindingCurrent);
       },
       run: async () => {
-        if (!workspace) {
+        if (!assertBindingCurrent) {
           throw new Error(`Session ${sessionKey} cloud worker stop barrier did not prepare`);
         }
+        assertBindingCurrent();
+        const resolved = await resolveWorkerPlacementSessionTarget({
+          sessionRuntime,
+          config: getRuntimeConfig(),
+          sessionId,
+          sessionKey,
+          agentId,
+          expectedTarget: target,
+          errorMessage: `Session ${sessionKey} changed before cloud worker stop. Retry.`,
+        });
         // Sharing mutations use this lifecycle fence too. Reauthorize after every wait and
         // immediately before drain so revoked callers cannot commit stale placement authority.
-        authorize?.();
+        assertBindingCurrent();
         // Eligibility ends at this operation's drain, unlike caller authority during teardown.
         beforeDrain?.();
+        resolved.assertCurrent(getRuntimeConfig());
         const placement = begin();
-        reclaimedPlacement = await reclaim(workspace, placement, authorize);
+        reclaimedPlacement = await reclaim(resolved.workspace, placement, authorize);
         params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
       },
     });

@@ -34,15 +34,17 @@ import {
   updateTransition,
 } from "./placement-row-codec.js";
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
+import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
   assertNoRunningWorkerSessionToolOperations,
   clearWorkerTurnToolState,
-} from "./placement-session-tool-operations.js";
+} from "./placement-session-tool-operations.kernel.js";
 import {
   canTransitionWorkerSessionPlacement,
   type WorkerSessionPlacementState,
 } from "./placement-state.js";
 import {
+  observePlacementAuthority,
   preparePlacementTurnClaimAuthority,
   publishPlacementTurnClaimCleared,
   publishPlacementTurnClaimState,
@@ -57,7 +59,7 @@ import {
   createPlacementTurnClaimOps,
   registerWorkerTurnClaimClosedHandler,
 } from "./placement-turn-claims.js";
-import { createPlacementWorkspaceJournalOps } from "./placement-workspace-journal.js";
+import { createPlacementWorkspaceJournalWorkerOps } from "./placement-workspace-journal-store.js";
 import { createPlacementWorkspaceReservationOps } from "./placement-workspace-reservation.js";
 import {
   createPlacementWorkspaceResultOps,
@@ -124,10 +126,19 @@ export function createWorkerSessionPlacementStore(
   const store = {
     ...createPlacementWorkspaceReservationOps(runtime),
     ...createPlacementTurnClaimOps(runtime),
-    ...createPlacementTurnClaimWorkerOps({ path, now: options.now }),
+    ...createPlacementSessionToolOperationOps({
+      path,
+      instanceId: runtime.instanceId,
+      now: options.now,
+    }),
+    ...createPlacementTurnClaimWorkerOps({
+      path,
+      instanceId: runtime.instanceId,
+      now: options.now,
+    }),
     ...createPlacementPendingFailureOps(runtime),
     ...createPlacementMoveOps(runtime),
-    ...createPlacementWorkspaceJournalOps(runtime),
+    ...createPlacementWorkspaceJournalWorkerOps({ path, now: options.now }),
     ...createPlacementWorkspaceResultOps(runtime),
 
     registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void {
@@ -142,6 +153,31 @@ export function createWorkerSessionPlacementStore(
       return preparePlacementTurnClaimAuthority(path, claim, (sessionIds) =>
         store.readProjection(sessionIds, { current: true }),
       );
+    },
+
+    async prepareRuntimeRefresh(sessionIdInput: string) {
+      const sessionId = required(sessionIdInput, "session id");
+      const observation = observePlacementAuthority(path, sessionId);
+      try {
+        const result = await executeExistingOpenClawStateRead(
+          { path },
+          { type: "workers.placementProjection", sessionIds: [sessionId], conflictBindings: [] },
+          { current: true },
+        );
+        if (!result?.ok || result.type !== "workers.placementProjection") {
+          throw new Error("Worker placement projection source is unavailable");
+        }
+        observation.assertCurrent();
+        return {
+          placement: result.result.projection.placements.get(sessionId),
+          move: result.result.projection.moves.get(sessionId),
+          pendingResult: result.result.projection.pendingResults.get(sessionId),
+          ...observation,
+        };
+      } catch (error) {
+        observation.release();
+        throw error;
+      }
     },
 
     async readProjection(

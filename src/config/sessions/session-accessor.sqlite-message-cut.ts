@@ -16,7 +16,6 @@ import {
   withSqliteSessionContextReset,
 } from "./session-accessor.sqlite-deletion.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionEntryRow,
   readSessionIdentitySnapshot,
   writeSessionEntry,
@@ -24,7 +23,6 @@ import {
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { loadTranscriptEventsFromDatabase } from "./session-accessor.sqlite-read.js";
 import {
-  normalizeSqliteSessionKey,
   resolveSqliteScope,
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
@@ -48,6 +46,7 @@ import {
   SYNC_REBUILD_MAX_BYTES,
   SYNC_REBUILD_MAX_ROWS,
 } from "./session-transcript-index.js";
+import { collectSessionEntryLookupKeys, normalizeStoreSessionKey } from "./store-entry.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import {
   isSessionTranscriptLeafControl,
@@ -116,10 +115,10 @@ async function mutateSqliteSessionAtMessage(
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
 ): Promise<SessionTranscriptMutationResult> {
-  const canonicalSourceKey = normalizeSqliteSessionKey(params.sessionKey);
-  const sourceKey = normalizeSqliteSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const canonicalSourceKey = normalizeStoreSessionKey(params.sessionKey);
+  const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
   const targetKey =
-    mode === "fork" ? normalizeSqliteSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
+    mode === "fork" ? normalizeStoreSessionKey(params.targetKey ?? params.sessionKey) : sourceKey;
   const resolved = resolveSqliteScope({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.env ? { env: params.env } : {}),
@@ -157,8 +156,8 @@ async function mutateSqliteSessionAtMessage(
             assertPreparedCurrent?.();
             params.commitGuard?.();
             const identityKeys = uniqueStrings([
-              ...collectSessionEntryLookupKeys(database, sourceKey),
-              ...collectSessionEntryLookupKeys(database, targetKey),
+              ...collectSessionEntryLookupKeys(sourceKey),
+              ...collectSessionEntryLookupKeys(targetKey),
             ]);
             previousIdentity = readSessionIdentitySnapshot(database, identityKeys);
             const mutationResult = mutateSqliteSessionAtMessageInTransaction(database, resolved, {

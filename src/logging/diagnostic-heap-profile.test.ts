@@ -334,11 +334,11 @@ assert.ok(retained.length > 0);
 retained = undefined;
 timers.setTimeout = async () => {
   allocateDroppedHeapProfileWorkload();
-  globalThis.gc();
+  await globalThis.gc({ type: "major", execution: "async" });
 };
 syncBuiltinESMExports();
 for (const includeCollected of [false, true]) {
-  globalThis.gc();
+  await globalThis.gc({ type: "major", execution: "async" });
   const outcome = await captureDiagnosticHeapProfile({
     ...options,
     includeObjectsCollectedByMajorGC: includeCollected,
@@ -377,7 +377,7 @@ assert.equal(url(), undefined);
         { cwd: root, signal, maxBuffer: 32768, requireProcessTreeExit: true },
       );
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
+      expect(result.status, [result.stderr, result.stdout].join("\n")).toBe(0);
       console.log("HEAP_PROFILE_NATIVE", result.stdout.trim());
     },
     30000,

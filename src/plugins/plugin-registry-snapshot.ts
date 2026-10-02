@@ -1,4 +1,3 @@
-// Builds stable snapshots of plugin registry contributions.
 import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";

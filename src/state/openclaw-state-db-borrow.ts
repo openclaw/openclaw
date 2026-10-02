@@ -28,17 +28,17 @@ export function createStateDatabaseRetainer(
     cachedDatabases: Map<string, OpenClawStateDatabase>;
   },
   operations: {
-    assertOpen(pathname: string): void;
+    assertOpen(pathname: string, ownership?: "cached-read"): void;
     capture(pathname: string): { assertCurrent(): void };
     retire(database: OpenClawStateDatabase, retireAdmission: boolean): void;
     retainFailed(database: OpenClawStateDatabase): void;
     touch(database: OpenClawStateDatabase): void;
   },
 ) {
-  const admit = (pathname: string) => {
+  const admit = (pathname: string, ownership?: "cached-read") => {
     const scope = getOpenClawDatabaseMaintenanceScope();
     scope?.assertAdmission();
-    operations.assertOpen(pathname);
+    operations.assertOpen(pathname, ownership);
     return scope;
   };
   // Only the synchronous entry points below can reach this already-admitted step.
@@ -86,8 +86,8 @@ export function createStateDatabaseRetainer(
     scope?.own(reference, "shared-references", () => reference.release());
     return reference;
   };
-  const findReadDatabase = (pathname: string) => {
-    const scope = admit(pathname);
+  const findReadDatabase = (pathname: string, ownership?: "cached-read") => {
+    const scope = admit(pathname, ownership);
     const database = state.cachedDatabases.get(path.resolve(pathname));
     return { database: database?.db.isOpen ? database : undefined, scope };
   };
@@ -116,12 +116,12 @@ export function createStateDatabaseRetainer(
   };
   return {
     retain: (database: OpenClawStateDatabase) => retain(database, admit(database.path)),
-    retainForIndependentRead(this: void, pathname: string) {
-      const { database, scope } = findReadDatabase(pathname);
+    retainForIndependentRead(this: void, pathname: string, ownership?: "cached-read") {
+      const { database, scope } = findReadDatabase(pathname, ownership);
       return database ? retainReadReference(database, scope) : undefined;
     },
-    borrowForRead(this: void, pathname: string) {
-      const { database, scope } = findReadDatabase(pathname);
+    borrowForRead(this: void, pathname: string, ownership?: "cached-read") {
+      const { database, scope } = findReadDatabase(pathname, ownership);
       if (!database) {
         return undefined;
       }

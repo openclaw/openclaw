@@ -7,7 +7,6 @@ import {
 import parseArgs from "yargs-parser";
 import type {
   ChromeMcpOptionsInput,
-  ChromeMcpProfileOptions,
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
@@ -77,6 +76,8 @@ export function normalizeChromeMcpOptions(
   return {
     // The pinned server runs on the Gateway's own runtime, Node or Bun.
     command: customCommand ?? process.execPath,
+    // Its update check shells out to npm, which Bun-only installs lack; custom servers keep theirs.
+    env: managedServer ? { CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" } : undefined,
     userDataDir,
     browserUrl,
     args: [
@@ -109,11 +110,4 @@ export function buildChromeMcpSessionCacheKey(
     options.command,
     options.args,
   ]);
-}
-
-export function chromeMcpProfileOptionsFromParams(params: {
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-}): string | ChromeMcpProfileOptions | undefined {
-  return params.profile ?? params.userDataDir;
 }

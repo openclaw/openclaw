@@ -168,7 +168,15 @@ describe("ordinary private-manager inspection", () => {
           XDG_RUNTIME_DIR: runtime,
           DBUS_SESSION_BUS_ADDRESS: systemdOperatorBusFixtures.stale.address,
         },
-        { requireEffective: true },
+        {
+          requireEffective: true,
+          // This fixture selects a user manager; never discover the host's real system unit.
+          systemdReadTarget: {
+            scope: "user",
+            unitName,
+            unitPath: path.join(home, ".config/systemd/user", unitName),
+          },
+        },
       );
       if (result === "absent") {
         await expect(inspected).resolves.toBeNull();

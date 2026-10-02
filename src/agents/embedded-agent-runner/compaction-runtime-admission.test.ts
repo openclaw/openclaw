@@ -97,7 +97,7 @@ it.each([
     });
     const previousConfig = config("summary-old");
     const committedConfig = config(nextProvider);
-    loadAndActivateRootPluginRegistry({
+    await loadAndActivateRootPluginRegistry({
       config: previousConfig,
       workspaceDir: gatewayWorkspace,
       onlyPluginIds: ["caller-provider"],

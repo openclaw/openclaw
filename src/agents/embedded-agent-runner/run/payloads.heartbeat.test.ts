@@ -36,6 +36,7 @@ describe("quiet heartbeat failures", () => {
             heartbeatTerminalToolFailure: { toolName },
             replyPayload: resolveHeartbeatReplyPayload(merged),
           },
+          useHeartbeatFailureCopy: true,
           hasRelayableExecCompletion: false,
           suppressUnmarkedSourceReplies: false,
           responsePrefix: undefined,

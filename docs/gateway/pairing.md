@@ -107,9 +107,9 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Restart the installed node with `openclaw node restart`, or stop and rerun its
-foreground command. A node paused on `PAIRING_REQUIRED` does not resume after
-manual approval. Its reconnect creates the separate command-surface request:
+Headless node hosts keep reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, the next reconnect
+creates the separate command-surface request:
 
 ```bash
 openclaw nodes pending
@@ -117,6 +117,10 @@ openclaw nodes approve <nodeRequestId>
 openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+command once.
 
 The device and node request IDs are distinct. To reject a surface request or
 manage an existing node instead:
@@ -275,10 +279,10 @@ Enabled by default. Requirements for it to fire:
 - Same eligibility floor as trusted-CIDR approval: fresh scopeless node
   pairing only; upgrades, browsers, Control UI, and WebChat always prompt.
 
-While a probe is running, the node client is told to keep retrying
-(`wait_then_retry`) instead of pausing for manual approval; if the probe
-fails, the next attempt falls back to the normal prompt flow. Failed targets
-get a short cooldown (5 minutes after a key mismatch).
+While device approval is pending, the node client is told to keep retrying
+(`wait_then_retry`), including while an SSH probe is running. If the probe fails,
+the request remains available for manual approval and the node keeps retrying.
+Failed SSH targets get a short cooldown (5 minutes after a key mismatch).
 
 Pairing settings hot-apply without restarting the Gateway. Automatic approvals
 recheck the current policy immediately before granting access, even if an SSH

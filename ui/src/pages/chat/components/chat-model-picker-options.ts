@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { icons } from "../../../components/icons.ts";
+import { renderKbd } from "../../../components/kbd.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
@@ -14,6 +15,14 @@ import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
 import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 
 registerModelControlsEnglish();
+
+function renderModelShortcut() {
+  return renderKbd("", {
+    ariaHidden: true,
+    hidden: true,
+    ref: (element) => element?.setAttribute("data-chat-model-shortcut", "true"),
+  });
+}
 
 export type ChatModelPickerOption = {
   agentRuntimeId?: string;
@@ -240,7 +249,7 @@ export function renderChatModelPickerOption(params: {
           ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
               >${icons.check}</span
             >`
-          : html`<kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>`
+          : renderModelShortcut()
       }
     </span>
   </button>`;
@@ -282,9 +291,7 @@ export function renderChatModelPickerTargetOption(params: {
           <span class="chat-controls__model-option-name">${params.entry.label}</span>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <kbd data-chat-model-shortcut="true" aria-hidden="true" hidden></kbd>
-      </span>
+      <span class="chat-controls__model-option-action"> ${renderModelShortcut()} </span>
     </button>
   `;
 }

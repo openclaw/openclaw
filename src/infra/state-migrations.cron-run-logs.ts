@@ -135,10 +135,6 @@ function parseLegacyRow(row: LegacyCronRunLogRow): CronRunLogEntry | null {
   };
 }
 
-function ordinalKey(jobId: string, ts: number): string {
-  return `${jobId}\0${ts}`;
-}
-
 /** Runs inside the state schema transaction and removes the retired table after import. */
 export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLogTaskImportResult {
   if (!hasLegacyCronRunLogs(db)) {
@@ -183,7 +179,7 @@ export function migrateLegacyCronRunLogsToTaskRuns(db: DatabaseSync): CronRunLog
         malformed++;
         continue;
       }
-      const key = ordinalKey(entry.jobId, entry.ts);
+      const key = `${entry.jobId}\0${entry.ts}`;
       const ordinal = (ordinals.get(key) ?? 0) + 1;
       ordinals.set(key, ordinal);
       const identities = mirrored.get(entry.jobId) ?? [];

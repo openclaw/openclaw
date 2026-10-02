@@ -21,9 +21,8 @@ import { normalizeProviderConfigForConfigDefaults } from "../config/provider-pol
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
-
-export { applyDefaultModel } from "./provider-model-primary.js";
 
 export function resolveProviderMatch(
   providers: ProviderPlugin[],
@@ -48,21 +47,16 @@ export function pickAuthMethod(
   provider: ProviderPlugin,
   rawMethod?: string,
 ): ProviderAuthMethod | null {
-  const raw = normalizeOptionalString(rawMethod);
-  if (!raw) {
+  const normalized = normalizeOptionalLowercaseString(rawMethod);
+  if (!normalized) {
     return null;
   }
-  const normalized = normalizeOptionalLowercaseString(raw);
   return (
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.id) === normalized) ??
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.label) === normalized) ??
     null
   );
 }
-
-// Guard config patches against prototype-pollution payloads if a patch ever
-// arrives from a JSON-parsed source that preserves these keys.
-const BLOCKED_MERGE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 function sanitizeConfigPatchValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -74,7 +68,7 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
 
   const next: Record<string, unknown> = {};
   for (const [key, nestedValue] of Object.entries(value)) {
-    if (BLOCKED_MERGE_KEYS.has(key)) {
+    if (isBlockedObjectKey(key)) {
       continue;
     }
     next[key] = sanitizeConfigPatchValue(nestedValue);
@@ -83,34 +77,22 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
 }
 
 function mergeConfigPatch<T>(base: T, patch: unknown): T {
-  if (!isPlainRecord(base) || !isPlainRecord(patch)) {
+  if (!isPlainRecord(patch)) {
     return sanitizeConfigPatchValue(patch) as T;
   }
 
-  const next: Record<string, unknown> = { ...base };
+  const next: Record<string, unknown> = isPlainRecord(base) ? { ...base } : {};
   for (const [key, value] of Object.entries(patch)) {
-    if (BLOCKED_MERGE_KEYS.has(key)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (value === undefined) {
+      delete next[key];
       continue;
     }
     next[key] = mergeConfigPatch(next[key], value);
   }
   return next as T;
-}
-
-function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
-  if (!isPlainRecord(target) || !isPlainRecord(patch)) {
-    return target;
-  }
-
-  const targetRecord = target as Record<string, unknown>;
-  for (const [key, value] of Object.entries(patch)) {
-    if (value === undefined) {
-      delete targetRecord[key];
-      continue;
-    }
-    deleteUndefinedPatchLeaves(targetRecord[key], value);
-  }
-  return target;
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
@@ -311,7 +293,7 @@ export function applyProviderAuthConfigPatch(
   const providerConfigNormalizer =
     options?.providerConfigNormalizer ?? normalizeProviderConfigForConfigDefaults;
   const merged = normalizeConfigModelRefsForWrite(
-    deleteUndefinedPatchLeaves(mergeConfigPatch(cfg, patch), patch),
+    mergeConfigPatch(cfg, patch),
     providerConfigNormalizer,
   );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {

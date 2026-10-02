@@ -1,11 +1,3 @@
-// Dockable gateway browser panel for the Control UI shell.
-//
-// Renders the gateway-controlled browser (the same one agents drive through
-// the browser plugin) as a screenshot-backed remote view with tabs, a URL bar,
-// and two capture modes: annotate (freehand markup packaged into a chat
-// prompt + attachment) and inspect (element details at the pointer). Works in
-// any regular browser — no native webview required — and equally inside the
-// macOS app's dashboard.
 import { nothing } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -85,7 +77,6 @@ class OpenClawBrowserPanel
     reservationPrefix: "browser",
     isAvailable: () => this.available,
   });
-  private readonly onToggleRequest = (event: Event) => this.handleToggleRequest(event);
   private viewportResizeObserver: ResizeObserver | null = null;
   private observedViewportElement: Element | null = null;
 
@@ -99,7 +90,7 @@ class OpenClawBrowserPanel
   override connectedCallback(): void {
     super.connectedCallback();
     if (!this.embedded) {
-      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     }
     // A settings takeover can already own the viewport when the panel mounts.
     // Suppress before the restored open state refreshes a dock nobody can see.
@@ -111,7 +102,7 @@ class OpenClawBrowserPanel
 
   override disconnectedCallback(): void {
     super.disconnectedCallback();
-    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+    window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
     this.viewportResizeObserver?.disconnect();
     this.viewportResizeObserver = null;
     this.observedViewportElement = null;
@@ -120,9 +111,9 @@ class OpenClawBrowserPanel
   override updated(changed: Map<string, unknown>): void {
     if (changed.has("embedded")) {
       if (this.embedded) {
-        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       } else {
-        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.onToggleRequest);
+        window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, this.handleToggleRequest);
       }
     }
     if (changed.has("suppressed")) {
@@ -154,10 +145,8 @@ class OpenClawBrowserPanel
       } else if (
         this.refreshOnPresentation &&
         !followedPreferred &&
-        (contextChanged || presentationChanged || gatewayAvailabilityChanged)
+        (contextChanged || presentationChanged || gatewayAvailabilityChanged || sessionTabsChanged)
       ) {
-        void this.browserPanelController.refreshAll();
-      } else if (this.refreshOnPresentation && !followedPreferred && sessionTabsChanged) {
         void this.browserPanelController.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {
@@ -294,7 +283,7 @@ class OpenClawBrowserPanel
     }
   }
 
-  handleToggleRequest(event: Event): void {
+  readonly handleToggleRequest = (event: Event): void => {
     if (this.fixedTab) {
       return;
     }
@@ -346,7 +335,7 @@ class OpenClawBrowserPanel
     } else if (shouldRefresh && !this.followPreferredTab()) {
       void this.browserPanelController.refreshAll();
     }
-  }
+  };
 
   private closePanel(): void {
     this.browserPanelController.suspendView();
@@ -371,8 +360,6 @@ class OpenClawBrowserPanel
   }
 }
 
-// Guarded define (not @customElement) so re-imports under a shared registry —
-// e.g. vitest with isolate=false — don't throw "already registered".
 if (!customElements.get("openclaw-browser-panel")) {
   customElements.define("openclaw-browser-panel", OpenClawBrowserPanel);
 }

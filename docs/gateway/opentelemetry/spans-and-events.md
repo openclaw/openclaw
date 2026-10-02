@@ -52,6 +52,7 @@ OpenTelemetry metrics or change Prometheus metric labels.
   - `openclaw.channel`, `openclaw.webhook`, `openclaw.error`
 - `openclaw.message.processed`
   - `openclaw.channel`, `openclaw.outcome`, `openclaw.reason`, optional `openclaw.agent` (the agent that initially ingested the prompt)
+  - Isolated cron agent turns use this span as the parent of their harness spans, keeping model calls, tools, and usage on the same trace through completion or failure.
 - `openclaw.message.delivery`
   - `openclaw.channel`, `openclaw.delivery.kind`, `openclaw.outcome`, `openclaw.errorCategory`, `openclaw.delivery.result_count`
 - `openclaw.session.stuck`

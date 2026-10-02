@@ -31,6 +31,20 @@ export function isRejectedWorkspaceArtifactPath(error: unknown): boolean {
   );
 }
 
+async function openMemoryHostEventArtifact(
+  workspaceRoot: MemoryHostWorkspaceRoot,
+  relativePath: string,
+) {
+  try {
+    return await workspaceRoot.open(relativePath);
+  } catch (error) {
+    if (isMissingPathError(error) || isRejectedWorkspaceArtifactPath(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 export function memoryHostEventExportOwnerContent(
   owner: MemoryHostEventExportOwner,
   content: {
@@ -70,14 +84,9 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
   expectedIdentity?: FileIdentityStat;
   nextContent: string;
 }): Promise<boolean> {
-  let observation: Awaited<ReturnType<typeof params.workspaceRoot.open>>;
-  try {
-    observation = await params.workspaceRoot.open(params.relativePath);
-  } catch (error) {
-    if (isMissingPathError(error) || isRejectedWorkspaceArtifactPath(error)) {
-      return false;
-    }
-    throw error;
+  const observation = await openMemoryHostEventArtifact(params.workspaceRoot, params.relativePath);
+  if (!observation) {
+    return false;
   }
   await using observed = observation;
   if (
@@ -112,14 +121,9 @@ export async function rewriteMemoryHostEventArtifactIfUnchanged(params: {
     await writable.handle.chmod(0o600);
     await writable.handle.sync();
   }
-  let verification: Awaited<ReturnType<typeof params.workspaceRoot.open>>;
-  try {
-    verification = await params.workspaceRoot.open(params.relativePath);
-  } catch (error) {
-    if (isMissingPathError(error) || isRejectedWorkspaceArtifactPath(error)) {
-      return false;
-    }
-    throw error;
+  const verification = await openMemoryHostEventArtifact(params.workspaceRoot, params.relativePath);
+  if (!verification) {
+    return false;
   }
   await using verified = verification;
   return (
@@ -134,14 +138,9 @@ export async function isMemoryHostEventArtifactAtIdentity(params: {
   expectedIdentity: FileIdentityStat;
   expectedContent?: string;
 }): Promise<boolean> {
-  let observation: Awaited<ReturnType<typeof params.workspaceRoot.open>>;
-  try {
-    observation = await params.workspaceRoot.open(params.relativePath);
-  } catch (error) {
-    if (isMissingPathError(error) || isRejectedWorkspaceArtifactPath(error)) {
-      return false;
-    }
-    throw error;
+  const observation = await openMemoryHostEventArtifact(params.workspaceRoot, params.relativePath);
+  if (!observation) {
+    return false;
   }
   await using opened = observation;
   if (!sameFileIdentity(params.expectedIdentity, opened.stat)) {

@@ -157,6 +157,13 @@ function createReadCache<Input, Output>(
 // a five-minute fallback observes working-tree edits made outside OpenClaw.
 function createReadCaches() {
   return {
+    identities: createReadCache(
+      (input: GitReadOperations["repository.identities"]["input"], signal) =>
+        runGitWorkerOperation({ type: "repository.identities", input }, { signal }),
+      // Identity includes Git config and worktree relocation inputs without a complete revision.
+      // Share only pending passes so later discovery always sees external changes.
+      0,
+    ),
     context: createReadCache(
       (input: GitReadOperations["checkout.context"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.context", input }, { signal }),
@@ -246,8 +253,11 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline } = (state.caches ??= createReadCaches());
+  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
+    createReadCaches());
   switch (operation.type) {
+    case "repository.identities":
+      return identities.read(operation.input, options);
     case "checkout.revision":
       return runGitWorkerOperation(operation, options);
     case "checkout.context":

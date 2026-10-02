@@ -233,10 +233,7 @@ export async function handleBuzzInbound(params: {
     },
     delivery: {
       deliver: async (payload) => {
-        const text =
-          payload && typeof payload === "object" && "text" in payload
-            ? ((payload as { text?: string }).text ?? "")
-            : "";
+        const text = payload.text ?? "";
         if (!text.trim()) {
           return;
         }

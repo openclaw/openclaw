@@ -76,7 +76,7 @@ function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): Se
 }
 
 function createManager(createRuntime?: CreateSessionMcpRuntime) {
-  const manager = createSessionMcpRuntimeManager({ createRuntime, enableIdleSweepTimer: false });
+  const manager = createSessionMcpRuntimeManager({ createRuntime });
   managers.push(manager);
   return manager;
 }
@@ -367,36 +367,46 @@ describe("MCP manager creation ownership", () => {
     }
   });
 
-  it("joins running idle cleanup before arming the successor scheduler", async () => {
-    const firstClock = createGatewaySchedulerClock(Date.now());
-    const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
-    const firstScheduler = createTestGatewayScheduler(firstClock.clock);
-    const secondScheduler = createTestGatewayScheduler(secondClock.clock);
-    const manager = createSessionMcpRuntimeManager({
-      scheduler: firstScheduler,
-      createRuntime: createRuntimeFixture,
-    });
-    managers.push(manager);
-    const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
-    const runtime = await manager.getOrCreate(input);
-    const cleanup = holdDisposal(runtime);
-    const sweep = firstClock.advanceBy(120_000);
-    await cleanup.started;
-    const handoff = manager.setScheduler(secondScheduler);
-    try {
-      const next = await manager.getOrCreate({ ...input, sessionId: "later-session" });
-      expect(secondScheduler.nextWakeAtMs).toBeNull();
-      cleanup.release();
-      await Promise.all([sweep, handoff]);
-      await secondClock.advanceBy(120_000);
-      expect(next.dispose).toHaveBeenCalledOnce();
-      expect(manager.listRuntimeKeys()).toEqual([]);
-    } finally {
-      cleanup.release();
-      await Promise.all([sweep, handoff]);
-      await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
-    }
-  });
+  it.each([false, true])(
+    "joins running idle cleanup before scheduler handoff with disabled cadence=%s",
+    async (disableCadence) => {
+      const firstClock = createGatewaySchedulerClock(Date.now());
+      const secondClock = createGatewaySchedulerClock(firstClock.clock.now());
+      const firstScheduler = createTestGatewayScheduler(firstClock.clock);
+      const secondScheduler = createTestGatewayScheduler(secondClock.clock);
+      const manager = createSessionMcpRuntimeManager({
+        scheduler: firstScheduler,
+        createRuntime: createRuntimeFixture,
+      });
+      managers.push(manager);
+      const input = { ...params, cfg: { mcp: { sessionIdleTtlMs: 60_000, servers: {} } } };
+      const runtime = await manager.getOrCreate(input);
+      const cleanup = holdDisposal(runtime);
+      const sweep = firstClock.advanceBy(120_000);
+      await cleanup.started;
+      if (disableCadence) {
+        await manager.getOrCreate({
+          ...params,
+          sessionId: "idle-disabled",
+          cfg: { mcp: { sessionIdleTtlMs: 0, servers: {} } },
+        });
+      }
+      const handoff = manager.setScheduler(secondScheduler);
+      try {
+        const next = await manager.getOrCreate({ ...input, sessionId: "later-session" });
+        expect(secondScheduler.nextWakeAtMs).toBeNull();
+        cleanup.release();
+        await Promise.all([sweep, handoff]);
+        await secondClock.advanceBy(120_000);
+        expect(next.dispose).toHaveBeenCalledOnce();
+        expect(manager.listRuntimeKeys()).toEqual(disableCadence ? ["idle-disabled"] : []);
+      } finally {
+        cleanup.release();
+        await Promise.all([sweep, handoff]);
+        await Promise.all([firstScheduler.stop(), secondScheduler.stop()]);
+      }
+    },
+  );
 
   it.each(
     ["host-close", "scheduler-stop", "already-stopped", "unbound-stopped"].flatMap((boundary) => [
@@ -481,7 +491,6 @@ describe("MCP manager creation ownership", () => {
         const manager = createSessionMcpRuntimeManager({
           scheduler: survivorScheduler,
           createRuntime: held.createRuntime,
-          enableIdleSweepTimer: false,
         });
         managers.push(manager);
         const previous = Reflect.get(globalThis, SESSION_MCP_RUNTIME_MANAGER_KEY);

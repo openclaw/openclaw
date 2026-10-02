@@ -517,4 +517,37 @@ describe("openrouter-model-capabilities", () => {
       expect(fetchSpy).toHaveBeenCalledTimes(2);
     });
   });
+
+  it("reads only loaded capabilities and follows catalog refreshes", async () => {
+    await withOpenRouterStateDir(async () => {
+      const modelId = "acme/refreshed-model";
+      const catalog = (efforts: string[]) =>
+        Response.json({
+          data: [{ id: modelId, reasoning: { supported_efforts: efforts, mandatory: true } }],
+        });
+      const fetchSpy = vi
+        .fn()
+        .mockResolvedValueOnce(catalog(["xhigh", "high"]))
+        .mockResolvedValueOnce(catalog(["high"]));
+      vi.stubGlobal("fetch", fetchSpy);
+      const writer = await importOpenRouterModelCapabilities("loaded-writer");
+      await writer.loadOpenRouterModelCapabilities(modelId);
+
+      // A cold process has SQLite rows available but must not read them or fetch.
+      const reader = await importOpenRouterModelCapabilities("loaded-reader");
+      expect(reader.getLoadedOpenRouterModelCapabilities(modelId)).toBeUndefined();
+      expect(fetchSpy).toHaveBeenCalledOnce();
+
+      await reader.loadOpenRouterModelCapabilities(modelId);
+      expect(
+        reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
+      ).toEqual(["xhigh", "high"]);
+
+      await reader.loadOpenRouterModelCapabilities("acme/new-model");
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      expect(
+        reader.getLoadedOpenRouterModelCapabilities(modelId)?.compat?.supportedReasoningEfforts,
+      ).toEqual(["high"]);
+    });
+  });
 });

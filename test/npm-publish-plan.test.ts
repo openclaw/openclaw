@@ -492,7 +492,6 @@ describe("resolvePublishedNpmVersionRoute", () => {
 
   it.each([
     ["beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.4" }],
-    ["alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.4" }],
     ["latest", "2026.9.6", { latest: "2026.9.7", beta: "2026.9.7" }],
   ])(
     "skips a published version superseded on %s without touching mirrors",
@@ -662,14 +661,11 @@ describe("shouldRequireNpmDistTagMirrorAuth", () => {
     ).toBe(false);
   });
 
-  it("publishes alpha prereleases without dist-tag mirroring", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1-alpha.1");
-
-    expect(plan).toEqual({
-      channel: "alpha",
-      publishTag: "alpha",
-      mirrorDistTags: [],
-    });
+  it("rejects alpha publication instead of falling through to latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.4.1-alpha.1")).toThrow("Alpha releases are retired;");
+    expect(() => resolveNpmPublishPlan("2026.4.1", undefined, "alpha")).toThrow(
+      "Alpha releases are retired;",
+    );
   });
 
   it("does not require auth when a publish already has npm auth", () => {

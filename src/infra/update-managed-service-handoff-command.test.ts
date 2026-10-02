@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { findSystemdGatewayInstallation } from "../daemon/systemd-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { parseDevUpdateTargetEnv, type DevUpdateTarget } from "./update-dev-target.js";
+import { withEnv } from "../test-utils/env.js";
+import { readDevUpdateTarget, type DevUpdateTarget } from "./update-dev-target.js";
 import type { ManagedHandoffLease } from "./update-managed-service-handoff-lease.js";
 import { signalMockManagedUpdateHandoffReady } from "./update-managed-service-handoff.test-support.js";
 
@@ -171,12 +172,13 @@ async function startHandoffAndReadCommand(params: {
 
 describe("managed service update handoff command", () => {
   it.each([
-    { writable: false, signal: null },
-    { writable: true, signal: null },
-    { writable: true, signal: "SIGKILL" },
+    { writable: false, signal: null, code: 0, receipt: false },
+    { writable: true, signal: null, code: 0, receipt: true },
+    { writable: true, signal: "SIGKILL", code: null, receipt: true },
+    { writable: true, signal: null, code: 143, receipt: false },
   ])(
-    "admits writable=$writable system updates and joins helper settlement (signal=$signal)",
-    async ({ writable, signal }) => {
+    "admits writable=$writable system updates and joins helper settlement (code=$code, signal=$signal, receipt=$receipt)",
+    async ({ writable, signal, code, receipt }) => {
       const root = systemRoots.make("openclaw-system-update-");
       const unitName = "openclaw-custom.service";
       vi.mocked(findSystemdGatewayInstallation).mockResolvedValue({
@@ -240,12 +242,16 @@ describe("managed service update handoff command", () => {
       const settled = vi.fn();
       const observed = barrier?.then(settled, settled);
       const child = await spawned.promise;
-      Object.assign(child, { exitCode: signal ? null : 0, signalCode: signal });
-      child.emit("exit", signal ? null : 0, signal);
+      // Model the helper's completion receipt independently of its exit code.
+      if (receipt) {
+        child.stdout.write("system-update-settled\n");
+      }
+      Object.assign(child, { exitCode: code, signalCode: signal });
+      child.emit("exit", code, signal);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
-      child.emit("close", signal ? null : 0, signal);
-      if (signal) {
+      child.emit("close", code, signal);
+      if (signal || !receipt) {
         await expect(barrier).rejects.toThrow("settlement could not be confirmed");
       } else {
         await expect(barrier).resolves.toBeUndefined();
@@ -567,13 +573,15 @@ describe("managed service update handoff command", () => {
 
     expect(result.spawnEnv?.KEEP).toBe("value");
     expect(result.spawnEnv?.OPENCLAW_UPDATE_RUN_ID).toBe(runId);
-    expect(parseDevUpdateTargetEnv(result.spawnEnv ?? {})).toEqual({
-      status: "valid",
-      target: {
-        mode: "tracked",
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
+    expect(
+      withEnv(
+        { OPENCLAW_UPDATE_DEV_TARGET_REF: result.spawnEnv?.OPENCLAW_UPDATE_DEV_TARGET_REF },
+        readDevUpdateTarget,
+      ),
+    ).toEqual({
+      mode: "tracked",
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
     });
   });
 });

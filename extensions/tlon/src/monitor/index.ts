@@ -25,7 +25,12 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import { createLoggerBackedRuntime } from "../../runtime-api.js";
 import { getTlonRuntime } from "../runtime.js";
-import { createSettingsManager, putTlonSetting, type TlonSettingsStore } from "../settings.js";
+import {
+  createSettingsManager,
+  putTlonSetting,
+  type PendingApproval,
+  type TlonSettingsStore,
+} from "../settings.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
 import { authenticate } from "../urbit/auth.js";
@@ -34,15 +39,10 @@ import type { DmInvite, Foreigns } from "../urbit/foreigns.js";
 import { sendDm, sendGroupMessage } from "../urbit/send.js";
 import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonApprovalRuntime } from "./approval-runtime.js";
-import {
-  createPendingApproval,
-  isAdminCommand,
-  isApprovalResponse,
-  type PendingApproval,
-} from "./approval.js";
+import { createPendingApproval } from "./approval.js";
 import { resolveChannelAuthorization } from "./authorization.js";
 import { createTlonCitationResolver } from "./cites.js";
-import { fetchAllChannels, fetchInitData } from "./discovery.js";
+import { fetchInitData } from "./discovery.js";
 import { createChannelHistoryCache, fetchThreadHistory } from "./history.js";
 import { createTlonIngressMonitor, type TlonIngressLifecycle } from "./ingress.js";
 import { buildTlonInboundMediaPrompt, downloadMessageImages } from "./media.js";
@@ -62,7 +62,6 @@ import {
   isDmAllowedWithIngress,
   isGroupInviteAllowed,
   isSummarizationRequest,
-  resolveAuthorizedMessageText,
   resolveTlonCommandAuthorizationWithIngress,
   resolveTlonMessageIngress,
   stripBotMention,
@@ -276,11 +275,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     return normalizeShip(ship) === effectiveOwnerShip;
   }
 
-  /**
-   * Extract the DM partner ship from the 'whom' field.
-   * This is the canonical source for DM routing (more reliable than essay.author).
-   * Returns empty string if whom doesn't contain a valid patp-like value.
-   */
   const processMessage = async (params: {
     messageId: string;
     senderShip: string;
@@ -545,10 +539,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
     const prepareReplyPayload = (payload: ReplyPayload): ReplyPayload => {
       const replyText = payload.text;
-      if (!replyText) {
-        return payload;
-      }
-      if (!effectiveShowModelSig) {
+      if (!replyText || !effectiveShowModelSig) {
         return payload;
       }
       const extPayload = payload as {
@@ -652,7 +643,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
   const watchedChannels = new Set<string>(groupChannels);
 
   const refreshWatchedChannels = async (): Promise<number> => {
-    const discoveredChannels = await fetchAllChannels(api, runtime);
+    const { channels: discoveredChannels } = await fetchInitData(api, runtime);
     let newCount = 0;
     for (const channelNest of discoveredChannels) {
       if (!watchedChannels.has(channelNest)) {
@@ -751,10 +742,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       const replySet = asRecord(replyPayload?.set);
       const essay = asRecord(set?.essay);
       const memo = asRecord(replySet?.memo);
-      if (!essay && !memo) {
-        return;
-      }
-
       const content = memo ?? essay;
       if (!content) {
         return;
@@ -833,12 +820,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const messageText = await resolveAuthorizedMessageText({
-        rawText,
-        content: contentBody,
-        authorizedForCites: true,
-        resolveAllCites,
-      });
+      const messageText = (await resolveAllCites(contentBody)) + rawText;
 
       await processMessage({
         messageId,
@@ -932,8 +914,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: ship,
               messagePreview: "(DM invite - no message yet)",
             });
-            await queueApprovalRequest(approval);
-            processedDmInvites.add(ship);
+            processedDmInvites.addIfAccepted(ship, await queueApprovalRequest(approval));
           }
         }
         return;
@@ -979,20 +960,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
       }
 
       const messageText = rawText;
-      if (isOwner(senderShip) && isApprovalResponse(messageText)) {
-        const handled = await handleApprovalResponse(messageText);
-        if (handled) {
-          runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
-          return;
-        }
+      if (isOwner(senderShip) && (await handleApprovalResponse(messageText))) {
+        runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
+        return;
       }
 
-      if (isOwner(senderShip) && isAdminCommand(messageText)) {
-        const handled = await handleAdminCommand(messageText);
-        if (handled) {
-          runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
-          return;
-        }
+      if (isOwner(senderShip) && (await handleAdminCommand(messageText))) {
+        runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
+        return;
       }
 
       const ownerDm = isOwner(senderShip);
@@ -1025,12 +1000,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
         return;
       }
 
-      const resolvedMessageText = await resolveAuthorizedMessageText({
-        rawText,
-        content: essay.content,
-        authorizedForCites: true,
-        resolveAllCites,
-      });
+      const resolvedMessageText = (await resolveAllCites(essay.content)) + rawText;
       if (ownerDm) {
         runtime.log?.(`[tlon] Processing DM from owner ${senderShip}`);
       }
@@ -1234,15 +1204,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
 
         let firstWriteError: Error | undefined;
         for (const [groupFlag, foreign] of Object.entries(foreigns)) {
+          const validInvite = foreign.invites?.find((invite) => invite.valid);
+          // Foreigns facts are per-group deltas. Retire only this group's terminal
+          // invite so a later invitation can be admitted without replaying other groups.
+          if (foreign.progress === "done" || !validInvite) {
+            processedGroupInvites.delete(groupFlag);
+            continue;
+          }
           if (processedGroupInvites.has(groupFlag)) {
-            continue;
-          }
-          if (!foreign.invites || foreign.invites.length === 0) {
-            continue;
-          }
-
-          const validInvite = foreign.invites.find((inv) => inv.valid);
-          if (!validInvite) {
             continue;
           }
 
@@ -1287,8 +1256,9 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
               requestingShip: inviterShip,
               groupFlag,
             });
-            await queueApprovalRequest(approval);
-            processedGroupInvites.add(groupFlag);
+            if (await queueApprovalRequest(approval)) {
+              processedGroupInvites.add(groupFlag);
+            }
             continue;
           }
 
@@ -1342,7 +1312,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
     }
 
     if (effectiveAutoDiscoverChannels) {
-      const discoveredChannels = await fetchAllChannels(api, runtime);
+      const { channels: discoveredChannels } = await fetchInitData(api, runtime);
       for (const channelNest of discoveredChannels) {
         watchedChannels.add(channelNest);
       }
@@ -1364,7 +1334,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts = {}): Promise<v
           if (!opts.abortSignal?.aborted) {
             try {
               if (effectiveAutoDiscoverChannels) {
-                const discoveredChannels = await fetchAllChannels(api, runtime);
+                const { channels: discoveredChannels } = await fetchInitData(api, runtime);
                 for (const channelNest of discoveredChannels) {
                   if (!watchedChannels.has(channelNest)) {
                     watchedChannels.add(channelNest);

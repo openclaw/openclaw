@@ -103,8 +103,9 @@ vi.mock("./realtime-voice.runtime.js", () => ({
   resolveConfiguredRealtimeVoiceProvider: mocks.resolveConfiguredRealtimeVoiceProvider,
 }));
 
-vi.mock("./realtime-fast-context.js", () => ({
-  resolveRealtimeFastContextConsult: mocks.resolveRealtimeFastContextConsult,
+vi.mock("openclaw/plugin-sdk/realtime-voice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/realtime-voice")>()),
+  resolveRealtimeVoiceFastContextConsult: mocks.resolveRealtimeFastContextConsult,
 }));
 
 vi.mock("./webhook/realtime-handler.js", () => ({
@@ -905,6 +906,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
         debug: console.debug,
       },
       sessionKey: "agent:main:voice:15550001234",
+      labels: {
+        audienceLabel: "caller",
+        contextName: "OpenClaw memory or session context",
+      },
     });
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });

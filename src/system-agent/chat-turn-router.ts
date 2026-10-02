@@ -1,4 +1,5 @@
 import type { SystemAgentChatParams } from "@openclaw/gateway-protocol";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type {
   SystemAgentSession,
@@ -303,7 +304,7 @@ export class ChatTurnRouter {
       throw new Error("OpenClaw host received a non-persistent approved operation.");
     }
     const capture = createCaptureRuntime();
-    const result = await this.executeOperation(operation, capture, true, beforePersistentApply);
+    const result = await this.executeOperation(operation, capture, beforePersistentApply);
     const configWrite =
       operation.kind === "config-set" ||
       operation.kind === "config-unset" ||
@@ -375,14 +376,20 @@ export class ChatTurnRouter {
         : text
     }`;
     // The runtime already owns recovery; a terminal failure must not start another inference turn.
-    const loopReply = await agentTurn({
-      input: loopInput,
-      overview,
-      surface: this.options.surface ?? "cli",
-      approvalArmed,
-      ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
-      session: this.agentSession,
-    });
+    const runTurn = () =>
+      agentTurn({
+        input: loopInput,
+        overview,
+        surface: this.options.surface ?? "cli",
+        approvalArmed,
+        ...(this.options.operatorApprovalOnly ? { operatorApprovalOnly: true } : {}),
+        session: this.agentSession,
+      });
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const loopReply =
+      requesterAgentId && requesterAgentId !== this.agentSession.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runTurn)
+        : await runTurn();
     if (!loopReply?.text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
@@ -498,13 +505,13 @@ export class ChatTurnRouter {
       return await this.startWizard(this.wizard.startChannel(recordedOperation.channel));
     }
     if (recordedOperation.kind === "skills-setup") {
-      return await this.startWizard(this.wizard.startSkills());
+      return await this.startWizard(this.wizard.startSetup("skills"));
     }
     if (recordedOperation.kind === "search-setup") {
-      return await this.startWizard(this.wizard.startSearch());
+      return await this.startWizard(this.wizard.startSetup("search"));
     }
     if (recordedOperation.kind === "gateway-config-setup") {
-      return await this.startWizard(this.wizard.startGateway());
+      return await this.startWizard(this.wizard.startSetup("gateway"));
     }
     if (recordedOperation.kind === "memory-import") {
       return await this.startWizard(this.wizard.startMemoryImport());
@@ -537,7 +544,7 @@ export class ChatTurnRouter {
     if (isPersistentSystemAgentOperation(recordedOperation)) {
       return await this.applyApprovedPersistentOperation(recordedOperation);
     }
-    const result = await this.executeOperation(recordedOperation, capture, true);
+    const result = await this.executeOperation(recordedOperation, capture);
     const reply = capture.read();
     if (result?.exitsInteractive === true) {
       return { text: reply, action: "exit" };
@@ -548,16 +555,13 @@ export class ChatTurnRouter {
   private async executeOperation(
     operation: SystemAgentOperation,
     capture: CaptureRuntime,
-    approved: boolean,
     beforePersistentApply?: PersistentApplyGuard,
   ): Promise<SystemAgentOperationResult | undefined> {
     try {
       const execute = this.dependencies.executeOperation ?? executeSystemAgentOperation;
-      if (approved) {
-        await this.callbacks.requirePersistentApplyInference(capture);
-      }
+      await this.callbacks.requirePersistentApplyInference(capture);
       return await execute(operation, capture, {
-        approved,
+        approved: true,
         ...(this.options.requesterAgentId
           ? { requesterAgentId: this.options.requesterAgentId }
           : {}),

@@ -44,11 +44,8 @@ type SessionMcpRuntimeManagerStore = {
   disposalInFlight?: Promise<void>;
   pendingDisposals: Map<string, Set<Promise<void>>>;
   createRuntime: CreateSessionMcpRuntime;
-  now: () => number;
-  idleSweepIntervalMs: number;
   runtimeSlots: WeakMap<SessionMcpRuntime, { idleTtlMs: number }>;
   liveRuntimeSlots: Set<{ idleTtlMs: number }>;
-  enableIdleSweepTimer: boolean;
   scheduler: GatewayScheduler;
   idleSweepJob: GatewayScheduledJob | undefined;
 };
@@ -56,9 +53,6 @@ type SessionMcpRuntimeManagerStore = {
 export type SessionMcpRuntimeManagerOpts = {
   scheduler: GatewayScheduler;
   createRuntime?: CreateSessionMcpRuntime;
-  now?: () => number;
-  enableIdleSweepTimer?: boolean;
-  idleSweepIntervalMs?: number;
 };
 
 function parseRuntimeCacheSessionId(runtimeKey: string): string {
@@ -77,7 +71,7 @@ export function createSessionMcpRuntimeManagerStore(
   opts: SessionMcpRuntimeManagerOpts,
   createSessionMcpRuntime: CreateSessionMcpRuntime,
 ): SessionMcpRuntimeManagerStore {
-  const store: SessionMcpRuntimeManagerStore = {
+  return {
     // Keys are bare sessionId for static runtimes, or requester composite JSON keys.
     runtimesBySessionId: new Map<string, SessionMcpRuntime>(),
     sessionIdBySessionKey: new Map<string, string>(),
@@ -99,15 +93,11 @@ export function createSessionMcpRuntimeManagerStore(
     runtimeWorkChains: new Map(),
     pendingDisposals: new Map(),
     createRuntime: opts.createRuntime ?? createSessionMcpRuntime,
-    now: opts.now ?? (() => store.scheduler.now()),
-    idleSweepIntervalMs: opts.idleSweepIntervalMs ?? SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
     runtimeSlots: new WeakMap(),
     liveRuntimeSlots: new Set(),
-    enableIdleSweepTimer: opts.enableIdleSweepTimer !== false,
     scheduler: opts.scheduler,
     idleSweepJob: undefined,
   };
-  return store;
 }
 
 export type SessionMcpRuntimeManagerLifecycle = ReturnType<
@@ -132,6 +122,7 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
 
 export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
   const schedulers = new Set<GatewayScheduler>();
+  let schedulerScope = store.scheduler.scope();
   const reserveRuntimeSlot = (
     existing: SessionMcpRuntime | undefined,
     hasServers: boolean,
@@ -291,7 +282,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
   };
 
   const sweepIdleRuntimes = async (): Promise<number> => {
-    const nowMs = store.now();
+    const nowMs = store.scheduler.now();
     const expired: Array<{ runtimeKey: string; runtime: SessionMcpRuntime }> = [];
     for (const [runtimeKey, runtime] of store.runtimesBySessionId.entries()) {
       const idleTtlMs = store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0;
@@ -334,19 +325,14 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
       clearIdleSweepTimer();
       return;
     }
-    if (
-      !store.enableIdleSweepTimer ||
-      store.idleSweepIntervalMs <= 0 ||
-      store.idleSweepJob ||
-      store.scheduler.signal.aborted
-    ) {
+    if (store.idleSweepJob || schedulerScope.signal.aborted) {
       return;
     }
     store.idleSweepJob = runInMcpManagerContext(() =>
-      store.scheduler.schedule({
+      schedulerScope.schedule({
         id: "mcp:idle-runtimes",
-        atMs: store.scheduler.now() + store.idleSweepIntervalMs,
-        everyMs: store.idleSweepIntervalMs,
+        atMs: store.scheduler.now() + SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
+        everyMs: SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
         run: () =>
           sweepIdleRuntimes().catch((error: unknown) => {
             logWarn(`bundle-mcp: idle runtime sweep failed: ${String(error)}`);
@@ -365,18 +351,20 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     if (scheduler === store.scheduler) {
       return;
     }
-    const previous = store.idleSweepJob;
-    previous?.cancel();
+    const previous = schedulerScope;
+    previous.beginClose();
     if (scheduler) {
       store.scheduler = scheduler;
     }
-    if (previous) {
-      // Keep the cancelled handle installed until its cleanup settles across the handoff.
-      await previous.stop();
-      if (store.idleSweepJob !== previous) {
-        return;
-      }
-      store.idleSweepJob = undefined;
+    const selected = store.scheduler;
+    // The closed scope fences rearming while acquisitions use the successor host.
+    await previous.stop();
+    if (schedulerScope !== previous || store.scheduler !== selected) {
+      return;
+    }
+    store.idleSweepJob = undefined;
+    if (scheduler) {
+      schedulerScope = scheduler.scope();
     }
     ensureIdleSweepTimer();
   };
@@ -531,7 +519,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     });
     return {
       version: 1,
-      generatedAt: store.now(),
+      generatedAt: store.scheduler.now(),
       servers,
       tools,
     };

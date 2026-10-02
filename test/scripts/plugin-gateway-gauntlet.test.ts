@@ -6,7 +6,17 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import {
   buildObservationGuardFailures,
   createGauntletPrebuildCommand,
@@ -26,10 +36,16 @@ import {
   discoverBundledPluginManifests,
   selectPluginEntries,
 } from "../../scripts/lib/plugin-gateway-gauntlet.mts";
+import { hasErrnoCode } from "../../src/infra/errno.js";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
@@ -38,6 +54,16 @@ const testNodeExecPath = resolveTestNodeExecPath();
 
 describe("plugin gateway gauntlet helpers", () => {
   let repoRoot: string;
+  let receipts: FixtureReceiptChannel;
+  let fixtureCompletion: Promise<void> | undefined;
+
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+
+  afterAll(async () => {
+    await receipts.close();
+  });
 
   beforeEach(async () => {
     repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-gauntlet-"));
@@ -45,6 +71,10 @@ describe("plugin gateway gauntlet helpers", () => {
   });
 
   afterEach(async () => {
+    // Vitest runs afterEach before onTestFinished; preserve fixture PID records
+    // and mocked clocks until an aborted body has finished its asynchronous cleanup.
+    await fixtureCompletion;
+    fixtureCompletion = undefined;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     await fs.rm(repoRoot, { recursive: true, force: true });
@@ -186,29 +216,52 @@ describe("plugin gateway gauntlet helpers", () => {
     };
   }
 
-  async function waitFor(predicate: () => Promise<boolean> | boolean, timeoutMs = 5_000) {
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      if (await predicate()) {
-        return;
-      }
-      await delay(5);
-    }
-    throw new Error("condition was not met before timeout");
+  function trackFixtureCompletion<T>(fixture: Promise<T>): Promise<T> {
+    // The body retains its failure; both teardown paths join its existing cleanup.
+    const settled = fixture.then(
+      () => {},
+      () => {},
+    );
+    fixtureCompletion = settled;
+    onTestFinished(() => settled);
+    return fixture;
   }
 
-  async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
-    return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve, reject) => {
-        const timer = setTimeout(() => {
-          reject(new Error("child did not close before timeout"));
-        }, timeoutMs);
-        child.once("close", (code, signal) => {
-          clearTimeout(timer);
-          resolve({ code, signal });
-        });
+  async function fixtureReadyBeforeSettlement(readyPath: string, operation: Promise<unknown>) {
+    const readReady = () =>
+      fs.readFile(readyPath, "utf8").catch((error: unknown) => {
+        if (hasErrnoCode(error, "ENOENT")) {
+          return "";
+        }
+        throw error;
+      });
+    // Receipt delivery and command settlement are unordered; the fixture writes
+    // this durable record before it exits or lets its parent proceed.
+    const settled = operation.then(
+      async () => {
+        if ((await readReady()) !== "ready") {
+          throw new Error("condition was not met before timeout");
+        }
+      },
+      async (error: unknown) => {
+        if ((await readReady()) !== "ready") {
+          throw error;
+        }
       },
     );
+    await Promise.race([receipts.waitFor(readyPath, "ready"), settled]);
+  }
+
+  async function waitForDead(pid: number, signal: AbortSignal) {
+    // The command joins its process group, but Darwin can still expose a zombie
+    // PID until the orphan is reaped. No ChildProcess handle owns that final reap.
+    while (isProcessAlive(pid)) {
+      try {
+        await delay(5, undefined, { signal });
+      } catch (error) {
+        throw new Error(`process still alive: ${pid}`, { cause: error });
+      }
+    }
   }
 
   it("stops parsing options after the argument terminator", () => {
@@ -716,10 +769,10 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.not.toContain("ETIMEDOUT");
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").for([
     { label: "normal-leader-exits", normalExit: true },
     { label: "timeout-leader-exits", normalExit: false },
-  ])("cleans measured process groups after $label", async ({ label, normalExit }) => {
+  ])("cleans measured process groups after $label", async ({ label, normalExit }, { signal }) => {
     const logDir = path.join(repoRoot, "logs");
     const scriptPath = path.join(repoRoot, "leader-exits.mjs");
     const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
@@ -731,6 +784,8 @@ describe("plugin gateway gauntlet helpers", () => {
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
 const normalExit = process.argv[4] === "normal";
 const grandchild = spawn(process.execPath, [
   "-e",
@@ -741,6 +796,7 @@ fs.writeFileSync(process.argv[2] + ".tmp", String(grandchild.pid));
 fs.renameSync(process.argv[2] + ".tmp", process.argv[2]);
 grandchild.once("message", () => {
   fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
   if (normalExit) process.exit(0);
 });
 process.on("SIGTERM", () => process.exit(0));
@@ -764,64 +820,66 @@ if (!normalExit) setInterval(() => {}, 1000);
     // Observe early rejection while readiness is checked; the original is awaited below.
     void rowPromise.catch(() => undefined);
 
-    await runQaGatewayFixture(
-      async () => {
-        await waitFor(() =>
-          fs.access(readyPath).then(
-            () => true,
-            () => false,
-          ),
-        );
-        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
-        if (!normalExit) {
-          expect(isProcessAlive(grandchildPid)).toBe(true);
-        }
-
-        const row = await rowPromise;
-        expect(row.timedOut).toBe(!normalExit);
-        if (normalExit) {
-          expect(row.status).toBe(1);
-        }
-        expect(row.spawnError?.code).toBe(
-          normalExit ? "EPROCESSGROUP_CLEANUP_FAILED" : "ETIMEDOUT",
-        );
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      },
-      async () => {
-        if (!grandchildPid) {
-          try {
-            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-          } catch (error) {
-            if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-              return;
-            }
-            throw error;
+    await trackFixtureCompletion(
+      runQaGatewayFixture(
+        async () => {
+          await withinTest(fixtureReadyBeforeSettlement(readyPath, rowPromise), signal);
+          grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+          expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+          if (!normalExit) {
+            expect(isProcessAlive(grandchildPid)).toBe(true);
           }
-        }
-        expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
-        if (isProcessAlive(grandchildPid)) {
-          try {
-            process.kill(grandchildPid, "SIGKILL");
-          } catch (error) {
-            if (
-              !(error && typeof error === "object" && "code" in error && error.code === "ESRCH")
-            ) {
+
+          const row = await withinTest(rowPromise, signal);
+          expect(row.timedOut).toBe(!normalExit);
+          if (normalExit) {
+            expect(row.status).toBe(1);
+          }
+          expect(row.spawnError?.code).toBe(
+            normalExit ? "EPROCESSGROUP_CLEANUP_FAILED" : "ETIMEDOUT",
+          );
+          await waitForDead(grandchildPid, signal);
+        },
+        async () => {
+          if (!grandchildPid) {
+            try {
+              grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+            } catch (error) {
+              if (
+                error &&
+                typeof error === "object" &&
+                "code" in error &&
+                error.code === "ENOENT"
+              ) {
+                return;
+              }
               throw error;
             }
           }
-        }
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      },
-      async () => {
-        await rowPromise;
-      },
+          expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 1).toBe(true);
+          if (isProcessAlive(grandchildPid)) {
+            try {
+              process.kill(grandchildPid, "SIGKILL");
+            } catch (error) {
+              if (
+                !(error && typeof error === "object" && "code" in error && error.code === "ESRCH")
+              ) {
+                throw error;
+              }
+            }
+          }
+          await waitForDead(grandchildPid, signal);
+        },
+        async () => {
+          await rowPromise;
+        },
+      ),
     );
   });
 
   it.runIf(process.platform !== "win32")(
     "lets timed-out measured command descendants drain during kill grace",
-    async () => {
+    async ({ signal }) => {
       const logDir = path.join(repoRoot, "logs");
       const scriptPath = path.join(repoRoot, "leader-exits-drain.mjs");
       const readyPath = path.join(repoRoot, "grandchild.ready");
@@ -832,6 +890,8 @@ if (!normalExit) setInterval(() => {}, 1000);
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
 const grandchildScript = [
   "const fs = require('node:fs');",
   "process.on('SIGTERM', () => {",
@@ -840,11 +900,15 @@ const grandchildScript = [
   "    process.exit(0);",
   "  }, 20);",
   "});",
-  "fs.writeFileSync(process.argv[2], 'ready');",
+  "process.send('ready');",
   "setInterval(() => {}, 1000);",
 ].join("\\n");
-spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
-  stdio: "ignore",
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[2], "ready");
+  sendReceipt(process.argv[2], "ready");
 });
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
@@ -865,17 +929,19 @@ setInterval(() => {}, 1000);
         timeMode: "none",
       });
 
-      await waitFor(() =>
-        fs
-          .access(readyPath)
-          .then(() => true)
-          .catch(() => false),
-      );
-      const row = await rowPromise;
+      await trackFixtureCompletion(
+        runQaGatewayFixture(
+          async () => {
+            await withinTest(fixtureReadyBeforeSettlement(readyPath, rowPromise), signal);
+            const row = await withinTest(rowPromise, signal);
 
-      expect(row.timedOut).toBe(true);
-      expect(row.spawnError?.code).toBe("ETIMEDOUT");
-      await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
+            expect(row.timedOut).toBe(true);
+            expect(row.spawnError?.code).toBe("ETIMEDOUT");
+            await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
+          },
+          () => rowPromise,
+        ),
+      );
     },
   );
 
@@ -923,7 +989,7 @@ setInterval(() => {}, 1000);
 
   it.runIf(process.platform !== "win32")(
     "cleans parent-terminated measured process groups when the leader exits first",
-    async () => {
+    async ({ signal }) => {
       const logDir = path.join(repoRoot, "logs");
       const harnessPath = path.join(repoRoot, "parent-termination-harness.mjs");
       const scriptPath = path.join(repoRoot, "parent-termination-leader.mjs");
@@ -937,17 +1003,22 @@ setInterval(() => {}, 1000);
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
 const grandchildScript = [
-  "const fs = require('node:fs');",
   "process.on('SIGTERM', () => {});",
   "process.on('SIGHUP', () => {});",
-  "fs.writeFileSync(process.argv[2], 'ready');",
+  "process.send('ready');",
   "setInterval(() => {}, 1000);",
 ].join("\\n");
 const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
-  stdio: "ignore",
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
 });
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+});
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,
@@ -982,35 +1053,48 @@ await runMeasuredCommand({
         cwd: repoRoot,
         stdio: ["ignore", "pipe", "pipe"],
       });
-      try {
-        await waitFor(async () => {
+      const closed = once(harness, "close");
+      void closed.catch(() => undefined);
+      await trackFixtureCompletion(
+        (async () => {
           try {
-            await fs.access(grandchildReadyPath);
-            return true;
-          } catch {
-            return false;
-          }
-        });
-        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
-        expect(isProcessAlive(grandchildPid)).toBe(true);
+            await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, closed), signal);
+            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+            expect(isProcessAlive(grandchildPid)).toBe(true);
 
-        harness.kill("SIGTERM");
-        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => !isProcessAlive(grandchildPid));
-      } finally {
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        if (harness.pid && isProcessAlive(harness.pid)) {
-          harness.kill("SIGKILL");
-        }
-      }
+            harness.kill("SIGTERM");
+            await expect(withinTest(closed, signal)).resolves.toEqual([null, "SIGTERM"]);
+            await waitForDead(grandchildPid, signal);
+          } finally {
+            if (harness.pid && isProcessAlive(harness.pid)) {
+              harness.kill("SIGTERM");
+            }
+            await closed;
+            if (!grandchildPid) {
+              grandchildPid = Number(
+                await fs.readFile(grandchildPidPath, "utf8").catch((error: unknown) => {
+                  if (hasErrnoCode(error, "ENOENT")) {
+                    return "0";
+                  }
+                  throw error;
+                }),
+              );
+            }
+            if (grandchildPid && isProcessAlive(grandchildPid)) {
+              process.kill(grandchildPid, "SIGKILL");
+            }
+            if (grandchildPid) {
+              await waitForDead(grandchildPid, signal);
+            }
+          }
+        })(),
+      );
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "rethrows parent termination received during timeout cleanup",
-    async () => {
+    async ({ signal }) => {
       const logDir = path.join(repoRoot, "logs");
       const harnessPath = path.join(repoRoot, "timeout-parent-termination-harness.mjs");
       const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
@@ -1058,6 +1142,8 @@ import { inspectManagedProcessGroup } from ${JSON.stringify(
           resolveRuntimeWorkerUrl(toolingMtsEntrypoints.managedChildProcess).href,
         )};
 
+${fixtureReceiptClientSource(receipts.endpoint)}
+
 const realDelay = delay;
 // Mocked timers cannot keep Node alive while a native signal is in flight.
 const keepAlive = setInterval(() => {}, 1_000);
@@ -1089,6 +1175,7 @@ fs.writeFileSync(${JSON.stringify(leaderPidPath)}, String(child.pid));
 try {
   assert.equal((await ready)[0], "ready");
   fs.writeFileSync(${JSON.stringify(grandchildReadyPath)}, "ready");
+  sendReceipt(${JSON.stringify(grandchildReadyPath)}, "ready");
   mock.timers.tick(200);
   assert.deepEqual(await closed, [0, null]);
   assert.equal(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" }), "live");
@@ -1131,7 +1218,7 @@ try {
         try {
           pid = Number(await fs.readFile(pidPath, "utf8"));
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          if (hasErrnoCode(error, "ENOENT")) {
             return;
           }
           throw error;
@@ -1140,40 +1227,35 @@ try {
         try {
           process.kill(group ? -pid : pid, "SIGKILL");
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+          if (!hasErrnoCode(error, "ESRCH")) {
             throw error;
           }
         }
-        await waitFor(() => !isProcessAlive(pid));
+        await waitForDead(pid, signal);
       };
-      await runQaGatewayFixture(
-        async () => {
-          await waitFor(async () => {
-            try {
-              await fs.access(grandchildReadyPath);
-              return true;
-            } catch {
-              return false;
-            }
-          }).catch((error: unknown) => {
-            throw new Error(`${String(error)}\n${stderr}`, { cause: error });
-          });
-          grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+      await trackFixtureCompletion(
+        runQaGatewayFixture(
+          async () => {
+            await withinTest(
+              fixtureReadyBeforeSettlement(grandchildReadyPath, closed),
+              signal,
+            ).catch((error: unknown) => {
+              throw new Error(`${String(error)}\n${stderr}`, { cause: error });
+            });
+            grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
 
-          expect(
-            await withTestTimeout(closed, 5_000, "harness did not close after fixture readiness"),
-            stderr,
-          ).toEqual([null, "SIGTERM"]);
-          await waitFor(() => !isProcessAlive(grandchildPid));
-        },
-        () => reapPidFile(leaderPidPath, true),
-        () => reapPidFile(grandchildPidPath),
-        async () => {
-          if (harness.pid && isProcessAlive(harness.pid)) {
-            harness.kill("SIGKILL");
-          }
-          await withTestTimeout(closed, 5_000, "fixture cleanup did not join harness closure");
-        },
+            expect(await withinTest(closed, signal), stderr).toEqual([null, "SIGTERM"]);
+            await waitForDead(grandchildPid, signal);
+          },
+          () => reapPidFile(leaderPidPath, true),
+          () => reapPidFile(grandchildPidPath),
+          async () => {
+            if (harness.pid && isProcessAlive(harness.pid)) {
+              harness.kill("SIGKILL");
+            }
+            await closed;
+          },
+        ),
       );
     },
   );
@@ -1231,7 +1313,9 @@ try {
     await expect(fs.readFile(row.logPath!, "utf8")).resolves.toContain("x".repeat(32));
   });
 
-  it("force kills timed-out live measured process groups that ignore SIGTERM", async () => {
+  it("force kills timed-out live measured process groups that ignore SIGTERM", async ({
+    signal,
+  }) => {
     const logDir = path.join(repoRoot, "logs");
     const markerPath = path.join(repoRoot, "timeout-marker.txt");
     const watcher = watch(repoRoot);
@@ -1280,19 +1364,29 @@ try {
       timeoutMs: 100,
       timeoutKillGraceMs: 10,
     });
-    let row: Awaited<ReturnType<typeof runMeasuredCommand>>;
-    try {
-      await withTestTimeout(ready, 5_000, "measured process fixture did not become ready");
-      watcher.close();
-      timerSpy.mockRestore();
-      expectDefined(fireDeadline, "command deadline should be armed before readiness")();
-      row = await command;
-    } finally {
-      watcher.close();
-      timerSpy.mockRestore();
-      fireDeadline?.();
-      await command;
-    }
+    const row = await trackFixtureCompletion(
+      (async () => {
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              ready,
+              command,
+              "measured process fixture did not become ready",
+            ),
+            signal,
+          );
+          watcher.close();
+          timerSpy.mockRestore();
+          expectDefined(fireDeadline, "command deadline should be armed before readiness")();
+          return await withinTest(command, signal);
+        } finally {
+          watcher.close();
+          timerSpy.mockRestore();
+          fireDeadline?.();
+          await command;
+        }
+      })(),
+    );
 
     expect(row.status).toBe(1);
     expect(row.timedOut).toBe(true);

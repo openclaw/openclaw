@@ -81,8 +81,6 @@ export type SessionCompanionAskDeps = {
   contextReader: SessionCompanionContextReader;
   run?: (params: SessionCompanionRunParams) => Promise<string>;
   now?: () => number;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
@@ -365,8 +363,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
   const run = params.run ?? defaultRun;
-  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
@@ -437,6 +433,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     agentId: string;
     sessionKey: string;
     question: string;
+    selectionContext?: string;
     attachments?: ChatAttachment[];
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -519,7 +516,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     } else {
       requestSignal?.addEventListener("abort", abortRequest, { once: true });
     }
-    const timeout = setTimeoutFn(() => abort("timeout"), ASK_TIMEOUT_MS);
+    const timeout = setTimeout(() => abort("timeout"), ASK_TIMEOUT_MS);
     const aborted = createDeferredCore<never>();
     const onAbort = () =>
       aborted.reject(new Error("session companion ask timed out or was cancelled"));
@@ -574,6 +571,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const messages = composePromptMessages({
         thread,
         question,
+        selectionContext: request.selectionContext,
         referenceContext,
         now: admittedAt,
       });
@@ -656,7 +654,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
             : "Side chat could not answer right now.",
       );
     } finally {
-      clearTimeoutFn(timeout);
+      clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);
       if (activeAsks.get(threadKey) === activeAsk) {

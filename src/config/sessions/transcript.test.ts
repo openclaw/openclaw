@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
@@ -14,9 +14,8 @@ import {
   OPENCLAW_TRANSCRIPT_ARTIFACT_API,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
 } from "../../shared/transcript-only-openclaw-assistant.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
   loadTranscriptEvents,
@@ -47,27 +46,24 @@ import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 type SessionEntryFixture = Partial<SessionEntry> & { channel?: string };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "transcript-test-");
+
 describe("appendAssistantMessageToSessionTranscript", () => {
   beforeAll(async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-warm-"));
-    try {
-      const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
-      fs.mkdirSync(sessionsDir, { recursive: true });
-      const storePath = path.join(sessionsDir, "sessions.json");
-      await replaceSessionEntry(
-        { sessionKey: "agent:main:warm", storePath },
-        { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
-      );
-      await appendAssistantMessageToSessionTranscript({
-        agentId: "main",
-        sessionKey: "agent:main:warm",
-        text: "warm",
-        storePath,
-      });
-    } finally {
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    const tempDir = sessionDirs.make();
+    const sessionsDir = path.join(tempDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const storePath = path.join(sessionsDir, "sessions.json");
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:warm", storePath },
+      { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
+    );
+    await appendAssistantMessageToSessionTranscript({
+      agentId: "main",
+      sessionKey: "agent:main:warm",
+      text: "warm",
+      storePath,
+    });
   });
 
   const fixture = useTempSessionsFixture("transcript-test-");
@@ -196,7 +192,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   }
 
   it("uses configured session.store when storePath is omitted", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
+    const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     try {
       setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
@@ -246,19 +242,16 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         }),
       );
     } finally {
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
         setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
   it("uses the session key agent for configured session.store templates", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-agent-store-"));
+    const tempDir = sessionDirs.make();
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
     try {
@@ -321,14 +314,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(event.sessionKey).toBe(configuredSessionKey);
     } finally {
       emitSpy.mockRestore();
-      closeOpenClawAgentDatabasesForTest(tempDir);
-      await cleanupSessionStateForTest({ stateDir: path.join(tempDir, "default-state") });
       if (previousStateDir === undefined) {
         deleteTestEnvValue("OPENCLAW_STATE_DIR");
       } else {
         setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
       }
-      fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 

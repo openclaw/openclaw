@@ -4,14 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { detectMarkerLineWithGateway } from "./inspect-markers.js";
 import {
-  detectMarkerLineWithGateway,
   findExtraGatewayServices,
   findSystemGatewayServices,
+  listManagedOpenClawGatewayServices,
   renderGatewayServiceCleanupHints,
 } from "./inspect.js";
 
 const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
+const loadedSystemdUnits = vi.hoisted(() =>
+  vi.fn<typeof import("./systemd-loaded-unit-inventory.js").listLoadedSystemdUnits>(),
+);
+vi.mock("./systemd-loaded-unit-inventory.js", () => ({
+  listLoadedSystemdUnits: loadedSystemdUnits,
+}));
 vi.mock("../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/exec.js")>();
   const { decodeLaunchAgentPlistFixture } = await import("./launchd-plist.test-support.js");
@@ -124,131 +131,6 @@ describe("detectMarkerLineWithGateway", () => {
   });
 });
 
-describe("renderGatewayServiceCleanupHints", () => {
-  it("does not suggest removing a gateway when no extra service was detected", () => {
-    expect(renderGatewayServiceCleanupHints([])).toEqual([]);
-  });
-
-  it.each([
-    {
-      title: "targets the detected macOS LaunchAgent instead of the active gateway",
-      platform: "darwin",
-      serviceName: "com.example.openclaw-gateway",
-      source: "plist: /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-      scope: "user",
-      firstHint: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      secondHint: "rm /Users/test/Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    },
-    {
-      title: "uses the system domain for a detected macOS LaunchDaemon",
-      platform: "darwin",
-      serviceName: "com.example.openclaw-gateway",
-      source: "plist: /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
-      scope: "system",
-      firstHint: "sudo launchctl bootout system/com.example.openclaw-gateway",
-      secondHint: "sudo rm /Library/LaunchDaemons/com.example.openclaw-gateway.plist",
-    },
-    {
-      title: "keeps global macOS LaunchAgents in the GUI domain",
-      platform: "darwin",
-      serviceName: "com.example.openclaw-gateway",
-      source: "plist: /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-      scope: "system",
-      firstHint: "launchctl bootout gui/$UID/com.example.openclaw-gateway",
-      secondHint: "sudo rm /Library/LaunchAgents/com.example.openclaw-gateway.plist",
-    },
-    {
-      title: "inspects the detected user-level systemd unit without removing it",
-      platform: "linux",
-      serviceName: "custom-gateway.service",
-      source: "unit: /home/test/.config/systemd/user/custom-gateway.service",
-      scope: "user",
-      firstHint: "systemctl --user status -- custom-gateway.service",
-      secondHint: "systemctl --user cat -- custom-gateway.service",
-    },
-    {
-      title: "inspects the detected system-level systemd unit without removing it",
-      platform: "linux",
-      serviceName: "custom-gateway.service",
-      source: "unit: /etc/systemd/system/custom-gateway.service",
-      scope: "system",
-      firstHint: "systemctl --system status -- custom-gateway.service",
-      secondHint: "systemctl --system cat -- custom-gateway.service",
-    },
-    {
-      title: "terminates systemctl options before a detected unit that begins with a dash",
-      platform: "linux",
-      serviceName: "-custom-gateway.service",
-      source: "unit: /home/test/.config/systemd/user/-custom-gateway.service",
-      scope: "user",
-      firstHint: "systemctl --user status -- -custom-gateway.service",
-      secondHint: "systemctl --user cat -- -custom-gateway.service",
-    },
-    {
-      title: "shell-quotes detected POSIX service labels and paths",
-      platform: "darwin",
-      serviceName: "com.example.gateway; touch injected",
-      source: "plist: /Users/test/Launch Agents/example's gateway.plist",
-      scope: "user",
-      firstHint: "launchctl bootout gui/$UID/'com.example.gateway; touch injected'",
-      secondHint: "rm '/Users/test/Launch Agents/example'\\''s gateway.plist'",
-    },
-  ] as const)("$title", ({ platform, serviceName, source, scope, firstHint, secondHint }) => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform,
-          label: serviceName,
-          detail: source,
-          scope,
-        },
-      ]),
-    ).toEqual([firstHint, secondHint]);
-  });
-
-  it("inspects the detected Windows scheduled task without suggesting removal", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "win32",
-          label: "\\OpenClaw Gateway Backup",
-          detail: "task: \\OpenClaw Gateway Backup",
-          scope: "system",
-        },
-      ]),
-    ).toEqual(['schtasks /Query /TN "\\OpenClaw Gateway Backup" /V /FO LIST']);
-  });
-
-  it.each(["$(Start-Process calc)", "%OPENCLAW_GATEWAY_TASK%", "unsafe&task", "task`name"])(
-    "does not render a Windows task name expandable by cmd.exe or PowerShell: %s",
-    (label) => {
-      expect(
-        renderGatewayServiceCleanupHints([
-          {
-            platform: "win32",
-            label,
-            detail: `task: ${label}`,
-            scope: "system",
-          },
-        ]),
-      ).toEqual([]);
-    },
-  );
-
-  it("does not invent a removal path when service metadata omits it", () => {
-    expect(
-      renderGatewayServiceCleanupHints([
-        {
-          platform: "darwin",
-          label: "com.example.openclaw-gateway",
-          detail: "loaded",
-          scope: "user",
-        },
-      ]),
-    ).toEqual(["launchctl bootout gui/$UID/com.example.openclaw-gateway"]);
-  });
-});
-
 describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem", () => {
   // These tests write real .service files to a temp dir and call findExtraGatewayServices
   // with that dir as HOME. No platform mocking or fs mocking needed.
@@ -292,6 +174,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
           platform: "linux",
           label: "clawdbot-gateway.service",
           detail: `unit: ${unitPath}`,
+          sourcePath: unitPath,
           scope: "user",
           marker: "clawdbot",
           legacy: true,
@@ -336,6 +219,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
         platform: "linux",
         label: "clawdbot-gateway.service",
         detail: `unit: ${unitPath}`,
+        sourcePath: unitPath,
         scope: "user",
         marker: "clawdbot",
         legacy: true,
@@ -375,6 +259,7 @@ describe("findExtraGatewayServices (linux / scanSystemdDir) — real filesystem"
           platform: "linux",
           label: "custom-openclaw.service",
           detail: `unit: ${unitPath}`,
+          sourcePath: unitPath,
           scope: "user",
           marker: "openclaw",
           legacy: false,
@@ -500,6 +385,7 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
         platform: "darwin",
         label: "com.example.openclaw-gateway",
         detail: `plist: ${plistPath}`,
+        sourcePath: plistPath,
         scope: "user",
         marker: "openclaw",
         legacy: false,
@@ -512,8 +398,12 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
   });
 });
 
-describe("Gateway inventory projections", () => {
+describe("managed Gateway inventory projections", () => {
   const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    loadedSystemdUnits.mockReset().mockResolvedValue([]);
+  });
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -522,9 +412,15 @@ describe("Gateway inventory projections", () => {
 
   function isolateNativeRoots(home: string) {
     const roots = [
-      "/etc/systemd/system",
-      "/usr/lib/systemd/system",
-      "/lib/systemd/system",
+      "/etc/systemd",
+      "/etc/xdg/systemd",
+      "/run/systemd",
+      "/run/user",
+      "/usr/local/lib/systemd",
+      "/usr/local/share/systemd",
+      "/usr/lib/systemd",
+      "/usr/share/systemd",
+      "/lib/systemd",
       "/Library/LaunchAgents",
       "/Library/LaunchDaemons",
     ].map((root) => path.normalize(root));
@@ -598,28 +494,53 @@ describe("Gateway inventory projections", () => {
     "uses %s inline metadata for an unbranded systemd command",
     async (_name, metadata, included) => {
       Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-      const home = tempDirs.make("systemd-inline-metadata-", os.tmpdir());
+      const home = tempDirs.make("managed-systemd-metadata-", os.tmpdir());
       const write = isolateNativeRoots(home);
-      await write(
+      for (const unitPath of [
+        path.join(home, ".config/systemd/user/custom.service"),
         "/etc/systemd/system/custom.service",
-        `[Service]\nExecStart = /usr/bin/node /srv/worker/dist/entry.js gateway run\n${metadata}\n`,
-      );
+      ]) {
+        await write(
+          unitPath,
+          `[Service]\nExecStart = /usr/bin/node /srv/worker/dist/entry.js gateway run\n${metadata}\n`,
+        );
+      }
 
+      const managed = await listManagedOpenClawGatewayServices({ HOME: home });
+
+      expect(managed).toEqual({
+        services: included
+          ? ["user", "system"].map((scope) =>
+              expect.objectContaining({
+                label: "custom.service",
+                scope,
+                marker: "openclaw",
+                legacy: false,
+              }),
+            )
+          : [],
+        errors: [],
+      });
       expect(await findSystemGatewayServices()).toEqual(
         included
           ? [
               expect.objectContaining({
                 label: "custom.service",
+                scope: "system",
                 marker: "openclaw",
                 legacy: false,
               }),
             ]
           : [],
       );
+      expect(await findExtraGatewayServices({ HOME: home }, { deep: true })).toEqual({
+        services: [],
+        errors: [],
+      });
     },
   );
 
-  it("filters managed systemd Gateways and authenticated Nodes while preserving extras and inspection errors", async () => {
+  it("includes current, sibling, custom, and template systemd Gateways while preserving incomplete inspection", async () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     const home = tempDirs.make("managed-systemd-", os.tmpdir());
     const write = isolateNativeRoots(home);
@@ -648,6 +569,7 @@ describe("Gateway inventory projections", () => {
       "[Service]\nExecStart=/usr/bin/node -C development --import /opt/bootstrap.mjs /opt/clawdbot/dist/entry.js --profile rescue gateway run\n",
     );
     await write(path.join(userDir, "clawdbot-gateway.service"), CLAWDBOT_GATEWAY_CONTENTS);
+    await write(path.join(userDir, "clawdbot-upgraded.service"), CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
     await write(
       path.join(userDir, "shell.service"),
       `[Service]\nExecStart=/bin/sh -c 'NODE_ENV=production exec /usr/bin/openclaw --profile rescue gateway run'\n`,
@@ -662,23 +584,135 @@ describe("Gateway inventory projections", () => {
     );
     await write("/lib/systemd/system", "unreadable service directory");
 
+    const managed = await listManagedOpenClawGatewayServices({ HOME: home });
     const extras = await findExtraGatewayServices({ HOME: home }, { deep: true });
 
-    expect(extras.services.map((service) => service.label).toSorted()).toEqual([
+    expect(managed.services.map((service) => service.label).toSorted()).toEqual([
+      "clawdbot-upgraded.service",
+      "openclaw-gateway-dev.service",
+      "openclaw-gateway.service",
+      "openclaw@.service",
+      "rescue.service",
+      "shell.service",
+      "vendor-gateway.service",
+    ]);
+    expect(managed.services).toContainEqual({
+      platform: "linux",
+      label: "openclaw@.service",
+      scope: "system",
+      detail: `unit: ${path.join("/etc/systemd/system", "openclaw@.service")}`,
+      sourcePath: path.join("/etc/systemd/system", "openclaw@.service"),
+      marker: "openclaw",
+      legacy: false,
+    });
+    const expectedExtras = [
       "clawdbot-gateway.service",
+      "clawdbot-upgraded.service",
       "env.service",
       "openclaw@.service",
       "rescue.service",
       "runtime-options.service",
       "shell.service",
       "vendor-gateway.service",
-    ]);
+    ];
+    expect(extras.services.map((service) => service.label).toSorted()).toEqual(expectedExtras);
+    for (const selected of [
+      "rescue.service",
+      "clawdbot-gateway.service",
+      "clawdbot-upgraded.service",
+      "vendor-gateway.service",
+    ]) {
+      const env = { HOME: home, OPENCLAW_SYSTEMD_UNIT: selected };
+      const selectedExtras = await findExtraGatewayServices(env, { deep: true });
+      const omitted = selected === "rescue.service" ? selected : undefined;
+      expect(selectedExtras.services.map((service) => service.label).toSorted()).toEqual(
+        expectedExtras.filter((label) => label !== omitted),
+      );
+      expect(selectedExtras.errors).toEqual(extras.errors);
+      expect(await listManagedOpenClawGatewayServices(env)).toEqual(managed);
+    }
     expect(extras.errors).toEqual([
       { source: "/lib/systemd/system", message: expect.stringContaining("could not be inspected") },
     ]);
-    for (const service of extras.services) {
+    expect(managed.errors).toEqual(extras.errors);
+    for (const service of [...managed.services, ...extras.services]) {
       expect(service).not.toHaveProperty("extra");
+      expect(service).not.toHaveProperty("managedGateway");
     }
+  });
+
+  it("keeps discovered native selectors independent of display details", async () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    const home = tempDirs.make("managed-systemd-load-paths-", os.tmpdir());
+    const write = isolateNativeRoots(home);
+    const configHome = path.join(home, "xdg-config");
+    const dataHome = path.join(home, "xdg-data");
+    const runtimeDir = path.join(home, "xdg-runtime");
+    await write(
+      path.join(configHome, "systemd/user/config-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      path.join(dataHome, "systemd/user/data-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      "/etc/systemd/system.control/system-gateway.service",
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      path.join(runtimeDir, "systemd/generator/generated-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write(
+      path.join(runtimeDir, "systemd/transient/transient-gateway.service"),
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+    await write("/run/systemd/user/run-gateway.service", CUSTOM_OPENCLAW_GATEWAY_CONTENTS);
+    await write(
+      "/run/systemd/generator/system-generated-gateway.service",
+      CUSTOM_OPENCLAW_GATEWAY_CONTENTS,
+    );
+
+    const result = await listManagedOpenClawGatewayServices(
+      {
+        HOME: home,
+        XDG_CONFIG_HOME: configHome,
+        XDG_DATA_HOME: dataHome,
+        XDG_RUNTIME_DIR: runtimeDir,
+      },
+      { requireComplete: true },
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.services.map((service) => service.label).toSorted()).toEqual([
+      "config-gateway.service",
+      "data-gateway.service",
+      "generated-gateway.service",
+      "run-gateway.service",
+      "system-gateway.service",
+      "system-generated-gateway.service",
+      "transient-gateway.service",
+    ]);
+    const inventory = await import("./inspect.js");
+    for (const service of result.services) {
+      service.detail = "Discovered Gateway";
+    }
+    vi.spyOn(inventory, "listManagedOpenClawGatewayServices").mockResolvedValue(result);
+    const { discoverManagedGatewayBindings } = await import("./managed-gateway-bindings.js");
+    const bindings = await discoverManagedGatewayBindings({ HOME: home });
+    expect(bindings).toHaveLength(7);
+    expect(bindings.map((binding) => binding.systemdReadTarget?.unitPath)).toEqual(
+      expect.arrayContaining([
+        path.join(configHome, "systemd/user/config-gateway.service"),
+        path.join(dataHome, "systemd/user/data-gateway.service"),
+        "/etc/systemd/system.control/system-gateway.service",
+        path.join(runtimeDir, "systemd/generator/generated-gateway.service"),
+        path.join(runtimeDir, "systemd/transient/transient-gateway.service"),
+        "/run/systemd/user/run-gateway.service",
+        "/run/systemd/generator/system-generated-gateway.service",
+      ]),
+    );
   });
 
   it.each([
@@ -729,6 +763,7 @@ describe("Gateway inventory projections", () => {
           platform: "darwin",
           label,
           detail: `plist: ${file}`,
+          sourcePath: file,
           scope: "system",
           marker: "openclaw",
           legacy: false,
@@ -738,7 +773,7 @@ describe("Gateway inventory projections", () => {
     },
   );
 
-  it("reports global and custom launchd extras without admitting authenticated Node jobs", async () => {
+  it("includes user and global launchd Gateways without admitting Node or legacy jobs", async () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
     const home = tempDirs.make("managed-launchd-", os.tmpdir());
     const write = isolateNativeRoots(home);
@@ -861,11 +896,24 @@ describe("Gateway inventory projections", () => {
     const unreadable = path.join(userDir, "ai.openclaw.broken.plist");
     await write(unreadable, "malformed plist");
 
+    const managed = await listManagedOpenClawGatewayServices({ HOME: home });
     const extras = await findExtraGatewayServices({ HOME: home }, { deep: true });
 
     expect(
-      extras.services.map((service) => `${service.scope}:${service.label}`).toSorted(),
+      managed.services.map((service) => `${service.scope}:${service.label}`).toSorted(),
     ).toEqual([
+      "system:ai.openclaw.gateway",
+      "system:org.example.global",
+      "user:ai.openclaw.gateway",
+      "user:ai.openclaw.gateway.dev",
+      "user:org.example.direct-wrapper",
+      "user:org.example.env",
+      "user:org.example.program",
+      "user:org.example.rescue",
+      "user:org.example.shell",
+      "user:org.example.wrapped",
+    ]);
+    const expectedExtras = [
       "system:ai.openclaw.gateway",
       "system:org.example.global",
       "user:com.clawdbot.gateway",
@@ -875,12 +923,32 @@ describe("Gateway inventory projections", () => {
       "user:org.example.rescue",
       "user:org.example.shell",
       "user:org.example.wrapped",
-    ]);
+    ];
+    expect(
+      extras.services.map((service) => `${service.scope}:${service.label}`).toSorted(),
+    ).toEqual(expectedExtras);
+    for (const selected of [
+      "org.example.rescue",
+      "com.clawdbot.gateway",
+      "org.example.global",
+      "ai.openclaw.gateway",
+    ]) {
+      const env = { HOME: home, OPENCLAW_LAUNCHD_LABEL: selected };
+      const selectedExtras = await findExtraGatewayServices(env, { deep: true });
+      const omitted = selected === "org.example.rescue" ? `user:${selected}` : undefined;
+      expect(
+        selectedExtras.services.map((service) => `${service.scope}:${service.label}`).toSorted(),
+      ).toEqual(expectedExtras.filter((label) => label !== omitted));
+      expect(selectedExtras.errors).toEqual(extras.errors);
+      expect(await listManagedOpenClawGatewayServices(env)).toEqual(managed);
+    }
     expect(extras.errors).toEqual([
       { source: unreadable, message: expect.stringContaining("could not be inspected") },
     ]);
-    for (const service of extras.services) {
+    expect(managed.errors).toEqual(extras.errors);
+    for (const service of [...managed.services, ...extras.services]) {
       expect(service).not.toHaveProperty("extra");
+      expect(service).not.toHaveProperty("managedGateway");
     }
   });
 });

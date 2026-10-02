@@ -6,8 +6,14 @@ import {
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  requireFirstPostJsonRecordRequest,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { VideoGenerationRequest } from "openclaw/plugin-sdk/video-generation";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -141,6 +147,51 @@ describe("runway video generation provider", () => {
     await expect(generateVideo()).rejects.toThrow(
       "Runway generated video download: malformed video response",
     );
+  });
+
+  it("authenticates video generation with a resolved file SecretRef provider overlay", async () => {
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          runway: {
+            baseUrl: "",
+            models: [],
+            apiKey: { source: "file", provider: "x", id: "/runway" },
+          },
+        },
+      },
+    };
+    setRuntimeConfigSnapshot(
+      {
+        models: {
+          providers: { runway: { baseUrl: "", models: [], apiKey: "runway-resolved-test-key" } },
+        },
+      },
+      sourceConfig,
+    );
+    const providerAuth = await import("openclaw/plugin-sdk/provider-auth-runtime");
+    const realAuth = await vi.importActual<
+      typeof import("openclaw/plugin-sdk/provider-auth-runtime")
+    >("openclaw/plugin-sdk/provider-auth-runtime");
+    try {
+      await vi
+        .mocked(providerAuth.resolveApiKeyForProvider)
+        .withImplementation(realAuth.resolveApiKeyForProvider, async () => {
+          mockSuccessfulTask();
+          await generateVideo({ cfg: sourceConfig, authStore: { version: 1, profiles: {} } });
+
+          const { headers } = requireFirstPostJsonRecordRequest(
+            postJsonRequestMock,
+            "Runway create request",
+          );
+          if (!(headers instanceof Headers)) {
+            throw new Error("expected Runway request headers");
+          }
+          expect(headers.get("authorization")).toBe("Bearer runway-resolved-test-key");
+        });
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {

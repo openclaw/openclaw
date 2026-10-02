@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isStringOption, readTrimmedStringAlias } from "../utils/string-readers.js";
 import type { RealtimeVoiceTool } from "./provider-types.js";
 import type { TalkEvent } from "./talk-events.js";
 
@@ -106,9 +107,7 @@ export function normalizeRealtimeVoiceAgentControlMode(
   value: unknown,
 ): RealtimeVoiceAgentControlMode | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
-  return REALTIME_VOICE_AGENT_CONTROL_MODES.includes(normalized as RealtimeVoiceAgentControlMode)
-    ? (normalized as RealtimeVoiceAgentControlMode)
-    : undefined;
+  return isStringOption(normalized, REALTIME_VOICE_AGENT_CONTROL_MODES) ? normalized : undefined;
 }
 
 const CANCEL_CONTROL_PATTERNS = [
@@ -241,11 +240,7 @@ export function parseRealtimeVoiceAgentControlToolArgs(args: unknown): {
 } {
   const parsed = parseRealtimeVoiceAgentControlToolArgsRecord(args);
   const record = asNonArrayRecord(parsed);
-  const text =
-    normalizeOptionalString(record.text) ??
-    normalizeOptionalString(record.message) ??
-    normalizeOptionalString(record.request) ??
-    normalizeOptionalString(record.query);
+  const text = readTrimmedStringAlias(record, ["text", "message", "request", "query"]);
   if (!text) {
     throw new Error("text required");
   }
@@ -323,30 +318,25 @@ export function formatRealtimeVoiceAgentQueueRejection(
     : "OpenClaw could not steer the active run.";
 }
 
-function isRealtimeVoiceAgentControlToolEvent(event: TalkEvent): boolean {
-  if (!event.type.startsWith("tool.")) {
-    return false;
-  }
-  const payload = asRecord(event.payload);
-  return normalizeOptionalString(payload.name) === REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME;
-}
-
 /** Format a concise spoken status for the active or most recent voice run. */
 export function formatRealtimeVoiceAgentStatus(params: {
   active: boolean;
   recentEvents?: readonly TalkEvent[];
   activity?: RealtimeVoiceAgentRunActivity;
 }): string {
-  const recent = (params.recentEvents ?? []).toReversed();
+  const recent = params.recentEvents ?? [];
   if (!params.active) {
-    const turnEnded = recent.find((event) => event.type === "turn.ended");
+    const turnEnded = recent.findLast((event) => event.type === "turn.ended");
     return turnEnded
       ? "OpenClaw finished the last voice request."
       : "I'm not working on an active request right now.";
   }
 
-  const toolEvent = recent.find(
-    (event) => event.type.startsWith("tool.") && !isRealtimeVoiceAgentControlToolEvent(event),
+  const toolEvent = recent.findLast(
+    (event) =>
+      event.type.startsWith("tool.") &&
+      normalizeOptionalString(asRecord(event.payload).name) !==
+        REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
   );
   if (toolEvent) {
     const payload = asRecord(toolEvent.payload);

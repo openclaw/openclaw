@@ -302,9 +302,8 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
 function selectIncrementalSqliteRecords(
   records: Record<string, unknown>[],
   previousLeafId: string | undefined,
-): { records: Record<string, unknown>[]; visibleLeafId?: string } | undefined {
+): { visibleLeafId?: string } | undefined {
   let visibleLeafId = previousLeafId;
-  const visible: Record<string, unknown>[] = [];
   for (const record of records) {
     if (isSessionTranscriptLeafControl(record) || record.appendMode === "side") {
       return undefined;
@@ -322,10 +321,9 @@ function selectIncrementalSqliteRecords(
         return undefined;
       }
     }
-    visible.push(record);
     visibleLeafId = id;
   }
-  return { records: visible, ...(visibleLeafId ? { visibleLeafId } : {}) };
+  return { visibleLeafId };
 }
 
 function sqliteCheckpointAnchorHash(event: unknown): string {

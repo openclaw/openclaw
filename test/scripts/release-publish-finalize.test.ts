@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sourceSha = "b".repeat(40);
+const signedTagObjectSha = "d".repeat(40);
 const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8")) as {
   jobs: Record<string, { steps: { name?: string; run?: string }[] }>;
 };
@@ -35,7 +36,7 @@ function fixture({
   mkdirSync(bin);
   writeFileSync(join(root, "calls"), "");
   writeFileSync(join(root, "summary"), "");
-  for (const binary of ["gh", "node"]) {
+  for (const binary of ["gh", "node", "git"]) {
     writeFileSync(
       join(bin, binary),
       `#!${process.execPath}
@@ -48,12 +49,16 @@ if (${JSON.stringify(binary)} === 'node') {
   if (args[0] === 'scripts/linux-app-channel.mjs' && args[1] === 'finalize-core') {
     console.log(JSON.stringify({ state: 'finalized' })); process.exit(0);
   }
-} else {
+} else if (${JSON.stringify(binary)} === 'gh') {
   if (args[0] === 'api' && args[1].includes('/commits/')) { console.log(${JSON.stringify(actualSha)}); process.exit(0); }
   if (args[0] === 'api' && args[1].endsWith('/releases/latest')) { console.log(${JSON.stringify(latest)}); process.exit(0); }
   if (args[0] === 'release' && args[1] === 'view') {
     console.log(JSON.stringify(${JSON.stringify({ isDraft: draft, isPrerelease: prerelease })})); process.exit(0);
   }
+} else {
+  console.log(${JSON.stringify(signedTagObjectSha)} + '\\trefs/tags/' + process.env.RELEASE_TAG);
+  console.log(${JSON.stringify(actualSha)} + '\\trefs/tags/' + process.env.RELEASE_TAG + '^{}');
+  process.exit(0);
 }
 throw new Error('Unexpected operation: ' + JSON.stringify(args));
 `,
@@ -72,9 +77,12 @@ throw new Error('Unexpected operation: ' + JSON.stringify(args));
       GITHUB_WORKFLOW_SHA: "a".repeat(40),
       GITHUB_RUN_ID: "123",
       GITHUB_RUN_ATTEMPT: "2",
+      PARENT_WORKFLOW_SHA: "a".repeat(40),
       RELEASE_TAG: tag,
       RELEASE_NPM_DIST_TAG: distTag,
+      SIGNED_RELEASE_TAG_OBJECT_SHA: signedTagObjectSha,
       SOURCE_SHA: sourceSha,
+      TARGET_SHA: sourceSha,
     },
   });
   const evidencePath = join(root, "core-finalization.json");
@@ -103,7 +111,6 @@ describe("release publish finalization", () => {
   it.each([
     { tag: "v2026.9.6", distTag: "latest", prerelease: false, madeLatest: true },
     { tag: "v2026.9.7-beta.1", distTag: "beta", prerelease: true, madeLatest: false },
-    { tag: "v2026.9.7-alpha.1", distTag: "alpha", prerelease: true, madeLatest: false },
     { tag: "v2026.8.33", distTag: "extended-stable", prerelease: false, madeLatest: false },
   ])("records verified public $tag without rewriting it", ({ madeLatest, ...options }) => {
     const result = fixture(options);
@@ -142,10 +149,8 @@ describe("release publish finalization", () => {
   it("refuses a moved public tag before admitting the idempotent result", () => {
     const result = fixture({ actualSha: "c".repeat(40) });
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Release tag moved before activation");
+    expect(result.stderr).toContain(`Release tag v2026.9.6 moved: expected ${sourceSha}`);
     expect(result.evidence).toBeUndefined();
-    expect(result.calls.filter(([binary]) => binary === "node").map((args) => args[2])).toEqual([
-      "carry",
-    ]);
+    expect(result.calls.filter(([binary]) => binary === "node")).toEqual([]);
   });
 });

@@ -17,6 +17,10 @@ import {
 } from "./system-run-approval-binding.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-plan.js";
 import * as mutableFilePolicy from "./system-run-mutable-file-policy.js";
+import {
+  hasPosixShellCodeLoadingOption,
+  resolvePosixShellScriptOperandIndex,
+} from "./system-run-shell-file-operand.js";
 
 function expectOk<T extends { ok: boolean }>(result: T): T & { ok: true } {
   expect(result.ok).toBe(true);
@@ -337,6 +341,29 @@ describe("missingSystemRunApprovalBinding", () => {
   });
 });
 
+describe("POSIX shell stdin option detection", () => {
+  it.each(["-s", "-se", "-es", "-ls", "-lse"])(
+    "recognizes %s before mutable file operand binding",
+    (flag) => {
+      const argv = ["bash", flag, "job.sh"];
+      expect(hasPosixShellCodeLoadingOption(argv, "bash")).toBe(true);
+      expect(resolvePosixShellScriptOperandIndex(argv, "bash")).toBeNull();
+    },
+  );
+
+  it("does not interpret tokens after -- as shell options", () => {
+    const argv = ["bash", "--", "-se"];
+    expect(hasPosixShellCodeLoadingOption(argv, "bash")).toBe(false);
+    expect(resolvePosixShellScriptOperandIndex(argv, "bash")).toBe(2);
+  });
+
+  it("does not interpret arguments after the script operand as shell options", () => {
+    const argv = ["bash", "job.sh", "-secret"];
+    expect(hasPosixShellCodeLoadingOption(argv, "bash")).toBe(false);
+    expect(resolvePosixShellScriptOperandIndex(argv, "bash")).toBe(1);
+  });
+});
+
 describe("mutable file operand binding", () => {
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "binds protected env and ls identities in dispatch order",
@@ -602,6 +629,34 @@ describe("mutable file operand binding", () => {
     await withTempDir("openclaw-system-run-startup-", async (cwd) => {
       fs.writeFileSync(path.join(cwd, "init.sh"), "echo init\n");
       fs.writeFileSync(path.join(cwd, "job.sh"), "echo job\n");
+      const positionalArgument = expectOk(
+        await prepareSystemRunMutableFileBinding({
+          command: { kind: "argv", argv: ["bash", "job.sh", "-secret"] },
+          cwd,
+        }),
+      );
+      expect(
+        positionalArgument.binding.operands
+          .filter((operand) => !operand.executable)
+          .map((operand) => operand.snapshot.path),
+      ).toEqual([path.join(cwd, "job.sh")]);
+      for (const [shell, flag] of [
+        ["sh", "-s"],
+        ["bash", "-se"],
+        ["bash", "-es"],
+        ["bash", "-ls"],
+        ["bash", "-lse"],
+      ] as const) {
+        await expect(
+          prepareSystemRunMutableFileBinding({
+            command: { kind: "argv", argv: [shell, flag, "job.sh"] },
+            cwd,
+          }),
+        ).resolves.toEqual({
+          ok: false,
+          message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup files",
+        });
+      }
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "shell", text: "bash --rcfile init.sh -i job.sh" },
@@ -614,15 +669,6 @@ describe("mutable file operand binding", () => {
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "argv", argv: ["bash", "-O", "extglob", "-i", "job.sh"] },
-          cwd,
-        }),
-      ).resolves.toEqual({
-        ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind shell startup files",
-      });
-      await expect(
-        prepareSystemRunMutableFileBinding({
-          command: { kind: "argv", argv: ["sh", "-s"] },
           cwd,
         }),
       ).resolves.toEqual({

@@ -5,6 +5,11 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../entry",
     distWorkerPath: "entry.js",
   },
+  daemon: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "daemon-cli",
+    distWorkerPath: "cli/daemon-cli.js",
+  },
   sessionAccessor: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../config/sessions/session-accessor",
@@ -183,6 +188,26 @@ export const gatewayDirectStopEntrypoints = {
 
 // Extra update roots share the native fixture generation.
 export const updateExecutorEntrypoints = {
+  gatewayLock: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-lock",
+    distWorkerPath: "infra/gateway-lock.js",
+  },
+  gatewayOwnerLease: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/gateway-owner-lease",
+    distWorkerPath: "infra/gateway-owner-lease.js",
+  },
+  boundaryPath: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/boundary-path",
+    distWorkerPath: "infra/boundary-path.js",
+  },
+  statePaths: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db.paths",
+    distWorkerPath: "state/openclaw-state-db.paths.js",
+  },
   sealedRegistry: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../infra/sealed-runtime-registry",

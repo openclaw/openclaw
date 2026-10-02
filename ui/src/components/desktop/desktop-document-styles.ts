@@ -37,7 +37,7 @@ export const desktopDocumentStyles = css`
     border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
     border-radius: 14px;
     background: color-mix(in srgb, var(--bg) 84%, transparent);
-    box-shadow: 0 8px 28px rgb(0 0 0 / 35%);
+    box-shadow: var(--overlay-shadow);
     backdrop-filter: blur(16px);
   }
   .desktop-touch-action {

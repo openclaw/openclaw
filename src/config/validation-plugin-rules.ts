@@ -65,7 +65,6 @@ type RegistryInfo = {
   registry: PluginManifestRegistry;
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
-  normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
   channelSchemaSelection?: ReadonlySet<string>;
   channelSchemas?: Map<
     string,
@@ -198,12 +197,6 @@ export function validatePreparedConfigWithPlugins(
     return info.overriddenPluginIds;
   };
 
-  const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
-    const info = ensureRegistry();
-    info.normalizedPlugins ??= normalizePluginsConfig(config.plugins);
-    return info.normalizedPlugins;
-  };
-
   const ensureChannelSchemaSelection = (): ReadonlySet<string> => {
     const info = ensureLoadedRegistryInfo();
     info.channelSchemaSelection ??= resolveChannelSchemaSelection(
@@ -214,10 +207,7 @@ export function validatePreparedConfigWithPlugins(
     return info.channelSchemaSelection;
   };
 
-  const ensureChannelSchemas = (): Map<
-    string,
-    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
-  > => {
+  const ensureChannelSchemas = (): NonNullable<RegistryInfo["channelSchemas"]> => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
@@ -277,13 +267,9 @@ export function validatePreparedConfigWithPlugins(
     return installedPluginRecordIds;
   };
 
-  const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
-    const normalizedChannelId = normalizePluginId(channelId);
-    return (
-      Boolean(normalizedChannelId) &&
-      !ensureKnownIds().has(normalizedChannelId) &&
-      hasPluginEvidence(channelId)
-    );
+  const hasStalePluginEvidence = (id: string): boolean => {
+    const normalizedId = normalizePluginId(id);
+    return Boolean(normalizedId) && !ensureKnownIds().has(normalizedId) && hasPluginEvidence(id);
   };
 
   const collectActiveWebSearchProviderIds = (): string[] => {
@@ -374,13 +360,7 @@ export function validatePreparedConfigWithPlugins(
       message: `unknown web_search provider: ${trimmed}`,
       allowedValues,
     };
-    const normalizedProviderId = normalizePluginId(trimmed);
-    const hasStaleEvidence = Boolean(
-      normalizedProviderId &&
-      !ensureKnownIds().has(normalizedProviderId) &&
-      hasPluginEvidence(trimmed),
-    );
-    if (hasStaleEvidence) {
+    if (hasStalePluginEvidence(trimmed)) {
       warnings.push({
         ...issue,
         message: `${issue.message} (stale web search plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -396,18 +376,12 @@ export function validatePreparedConfigWithPlugins(
       return;
     }
     const { registry } = ensureRegistry();
-    const suppressedModels = new Map<
-      string,
-      { provider: string; model: string; reason?: string }
-    >();
-    for (const suppression of planManifestModelCatalogSuppressions({ registry }).suppressions) {
+    const { suppressions } = planManifestModelCatalogSuppressions({ registry });
+    const suppressedModels = new Map<string, (typeof suppressions)[number]>();
+    for (const suppression of suppressions) {
       const key = `${suppression.provider}/${suppression.model}`;
       if (!suppression.when && !suppressedModels.has(key)) {
-        suppressedModels.set(key, {
-          provider: suppression.provider,
-          model: suppression.model,
-          ...(suppression.reason ? { reason: suppression.reason } : {}),
-        });
+        suppressedModels.set(key, suppression);
       }
     }
     const seen = new Set<string>();
@@ -480,7 +454,7 @@ export function validatePreparedConfigWithPlugins(
           continue;
         }
         const issue = { path: `channels.${trimmed}`, message: `unknown channel id: ${trimmed}` };
-        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+        if (hasStalePluginEvidence(trimmed)) {
           warnings.push({
             ...issue,
             message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
@@ -538,9 +512,7 @@ export function validatePreparedConfigWithPlugins(
     }
   }
 
-  const heartbeatChannelIds = new Set(
-    bundledChannelIds.map((channelId) => normalizeLowercaseStringOrEmpty(channelId)),
-  );
+  const heartbeatChannelIds = new Set(bundledChannelIds);
   const validateHeartbeatTarget = (target: string | undefined, issuePath: string): void => {
     if (typeof target !== "string") {
       return;
@@ -599,7 +571,7 @@ export function validatePreparedConfigWithPlugins(
       schemaValidations: opts.schemaValidations,
       registry,
       knownIds: ensureKnownIds(),
-      normalizedPlugins: ensureNormalizedPlugins(),
+      normalizedPlugins: normalizePluginsConfig(config.plugins),
       deferredPluginIds,
       ensureCompatPluginIds,
       ensureOverriddenPluginIds,

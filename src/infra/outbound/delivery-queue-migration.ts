@@ -463,7 +463,7 @@ async function finalizePreparedMigration(params: {
     return "moved";
   } finally {
     if (!stagedArtifactsTransferred) {
-      cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
+      await cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
       await releaseSpoolArtifacts(stagedArtifacts, params.stateDir);
     }
   }

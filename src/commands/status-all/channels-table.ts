@@ -1,5 +1,4 @@
-// Builds the user-facing `openclaw status --all` channel summary table rows.
-// Gateway issues are folded in here so every text/report surface shows the same warning state.
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 
 type ChannelTableRowInput = {
   id: string;
@@ -21,7 +20,6 @@ export const statusChannelsTableColumns = [
   { key: "Detail", header: "Detail", flex: true, minWidth: 24 },
 ] as const;
 
-/** Formats channel rows and overlays live gateway issues onto their display state. */
 export function buildStatusChannelsTableRows(params: {
   rows: readonly ChannelTableRowInput[];
   channelIssues: readonly ChannelIssueLike[];
@@ -31,13 +29,7 @@ export function buildStatusChannelsTableRows(params: {
   accentDim: (text: string) => string;
   formatIssueMessage?: (message: string) => string;
 }) {
-  const firstIssueByChannel = new Map<string, ChannelIssueLike>();
-  for (const issue of params.channelIssues) {
-    const channel = issue.channel;
-    if (!firstIssueByChannel.has(channel)) {
-      firstIssueByChannel.set(channel, issue);
-    }
-  }
+  const firstIssueByChannel = indexFirstByKey(params.channelIssues, (issue) => issue.channel);
   const formatIssueMessage = params.formatIssueMessage ?? ((message: string) => message);
   return params.rows.map((row) => {
     const issue = firstIssueByChannel.get(row.id);

@@ -8,6 +8,7 @@ import type { CronStatus, ModelAuthStatusResult } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import type { SidebarAttentionStore } from "../app/sidebar-attention-store.ts";
+import { outboxStorageScope } from "../lib/chat/outbox-payload-store.runtime.ts";
 import { captureChatOutboxAdmission } from "../lib/chat/outbox-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
@@ -954,7 +955,7 @@ describe("sidebar attention source publication", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("keeps only nondismissable local incidents available offline and observes canonical removal", async () => {
+  it("clears reviewed local incidents offline without deleting their drafts", async () => {
     const { sidebarInboxTabCounts } = await import("./sidebar-attention-entries.ts");
     vi.stubGlobal("sessionStorage", createStorageMock());
     const request = vi.fn(async (method: string) =>
@@ -978,6 +979,7 @@ describe("sidebar attention source publication", () => {
     };
     const row = {
       id: "local-review",
+      storageScope: outboxStorageScope(host),
       text: "private submission",
       createdAt: 1,
       sendState: "unconfirmed" as const,
@@ -1000,7 +1002,8 @@ describe("sidebar attention source publication", () => {
       system: 1,
       automations: 1,
     });
-    expect(store.entries[0]?.dismissal).toBeNull();
+    const dismissal = store.entries[0]?.dismissal;
+    expect(dismissal?.kind).toBe("outbox");
     expect(JSON.stringify(store.entries[0])).not.toContain("private submission");
     harness.update({ phase: "reconnecting", hello: null });
     const calls = request.mock.calls.length;
@@ -1010,8 +1013,12 @@ describe("sidebar attention source publication", () => {
       system: 1,
       automations: 0,
     });
-    expect(removeStoredChatComposerQueueItem(host, host.sessionKey, row.id, row)).toBe(true);
+    store.dismiss(dismissal!);
     expect(store.entries).toEqual([]);
     expect(request.mock.calls).toHaveLength(calls);
+    harness.update({ phase: "connected" });
+    expect(store.entries.some((entry) => entry.type === "outbox")).toBe(false);
+    expect(removeStoredChatComposerQueueItem(host, host.sessionKey, row.id, row)).toBe(true);
+    expect(store.entries).toEqual([]);
   });
 });

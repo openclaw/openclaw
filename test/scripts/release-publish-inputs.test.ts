@@ -46,6 +46,12 @@ function fixture(npmDistTag = "latest", packageName = "@openclaw/example") {
   };
 }
 
+it("rejects retired alpha sealed-input selectors before optional receipt fallback", () => {
+  expect(() => resolveReleasePublishInputs(fixture("alpha").manifest)).toThrow(
+    "Alpha releases are retired;",
+  );
+});
+
 describe("sealed publication inputs", () => {
   it.each([
     { published: false, latest: "2026.9.5", decision: "plan", route: null },

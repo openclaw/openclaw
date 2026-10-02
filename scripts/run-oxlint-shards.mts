@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import {
   distArtifactEntryArgs,
   withDistArtifactOwnership,
@@ -12,6 +13,7 @@ import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import {
   CI_PARALLEL_MIN_MEMORY_BYTES,
   isConstrainedCiCheckHost,
+  resolveCheckMemoryCapacityBytes,
   resolveLocalCheckEnv,
 } from "./lib/local-check-runtime.mts";
 import {
@@ -21,7 +23,10 @@ import {
   waitForManagedProcessGroupExit,
 } from "./lib/managed-child-process.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
-import { shouldPrepareExtensionPackageBoundaryArtifacts } from "./run-oxlint.mts";
+import {
+  shouldPrepareExtensionPackageBoundaryArtifacts,
+  shouldPrepareOxlintArtifacts,
+} from "./run-oxlint.mts";
 
 const DEFAULT_EXTENSION_CHUNK_SIZE = 8;
 const LARGE_CI_EXTENSION_CHUNK_SIZE = 16;
@@ -39,7 +44,7 @@ const EXTENSIONS_DIR = "extensions";
 const OXLINT_SOURCE_FILE_PATTERN = /\.[cm]?[jt]sx?$/;
 const PARENT_TERMINATION_SIGNALS = ["SIGINT", "SIGTERM"] satisfies NodeJS.Signals[];
 
-type OxlintShard = { name: string; args: string[] };
+type OxlintShard = { name: string; args: string[]; canonicalTargets?: readonly string[] };
 type ShardStripe = { index: number; total: number };
 type HostResources = {
   logicalCpuCount: number;
@@ -59,7 +64,11 @@ type RunnerOptions = {
   extraArgs: string[];
   runner: string;
 };
-type ShardRunnerOptions = RunnerOptions & { shard: OxlintShard; onCompleted?: () => void };
+type ShardRunnerOptions = RunnerOptions & {
+  shard: OxlintShard;
+  onCompleted?: () => void;
+  ownsArtifacts?: boolean;
+};
 type ShardBatchOptions = RunnerOptions & {
   concurrency: number;
   entries: OxlintShard[];
@@ -89,103 +98,80 @@ const SCRIPTS_SHARD = {
   args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
 };
 
-async function lintWorkspacePackages(cwd: string): Promise<string[] | undefined> {
-  const { parse: parseYaml } = await import("yaml");
-  const workspace: unknown = parseYaml(
-    fs.readFileSync(path.join(cwd, "pnpm-workspace.yaml"), "utf8"),
+const LINT_SOURCE_PATH = /^(?:src|ui|packages|extensions|scripts)\/.+\.[cm]?[jt]sx?$/u;
+
+export function isOxlintSourcePath(file: string, cwd: string) {
+  return (
+    file === file.trim() &&
+    !file.split("/").includes("..") &&
+    LINT_SOURCE_PATH.test(file) &&
+    !/\.d\.[cm]?ts$/u.test(file) &&
+    fs.existsSync(path.join(cwd, file))
   );
+}
+
+/** Filtering follows canonical stripe assignment, so a narrowed row cannot steal another row's files. */
+export function createOxlintFileScope(files: readonly string[], cwd = process.cwd()) {
   if (
-    !workspace ||
-    typeof workspace !== "object" ||
-    !("packages" in workspace) ||
-    !Array.isArray(workspace.packages) ||
-    !workspace.packages.every((entry) => typeof entry === "string" && !entry.startsWith("!"))
+    new Set(files).size !== files.length ||
+    !files.every((file) => isOxlintSourcePath(file, cwd))
   ) {
-    return undefined;
+    throw new Error("Oxlint file selection requires unique, present canonical source paths");
   }
-  const roots = [
-    ...new Set(
-      workspace.packages.flatMap((pattern: string) =>
-        (pattern === "." ? ["."] : [...fs.globSync(pattern, { cwd })])
-          .filter((root) => fs.existsSync(path.join(cwd, root, "package.json")))
-          .map((root) => root.replaceAll(path.sep, "/")),
-      ),
-    ),
-  ];
-  return roots.includes(".")
-    ? roots.toSorted((left, right) => right.length - left.length)
-    : undefined;
-}
-
-/** Workspace metadata owns package boundaries; test/ remains outside full semantic lint. */
-export async function resolveChangedOxlintPackageScope(
-  files: readonly string[],
-  cwd = process.cwd(),
-) {
-  const roots = await lintWorkspacePackages(cwd);
-  if (!roots) {
-    return undefined;
-  }
-  const selected = new Set<string>();
-  for (const file of files) {
-    if (
-      path.isAbsolute(file) ||
-      file !== file.trim() ||
-      file.split("/").includes("..") ||
-      !OXLINT_SOURCE_FILE_PATTERN.test(file) ||
-      /\.d\.[cm]?ts$/u.test(file) ||
-      !fs.existsSync(path.join(cwd, file))
-    ) {
-      return undefined;
-    }
-    const owner = roots.find((root) => root !== "." && file.startsWith(`${root}/`)) ?? ".";
-    selected.add(owner);
-  }
-  return prepareOxlintPackageScope(roots, [...selected].toSorted(), cwd);
-}
-
-/** Filter after stripe assignment so package scope never changes execution ownership. */
-export async function createOxlintPackageScope(packages: readonly string[], cwd = process.cwd()) {
-  const roots = await lintWorkspacePackages(cwd);
-  if (!roots) {
-    throw new Error("Oxlint package selection requires canonical workspace roots");
-  }
-  return prepareOxlintPackageScope(roots, packages, cwd);
-}
-
-function prepareOxlintPackageScope(
-  roots: readonly string[],
-  packages: readonly string[],
-  cwd: string,
-) {
-  const selected = new Set(packages);
-  if (selected.size !== packages.length || packages.some((root) => !roots.includes(root))) {
-    throw new Error("Oxlint package selection must name unique canonical workspace roots");
-  }
-  const project = (target: string): string[] => {
-    const owner =
-      roots.find((root) => root !== "." && (target === root || target.startsWith(`${root}/`))) ??
-      ".";
-    const nested = roots.filter((root) => root !== "." && root.startsWith(`${target}/`));
-    if (!selected.has(owner)) {
-      return nested.filter((root) => selected.has(root));
-    }
-    if (nested.length === 0) {
-      return fs.statSync(path.join(cwd, target)).isDirectory() ||
-        OXLINT_SOURCE_FILE_PATTERN.test(target)
-        ? [target]
-        : [];
-    }
-    // A canonical container such as packages/ can contain both workspace
-    // packages and root-owned files. Split only along declared package roots.
-    return fs.readdirSync(path.join(cwd, target)).flatMap((entry) => project(`${target}/${entry}`));
-  };
+  const selected = files.toSorted((left, right) => left.localeCompare(right));
   return {
-    packages: [...selected].toSorted(),
+    files: selected,
     selectShards(shards: readonly OxlintShard[]) {
       return shards.flatMap((shard) => {
-        const targets = [...new Set(shard.args.slice(2).flatMap(project))];
-        return targets.length ? [{ ...shard, args: [...shard.args.slice(0, 2), ...targets] }] : [];
+        const targets = selected.filter((file) =>
+          shard.args.slice(2).some((root) => file === root || file.startsWith(`${root}/`)),
+        );
+        return targets.length
+          ? [
+              {
+                ...shard,
+                args: [...shard.args.slice(0, 2), ...targets],
+                canonicalTargets: shard.canonicalTargets ?? shard.args.slice(2),
+              },
+            ]
+          : [];
+      });
+    },
+  };
+}
+
+/** Package roots narrow reported targets after their canonical stripe and chunk ownership. */
+export function createOxlintExtensionRootScope(roots: readonly string[], cwd = process.cwd()) {
+  const available = new Set(
+    listOxlintRootEntries(EXTENSIONS_DIR, { cwd, readDir: fs.readdirSync }).dirs,
+  );
+  if (
+    roots.length === 0 ||
+    new Set(roots).size !== roots.length ||
+    !roots.every(
+      (root) => /^extensions\/[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(root) && available.has(root),
+    )
+  ) {
+    throw new Error("Oxlint extension selection requires unique, present canonical package roots");
+  }
+  const selected = new Set(roots);
+  return {
+    roots: [...selected].toSorted((left, right) => left.localeCompare(right)),
+    selectShards(shards: readonly OxlintShard[]) {
+      return shards.flatMap((shard) => {
+        if (!shard.name.startsWith("extensions:")) {
+          throw new Error("Oxlint extension roots require canonical extension-only chunks");
+        }
+        const targets = shard.args.slice(2).filter((target) => selected.has(target));
+        return targets.length
+          ? [
+              {
+                ...shard,
+                args: [...shard.args.slice(0, 2), ...targets],
+                canonicalTargets: shard.canonicalTargets ?? shard.args.slice(2),
+              },
+            ]
+          : [];
       });
     },
   };
@@ -201,7 +187,7 @@ export function createOxlintShards({
   splitExtensions = false,
 }: PlatformShardOptions = {}) {
   const constrainedSerial =
-    hostResources.totalMemoryBytes < CI_PARALLEL_MIN_MEMORY_BYTES &&
+    resolveCheckMemoryCapacityBytes(hostResources) < CI_PARALLEL_MIN_MEMORY_BYTES &&
     shouldRunOxlintShardsSerial({ env, platform, hostResources });
   const coreGroups =
     splitCore || constrainedSerial ? createCoreOxlintShards({ cwd, readDir }) : [CORE_SHARD];
@@ -330,7 +316,7 @@ export function shouldRunOxlintShardsSerial({
     return isConstrainedCiCheckHost(resources);
   }
   return (
-    resources.totalMemoryBytes < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
+    resolveCheckMemoryCapacityBytes(resources) < FAST_LOCAL_CHECK_MIN_MEMORY_BYTES ||
     resources.logicalCpuCount < FAST_LOCAL_CHECK_MIN_CPUS
   );
 }
@@ -380,7 +366,8 @@ export async function main(
   const shardArgs = parseShardRunnerArgs(extraArgs);
   const env = resolveLocalCheckEnv(runtimeEnv);
   const hostResources = resolveHostResources();
-  const splitExtensions = shardArgs.extensionStripe !== undefined;
+  const splitExtensions =
+    shardArgs.extensionStripe !== undefined || shardArgs.extensionRoots !== undefined;
   const shards = createOxlintShards({
     cwd: process.cwd(),
     env,
@@ -395,9 +382,11 @@ export async function main(
     }),
     shardArgs.extensionStripe,
   );
-  const selectedShards = shardArgs.packages
-    ? (await createOxlintPackageScope(shardArgs.packages)).selectShards(stripedShards)
-    : stripedShards;
+  const selectedShards = shardArgs.extensionRoots
+    ? createOxlintExtensionRootScope(shardArgs.extensionRoots).selectShards(stripedShards)
+    : shardArgs.files
+      ? createOxlintFileScope(shardArgs.files).selectShards(stripedShards)
+      : stripedShards;
 
   const needsArtifacts = shouldPrepareExtensionPackageBoundaryArtifactsForShards(
     selectedShards,
@@ -406,6 +395,14 @@ export async function main(
   const evidenceId = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" ? randomUUID() : undefined;
   let completed = 0;
   const run = async () => {
+    // Children skip preparation; generate shared types once before any core stripe starts.
+    if (
+      selectedShards.some((shard) =>
+        shouldPrepareOxlintArtifacts([...shard.args, ...shardArgs.oxlintArgs]),
+      )
+    ) {
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
+    }
     if (needsArtifacts) {
       const code = await runManagedCommand({
         bin: process.execPath,
@@ -444,7 +441,9 @@ export async function main(
     completed = results.completed;
     return results.statuses.find((status) => status !== 0) ?? 0;
   };
-  const status = needsArtifacts ? await withDistArtifactOwnership(process.cwd(), run) : await run();
+  // One batch owner lets lint children overlap without exposing their transient
+  // configuration files to a concurrent compiler's input snapshot.
+  const status = await withDistArtifactOwnership(process.cwd(), run);
   if (evidenceId && completed === selectedShards.length && !isParentTerminationRequested()) {
     console.log(
       `[ci-static:oxlint:completion] ${JSON.stringify({
@@ -485,23 +484,37 @@ export function parseShardRunnerArgs(args: string[]) {
   let coreStripe: ShardStripe | undefined;
   let extensionStripe: ShardStripe | undefined;
   let splitCore = false;
-  let packages: string[] | undefined;
+  let files: string[] | undefined;
+  let extensionRoots: string[] | undefined;
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (arg === undefined) {
       break;
     }
-    if (arg === "--packages-json") {
+    if (arg === "--files-json") {
       const value: unknown = JSON.parse(args[index + 1] ?? "null");
       if (
         !Array.isArray(value) ||
         value.length === 0 ||
         !value.every((root) => typeof root === "string")
       ) {
-        throw new Error("--packages-json requires a nonempty JSON string array");
+        throw new Error("--files-json requires a nonempty JSON string array");
       }
-      packages = value;
+      files = value;
+      index += 1;
+      continue;
+    }
+    if (arg === "--extension-roots-json") {
+      const value: unknown = JSON.parse(args[index + 1] ?? "null");
+      if (
+        !Array.isArray(value) ||
+        value.length === 0 ||
+        !value.every((root) => typeof root === "string")
+      ) {
+        throw new Error("--extension-roots-json requires a nonempty JSON string array");
+      }
+      extensionRoots = value;
       index += 1;
       continue;
     }
@@ -545,13 +558,17 @@ export function parseShardRunnerArgs(args: string[]) {
   if (coreStripe && !splitCore) {
     throw new Error("--core-stripe requires --split-core");
   }
+  if (extensionRoots && (files || only.size !== 1 || !only.has("extensions"))) {
+    throw new Error("--extension-roots-json requires --only=extensions without --files-json");
+  }
   return {
     coreStripe,
     extensionStripe,
     only,
     oxlintArgs,
     splitCore,
-    ...(packages ? { packages } : {}),
+    ...(files ? { files } : {}),
+    ...(extensionRoots ? { extensionRoots } : {}),
   };
 }
 
@@ -710,7 +727,8 @@ async function runShards({
       if (isParentTerminationRequested()) {
         return undefined;
       }
-      const targets = shard.args.slice(2);
+      // File projection must retain the measured parent Program's resource bounds.
+      const targets = shard.canonicalTargets ?? shard.args.slice(2);
       const boundedTargets =
         (shard.name.startsWith("core:") &&
           (targets.length === 1 ||
@@ -731,6 +749,7 @@ async function runShards({
         extraArgs,
         runner,
         shard,
+        ownsArtifacts: true,
         onCompleted: () => {
           completed++;
         },
@@ -741,7 +760,14 @@ async function runShards({
   return { statuses: results.filter((status) => status !== undefined), completed };
 }
 
-export async function runShard({ env, extraArgs, runner, shard, onCompleted }: ShardRunnerOptions) {
+export async function runShard({
+  env,
+  extraArgs,
+  runner,
+  shard,
+  onCompleted,
+  ownsArtifacts,
+}: ShardRunnerOptions) {
   console.error(`[oxlint:${shard.name}] starting`);
   const startedAt = Date.now();
   const heartbeatMs = resolveShardHeartbeatMs(env);
@@ -751,7 +777,7 @@ export async function runShard({ env, extraArgs, runner, shard, onCompleted }: S
   // errors to the private artifact entry without catching or reporting them here.
   const args =
     runner === path.resolve("scripts", "run-oxlint.mts")
-      ? shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
+      ? ownsArtifacts || shouldPrepareExtensionPackageBoundaryArtifactsForShards([shard], extraArgs)
         ? distArtifactEntryArgs(runner, [...shard.args, ...extraArgs])
         : [
             "--import",

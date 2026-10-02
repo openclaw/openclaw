@@ -36,7 +36,6 @@ function publicationPragmas(db: DatabaseSync): MemoryPublicationConnection["prag
     busy_timeout: read("busy_timeout"),
     synchronous: read("synchronous"),
     foreign_keys: read("foreign_keys"),
-    wal_autocheckpoint: read("wal_autocheckpoint"),
     journal_size_limit: read("journal_size_limit"),
     checkpoint_fullfsync: read("checkpoint_fullfsync"),
   };
@@ -49,6 +48,7 @@ function createPublicationDatabase(stateDir: string) {
   db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
     VALUES ('memory/current.md', 'memory', 'old', 1, 1)`);
   const input: PublicationFaultInput = {
+    kind: "publication",
     marker: path.join(stateDir, "entered"),
     failRollback: false,
     failClose: false,

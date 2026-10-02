@@ -78,7 +78,7 @@ export function capturePluginGenerationArtifact(
   } = sourceCapture;
   const captureAdmitted = <T>(run: () => T) => {
     const acquired = acquireSources(run);
-    nativeAdmission.finish(directory, receipt.finish());
+    nativeAdmission.finish(receipt.finish());
     return acquired;
   };
   const moduleCaptures = new Map<string, PluginModuleCapture>();
@@ -599,7 +599,7 @@ export function capturePluginGenerationArtifact(
     };
     const initialReceipt = receipt.finish();
     assertSourceCurrent();
-    nativeAdmission.finish(directory, initialReceipt);
+    nativeAdmission.finish(initialReceipt);
     pendingInputs.clear();
     additions.clear();
     const captures = [moduleCaptures, hardlinkedSources, metadataCapture, packages];

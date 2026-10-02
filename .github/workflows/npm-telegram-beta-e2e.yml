@@ -339,6 +339,7 @@ jobs:
             extensions/telegram/src/bot-message-dispatch.ts
             extensions/telegram/src/draft-stream.ts
             qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml
+            qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml
             qa/scenarios/channels/telegram-progress-tool-visibility.yaml
             qa/scenarios/channels/telegram-queue-invalid-mode.yaml
             qa/scenarios/channels/telegram-rich-inline-composition.yaml
@@ -413,8 +414,12 @@ jobs:
               echo "Prerelease plugin registry inputs require an artifact-backed OpenClaw package." >&2
               exit 1
             fi
-            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-              echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
+            if [[ "${PACKAGE_SPEC}" == "openclaw@alpha" ]]; then
+              echo "Alpha releases are retired; use openclaw@beta or an exact historical version." >&2
+              exit 1
+            fi
+            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+              echo "package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
             fi
           elif [[ ! "$PACKAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ||

@@ -58,10 +58,7 @@ function isShellWrapperAllowedOverrideEnvVarName(rawKey: string): boolean {
     return false;
   }
   const upper = key.toUpperCase();
-  if (HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(upper)) {
-    return true;
-  }
-  return upper.startsWith("LC_");
+  return HOST_SHELL_WRAPPER_ALLOWED_OVERRIDE_ENV_KEYS.has(upper) || upper.startsWith("LC_");
 }
 
 type HostExecEnvSanitizationResult = {
@@ -183,11 +180,7 @@ function sanitizeInheritedGitAllowProtocolValue(value: string): string {
   return safeProtocols.join(":");
 }
 
-function sanitizeHostInheritedEnvEntry(rawKey: string, value: string): [string, string] | null {
-  const key = normalizeEnvVarKey(rawKey);
-  if (!key) {
-    return null;
-  }
+function sanitizeHostInheritedEnvEntry(key: string, value: string): [string, string] | null {
   // Preserve inherited Git allowlists without widening malformed or unsafe entries by deletion.
   // Protocols outside Git's safe default set are removed instead of being passed through.
   if (key.toUpperCase() === GIT_ALLOW_PROTOCOL_ENV_KEY) {

@@ -22,8 +22,7 @@ const APPROVAL_ENVIRONMENT = "npm-release";
 const MAX_RECEIPT_BYTES = 8 * 1024;
 const SHA = /^[a-f0-9]{40}$/u;
 const ID = /^[1-9][0-9]*$/u;
-const RELEASE_TAG =
-  /^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const RELEASE_TAG = /^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
 const RECEIPT_KEYS =
   "version kind repository parentWorkflow parentRunId parentRunAttempt toolingRef toolingFullRef toolingSha releaseTag targetSha npmDistTag environment approvalJob approver".split(
     " ",
@@ -100,10 +99,18 @@ export function validateReleaseApprovalReceipt(value) {
   for (const key of ["parentRunId", "parentRunAttempt"]) {
     pattern(value[key], ID, key);
   }
+  if (
+    value.releaseTag.includes("-alpha.") ||
+    value.npmDistTag === "alpha" ||
+    value.toolingRef.includes("tideclaw/alpha/") ||
+    value.toolingFullRef.includes("tideclaw/alpha/")
+  ) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   refIdentity(value.toolingRef, value.toolingFullRef, value.toolingSha);
   pattern(value.releaseTag, RELEASE_TAG, "Release tag");
   pattern(value.targetSha, SHA, "Target SHA");
-  if (!["latest", "beta", "alpha", "extended-stable"].includes(value.npmDistTag)) {
+  if (!["latest", "beta", "extended-stable"].includes(value.npmDistTag)) {
     throw new Error("Release approval npm dist-tag is invalid.");
   }
   if (

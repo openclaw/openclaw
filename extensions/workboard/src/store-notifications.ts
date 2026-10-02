@@ -56,7 +56,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     }));
   }
 
-  private async collectNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
+  async notificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
     subscription?: WorkboardNotificationSubscription;
     events: WorkboardNotification[];
   }> {
@@ -146,13 +146,6 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
     return { ...(subscription ? { subscription } : {}), events: sorted };
   }
 
-  async notificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
-    subscription?: WorkboardNotificationSubscription;
-    events: WorkboardNotification[];
-  }> {
-    return await this.collectNotificationEvents(input);
-  }
-
   async advanceNotificationEvents(input: WorkboardNotificationEventsInput = {}): Promise<{
     subscription?: WorkboardNotificationSubscription;
     events: WorkboardNotification[];
@@ -167,7 +160,7 @@ export class WorkboardNotificationStore extends WorkboardWorkflowStore {
       throw new Error("subscriptionId is required to advance notification events.");
     }
     return await this.enqueueMutation(async () => {
-      const result = await this.collectNotificationEvents({ ...input, subscriptionId });
+      const result = await this.notificationEvents({ ...input, subscriptionId });
       if (!result.subscription || !result.events.length) {
         return result;
       }

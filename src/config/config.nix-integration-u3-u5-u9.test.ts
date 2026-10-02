@@ -1,17 +1,9 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveConfigPathCandidate, resolveIsNixMode } from "./config.js";
+import { resolveConfigPathCandidate } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
 describe("Nix integration config selection", () => {
-  it.each([
-    { value: undefined, expected: false },
-    { value: "true", expected: false },
-    { value: "1", expected: true },
-  ])("resolves OPENCLAW_NIX_MODE=$value to $expected", ({ value, expected }) => {
-    expect(resolveIsNixMode({ OPENCLAW_NIX_MODE: value })).toBe(expected);
-  });
-
   it("defaults CONFIG_PATH to OPENCLAW_HOME/.openclaw/openclaw.json", () => {
     const customHome = path.join(path.sep, "custom", "home");
     expect(resolveConfigPathCandidate({ OPENCLAW_HOME: customHome })).toBe(

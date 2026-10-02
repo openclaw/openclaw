@@ -1,4 +1,3 @@
-// Question gateway methods create, inspect, wait for, and resolve transient prompts.
 import {
   ErrorCodes,
   errorShape,
@@ -14,6 +13,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../../agents/embedded-agent-runner/run-state.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import {
   handleQuestionChannelRequested,
   handleQuestionChannelResolved,
@@ -103,6 +103,7 @@ function normalizeQuestions(params: QuestionRequestParams): Question[] {
 export function createQuestionHandlers(
   manager: QuestionManager,
   storeWriteService: SecretStoreWriteService,
+  scheduler: GatewayScheduler,
 ): GatewayRequestHandlers {
   const prepareSelectedQuestion = (
     options: GatewayRequestHandlerOptions,
@@ -361,7 +362,7 @@ export function createQuestionHandlers(
           };
           const record = manager.request(managerRequest);
           accepted = true;
-          handleQuestionChannelRequested(record);
+          handleQuestionChannelRequested(record, scheduler);
           broadcastQuestion(
             "question.requested",
             record,

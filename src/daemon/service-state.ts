@@ -1,8 +1,11 @@
 /** Shared native service-state inspection with one caller-owned deadline and binding. */
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveGatewayProfileSuffix } from "./constants.js";
+import { readScheduledTaskCommand } from "./schtasks-layout.js";
+import { readStartupEntryState } from "./schtasks-runtime.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import {
+  assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
@@ -13,26 +16,14 @@ import { createServiceRuntimeInspectionFailure } from "./service-runtime.js";
 import type {
   GatewayService,
   GatewayServiceCommandInspection,
-  GatewayServiceEnv,
-  GatewayServiceEnvArgs,
   GatewayServiceLoadState,
-  GatewayServiceReadOptions,
+  ReadGatewayServiceStateArgs,
   GatewayServiceState,
 } from "./service-types.js";
 import { getGatewayServiceUpdateNativeCommand } from "./service-update-authority.js";
 import { admitSystemdServiceReadBinding } from "./systemd-peer.js";
 import { findSystemdGatewayInstallation } from "./systemd-scope.js";
 import { readSystemdServiceExecStart } from "./systemd.js";
-
-type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
-  systemdReadTarget?: GatewayServiceReadOptions["systemdReadTarget"];
-  systemdInstallation?: GatewayServiceState["systemdInstallation"];
-  requireEffective?: boolean;
-  requireLoadedCommand?: boolean;
-  loadForInspection?: GatewayServiceReadOptions["loadForInspection"];
-  systemdReadBinding?: GatewayServiceReadOptions["systemdReadBinding"];
-  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
-};
 
 class ServiceInspectionDeadlineError extends Error {
   constructor() {
@@ -65,6 +56,12 @@ export async function readGatewayServiceState(
   service: GatewayService,
   input: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
+  if (input.windowsStartupEntry !== undefined) {
+    if (service.readCommand !== readScheduledTaskCommand) {
+      throw new Error("Startup file inspection requires the Windows service adapter.");
+    }
+    return readStartupEntryState(input.windowsStartupEntry, input);
+  }
   const timeoutMs =
     input.timeoutMs ?? (service.readCommand === readSystemdServiceExecStart ? 5000 : undefined);
   const inspectionDeadline = timeoutMs === undefined ? undefined : performance.now() + timeoutMs;
@@ -182,13 +179,7 @@ async function readGatewayServiceStateWithBinding(
     : await service
         .isAbsent?.({ env: baseEnv, timeoutMs: remainingTimeoutMs() })
         .catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          const refusal = findServiceOwnershipRefusal(error);
-          if (refusal) {
-            throw refusal;
-          }
+          assertServiceInspectionFallbackAllowed(error);
           return false;
         });
   // Initial systemd absence proves no manager; strict absence below only proves no unit.
@@ -222,13 +213,7 @@ async function readGatewayServiceStateWithBinding(
             },
           })
           .catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
+            assertServiceInspectionFallbackAllowed(error);
             return null;
           });
   const mergedEnv = mergeGatewayServiceEnv(
@@ -259,13 +244,7 @@ async function readGatewayServiceStateWithBinding(
     absent = await service
       .isAbsent({ env, timeoutMs: remaining, strictCommandAbsent: true })
       .catch((error: unknown) => {
-        if (hasCommandProcessCleanupError(error)) {
-          throw error;
-        }
-        const refusal = findServiceOwnershipRefusal(error);
-        if (refusal) {
-          throw refusal;
-        }
+        assertServiceInspectionFallbackAllowed(error);
         return false;
       });
     systemdReadBinding?.verify();
@@ -298,13 +277,10 @@ async function readGatewayServiceStateWithBinding(
           .hasInstalledDefinition?.({ env: statusEnv, timeoutMs: remainingTimeoutMs() })
           .catch((error: unknown) => {
             // Strict command absence cannot erase a failed installed-definition read.
-            if (args.requireEffective || hasCommandProcessCleanupError(error)) {
+            if (args.requireEffective) {
               throw error;
             }
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
+            assertServiceInspectionFallbackAllowed(error);
             return false;
           }) ?? false);
   const readLoadState = async () =>
@@ -338,13 +314,7 @@ async function readGatewayServiceStateWithBinding(
             ...(args.requireLoadedCommand ? { requireLoaded: true } : {}),
           })
           .catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            const refusal = findServiceOwnershipRefusal(error);
-            if (refusal) {
-              throw refusal;
-            }
+            assertServiceInspectionFallbackAllowed(error);
             return { kind: "unknown", reason: "inspection-failed" } as const;
           })
       : undefined;

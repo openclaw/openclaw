@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
 import type { WebClientOptions } from "@slack/web-api";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { prepareSlackMessage } from "./prepare.js";
@@ -19,8 +19,6 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
 
 describe("Slack inbound conversation links", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-conversation-link-");
-  beforeAll(() => storeFixture.setup());
-  afterAll(() => storeFixture.cleanup());
 
   it.each([
     { channel: "C123", channelType: "channel", threadTs: "9.000" },

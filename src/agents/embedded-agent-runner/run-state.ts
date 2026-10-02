@@ -6,10 +6,12 @@ import type {
 import type {
   ReplyBackendQueueMessageOptions,
   ReplyToolAuthorityOverlay,
+  ReplyTurnParticipants,
   ReplyBackendQueueMessageResult,
   ReplyBackendMessageInjection,
   ReplyBackendMessageInjectionV2,
 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
+import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   isAgentEventLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -68,12 +70,36 @@ export type EmbeddedAgentQueueHandle = {
   supportsTranscriptCommitWait?: boolean;
   /** True only when queueMessage preserves images supplied in its options. */
   supportsQueueMessageImages?: boolean;
+  /** False keeps inbound steering with the turn owner's profile; omission permits other profiles. */
+  readonly supportsCrossProfileSteering?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   terminalReplyExpectation?: ReplyExpectation;
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
 };
+
+export type EmbeddedAgentQueueMessageOutcome =
+  | {
+      queued: true;
+      sessionId: string;
+      /** Physical execution selected by queue admission, retained across the awaited receipt. */
+      runId?: string;
+      target: "embedded_run" | "reply_run";
+      gatewayHealth: "live";
+      /** Input is non-replayable, but its delivery or commitment could not be confirmed. */
+      transcriptCommit?: "unconfirmed";
+      errorMessage?: string;
+      deliveredAtMs?: number;
+      enqueuedAtMs?: number;
+    }
+  | {
+      queued: false;
+      sessionId: string;
+      reason: EmbeddedAgentQueueFailureReason;
+      gatewayHealth: "live";
+      errorMessage?: string;
+    };
 
 export type EmbeddedAgentQueueFailureReason =
   | "input_visibility_mismatch"
@@ -112,6 +138,7 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   sourceTurnId?: string;
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
   assertActive: () => void;
+  personalToolParticipants?: ReplyTurnParticipants;
 };
 
 export type EmbeddedRunRegistration = {
@@ -143,6 +170,7 @@ export type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
   handle?: EmbeddedAgentQueueHandle;
   timer?: NodeJS.Timeout;
+  settleOnAbort?: boolean;
 };
 
 export type AbandonedEmbeddedRun = {
@@ -178,21 +206,58 @@ const embeddedRunState = resolveGlobalSingleton(EMBEDDED_RUN_STATE_KEY, () => ({
   waiters: new Map<string, Set<EmbeddedRunWaiter>>(),
 }));
 
-export const ACTIVE_EMBEDDED_RUNS =
-  embeddedRunState.activeRuns ??
-  (embeddedRunState.activeRuns = new Map<string, EmbeddedAgentQueueHandle>());
-export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID =
-  embeddedRunState.activeRunsByRunId ??
-  (embeddedRunState.activeRunsByRunId = new Map<string, EmbeddedAgentQueueHandle>());
-export const ACTIVE_EMBEDDED_RUN_REGISTRATIONS =
-  embeddedRunState.activeRunRegistrations ??
-  (embeddedRunState.activeRunRegistrations = new WeakMap<
-    EmbeddedAgentQueueHandle,
-    EmbeddedRunRegistration
-  >());
-export const EMBEDDED_RUN_COMPLETION_CLAIMS =
-  embeddedRunState.completionClaims ??
-  (embeddedRunState.completionClaims = new Map<string, EmbeddedRunCompletionClaim>());
+export const ACTIVE_EMBEDDED_RUNS = embeddedRunState.activeRuns;
+export const ACTIVE_EMBEDDED_RUNS_BY_RUN_ID = embeddedRunState.activeRunsByRunId;
+export const ACTIVE_EMBEDDED_RUN_REGISTRATIONS = embeddedRunState.activeRunRegistrations;
+export const EMBEDDED_RUN_COMPLETION_CLAIMS = embeddedRunState.completionClaims;
+
+/** Identity-only dispatch must resolve the same participant owner as in-process tools. */
+export function captureActiveEmbeddedRunPersonalToolParticipants(
+  identity: AgentRuntimeIdentity,
+  options?: { allowMissingRegistry?: boolean },
+) {
+  const instance = identity.operationalRunInstance;
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(instance.runId);
+  if (!handle) {
+    return undefined;
+  }
+  const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
+  const toolAuthority = registration?.toolAuthority;
+  // Session fencing only applies to runs that admitted personal-tool participants.
+  if (options?.allowMissingRegistry && !toolAuthority?.personalToolParticipants) {
+    return undefined;
+  }
+  const delegatedAuthority = registration?.delegatedAuthority;
+  const ownsRegistration = () =>
+    registration !== undefined &&
+    registration.operationalRunInstance?.instanceId === instance.instanceId &&
+    registration.operationalRunInstance.runId === instance.runId &&
+    registration.sessionKey === identity.sessionKey &&
+    registration.agentId === identity.agentId &&
+    handle.runId === instance.runId &&
+    ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(instance.runId) === handle &&
+    ACTIVE_EMBEDDED_RUNS.get(registration.sessionId) === handle &&
+    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle) === registration &&
+    registration.delegatedAuthority === delegatedAuthority &&
+    registration.toolAuthority === toolAuthority;
+  const assertCurrent = () => {
+    toolAuthority?.assertActive();
+    if (
+      !ownsRegistration() ||
+      !toolAuthority ||
+      !delegatedAuthority ||
+      getActiveAgentRunDelegatedAuthority(instance) !== delegatedAuthority ||
+      !validateAgentRunDelegatedAuthority(identity.delegatedAuthority, delegatedAuthority) ||
+      handle.isAborted?.() ||
+      handle.isStopped?.() ||
+      !ownsRegistration()
+    ) {
+      throw new Error("Personal-tool turn authority is no longer active; ask again in a new turn.");
+    }
+  };
+  assertCurrent();
+  return { participants: toolAuthority?.personalToolParticipants, assertCurrent };
+}
 
 /** Only an accepted question's exact admitted owner may suppress stale-work recovery. */
 export function registerActiveEmbeddedRunHumanInputWait(
@@ -273,42 +338,19 @@ export function resolveActiveEmbeddedRunRecoveryBlocker(
     ? "runtime_owned_wait"
     : undefined;
 }
-const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS =
-  embeddedRunState.activeRunLifecycleGenerations ??
-  (embeddedRunState.activeRunLifecycleGenerations = new WeakMap<
-    EmbeddedAgentQueueHandle,
-    string
-  >());
+const ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS = embeddedRunState.activeRunLifecycleGenerations;
 export const RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS =
-  embeddedRunState.retainedAbortabilityRunIds ??
-  (embeddedRunState.retainedAbortabilityRunIds = new Set<string>());
-export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS =
-  embeddedRunState.snapshots ??
-  (embeddedRunState.snapshots = new Map<string, ActiveEmbeddedRunSnapshot>());
-export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
-  embeddedRunState.sessionIdsByKey ??
-  (embeddedRunState.sessionIdsByKey = new Map<string, string>());
-export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
-  embeddedRunState.sessionIdsByFile ??
-  (embeddedRunState.sessionIdsByFile = new Map<string, string>());
-export const ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID =
-  embeddedRunState.abandonedRunsBySessionId ??
-  (embeddedRunState.abandonedRunsBySessionId = new Map<string, AbandonedEmbeddedRun>());
+  embeddedRunState.retainedAbortabilityRunIds;
+export const ACTIVE_EMBEDDED_RUN_SNAPSHOTS = embeddedRunState.snapshots;
+export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY = embeddedRunState.sessionIdsByKey;
+export const ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_FILE = embeddedRunState.sessionIdsByFile;
+export const ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID = embeddedRunState.abandonedRunsBySessionId;
 export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY =
-  embeddedRunState.abandonedRunSessionIdsByKey ??
-  (embeddedRunState.abandonedRunSessionIdsByKey = new Map<string, string>());
+  embeddedRunState.abandonedRunSessionIdsByKey;
 export const ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE =
-  embeddedRunState.abandonedRunSessionIdsByFile ??
-  (embeddedRunState.abandonedRunSessionIdsByFile = new Map<string, string>());
-export const EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS =
-  embeddedRunState.forcedTerminalSettlements ??
-  (embeddedRunState.forcedTerminalSettlements = new WeakMap<
-    EmbeddedAgentQueueHandle,
-    () => Promise<void>
-  >());
-export const EMBEDDED_RUN_WAITERS =
-  embeddedRunState.waiters ??
-  (embeddedRunState.waiters = new Map<string, Set<EmbeddedRunWaiter>>());
+  embeddedRunState.abandonedRunSessionIdsByFile;
+export const EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS = embeddedRunState.forcedTerminalSettlements;
+export const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
 
 function evictPriorLifecycleEmbeddedRuns(): void {
   const staleHandles = new Set<EmbeddedAgentQueueHandle>();

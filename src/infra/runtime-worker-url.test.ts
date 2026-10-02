@@ -5,11 +5,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
+  runtimeNeedsTypeScriptLoader,
 } from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
@@ -148,6 +150,7 @@ describe("resolveRuntimeWorkerArgv", () => {
           expect(resolveRuntimeWorkerThreadExecArgv(url, selected)).toEqual(
             needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
           );
+          expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), selected)).toBe(needsLoader);
         }
       }
     } finally {

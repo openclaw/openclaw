@@ -59,7 +59,7 @@ describe.each(["borrowForRead", "retainForIndependentRead"] as const)("%s", (rea
     const pin = retainer[readPin](database.path);
     try {
       expect(pin).toBeDefined();
-      expect(assertOpen).toHaveBeenCalledExactlyOnceWith(database.path);
+      expect(assertOpen).toHaveBeenCalledExactlyOnceWith(database.path, undefined);
     } finally {
       pin?.release();
       await scope.close();

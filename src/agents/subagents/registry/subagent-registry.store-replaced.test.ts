@@ -27,10 +27,8 @@ import {
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
-import {
-  SUBAGENT_ENDED_REASON_COMPLETE,
-  SUBAGENT_ENDED_REASON_ERROR,
-} from "./subagent-lifecycle-events.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
+import * as lifecycleCleanup from "./subagent-registry-lifecycle-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -135,6 +133,7 @@ it.each([false, true])(
     );
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled({
+        isSourceCurrent: () => true,
         requesterSessionKey: input.subagent.requesterSessionKey,
         settledEntry,
         transitionBatch: () => {
@@ -173,82 +172,70 @@ it.each([false, true])(
   },
 );
 
-it.each(["ok", "error"] as const)(
-  "keeps an observed late-result store retirement after the original selector returns (%s)",
-  async (outcome) => {
-    const input = records();
-    input.subagent.requesterStorePath = "original-store";
-    input.subagent.delivery = { status: "pending" };
-    input.subagent.execution.outcome = { status: outcome };
-    input.subagent.endedReason =
-      outcome === "ok" ? SUBAGENT_ENDED_REASON_COMPLETE : SUBAGENT_ENDED_REASON_ERROR;
-    const executionBefore = structuredClone(input.subagent.execution);
-    const running = structuredClone(input.subagent);
-    running.execution = { status: "running", startedAt: running.createdAt };
-    running.endedReason = undefined;
-    running.completion = { required: true };
-    const database = openOpenClawStateDatabase();
-    seedSubagentCompletionDelivery({ subagent: running });
-    publishCommittedRecords(running);
-    publishSystemEventStoreResolver(() => "replacement-store");
+it("keeps an observed late-result store retirement after the original selector returns", async () => {
+  const input = records();
+  input.subagent.requesterStorePath = "original-store";
+  input.subagent.delivery = { status: "pending" };
+  input.subagent.execution.outcome = { status: "error" };
+  input.subagent.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+  const executionBefore = structuredClone(input.subagent.execution);
+  const running = structuredClone(input.subagent);
+  running.execution = { status: "running", startedAt: running.createdAt };
+  running.endedReason = undefined;
+  running.completion = { required: true };
+  const database = openOpenClawStateDatabase();
+  seedSubagentCompletionDelivery({ subagent: running });
+  publishCommittedRecords(running);
+  publishSystemEventStoreResolver(() => "replacement-store");
 
-    seedSubagentCompletionDelivery({ subagent: input.subagent });
-    publishCommittedRecords(input.subagent);
-    const entry = expectDefined(subagentRuns.get(input.subagent.runId), "late terminal child");
-    const driver = requesterWakeDriver([{ ...input, subagent: entry }]);
-    const entered =
-      createDeferredCore<Parameters<typeof driver.controller.options.runSubagentAnnounceFlow>[0]>();
-    const release = createDeferredCore();
-    vi.mocked(driver.controller.options.runSubagentAnnounceFlow).mockImplementation(
-      async (params) => {
-        entered.resolve(params);
-        await release.promise;
-        return "retryable";
-      },
-    );
-    try {
-      expect(driver.controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
-      const announce = await entered.promise;
-      expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
-      publishSystemEventStoreResolver(() => "original-store");
-      expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
-    } finally {
-      release.resolve();
-      await settleRootWork(true);
-      driver.controller.clearScheduledResumeTimers();
-    }
+  seedSubagentCompletionDelivery({ subagent: input.subagent });
+  publishCommittedRecords(input.subagent);
+  const entry = expectDefined(subagentRuns.get(input.subagent.runId), "late terminal child");
+  const driver = requesterWakeDriver([{ ...input, subagent: entry }]);
+  const entered =
+    createDeferredCore<Parameters<typeof driver.controller.options.runSubagentAnnounceFlow>[0]>();
+  const release = createDeferredCore();
+  vi.mocked(driver.controller.options.runSubagentAnnounceFlow).mockImplementation(
+    async (params) => {
+      entered.resolve(params);
+      await release.promise;
+      return "retryable";
+    },
+  );
+  try {
+    expect(driver.controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+    const announce = await entered.promise;
+    expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
+    publishSystemEventStoreResolver(() => "original-store");
+    expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
+  } finally {
+    release.resolve();
+    await settleRootWork(true);
+    driver.controller.clearScheduledResumeTimers();
+  }
 
-    const saved = loadSubagentRegistryFromSqlite().get(entry.runId);
-    expect(saved?.execution).toEqual(executionBefore);
-    expect(saved?.completion?.resultText).toBe(input.subagent.completion?.resultText);
-    expect(saved?.delivery).toMatchObject({
-      status: "suspended",
-      disposition: "intentional_non_delivery",
-      lastError: "store replaced",
-    });
-    expect(saved?.requesterSettleWake).toBeUndefined();
-    expect(driver.wake).not.toHaveBeenCalled();
-    expect(
-      database.db
-        .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
-        .all(),
-    ).toEqual([]);
-  },
-);
+  const saved = loadSubagentRegistryFromSqlite().get(entry.runId);
+  expect(saved?.execution).toEqual(executionBefore);
+  expect(saved?.completion?.resultText).toBe(input.subagent.completion?.resultText);
+  expect(saved?.delivery).toMatchObject({
+    status: "suspended",
+    disposition: "intentional_non_delivery",
+    lastError: "store replaced",
+  });
+  expect(saved?.requesterSettleWake).toBeUndefined();
+  expect(driver.wake).not.toHaveBeenCalled();
+  expect(
+    database.db
+      .prepare("SELECT id FROM delivery_queue_entries WHERE entry_kind = 'systemEvent'")
+      .all(),
+  ).toEqual([]);
+});
 
-it.each([
-  "same",
-  "replaced",
-  "restore",
-  "unknown",
-  "unknown retry",
-  "failed",
-  "delivered",
-] as const)(
+it.each(["same", "restore", "unknown retry", "failed", "delivered"] as const)(
   "keeps automatic child notification disposition through store publication: %s",
   async (change) => {
     const input = change === "failed" ? failedRecords("failed", { status: "error" }) : records();
-    const unknownStore = change === "unknown" || change === "unknown retry";
+    const unknownStore = change === "unknown retry";
     input.subagent.requesterStorePath = unknownStore ? undefined : "original-store";
     input.subagent.controllerStorePath = unknownStore ? undefined : "original-store";
     input.subagent.cleanupCompletedAt = undefined;
@@ -265,7 +252,8 @@ it.each([
       "persisted notification receipt",
     );
     subagentRuns.set(input.subagent.runId, input.subagent);
-    initSubagentRegistry();
+    await initSubagentRegistry();
+    using retireNotifications = vi.spyOn(lifecycleCleanup, "suspendReplacedStoreNotifications");
     if (change === "unknown retry") {
       await admitCompletionFixtureDatabase();
       database.db.exec(
@@ -275,10 +263,10 @@ it.each([
     if (change === "restore") {
       resetSubagentRegistryForTests({ persist: false });
       publishSystemEventStoreResolver(() => "replacement-store");
-      initSubagentRegistry();
+      await initSubagentRegistry();
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context);
     } else {
       publishSystemEventStoreResolver(() =>
         change === "same" || unknownStore ? "original-store" : "replacement-store",
@@ -288,13 +276,13 @@ it.each([
     if (change === "unknown retry") {
       const context = createGatewayRequestContext(makeContextParams());
       context.resolveGatewayContext = () => context;
-      activateSubagentRegistry(() => context);
+      await activateSubagentRegistry(() => context);
       try {
-        await expect(settleRootWork(true)).rejects.toMatchObject({
-          errors: expect.arrayContaining([
-            expect.objectContaining({ message: "retirement write rejected" }),
-          ]),
-        });
+        expect(retireNotifications).toHaveBeenCalled();
+        await expect(retireNotifications.mock.results[0]?.value).rejects.toThrow(
+          "retirement write rejected",
+        );
+        await settleRootWork(true);
         expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery).toEqual(
           receipt,
         );
@@ -352,7 +340,7 @@ it("keeps retirement authority closed when the original selector returns before 
   };
   seedSubagentCompletionDelivery({ subagent: input.subagent });
   subagentRuns.set(input.subagent.runId, input.subagent);
-  initSubagentRegistry();
+  await initSubagentRegistry();
   const entered = createDeferredCore();
   const release = createDeferredCore();
   const runWorker = stateWorker.runOpenClawStateWorkerOperation;
