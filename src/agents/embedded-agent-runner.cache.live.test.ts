@@ -792,6 +792,14 @@ async function runAnthropicImageCacheProbe(params: {
 
 describeCacheLive("embedded agent runner prompt caching (live)", () => {
   beforeAll(async () => {
+    // Live runs build the real plugin runtime on a shared, often busy host; the
+    // default 120 s publication budget is sized for CI, not for this proof.
+    await import("./prepared-model-runtime.js");
+    (
+      (globalThis as Record<PropertyKey, unknown>)[
+        Symbol.for("openclaw.preparedModelRuntimeTestApi")
+      ] as { setModelRuntimeBuildTimeoutMsForTest(timeoutMs: number): void }
+    ).setModelRuntimeBuildTimeoutMsForTest(10 * 60_000);
     // Database disposal must use the registered path even when the temporary root is a symlink.
     const rootDir = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cache-")),
