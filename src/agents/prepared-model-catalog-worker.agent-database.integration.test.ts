@@ -1,8 +1,5 @@
-import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import {
   closeDeletedAgentDatabases,
@@ -15,7 +12,7 @@ import { retirePreparedModelRuntimeAgent } from "./prepared-model-runtime.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, readCatalogWorkers } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
 // Leaving WAL needs an exclusive lock, which any connection in this process still refuses.
@@ -31,42 +28,33 @@ function leaveWalMode(databasePath: string): unknown {
 describe("Gateway catalog worker agent database readers", () => {
   it("closes one agent's database readers without retiring the shared worker", async () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
-    const spawned: Worker[] = [];
-    const workerChannel = channel("worker_threads");
-    const recordWorker = (message: unknown) => {
-      if (isRecord(message) && message.worker instanceof Worker) {
-        spawned.push(message.worker);
-      }
-    };
+    const fixture = await createFleetFixture(undefined, false, { publication: "individual" });
+    await Promise.all(
+      fixture.snapshots.map((snapshot) =>
+        loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
+      ),
+    );
+    const catalogWorkers = readCatalogWorkers();
+    expect(catalogWorkers).toHaveLength(1);
+    const [deleted, survivor] = fixture.agentIds.map((agentId) =>
+      path.join(fixture.entries[agentId]!.agentDir, "openclaw-agent.sqlite"),
+    );
+    await retirePreparedModelRuntimeAgent({
+      agentId: fixture.agentIds[0]!,
+      agentDirs: [path.dirname(deleted!)],
+    });
+    closeOpenClawAgentDatabasesForTest();
+
     try {
-      const fixture = await createFleetFixture(() => workerChannel.subscribe(recordWorker));
-      await Promise.all(
-        fixture.snapshots.map((snapshot) =>
-          loadPreparedModelRuntimeAuth(snapshot, { providerIds: [PROVIDER_ID] }),
-        ),
-      );
-      expect(spawned).toHaveLength(1);
-      const [deleted, survivor] = fixture.agentIds.map((agentId) =>
-        path.join(fixture.entries[agentId]!.agentDir, "openclaw-agent.sqlite"),
-      );
-      await retirePreparedModelRuntimeAgent({
-        agentId: fixture.agentIds[0]!,
-        agentDirs: [path.dirname(deleted!)],
-      });
-      closeOpenClawAgentDatabasesForTest();
+      expect(() => leaveWalMode(survivor!)).toThrow(/locked/);
+      await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
 
-      try {
-        await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
-
-        expect(leaveWalMode(deleted!)).toBe("delete");
-        expect(() => leaveWalMode(survivor!)).toThrow(/locked/);
-        expect(spawned).toHaveLength(1);
-        expect(spawned[0]!.threadId).not.toBe(-1);
-      } finally {
-        await reviveAgentDatabases([fixture.agentIds[0]!]);
-      }
+      expect(leaveWalMode(deleted!)).toBe("delete");
+      expect(() => leaveWalMode(survivor!)).toThrow(/locked/);
+      expect(readCatalogWorkers()).toHaveLength(1);
+      expect(catalogWorkers[0]!.threadId).not.toBe(-1);
     } finally {
-      workerChannel.unsubscribe(recordWorker);
+      await reviveAgentDatabases([fixture.agentIds[0]!]);
     }
   });
 });
