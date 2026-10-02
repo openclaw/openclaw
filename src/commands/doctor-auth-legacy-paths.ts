@@ -4,11 +4,18 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
-import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
+import {
+  cloneEnvWithPlatformSemantics,
+  createConfigRuntimeEnv,
+} from "../config/config-env-vars.js";
+import { createConfigIoContext } from "../config/io.context.js";
+import { coerceConfig, readConfigFileIfPresent } from "../config/io.read-helpers.js";
+import { inspectConfigJsonRootSuffixWithContext } from "../config/io.recovery.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
+import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -152,5 +159,26 @@ export function listLegacyOAuthSidecarPaths(
       return [];
     }
     throw error;
+  }
+}
+
+export function assertNoRetiredOAuthSidecarsBeforeConfigRecovery(params: {
+  env: NodeJS.ProcessEnv;
+  configPath?: string;
+}): void {
+  const context = createConfigIoContext({
+    ...params,
+    env: cloneEnvWithPlatformSemantics(params.env),
+    observe: false,
+    shellEnvFallback: "defer",
+  });
+  const raw = readConfigFileIfPresent(context.deps, context.configPath);
+  if (raw !== undefined) {
+    inspectConfigJsonRootSuffixWithContext(context, raw, (candidate) => {
+      assertNoRetiredStateFiles(
+        "OAuth credential sidecars",
+        listLegacyOAuthSidecarPaths(context.deps.env, coerceConfig(candidate)),
+      );
+    });
   }
 }

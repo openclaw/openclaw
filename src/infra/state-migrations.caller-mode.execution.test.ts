@@ -123,7 +123,7 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller execution", () => {
-  it.each(["automatic", "doctor", "direct"] as const)(
+  it.each(["automatic", "doctor", "direct", "detected-directory", "detected-config"] as const)(
     "refuses retired OAuth sidecars before %s schema preparation on every attempt",
     async (mode) => {
       const fixture = await makeFixture();
@@ -132,11 +132,14 @@ describe("legacy state migration caller execution", () => {
       const cfg: OpenClawConfig = { env: { vars: { OPENCLAW_OAUTH_DIR: oauthDir } } };
       fs.writeFileSync(fixture.configPath, JSON.stringify(cfg));
       const detected =
-        mode === "direct"
+        mode === "direct" || mode === "detected-directory" || mode === "detected-config"
           ? await detectLegacyStateMigrations({
               cfg,
               mode: "doctor",
-              env: fixture.env,
+              env:
+                mode === "detected-directory"
+                  ? { ...fixture.env, OPENCLAW_OAUTH_DIR: oauthDir }
+                  : fixture.env,
               homedir: () => fixture.homeDir,
               doctorOnlyStateMigrations: true,
               legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
@@ -154,8 +157,9 @@ describe("legacy state migration caller execution", () => {
         const migration = detected
           ? runLegacyStateMigrations({
               detected,
-              config: cfg,
-              env: fixture.env,
+              ...(mode === "detected-directory" || mode === "detected-config"
+                ? {}
+                : { config: cfg, env: fixture.env }),
               doctorOnlyStateMigrations: true,
               legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
             })

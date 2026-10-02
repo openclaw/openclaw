@@ -23,6 +23,7 @@ describe("legacy state dir auto-migration", () => {
     { location: "source", selector: "default" },
     { location: "source", selector: "environment" },
     { location: "source", selector: "config" },
+    { location: "source", selector: "prefixed-config" },
     { location: "source", selector: "selected-config" },
     { location: "target", selector: "default" },
     { location: "custom", selector: "default" },
@@ -49,7 +50,7 @@ describe("legacy state dir auto-migration", () => {
           env.OPENCLAW_OAUTH_DIR = oauthDir;
         }
         const config =
-          selector === "config" || selector === "selected-config"
+          selector === "config" || selector === "prefixed-config" || selector === "selected-config"
             ? { env: { vars: { OPENCLAW_OAUTH_DIR: "~/.clawdbot/oauth$old" } } }
             : {};
         fs.mkdirSync(legacyDir, { recursive: true });
@@ -62,7 +63,7 @@ describe("legacy state dir auto-migration", () => {
         if (selector === "selected-config") {
           env.OPENCLAW_CONFIG_PATH = configPath;
         }
-        const configBytes = JSON.stringify(config);
+        const configBytes = `${selector === "prefixed-config" ? "unexpected prefix\n" : ""}${JSON.stringify(config)}`;
         fs.writeFileSync(configPath, configBytes);
         const envBefore = { ...env };
 

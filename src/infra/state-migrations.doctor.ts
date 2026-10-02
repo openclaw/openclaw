@@ -14,6 +14,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { listLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
+import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
@@ -254,7 +255,10 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(stateDir));
-  const oauthDir = resolveOAuthDir(env, stateDir);
+  const oauthDir = resolveOAuthDir(
+    createConfigRuntimeEnv(params.sourceConfigBeforeMigrations ?? params.cfg, env),
+    stateDir,
+  );
   const detectSessionFiles = params.mode !== "automatic";
   const { installAgentDir, migrationTarget, migrationAgentId, sessionMigrationAgentId } =
     resolveLegacyStateMigrationOwner({
@@ -2433,10 +2437,10 @@ export async function runLegacyStateMigrations(params: {
   );
   const env = params.env ?? process.env;
   const config = params.config ?? ({} as OpenClawConfig);
-  assertNoRetiredStateFiles(
-    "OAuth credential sidecars",
-    listLegacyOAuthSidecarPaths(env, config, detected.stateDir),
-  );
+  assertNoRetiredStateFiles("OAuth credential sidecars", [
+    ...listLegacyOAuthSidecarPaths(env, config, detected.stateDir),
+    ...listLegacyOAuthSidecarPaths({ ...env, OPENCLAW_OAUTH_DIR: detected.oauthDir }),
+  ]);
   const legacySessionSurfaces = params.legacySessionSurfaces;
   const buildSteps = (pluginStateMigrationInventory?: PluginDoctorStateMigrationInventory) =>
     buildLegacyStateMigrationSteps({

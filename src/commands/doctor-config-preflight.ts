@@ -18,7 +18,10 @@ import {
   readConfigPreflightSnapshot,
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
-import { listLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
+import {
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
+  listLegacyOAuthSidecarPaths,
+} from "./doctor-auth-legacy-paths.js";
 import { noteDoctorConfigPreflightIssues } from "./doctor-config-analysis.js";
 import {
   createDoctorConfigRepairPlanner,
@@ -62,6 +65,7 @@ export async function runDoctorConfigPreflight(
 async function runDoctorConfigPreflightOperation(
   options: DoctorConfigPreflightOptions,
 ): Promise<DoctorConfigPreflightResult> {
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env: process.env });
   const { env: inspectionEnv } = readCurrentConfigForResolution();
   assertNoRetiredStateFiles(
     "OAuth credential sidecars",

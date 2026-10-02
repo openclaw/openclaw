@@ -5,7 +5,10 @@ import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "@openclaw/f
 import { isWithinDir, safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
-import { listLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
+import {
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
+  listLegacyOAuthSidecarPaths,
+} from "../commands/doctor-auth-legacy-paths.js";
 import { readCurrentConfigForResolution } from "../config/io.runtime.js";
 import {
   resolveConfigPath,
@@ -338,9 +341,11 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
   const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
   const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(targetDir));
+  const configPath = resolveConfigPath(env, resolveStateDir(env, homedir), homedir);
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env, configPath });
   const { env: inspectionEnv } = readCurrentConfigForResolution({
     env,
-    configPath: resolveConfigPath(env, resolveStateDir(env, homedir), homedir),
+    configPath,
   });
   assertNoRetiredStateFiles(
     "OAuth credential sidecars",
