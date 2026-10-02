@@ -31,7 +31,7 @@ export function renderSidebarPeopleFilterMenuForController(controller: SidebarMe
   return keyed(
     position,
     html`<openclaw-sidebar-session-filter-popover
-      class="sidebar-session-sort-menu"
+      class="sidebar-session-sort-menu sidebar-people-filter-menu"
       .anchor=${controller.peopleFilterMenuTrigger}
       .label=${t("presence.filters.label")}
       .initialFocusSelector=${"#sidebar-people-status"}
