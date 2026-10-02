@@ -554,6 +554,54 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(mcpMocks.dispose).toHaveBeenCalledOnce();
   });
 
+  it.each([["*"], ["resolver__read"]])(
+    "projects requesterless resolvers for trusted scheduled runs under cap %j",
+    async (grant) => {
+      const sessionFile = path.join(tempDir, "session-trusted-background-resolver.jsonl");
+      const params = createParams(sessionFile, path.join(tempDir, "workspace-trusted-background"));
+      configureFakeMcp(params);
+      params.trigger = "cron";
+      params.toolsAllow = [grant];
+      params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+      params.senderId = "owner:must-not-be-replayed";
+      params.agentAccountId = "default";
+      params.messageChannel = "arxi";
+      params.chatType = "direct";
+      params.chatId = "telegram-chat:42";
+      mcpMocks.requesterScopedServerNames.push("resolver");
+      mcpMocks.requesterToolNames.push("resolver__read");
+
+      const harness = createStartedThreadHarness();
+      const run = runCodexAppServerAttempt(params, {
+        pluginConfig: {
+          appServer: { approvalPolicy: "never", sandbox: "danger-full-access" },
+        },
+      });
+      await harness.waitForMethod("turn/start");
+      const threadStart = harness.requests.find((request) => request.method === "thread/start")
+        ?.params as { dynamicTools?: unknown } | undefined;
+      expect(JSON.stringify(threadStart?.dynamicTools ?? [])).toContain("resolver__read");
+      expect(mcpMocks.requesterParams[0]).toMatchObject({
+        agentId: "main",
+        sessionKey: params.sessionKey,
+        toolsAllow: [grant],
+        scheduledCodexApproval: { autoApprove: true },
+      });
+      for (const field of [
+        "requesterSenderId",
+        "agentAccountId",
+        "messageChannel",
+        "chatType",
+        "conversationId",
+      ]) {
+        expect(mcpMocks.requesterParams[0]).not.toHaveProperty(field);
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await expect(run).resolves.toBeDefined();
+      expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
+    },
+  );
+
   it("rejects a configured tool that takes a disappeared resolver's persisted name", async () => {
     const sessionFile = path.join(tempDir, "session-scheduled-background-collision.jsonl");
     const params = createParams(

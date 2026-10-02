@@ -458,10 +458,13 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
   try {
     const scheduledAccountMcp =
       authenticatedScheduledMode && params.scheduledToolPolicy?.mode === "account";
+    const scheduledTrustedMcp =
+      authenticatedScheduledMode && params.scheduledToolPolicy?.mode === "trusted";
     const hasRequesterScopedMcp = bundleMcpThreadConfig.requesterScopedServerNames.length > 0;
     const hasFiniteScheduledAccountCap = hasExplicitFiniteCodexToolAllowlist(params.toolsAllow);
     const mayResolveBackgroundMcp =
-      scheduledAccountMcp && hasRequesterScopedMcp && hasFiniteScheduledAccountCap;
+      hasRequesterScopedMcp &&
+      (scheduledTrustedMcp || (scheduledAccountMcp && hasFiniteScheduledAccountCap));
     const missingScheduledAccountCap =
       scheduledAccountMcp && hasRequesterScopedMcp && !hasFiniteScheduledAccountCap;
     scopedMcpTools =
@@ -484,7 +487,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
             cfg: params.config,
             manifestRegistry: bundleManifestRegistry,
             toolOverrides: codexMcpToolOverrides,
-            // Account-owned scheduled runs may resolve only providers that explicitly
+            // Authenticated scheduled runs may resolve only providers that explicitly
             // accept canonical agent + session identity without a live requester.
             // Never replay the creator's sender, account, channel, or conversation:
             // per-requester OAuth and requester-required resolvers must stay closed.
