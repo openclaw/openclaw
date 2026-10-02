@@ -257,7 +257,7 @@ function createQaPartitionEvidenceOwner(params: {
     results: QaUnifiedPartitionResult["scenarioResults"],
   ) => {
     receive(evidence);
-    const selected = new Set(
+    const selectedIds = new Set(
       restore().anchors.flatMap((anchor) =>
         anchor.scenario?.kind === "instance" && anchor.scenario.resultOccurrenceId !== null
           ? [anchor.scenario.resultOccurrenceId]
@@ -267,7 +267,7 @@ function createQaPartitionEvidenceOwner(params: {
     const returned = results.map(({ result }) => result.evidenceOccurrenceId);
     if (
       new Set(returned).size !== returned.length ||
-      returned.some((id) => id === undefined || !selected.has(id))
+      returned.some((id) => id === undefined || !selectedIds.has(id))
     ) {
       throw new Error("partition result does not match its selected observation");
     }
