@@ -19,7 +19,7 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
-import { runInMemoryBackgroundContext } from "./background-context.js";
+import { resolveMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
@@ -304,7 +304,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
-        runInMemoryBackgroundContext(() => {
+        resolveMemoryBackgroundContext()(() => {
           this.ensureWatcher();
           this.ensureSessionListener();
           this.ensureIntervalSync();
