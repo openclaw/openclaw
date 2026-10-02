@@ -1,4 +1,5 @@
 // Memory Host SDK tests cover embeddings remote client behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveRemoteEmbeddingBearerClient } from "./embeddings-remote-client.js";
 import type { EmbeddingProviderOptions } from "./embeddings.types.js";

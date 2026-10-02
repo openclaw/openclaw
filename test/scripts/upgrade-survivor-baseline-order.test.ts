@@ -233,7 +233,7 @@ const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
 const stores = volume
   ? ["agents/main/sessions/sessions.json", "agents/ops/sessions/sessions.json"]
-  : ["sessions/sessions.json"];
+  : ["agents/main/sessions/sessions.json"];
 const checkStartup = () => assertSessionStoreMigrationComplete({
   cfg: {}, env: process.env, targets: stores.map(file => ({ storePath: path.join(state, file) })),
 });

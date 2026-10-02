@@ -36,7 +36,10 @@ export function resolveCodeModeSkills(params: {
       name,
       description: [source.description, source.locationNote].filter(Boolean).join("\n"),
       location,
-      source: { filePath: source.filePath, readContent: source.readContent },
+      source: {
+        filePath: source.filePath,
+        readContent: source.readContent,
+      },
       reader: params.reader,
     });
   }

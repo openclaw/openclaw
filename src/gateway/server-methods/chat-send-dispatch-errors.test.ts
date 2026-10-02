@@ -292,8 +292,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         if (missingProfile) {
           const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;
           const storedError = loadSessionEntry(target)?.lastRunError;
-          expect(storedError).toMatch(/^The selected auth profile is unavailable/u);
-          expect(storedError).toContain("`openclaw configure`, then retry.");
+          expect(storedError).toMatch(/^This saved login isn't available\./u);
+          expect(storedError).toContain("run `openclaw configure`.");
           expect(storedError?.length).toBeLessThanOrEqual(160);
           expect(JSON.stringify(messages)).toContain(recovery);
           expect(JSON.stringify(messages)).not.toContain("openai:removed");

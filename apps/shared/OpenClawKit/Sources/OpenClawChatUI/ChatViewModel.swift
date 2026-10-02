@@ -1413,14 +1413,10 @@ extension OpenClawChatViewModel {
         }
     }
 
-    private func finishSettingsPatchTail(requestID: UInt64, target: ModelPatchTarget) {
-        guard self.settingsPatchTailsByTarget[target]?.requestID == requestID else { return }
-        self.settingsPatchTailsByTarget.removeValue(forKey: target)
-    }
-
     func reserveSessionSettingsRequest(for target: ModelPatchTarget) -> UInt64 {
         self.nextSessionSettingsRequestID &+= 1
-        self.beginSettingsPatch(for: target)
+        self.settingsPatchRevisionsByTarget[target, default: 0] &+= 1
+        self.inFlightSettingsPatchCountsByTarget[target, default: 0] += 1
         return self.nextSessionSettingsRequestID
     }
 
@@ -1449,17 +1445,14 @@ extension OpenClawChatViewModel {
             await operation(routeLease)
             rosterOwner?.settleSettingsWrite(target: rosterTarget, scope: rosterScope)
             self.endSettingsPatch(for: target)
-            self.finishSettingsPatchTail(requestID: requestID, target: target)
+            if self.settingsPatchTailsByTarget[target]?.requestID == requestID {
+                self.settingsPatchTailsByTarget.removeValue(forKey: target)
+            }
         }
         self.settingsPatchTailsByTarget[target] = SettingsPatchTail(
             requestID: requestID,
             routeLeaseTask: routeLeaseTask,
             task: task)
-    }
-
-    private func beginSettingsPatch(for target: ModelPatchTarget) {
-        self.settingsPatchRevisionsByTarget[target, default: 0] &+= 1
-        self.inFlightSettingsPatchCountsByTarget[target, default: 0] += 1
     }
 
     private func endSettingsPatch(for target: ModelPatchTarget) {
@@ -1527,13 +1520,9 @@ extension OpenClawChatViewModel {
             self.modelSelectionID = Self.defaultModelSelectionID
             return
         }
-        if let explicitModelID {
-            self.lastSuccessfulModelSelectionIDsByTarget[target] = explicitModelID
-            self.modelSelectionID = explicitModelID
-            return
-        }
-        self.lastSuccessfulModelSelectionIDsByTarget[target] = Self.defaultModelSelectionID
-        self.modelSelectionID = Self.defaultModelSelectionID
+        let selectionID = explicitModelID ?? Self.defaultModelSelectionID
+        self.lastSuccessfulModelSelectionIDsByTarget[target] = selectionID
+        self.modelSelectionID = selectionID
     }
 
     private func normalizedSelectionID(_ selectionID: String) -> String {
@@ -1555,7 +1544,7 @@ extension OpenClawChatViewModel {
         if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
             return trimmed
         }
-        let matches = self.modelChoices.filter { $0.modelID == trimmed || $0.selectionID == trimmed }
+        let matches = self.modelChoices.filter { $0.modelID == trimmed }
         if matches.count == 1 {
             return matches[0].selectionID
         }

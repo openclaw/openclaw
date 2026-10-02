@@ -34,7 +34,6 @@ import { addMissingRequiredPluginDiagnostics } from "./discovery-required-plugin
 import type { PluginCandidate, PluginDiscoveryResult } from "./discovery.types.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
-import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -513,23 +512,6 @@ function pushInvalidPackageExtensionDiagnostic(params: {
   return true;
 }
 
-function addLegacyNpmDeclarationDiagnostic(params: {
-  pluginDir: string;
-  diagnostics: PluginDiagnostic[];
-}): boolean {
-  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
-  if (!declaration) {
-    return false;
-  }
-  params.diagnostics.push({
-    level: "warn",
-    pluginId: declaration.pluginId,
-    source: declaration.source,
-    message: `legacy npm plugin declaration ignored for "${declaration.pluginId}"; run "openclaw doctor --fix" to install ${declaration.npmSpec} into the managed plugin root`,
-  });
-  return true;
-}
-
 function isSourceCheckoutExtensionsDir(extensionsDir: string): boolean {
   const packageRoot = path.dirname(extensionsDir);
   return (
@@ -891,7 +873,7 @@ function createPluginScanner(env: NodeJS.ProcessEnv, ownershipUid?: number | nul
       addPackageCandidate(indexFile, manifestId ?? path.basename(dir));
       return true;
     }
-    return addLegacyNpmDeclarationDiagnostic({ pluginDir: dir, diagnostics });
+    return false;
   }
 
   function discoverInDirectory(

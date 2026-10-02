@@ -13,6 +13,7 @@ type Request = {
   taskId: number;
   interactive?: boolean;
   nativeSections: SharedArrayBuffer;
+  deletedAgentDatabaseFences: [string, string][];
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
 type QuarantineDatabase = {
@@ -127,7 +128,6 @@ vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
   },
 }));
 vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({
-  closeOpenClawAgentDatabaseReadOnlyCandidates: vi.fn(),
   OpenClawAgentDatabaseReadOnlyScope: class {
     hasRetainedConnection = true;
     run(_database: unknown, operation: () => unknown) {

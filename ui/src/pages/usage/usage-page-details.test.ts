@@ -771,14 +771,16 @@ describe("UsagePage detail requests", () => {
 
       expect(page.details.timeSeries.data).toBeNull();
       expect(page.details.timeSeries.status).toEqual({
-        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        error:
+          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
         hasLoaded: false,
         stale: false,
         awaitingGateway: false,
       });
       expect(page.details.sessionLogs.data).toBeNull();
       expect(page.details.sessionLogs.status).toEqual({
-        error: "This connection is missing operator.read, so usage details cannot be loaded yet.",
+        error:
+          "You don't have permission to view usage details. Ask the person who manages OpenClaw for access.",
         hasLoaded: false,
         stale: false,
         awaitingGateway: false,

@@ -43,11 +43,11 @@ const TOKEN = "native-cancellation-e2e-token";
 const ROUTE_OWNER = "agent:main:native-authority-proof";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => {
+afterEach(async () => {
   clearConfigCache();
   clearRuntimeConfigSnapshot();
   acpManagerTesting.resetAcpSessionManagerForTests();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetPluginStateStoreForTests();
   resetPluginRuntimeStateForTest();
 });

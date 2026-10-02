@@ -7,6 +7,7 @@ import type { AuditWorkerOperations } from "../audit/audit-event-writer.worker.j
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
 import type { ClawProvenanceWriteOperations } from "../claws/provenance-write.worker-contract.js";
 import type { DoctorWorkerOperations } from "../commands/doctor-state.worker.js";
+import type { ConfigSnapshotWorkerOperations } from "../config/config-journal-snapshot.worker-contract.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.kernel.js";
 import type { OperatorApprovalWorkerOperations } from "../gateway/operator-approval-store.worker-contract.js";
@@ -24,6 +25,7 @@ import type { PromotionWorkerOperations } from "../infra/promotions-feed.worker.
 import type { ApnsRegistrationWorkerOperations } from "../infra/push-apns-store.worker-contract.js";
 import type { WebPushWorkerOperations } from "../infra/push-web-store.worker-contract.js";
 import type { SessionDeliveryWorkerOperations } from "../infra/session-delivery-queue.worker.js";
+import type { DiagnosticWorkerOperations } from "../infra/sqlite-audit-record.worker-contract.js";
 import type { LegacyMcpOAuthWorkerOperations } from "../infra/state-migrations.mcp-oauth.worker.js";
 import type { TelemetryWorkerOperations } from "../infra/telemetry-store.worker.js";
 import type { ModelCatalogWorkerOperations } from "../model-catalog/remote-store.worker.js";
@@ -43,6 +45,8 @@ import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
+  ConfigSnapshotWorkerOperations &
+  DiagnosticWorkerOperations &
   WebPushWorkerOperations &
   ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
@@ -84,6 +88,10 @@ export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  config: () =>
+    import("../config/config-journal-snapshot.worker.js").then((m) => m.configSnapshotOperations),
+  diagnostic: () =>
+    import("../infra/sqlite-audit-record.worker.js").then((m) => m.diagnosticOperations),
   clawProvenance: () =>
     import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>

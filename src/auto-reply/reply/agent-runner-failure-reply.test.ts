@@ -140,7 +140,7 @@ describe("buildExternalRunFailureReply", () => {
     expect(verbose.isGenericRunnerFailure).toBe(false);
   });
 
-  it("keeps unclassified model context visible without exposing raw detail", () => {
+  it("points unclassified failures to logs without exposing raw detail", () => {
     const message = "opaque-private-provider-detail";
     const reply = buildExternalRunFailureReply(
       {
@@ -155,7 +155,7 @@ describe("buildExternalRunFailureReply", () => {
     );
 
     expect(reply.isGenericRunnerFailure).toBe(false);
-    expect(reply.text).toContain("openai/test-model");
+    expect(reply.text).toContain("openclaw logs --follow");
     expect(reply.text).not.toContain(message);
   });
 
@@ -225,7 +225,7 @@ describe("buildExternalRunFailureReply", () => {
       expect(reply.text).not.toMatch(/HTTP|openai\/test-model|context preparation/);
     } else if (error.reason === "timeout") {
       expect(reply.text).toBe(
-        "⚠️ The request timed out. Please try again. If it keeps happening, try a shorter request or a different model.",
+        "⚠️ The request took too long. Check the conversation for any completed work before trying again.",
       );
       expect(error).toMatchObject({
         reason: "timeout",
@@ -234,7 +234,7 @@ describe("buildExternalRunFailureReply", () => {
         model: "test-model",
       });
     } else {
-      expect(reply.text).toContain("openai/test-model");
+      expect(reply.text).toContain("AI service is busy");
       expect(reply.text).not.toMatch(/local worker/i);
     }
   });

@@ -73,17 +73,14 @@ export async function runSpawnPipeline<TState>(
       phase = "register";
       params.assertActive?.();
       registration = params.buildRegistration(state, runId);
-      const completion = registration.queued
-        ? registerSubagentRun(registration, {
-            assertCurrent: params.assertActive,
-            retainOwnership: (scope) => {
+      await registerSubagentRun(registration, {
+        assertCurrent: params.assertActive,
+        retainOwnership: registration.queued
+          ? (scope) => {
               registrationScope = scope;
-            },
-          })
-        : registerSubagentRun(registration, { assertCurrent: params.assertActive });
-      if (completion) {
-        await completion;
-      }
+            }
+          : undefined,
+      });
       // Release launch admission only after any authority preparation and registry acknowledgement.
       params.admissionReservation?.release();
     } catch (error) {

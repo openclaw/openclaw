@@ -295,7 +295,7 @@ export function registerYieldedRequesterSettlementCase(
     await withPluginSubagentTestState(
       "openclaw-gateway-yield-settlement-race-",
       async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const requesterSessionKey = "agent:main:main";
         const childSessionKey = "agent:main:subagent:settlement-orchestrator";
         const workerSessionKey = "agent:main:subagent:settlement-worker";
@@ -371,7 +371,7 @@ export function registerYieldedRequesterSettlementCase(
           cleanup: "keep",
           expectsCompletionMessage: true,
         });
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: workerRunId,
           childSessionKey: workerSessionKey,
           requesterSessionKey: childSessionKey,

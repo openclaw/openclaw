@@ -62,11 +62,8 @@ import {
   resolveGlobalManager,
   runUpdateStep,
 } from "./shared.js";
-import {
-  prepareGitPackageExposure,
-  readPackageUpdateIdentity,
-  runPackageUpdateDoctor,
-} from "./update-command-package.js";
+import { readPackageUpdateIdentity } from "./update-command-package-identity.js";
+import { prepareGitPackageExposure, runPackageUpdateDoctor } from "./update-command-package.js";
 import { gatewayServiceCommandUsesRoot } from "./update-command-service-plan.js";
 
 export async function retireStandaloneGitWrapper(params: {

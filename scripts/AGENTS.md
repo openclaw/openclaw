@@ -130,10 +130,12 @@ host-qualified `GH_REPO=github.com/openclaw/openclaw` also avoids discovery whil
 preserving the subsequent authoritative API checks.
 
 Immediate REST squash uses `gh api --method PUT repos/OWNER/REPO/pulls/NUMBER/merge
---input -` with JSON containing the full prepared 40-hex `sha`,
+--input <absolute-file>` with JSON containing the full prepared 40-hex `sha`,
 `merge_method: "squash"`, and the inspected `commit_message`; an optional
-`commit_title` is accepted. Keep the explicit SHA even when newer Octopool can
-resolve a missing one. Auto-merge needs Octopool's protected auto-merge support
+`commit_title` is accepted. The shared GitHub subprocess owner stages internal
+`--input -` payload bytes in a private temporary file, keeps child stdin empty,
+and removes the file after synchronous completion. Keep the explicit SHA even
+when newer Octopool can resolve a missing one. Auto-merge needs Octopool's protected auto-merge support
 (openclaw/octopool#179), a numeric PR, `--squash --auto --match-head-commit SHA`,
 an explicit `--subject`, and `--body-file`. The wrapper supplies GitHub's
 current-head `viewerMergeHeadlineText` preview so repository title defaults stay
@@ -228,3 +230,13 @@ for the evidence fields and supported policy limits.
 - Before recording intent, `--auto-merge` selects immediate pinned squash for `MERGEABLE/CLEAN` or auto for `MERGEABLE/BEHIND` or `MERGEABLE/BLOCKED`, subject to all admission gates and queue policy. Accepted auto/queue requests are visible pending outcomes, not completion. The request carries `--match-head-commit`; confirmation still requires the exact attempted head. This is a submission-time head precondition, not a server-side freeze against later collaborator pushes. Existing or ambiguous requests are never automatically cancelled, re-armed, or followed by an immediate fallback; an explicitly investigated accepted auto request uses the cancellation recovery above. Ordinary `gh pr merge` can enqueue when queue policy applies.
 - A confirmed merge receipt precedes audits, comments, and cleanup. A comment POST has one attempt marker and is never blindly repeated. Recovery searches authoritative comments for that marker, reports completion pending, and leaves cleanup to the operator after ownership checks; it works without the original worktree/prep artifacts. Normal uninterrupted completion preserves comments and cleanup, with exact-head leased remote deletion. Authoritative branch absence completes cleanup; inspect warnings for advanced or inaccessible branches. Delayed recovery never deletes a recreated branch by name.
 - After ownership-checked cleanup, explicitly finish a verified receipt with `scripts/pr merge-complete <PR> <OUTCOME_OID> --confirmed-operator-completion`. It revalidates the exact retained receipt and remote merge, requires native worktree/local branch/remote head branch absence, and never dispatches a merge or deletes resources. A `merged` receipt may post its first completion comment; `commenting`/`commented` require the existing exact attempt marker and never repost. Missing or ambiguous comments preserve pending state. For a retained prior-CI admin receipt, delayed completion reconstructs the historical parent comparison from retained admission main and the verified landed commit before checking cleanup absence. It labels the audit reconstructed after merge, claims no original at-landing audit, and retains the historical CI caveat. Legacy admin receipts without retained prior-CI proof still require owner review; no original audit is fabricated. Read the current outcome OID again after a state transition; stale OIDs are refused. Default `merge-run` remains reconciliation-only.
+
+## Execution Gotchas
+
+These commands apply on the host permitted by the task and its workflow; they do
+not authorize local execution or a broader test plan.
+
+- For fs-safe dependency trouble, follow [on-demand vendoring instructions](vendor-fs-safe.md); keep vendor contents local and registry dependencies as the default.
+- Restore missing dependencies in a trusted normal checkout with `pnpm install`, then retry once before diagnosing a code defect. Never reconcile a shared/worktree install while other jobs use it.
+- Run the CLI through `pnpm openclaw ...` or `pnpm dev`, never `node --import tsx src/index.ts`; the supported wrappers own build freshness and process setup.
+- Use installed `oxfmt` for formatting and the repository's `tsgo` lanes for typechecking. Inspect scope with `pnpm changed:lanes --json`; use targeted tests/checks. When avoiding worktree reconciliation, use `node scripts/check-changed.mjs` or `node scripts/run-vitest.mjs` with ready dependencies. Host restrictions still apply.

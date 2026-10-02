@@ -166,11 +166,13 @@ describe("executeAgentTurn: provider failures", () => {
           expect(result.payload.text).not.toContain("diagnostic-canary");
         } else {
           expect(result.payload.isError).toBe(true);
-          expect(result.payload.text).toContain("Agent failed before reply:");
-          expect(result.payload.text).toContain("reconnect before continuing");
           if (surface === "control UI") {
+            expect(result.payload.text).toContain("Check the conversation before trying again");
             expect(result.payload.text).toContain("openclaw logs --follow");
+            expect(result.payload.text).not.toContain("diagnostic-canary");
           } else {
+            expect(result.payload.text).toContain("Agent failed before reply:");
+            expect(result.payload.text).toContain("reconnect before continuing");
             expect(result.payload.text!.length).toBeLessThanOrEqual(1020);
           }
         }
@@ -250,7 +252,7 @@ describe("executeAgentTurn: provider failures", () => {
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
-        expect(result.payload.text).toContain('Missing API key for provider "openai"');
+        expect(result.payload.text).toContain("openclaw doctor --fix");
       }
     },
   );
@@ -349,7 +351,7 @@ describe("executeAgentTurn: provider failures", () => {
         expect(result.payload.isError).toBe(true);
         expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
         expect(result.payload.text).toBe(
-          "⚠️ The model request was rate-limited. Please try again in a few minutes.",
+          "⚠️ The AI service needs a short break. Please try again in a few minutes.",
         );
       }
     },
@@ -407,9 +409,7 @@ describe("executeAgentTurn: provider failures", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(payload?.text).toBe(
-      "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes.",
-    );
+    expect(payload?.text).toBe("⚠️ The AI services are busy. Please try again in a few minutes.");
   });
 
   it("surfaces typed periodic rate-limit details through known failure payloads in group chats", () => {
@@ -515,8 +515,8 @@ describe("executeAgentTurn: provider failures", () => {
       expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
-        expect(result.payload.text).toContain("overall turn limit");
-        expect(result.payload.text).toContain("did not replay this turn automatically");
+        expect(result.payload.text).toContain("task took too long");
+        expect(result.payload.text).toContain("Check its results before trying again");
       }
     },
   );
@@ -562,9 +562,9 @@ describe("executeAgentTurn: provider failures", () => {
     expect(wholeTurnRetries).toBe(0);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("overall turn limit");
-      expect(result.payload.text).toMatch(/effects may be partial/i);
-      expect(result.payload.text).toContain("did not replay this turn automatically");
+      expect(result.payload.text).toContain("task took too long");
+      expect(result.payload.text).toContain("Some work may have completed");
+      expect(result.payload.text).toContain("Check its results before trying again");
     }
   });
 
@@ -589,10 +589,9 @@ describe("executeAgentTurn: provider failures", () => {
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toContain("no-output watchdog");
-      expect(result.payload.text).toContain("1 active CLI tool call");
-      expect(result.payload.text).toMatch(/effects may be partial/i);
-      expect(result.payload.text).toContain("did not replay this turn automatically");
+      expect(result.payload.text).toContain("task stopped responding");
+      expect(result.payload.text).toContain("Some work may have completed");
+      expect(result.payload.text).toContain("Check its results before trying again");
     }
   });
 
@@ -847,8 +846,7 @@ describe("executeAgentTurn: provider failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ LLM request failed (provider internal error). " +
-          "This is usually temporary — try again shortly.",
+        "⚠️ The AI service is having trouble. Please try again in a moment.",
       );
       expect(result.payload.text).not.toContain("Something exploded");
     }

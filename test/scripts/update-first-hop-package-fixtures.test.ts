@@ -56,6 +56,29 @@ function makePackageFixture() {
 
 describe("first-hop package fixtures", () => {
   it.each([
+    { name: "empty", output: [] },
+    { name: "multiple", output: [{ filename: "first.tgz" }, { filename: "second.tgz" }] },
+    {
+      name: "multiple keyed",
+      output: { first: { filename: "first.tgz" }, second: { filename: "second.tgz" } },
+    },
+    { name: "missing filename", output: { openclaw: { version: "2026.9.1" } } },
+    { name: "empty filename", output: { openclaw: { filename: "" } } },
+  ])("rejects $name pack results at the first-hop helper entry point", ({ output }) => {
+    const root = tempDirs.make("openclaw-first-hop-pack-json-");
+    const input = path.join(root, "source-pack.json");
+    writeJson(input, output);
+    const result = spawnSync(
+      process.execPath,
+      ["scripts/e2e/lib/update-first-hop-package-fixtures.mjs", "pack-filename", input],
+      { encoding: "utf8" },
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("exactly one package result with a filename");
+  });
+
+  it.each([
     "first-hop-tarball",
     "future-tarball",
     "negative-tarball",
@@ -587,7 +610,8 @@ const sources = ${JSON.stringify(sourceTarballs)};
 const version = process.argv[3].slice("openclaw@".length);
 const filename = path.basename(sources[version]);
 fs.copyFileSync(sources[version], path.join(process.argv[process.argv.indexOf("--pack-destination") + 1], filename));
-process.stdout.write(JSON.stringify([{ filename }]));
+const packed = { filename };
+process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed } : [packed]));
 `,
         { mode: 0o755 },
       );

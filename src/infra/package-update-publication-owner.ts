@@ -87,23 +87,15 @@ export function createPublicationOwner(
       throw new Error("Unknown package recovery artifacts require operator inspection.");
     }
   };
-  const selectedLauncherIdentity = (
-    entry: (typeof descriptor.launchers)[number],
-    selected: "previous" | "candidate",
-  ) => {
-    if (selected === "previous" && entry.previous === null) {
-      return null;
-    }
-    return record.phase === "aborted"
-      ? entry.previousIdentity
-      : record.publications.find((published) => published.name === entry.name)?.identity;
-  };
   const assertSelectedLaunchers = (selected: "previous" | "candidate") => {
     for (const entry of descriptor.launchers) {
-      if (
-        entryIdentity(path.join(descriptor.binDir, entry.name), "launcher") !==
-        selectedLauncherIdentity(entry, selected)
-      ) {
+      const expected =
+        selected === "previous" && entry.previous === null
+          ? null
+          : record.phase === "aborted"
+            ? entry.previousIdentity
+            : record.publications.find((published) => published.name === entry.name)?.identity;
+      if (entryIdentity(path.join(descriptor.binDir, entry.name), "launcher") !== expected) {
         throw new Error("Selected package launcher identity changed.");
       }
     }
@@ -156,9 +148,21 @@ export function createPublicationOwner(
     assertCurrent();
     record = journal.transition(record, phase, intent, assertion, publications);
   };
-  const matches = async (file: string, expected: PackageIntegrityFingerprint, logical: string) => {
-    if (!(await packagePathEntryExists(file))) {
+  const matches = async (
+    file: string,
+    expected: PackageIntegrityFingerprint,
+    logical: string,
+    contents = true,
+  ) => {
+    const id = entryIdentity(file, true);
+    if (id === null) {
       return false;
+    }
+    if (id !== expected.identity) {
+      throw new Error(`Package publication object changed: ${file}`);
+    }
+    if (!contents) {
+      return true;
     }
     const observed = await createPackageIntegrityReader().tree(file, logical);
     if (!isDeepStrictEqual(observed, expected)) {
@@ -169,16 +173,15 @@ export function createPublicationOwner(
     }
     return true;
   };
-  const inspect = async () => {
+  const inspect = async (contents: "all" | "selected" | "staged" | "none" = "all") => {
     const reader = createPackageIntegrityReader();
-    const livePresent = await reader.exists(live);
+    const liveIdentity = entryIdentity(live, true);
     let selected: "previous" | "candidate" | null = null;
-    if (livePresent) {
-      const id = packageActivationIdentity(live, true);
+    if (liveIdentity !== null) {
       selected =
-        id === descriptor.previous.identity
+        liveIdentity === descriptor.previous.identity
           ? "previous"
-          : id === descriptor.candidate.identity
+          : liveIdentity === descriptor.candidate.identity
             ? "candidate"
             : null;
       if (!selected) {
@@ -188,13 +191,15 @@ export function createPublicationOwner(
         live,
         descriptor[selected],
         selected === "previous" ? live : descriptor.originalStageRoot,
+        contents === "all" || contents === "selected",
       );
     }
-    const previous = await matches(root("previous"), descriptor.previous, live);
+    const previous = await matches(root("previous"), descriptor.previous, live, contents === "all");
     const candidate = await matches(
       root("candidate"),
       descriptor.candidate,
       descriptor.originalStageRoot,
+      contents === "all" || contents === "staged",
     );
     if ((selected === "previous") === previous || (selected === "candidate") === candidate) {
       throw new Error("Package publication generation roles are ambiguous.");
@@ -271,7 +276,7 @@ export function createPublicationOwner(
     if (record.phase === "preparing") {
       inspectPackageActivationCustody(anchor, record);
     } else if (action === "repair" || record.phase === "publication-complete") {
-      await inspect();
+      await inspect(action === "repair" ? "all" : "selected");
     } else {
       const selected = selectedRetirementGeneration();
       if (
@@ -347,9 +352,10 @@ export function createPublicationOwner(
     } else if (observed.selected === null) {
       await persistPackageSelection("displaced");
     }
-    observed = await inspect();
-    assertCurrent();
-    if (observed.selected === null) {
+    if (observed.selected !== "candidate") {
+      // Displacement/capture can yield to writers; hash the candidate at publication.
+      await inspect("staged");
+      assertCurrent();
       transition("publishing", { kind: "publish" });
       await activateStagedNpmPackageRoot(root("candidate"), live, () => {
         assertCurrent();
@@ -364,7 +370,7 @@ export function createPublicationOwner(
     }
     await persistPackageSelection("candidate");
     for (const entry of descriptor.launchers) {
-      observed = await inspect();
+      observed = await inspect("none");
       assertCurrent();
       if (observed.launcherStates.get(entry.name) === "candidate") {
         const destination = path.join(descriptor.binDir, entry.name);
@@ -416,7 +422,7 @@ export function createPublicationOwner(
       const id = packageActivationIdentity(path.join(descriptor.binDir, entry.name), "launcher");
       transition("publishing", null, [...record.publications, { name: entry.name, identity: id }]);
     }
-    observed = await inspect();
+    observed = await inspect("selected");
     assertCurrent();
     if (observed.selected !== "candidate") {
       throw new Error("Candidate publication is incomplete.");
@@ -455,14 +461,6 @@ export function createPublicationOwner(
     retirementSelected = selected;
     assertCurrent();
     if (!["retiring", "anchor-retired"].includes(record.phase)) {
-      for (const name of ["previous", "candidate", "previous.candidate"] as const) {
-        await matches(
-          root(name),
-          name === "previous" ? descriptor.previous : descriptor.candidate,
-          name === "previous" ? live : descriptor.originalStageRoot,
-        );
-      }
-      assertCurrent();
       const publications =
         record.phase === "aborted"
           ? descriptor.launchers.flatMap((entry) =>
@@ -572,9 +570,7 @@ export function createPublicationOwner(
       // Disarm before any restore or its compensating moves. Failure to commit
       // this fact forbids compensation; a killed rollback never becomes forward repair.
       transition("rollback-in-progress", record.intent);
-      const disarmed = await inspect();
-      assertCurrent();
-      return disarmed.previous;
+      return observed.previous;
     },
     recordRestoredLauncher(name: string, staged: string) {
       if (record.phase !== "rollback-in-progress") {

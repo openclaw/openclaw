@@ -55,7 +55,13 @@ snapshot refresh and sandbox synchronization. Sandboxed runs read the
 materialized copies, not the original host paths.
 
 Managed worktree sessions keep their recorded canonical workspace as the skill
-source. The configured agent workspace remains the primary skill source even when
+source. That source is read and watched on the Gateway, even when a File Transfer
+plugin serves the agent workspace from a paired node. The node reads its configured
+agent skill roots; it does not receive Gateway source paths. Selected skill files
+and supporting resources are delivered from their owning host. Model-facing
+workspace-hosted entries use `workspace-skill://` read locations, so an identical
+Gateway path cannot redirect the read to the node.
+The configured agent workspace remains the primary skill source even when
 the session executes in a worktree; only selecting that worktree as the agent's
 workspace gives its skills primary precedence. A selected nested workspace stays
 nested: discovery does not walk up to its parent repository. Installing OpenClaw

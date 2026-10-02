@@ -826,16 +826,17 @@ async function recordMatchesTranscriptMessage(
 
   // Archive file stats cannot establish current SQLite visibility. Reuse membership
   // only within a cleanup pass; each new request must select canonical history again.
+  // Cleanup also owns off-path branches because rewind/switch can expose them again;
+  // serving stays limited to visible history.
   const scope = { agentId, sessionEntry: entry, sessionId, sessionKey, storePath };
-  const messages = cache
-    ? (
-        await readSessionMessagesWithSourceAsync(scope, {
-          mode: "full",
-          reason: "managed outgoing attachment index",
-          allowResetArchiveFallback: true,
-        })
-      ).messages
-    : await readSessionMessagesMatchingIdAsync(scope, requestedMessageId);
+  const { messages } = cache
+    ? await readSessionMessagesWithSourceAsync(scope, {
+        mode: "full",
+        reason: "managed outgoing attachment index",
+        allowResetArchiveFallback: true,
+        includeOffPathMessages: true,
+      })
+    : { messages: await readSessionMessagesMatchingIdAsync(scope, requestedMessageId) };
   const index: SessionManagedOutgoingAttachmentIndex = new Set();
   for (const message of messages) {
     const meta = (message as { __openclaw?: { id?: string } } | null)?.["__openclaw"];

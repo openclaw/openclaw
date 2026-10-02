@@ -72,7 +72,7 @@ type GatewayEvent = { event?: string; payload?: unknown };
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
-  options?: { allowSessionTruncation?: boolean },
+  options?: { allowSessionTruncation?: boolean; diagnostic?: string },
 ) {
   const serialized = JSON.stringify(value);
   if (options?.allowSessionTruncation) {
@@ -82,7 +82,7 @@ function expectBoundedMissingProfileRecovery(
     expect(value).toMatch(/then retry\.$/u);
     expect(value).toHaveLength(160);
   } else {
-    expect(serialized).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(serialized, options?.diagnostic).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
   }
   expect(serialized).not.toContain(MISSING_PROFILE_ID);
   expect(serialized).not.toContain("was not found");
@@ -410,6 +410,7 @@ describe("Codex auth product proof", () => {
       instance = await createOpenClawTestInstance({
         name: "qa-codex-missing-auth-profile",
         env: {
+          OPENCLAW_LOG_LEVEL: undefined,
           OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
           OPENCLAW_QA_CODEX_APP_SERVER_VERSION: CODEX_APP_SERVER_VERSION,
           OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -417,6 +418,7 @@ describe("Codex auth product proof", () => {
           OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
         },
         config: {
+          logging: { consoleLevel: "debug" },
           plugins: {
             enabled: true,
             allow: ["codex"],
@@ -596,7 +598,7 @@ describe("Codex auth product proof", () => {
           (event.payload as { session?: { lastRunId?: unknown } }).session?.lastRunId === runId &&
           (event.payload as { session?: { status?: unknown } }).session?.status === "failed",
       );
-      expectBoundedMissingProfileRecovery(finalEvent?.payload);
+      expectBoundedMissingProfileRecovery(finalEvent?.payload, { diagnostic: instance.logs() });
       // Lifecycle metadata belongs to sessions.changed; transcript delivery has independent timing.
       expectBoundedMissingProfileRecovery(
         (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session

@@ -6,6 +6,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
   countActiveRunsForSessionFromRuns,
@@ -73,16 +74,9 @@ describe("subagent registry query regressions", () => {
     ]);
     expect(index.swarmRunsByRequesterSessionKey.get("parent")).toEqual([first, replacement]);
     index = index.patch(toRunMap([middle]), new Map());
-    expect(index.runsByControllerSessionKey.get(first.requesterSessionKey)).toEqual([
-      first,
-      replacement,
-      middle,
-    ]);
-    expect(index.swarmRunsByRequesterSessionKey.get("parent")).toEqual([
-      first,
-      replacement,
-      middle,
-    ]);
+    const expectedOrder = [first, replacement, middle];
+    expect(index.runsByControllerSessionKey.get(first.requesterSessionKey)).toEqual(expectedOrder);
+    expect(index.swarmRunsByRequesterSessionKey.get("parent")).toEqual(expectedOrder);
   });
 
   it("preserves complete snapshot inputs and exact memory winners after the source changes", () => {
@@ -222,6 +216,8 @@ describe("subagent registry query regressions", () => {
         ] as const,
     );
     try {
+      subagentRuns.set(running.runId, running);
+      subagentRuns.set(sibling.runId, sibling);
       const params = { runs: toRunMap([running, ended, sibling]), now };
       const index = buildSubagentRunReadIndexFromRuns(params);
       for (const [id, claim] of claims) {
@@ -234,6 +230,7 @@ describe("subagent registry query regressions", () => {
     } finally {
       for (const [id, claim] of claims) {
         releaseAgentRunContext(id, claim);
+        subagentRuns.delete(id);
       }
     }
   });

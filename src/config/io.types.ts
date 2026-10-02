@@ -27,7 +27,7 @@ export const configWritePostCommitRollback = Symbol("configWritePostCommitRollba
 export type InternalConfigWriteResult = ConfigWriteResult & {
   [configWritePostCommitRollback]?: {
     restoreFile: (assertCurrent: () => void) => Promise<boolean>;
-    restoreEffects: (assertCurrent: () => void) => void;
+    restoreEffects: (assertCurrent: () => void) => Promise<void>;
   };
 };
 

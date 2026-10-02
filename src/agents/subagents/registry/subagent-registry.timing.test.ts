@@ -37,12 +37,6 @@ vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
     captureSubagentCompletionReply: vi.fn(async () => undefined),
   };
 });
-vi.mock("./subagent-registry-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-registry-state.js")>();
-  const { saveSubagentRegistryChangesToSqlite } =
-    await import("./subagent-registry.store.sqlite.js");
-  return { ...actual, persistSubagentRunsToDisk: saveSubagentRegistryChangesToSqlite };
-});
 
 describe("subagent timing completion", () => {
   const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
@@ -90,14 +84,19 @@ describe("subagent timing completion", () => {
       endedAt: number;
       terminalReply: typeof terminalReply;
     }>();
+    const waitEntered = createDeferred();
+    const waitReturned = createDeferred();
     vi.mocked(callGateway).mockImplementation(async (request) => {
       expect(request.method).toBe("agent.wait");
-      return await waiting.promise;
+      waitEntered.resolve();
+      const result = await waiting.promise;
+      waitReturned.resolve();
+      return result;
     });
 
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     // Seed through the real accessor, suppressing only setup maintenance so
-    // pending FIFO jobs below can only be the two terminal timing writes.
+    // pending FIFO work below belongs to terminal timing publication.
     for (const [sessionKey, sessionId] of [
       [childSessionKey, "session-overlap"],
       [requesterSessionKey, "requester-overlap"],
@@ -118,7 +117,7 @@ describe("subagent timing completion", () => {
       cleanup: "keep",
       expectsCompletionMessage: true,
     });
-    await vi.waitFor(() => expect(callGateway).toHaveBeenCalled());
+    await waitEntered.promise;
     const readRun = () => loadSubagentRegistryFromSqlite().get(runId);
     const startedAt = readRun()?.sessionStartedAt;
     if (typeof startedAt !== "number") {
@@ -161,15 +160,12 @@ describe("subagent timing completion", () => {
         throw new Error("session writer did not retain its queue");
       }
       const lifecycleQueued = createDeferred();
-      const waiterQueued = createDeferred();
       const push = queue.pending.push.bind(queue.pending);
       // Task finalization awaits a worker before these writes reach the FIFO.
       const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
         const depth = push(...tasks);
         if (depth === 1) {
           lifecycleQueued.resolve();
-        } else if (depth === 2) {
-          waiterQueued.resolve();
         }
         return depth;
       });
@@ -178,9 +174,10 @@ describe("subagent timing completion", () => {
         emitTerminal();
         await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
         expect(queue.pending.length).toBe(1);
+        // The wait result overlaps the blocked lifecycle callback. The owner may
+        // coalesce equivalent terminal writes without changing this contract.
         waiting.resolve(terminal);
-        await racePromiseWithAbortSignal(waiterQueued.promise, signal);
-        expect(queue.pending.length).toBe(2);
+        await waitReturned.promise;
       } finally {
         enqueueObserver.mockRestore();
       }

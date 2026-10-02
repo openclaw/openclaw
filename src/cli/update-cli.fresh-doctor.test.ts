@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { recordCommandProcessFailure } from "../process/exec-result.js";
 import { VERSION } from "../version.js";
 import {
   commandCalls,
@@ -33,6 +34,7 @@ import {
   resolveUpdateInstallKind,
   runExec,
   runPostCorePluginConvergenceSpy,
+  runUtf8CommandWithTimeout,
   updateCommand,
   updateGitCheckout,
 } from "./update-cli-modules.test-support.js";
@@ -328,11 +330,14 @@ describe("update-cli", () => {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
     );
-    vi.mocked(runExec).mockRejectedValueOnce(
-      Object.assign(new Error("Command failed: " + "long-argv-prefix ".repeat(100)), {
-        stderr: "doctor process failed: optional plugin repair unavailable",
-        stdout: "doctor diagnostic output",
-      }),
+    vi.mocked(runUtf8CommandWithTimeout).mockRejectedValueOnce(
+      recordCommandProcessFailure(
+        Object.assign(new Error("Command failed: " + "long-argv-prefix ".repeat(100)), {
+          stderr: "doctor process failed: optional plugin repair unavailable",
+          stdout: "doctor diagnostic output",
+        }),
+        { code: 1, cleanup: "normal", termination: "exit" },
+      ),
     );
     const result = await completeChangedPostCorePluginUpdate();
 
@@ -350,9 +355,14 @@ describe("update-cli", () => {
       "/tmp/openclaw-updated-entry.mjs",
     );
     const issues = [{ path: "channels.signal.httpUrl", message: "legacy Signal transport field" }];
-    vi.mocked(runExec)
-      .mockRejectedValueOnce(new Error("doctor process failed"))
-      .mockRejectedValueOnce(createConfigValidationFailure(issues));
+    vi.mocked(runUtf8CommandWithTimeout).mockRejectedValueOnce(
+      recordCommandProcessFailure(new Error("doctor process failed"), {
+        code: 1,
+        cleanup: "normal",
+        termination: "exit",
+      }),
+    );
+    vi.mocked(runExec).mockRejectedValueOnce(createConfigValidationFailure(issues));
     vi.mocked(readConfigFileSnapshot).mockResolvedValueOnce(
       configSnapshot(baseConfig, {
         valid: false,

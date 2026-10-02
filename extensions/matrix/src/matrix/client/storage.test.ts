@@ -13,11 +13,11 @@ import { getMatrixRuntime } from "../../runtime.js";
 import { resolveMatrixAccountStorageRoot } from "../../storage-paths.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
-  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
-  openMatrixLegacyCryptoMigrationStoreOptions,
   openMatrixRecoveryKeyStoreOptions,
+  writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
 import { SqliteBackedMatrixSyncStore } from "./file-sync-store.js";
+import { julyLegacyCryptoStoreOptions } from "./legacy-crypto-state.test-support.js";
 import { openMatrixStorageMetaStoreOptions } from "./storage-metadata.js";
 import {
   claimCurrentTokenStorageState,
@@ -512,13 +512,16 @@ describe("matrix client storage paths", () => {
         roomKeyCounts: null,
         restoreStatus: "pending",
       };
-      writeJson(storagePaths.rootDir, "recovery-key.json", recoveryKey);
-      writeJson(storagePaths.rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME, migrationState);
-      const migrationPath = path.join(
-        storagePaths.rootDir,
-        MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
-      );
-      const sentinelPath = `${storagePaths.rootDir} SQLite recovery key state`;
+      createPluginStateSyncKeyedStoreForTests(
+        "matrix",
+        openMatrixRecoveryKeyStoreOptions(storagePaths.rootDir),
+      ).register("current", recoveryKey);
+      createPluginStateSyncKeyedStoreForTests(
+        "matrix",
+        julyLegacyCryptoStoreOptions(storagePaths.rootDir),
+      ).register("current", migrationState);
+      const migrationPath = storagePaths.storagePath;
+      const sentinelPath = `${storagePaths.rootDir} SQLite sync cache`;
       const sentinel = "unrelated file must remain at its original path";
       if (withSentinel) {
         fs.writeFileSync(sentinelPath, sentinel);
@@ -545,12 +548,9 @@ describe("matrix client storage paths", () => {
           ).lookup("current"),
         ).toEqual(recoveryKey);
         expect(
-          JSON.parse(fs.readFileSync(`${storagePaths.recoveryKeyPath}.migrated`, "utf8")),
-        ).toEqual(recoveryKey);
-        expect(
           createPluginStateSyncKeyedStoreForTests(
             "matrix",
-            openMatrixLegacyCryptoMigrationStoreOptions(storagePaths.rootDir),
+            julyLegacyCryptoStoreOptions(storagePaths.rootDir),
           ).lookup("current"),
         ).toEqual(migrationState);
         expect
@@ -568,7 +568,6 @@ describe("matrix client storage paths", () => {
           });
       };
       expectPreservedState();
-      expect(fs.existsSync(storagePaths.storagePath)).toBe(true);
       expect(fs.existsSync(migrationPath)).toBe(true);
       expect(fs.existsSync(`${migrationPath}.migrated`)).toBe(false);
       await expect(
@@ -581,11 +580,9 @@ describe("matrix client storage paths", () => {
       resetPluginStateStoreForTests();
 
       expectPreservedState();
-      expect(fs.existsSync(storagePaths.storagePath)).toBe(false);
-      expect(fs.existsSync(`${storagePaths.storagePath}.migrated`)).toBe(true);
       expect(fs.existsSync(migrationPath)).toBe(false);
-      expect(JSON.parse(fs.readFileSync(`${migrationPath}.migrated`, "utf8"))).toEqual(
-        migrationState,
+      expect(fs.readFileSync(`${migrationPath}.migrated`, "utf8")).toBe(
+        legacySyncCacheBody("retry-token"),
       );
       await expect(
         (await SqliteBackedMatrixSyncStore.create(storagePaths.rootDir)).getSavedSyncToken(),
@@ -756,7 +753,7 @@ describe("matrix client storage paths", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("reads legacy storage metadata until doctor migrates it to SQLite", async () => {
+  it("refuses retired storage metadata without selecting or rewriting its root", async () => {
     setupStateDir();
     const oldStoragePaths = await resolveDefaultStoragePaths({
       accessToken: "secret-token-old",
@@ -771,33 +768,49 @@ describe("matrix client storage paths", () => {
       currentTokenStateClaimed: true,
     });
 
-    const rotatedStoragePaths = await resolveDefaultStoragePaths({
-      accessToken: "secret-token-new",
-      deviceId: "DEVICE123",
-    });
-
-    expect(rotatedStoragePaths.rootDir).toBe(oldStoragePaths.rootDir);
+    const sourcePath = path.join(oldStoragePaths.rootDir, "storage-meta.json");
+    const source = fs.readFileSync(sourcePath, "utf8");
+    await expect(
+      resolveDefaultStoragePaths({ accessToken: "secret-token-new", deviceId: "DEVICE123" }),
+    ).rejects.toThrow("Install OpenClaw 2026.9.5");
+    expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
     expect(fs.existsSync(path.join(oldStoragePaths.rootDir, "state", "openclaw.sqlite"))).toBe(
       false,
     );
   });
 
-  it.each(["recovery-key.json", "crypto-idb-snapshot.json"])(
-    "keeps a legacy %s root selectable until its state migrates",
-    async (legacyFilename) => {
+  it.each(["recovery-key", "idb-snapshot"])(
+    "keeps a July SQLite %s root selectable across token rotation",
+    async (namespace) => {
       const stateDir = setupStateDir();
       const oldStoragePaths = await resolveDefaultStoragePaths({
         accessToken: "secret-token-old",
         deviceId: "DEVICE123",
       });
-      seedLegacyStorageMeta(oldStoragePaths.rootDir, {
+      seedStorageMeta(oldStoragePaths.rootDir, {
         homeserver: defaultStorageAuth.homeserver,
         userId: defaultStorageAuth.userId,
         accountId: "default",
         accessTokenHash: oldStoragePaths.tokenHash,
         deviceId: "DEVICE123",
       });
-      writeJson(oldStoragePaths.rootDir, legacyFilename, { legacy: true });
+      if (namespace === "recovery-key") {
+        createPluginStateSyncKeyedStoreForTests(
+          "matrix",
+          openMatrixRecoveryKeyStoreOptions(oldStoragePaths.rootDir),
+        ).register("current", {
+          version: 1,
+          createdAt: "2026-07-01T00:00:00.000Z",
+          keyId: "fixture-key",
+          privateKeyBase64: "AQIDBA==",
+        });
+      } else {
+        await writeMatrixIdbSnapshotJson({
+          storageRootDir: oldStoragePaths.rootDir,
+          snapshotJson: JSON.stringify([{ name: "fixture-crypto", version: 1, stores: [] }]),
+          databaseCount: 1,
+        });
+      }
 
       seedCanonicalStorageRoot({
         stateDir,

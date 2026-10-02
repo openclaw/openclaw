@@ -178,18 +178,25 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     { auto: false, admin: true, mergeState: "BEHIND", route: "admin" },
     { auto: true, admin: false, mergeState: "BEHIND", route: "auto" },
     { auto: true, admin: false, mergeState: "BLOCKED", route: "auto" },
-    { auto: true, admin: false, mergeState: "CLEAN", route: "immediate" },
+    { auto: true, admin: false, mergeState: "CLEAN", route: "immediate", pendingGates: true },
   ])(
     "submits verified attribution with pinned head for %j",
-    ({ auto, admin, mergeState, route }) => {
+    ({ auto, admin, mergeState, route, pendingGates }) => {
       const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
       const f = fixture(`Source change\n\n${credit}\n`);
       f.save({
         ...f.state(),
         admin,
+        ...(pendingGates ? { requiredCheckName: "openclaw/ci-gate" } : {}),
         gates: admin ? "fail" : "pass",
         pr: { ...f.state().pr, mergeStateStatus: mergeState },
       });
+      if (pendingGates) {
+        writeFileSync(
+          join(f.worktree, ".local/gates.env"),
+          `PR_NUMBER=123\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+        );
+      }
       const run = f.run(auto);
       expect(run.status, run.output).toBe(0);
       const submissions = f.state().calls.filter((call) => call[1] === "pr" && call[2] === "merge");
@@ -206,7 +213,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
         expect(args[args.indexOf("--subject") + 1]).toBe(f.state().previewHeadline);
       }
       expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
-      expect(f.record()).toMatchObject({ route, phase: "complete" });
+      expect(f.record(), run.output).toMatchObject({ route, phase: "complete" });
     },
   );
   it("rejects a missing auto-merge headline before intent", () => {

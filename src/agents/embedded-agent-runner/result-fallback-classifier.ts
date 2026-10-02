@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { classifyFailoverReason } from "../failover/classify.js";
 import type { FailoverReason } from "../failover/signal.js";
@@ -148,14 +149,9 @@ function classifyHarnessResult(params: {
   }
 }
 
-function classifyProviderErrorPayloadReason(
-  errorText: string,
-  provider: string,
+function providerErrorPayloadReason(
+  failoverReason: FailoverReason | null,
 ): ProviderErrorPayloadFailoverReason | null {
-  if (!errorText.trim()) {
-    return null;
-  }
-  const failoverReason = classifyFailoverReason(errorText, { provider });
   switch (failoverReason) {
     case "auth":
     case "auth_permanent":
@@ -258,19 +254,34 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return harnessClassification;
   }
 
-  const errorText = payloads
-    .filter((payload) => payload?.isError === true)
+  const errorPayloads = payloads.filter((payload) => payload?.isError === true);
+  const errorText = errorPayloads
+    .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
+    .join("\n");
+  const providerFailure = errorPayloads
+    .map((payload) => getReplyPayloadMetadata(payload)?.providerFailure)
+    .find((failure) => failure && providerErrorPayloadReason(failure.reason));
+  // External and serialized payloads may carry only the original error text.
+  // A classified native payload (including a null reason) must not be reinterpreted as copy changes.
+  const unclassifiedErrorText = errorPayloads
+    .filter((payload) => !getReplyPayloadMetadata(payload)?.providerFailure)
     .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
     .join("\n");
   // Provider error payloads are auth/profile health signals even when they arrive as an
   // embedded result rather than a transport exception.
-  const failoverReason = classifyProviderErrorPayloadReason(errorText, params.provider);
+  const failoverReason = providerErrorPayloadReason(
+    providerFailure?.reason ??
+      (unclassifiedErrorText.trim()
+        ? classifyFailoverReason(unclassifiedErrorText, { provider: params.provider })
+        : null),
+  );
   if (failoverReason) {
+    const rawError = providerFailure?.rawError ?? unclassifiedErrorText;
     return {
-      message: `${params.provider}/${params.model} ended with a provider error: ${errorText}`,
+      message: `${params.provider}/${params.model} ended with a provider error: ${rawError}`,
       reason: failoverReason,
       code: "embedded_error_payload",
-      rawError: errorText,
+      rawError,
     };
   }
 

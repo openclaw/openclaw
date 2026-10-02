@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { visitSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
+import { visitSessionMessagesAsync } from "../../gateway/session-transcript-native.test-support.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,

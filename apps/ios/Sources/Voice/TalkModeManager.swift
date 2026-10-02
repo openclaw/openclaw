@@ -1179,11 +1179,6 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    func cancelPushToTalk() -> OpenClawTalkPTTStopPayload {
-        let captureId = self.activePTTCaptureId ?? UUID().uuidString
-        return self.cancelPushToTalk(captureId: captureId)
-    }
-
     func cancelPushToTalk(expectedTranscriptionOnly: Bool) -> OpenClawTalkPTTStopPayload {
         guard let activePushToTalk,
               activePushToTalk.transcriptionOnly == expectedTranscriptionOnly
@@ -3299,12 +3294,13 @@ final class TalkModeManager: NSObject {
         return outputFormat
     }
 
-    private func startSpeechInterruptionRecognitionIfNeeded() {
+    private func startSpeechInterruptionRecognitionIfNeeded(context: String = "speak") {
         guard self.interruptOnSpeech else { return }
         do {
             try self.startRecognition()
         } catch {
-            self.logger.warning("startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
+            self.logger.warning(
+                "startRecognition during \(context, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -3314,9 +3310,7 @@ final class TalkModeManager: NSObject {
 
     private func stopSpeaking(storeInterruption: Bool = true) {
         self.speechGeneration += 1
-        let hasIncremental = self.incrementalSpeechActive ||
-            self.incrementalSpeechTask != nil ||
-            !self.incrementalSpeechQueue.isEmpty
+        guard self.isSpeechOutputActive else { return }
         if self.isSpeaking {
             let streamedInterruptedAt = self.lastPlaybackWasPCM
                 ? self.pcmPlayer.stop()
@@ -3329,8 +3323,6 @@ final class TalkModeManager: NSObject {
             _ = self.lastPlaybackWasPCM
                 ? self.mp3Player.stop()
                 : self.pcmPlayer.stop()
-        } else if !hasIncremental {
-            return
         }
         self.stopRecognition()
         TalkSystemSpeechSynthesizer.shared.stop()
@@ -3414,14 +3406,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func startIncrementalSpeechTask() {
-        if self.interruptOnSpeech {
-            do {
-                try self.startRecognition()
-            } catch {
-                self.logger.warning(
-                    "startRecognition during incremental speak failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        self.startSpeechInterruptionRecognitionIfNeeded(context: "incremental speak")
 
         let speechGeneration = self.speechGeneration
         let task = Task { @MainActor [weak self] in

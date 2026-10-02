@@ -6,12 +6,14 @@ import { subagentRuns } from "../agents/subagents/registry/subagent-registry-mem
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
-  persistSubagentRunsToDiskOrThrow,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
@@ -70,7 +72,7 @@ it("settles a registry revision after persisting an already absent run", async (
         await projection.ensureMaterialized();
         expect(projection.needsMaterialization).toBe(false);
 
-        persistSubagentRunsToDiskOrThrow(subagentRuns, ["already-absent-run"]);
+        persistRegistryFixture(subagentRuns, ["already-absent-run"]);
 
         expect(projection.dirtyRowCount).toBe(0);
         remainingRefreshes = 10;
@@ -323,7 +325,7 @@ it.each(["exact", "bulk"] as const)(
           delivery: { status: "not_required" },
         };
         subagentRuns.set(run.runId, run);
-        persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
+        persistRegistryFixture(subagentRuns);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let holdNextRead = false;
@@ -447,7 +449,7 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
             ...run,
             execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
           });
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [run.runId]);
+          persistRegistryFixture(subagentRuns, [run.runId]);
         }
       }
     })();
@@ -554,7 +556,7 @@ it.each(
             } else if (publication === "ownership") {
               subagentRuns.commitOwnership(replacement);
             } else {
-              persistSubagentRunsToDiskOrThrow(subagentRuns, [run.runId]);
+              persistRegistryFixture(subagentRuns, [run.runId]);
             }
           } else if (publication === "retirement") {
             subagentRuns.delete(run.runId);

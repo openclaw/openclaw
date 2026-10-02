@@ -8,12 +8,12 @@ import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execut
 import * as acpReads from "../acp/runtime/session-meta-readonly.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";

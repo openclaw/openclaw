@@ -33,6 +33,7 @@ import {
   captureRecoveryCacheWrite,
   holdRecoveryKeyPersistence,
   readStoredRecoveryKey,
+  seedRecoveryKeyState,
 } from "./sdk/recovery-persistence.test-support.js";
 
 vi.mock("./sdk/joined-room-encryption.js", () => ({
@@ -515,23 +516,13 @@ function makeDeviceVerificationStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function writeRecoveryKeyFixture(recoveryKeyPath: string, seed: number): string {
+async function writeRecoveryKeyFixture(recoveryKeyPath: string, seed: number): Promise<string> {
   const privateKey = Uint8Array.from({ length: 32 }, (_, i) => i + seed);
   const encoded = encodeRecoveryKey(privateKey);
   if (!encoded) {
     throw new Error("Could not encode the recovery-key fixture");
   }
-  fs.writeFileSync(
-    recoveryKeyPath,
-    JSON.stringify({
-      version: 1,
-      createdAt: new Date().toISOString(),
-      keyId: "SSSSKEY",
-      encodedPrivateKey: encoded,
-      privateKeyBase64: Buffer.from(privateKey).toString("base64"),
-    }),
-    "utf8",
-  );
+  await seedRecoveryKeyState(recoveryKeyPath, privateKey, encoded);
   return encoded;
 }
 
@@ -2796,16 +2787,7 @@ describe("MatrixClient crypto bootstrapping", () => {
   it("rejects recovery keys when secret-storage metadata cannot authenticate them", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-test-"));
     const recoveryKeyPath = path.join(tmpDir, "recovery-key.json");
-    fs.writeFileSync(
-      recoveryKeyPath,
-      JSON.stringify({
-        version: 1,
-        createdAt: new Date().toISOString(),
-        keyId: "SSSSKEY",
-        privateKeyBase64: Buffer.from([1, 2, 3, 4]).toString("base64"),
-      }),
-      "utf8",
-    );
+    await seedRecoveryKeyState(recoveryKeyPath, new Uint8Array([1, 2, 3, 4]));
     const checkKey = vi.fn(async () => true);
     Object.assign(matrixJsClient, {
       secretStorage: {
@@ -3224,7 +3206,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-cached-"));
     const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const previousEncoded = writeRecoveryKeyFixture(recoveryKeyPath, 5);
+    const previousEncoded = await writeRecoveryKeyFixture(recoveryKeyPath, 5);
 
     const client = createSdkClient({
       encryption: true,
@@ -3264,7 +3246,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-invalid-"));
     const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const previousEncoded = writeRecoveryKeyFixture(recoveryKeyPath, 5);
+    const previousEncoded = await writeRecoveryKeyFixture(recoveryKeyPath, 5);
 
     const client = createSdkClient({
       encryption: true,
@@ -3310,7 +3292,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-restored-"));
     const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const encoded = writeRecoveryKeyFixture(recoveryKeyPath, 1);
+    const encoded = await writeRecoveryKeyFixture(recoveryKeyPath, 1);
 
     const client = createSdkClient({
       encryption: true,
@@ -3392,7 +3374,7 @@ describe("MatrixClient crypto bootstrapping", () => {
 
     const recoveryDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-sdk-verify-preserve-"));
     const recoveryKeyPath = path.join(recoveryDir, "recovery-key.json");
-    const previousEncoded = writeRecoveryKeyFixture(recoveryKeyPath, 5);
+    const previousEncoded = await writeRecoveryKeyFixture(recoveryKeyPath, 5);
     const client = createSdkClient({
       encryption: true,
       recoveryKeyPath,

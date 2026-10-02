@@ -386,7 +386,7 @@ export type PreparedSubagentMaintenanceRead = {
   dispose(): void;
 };
 
-/** Fresh physical maintenance facts share the existing cache's unpublished-intent overlays. */
+/** Fresh physical maintenance facts combine with current published resident rows. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
@@ -410,17 +410,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     context ? selectSubagentCacheStateForRead(cache.state, context) : {};
   const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
     assertCurrent();
-    const state = stateForRead();
-    const runs = new Map(state.replacementPending ? state.snapshot : persisted);
-    for (const [runId, { entry, committed }] of state.changes ?? []) {
-      if (!committed) {
-        if (entry) {
-          runs.set(runId, entry);
-        } else {
-          runs.delete(runId);
-        }
-      }
-    }
+    const runs = new Map(persisted);
     for (const [runId, entry] of inMemoryRuns) {
       runs.set(runId, cache.project(entry));
     }
