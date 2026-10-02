@@ -5,6 +5,7 @@ import type {
 } from "../../../../src/claws/clawhub-source.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ClawPluginAcknowledgement } from "./claws-plugin-review.ts";
+import type { ClawSkillAcknowledgement } from "./claws-skill-review.ts";
 
 export type ClawCatalogEntry = ClawHubClawCatalogEntry;
 export type ClawCatalogDetail = ClawHubClawCatalogDetail;
@@ -119,11 +120,13 @@ export async function applyOfficialClawAdd(
   plan: ClawAddPlan,
   acknowledgeClawHubRisk: boolean,
   acknowledgeCapabilities: ClawPluginAcknowledgement[],
+  acknowledgeSkillWarnings: ClawSkillAcknowledgement[],
 ): Promise<ClawAddApplyResult> {
   return await client.request<ClawAddApplyResult>("claws.add.apply", {
     source,
     planIntegrity: plan.planIntegrity,
     ...(plan.riskAcknowledgementRequired ? { acknowledgeClawHubRisk } : {}),
     ...(acknowledgeCapabilities.length ? { acknowledgeCapabilities } : {}),
+    ...(acknowledgeSkillWarnings.length ? { acknowledgeSkillWarnings } : {}),
   });
 }

@@ -10,6 +10,7 @@ export type ClawPluginReview = {
   ref: string;
   version: string;
   ownerAction: "install" | "reuse";
+  integrity: string;
   declaredCapabilities: PluginAcceptedDeclaredSurface;
   capabilityGrants: PluginOperatorGrants;
   reviewToken: string;
@@ -37,6 +38,9 @@ export function pluginAcknowledgements(
   }
   const acknowledgements: ClawPluginAcknowledgement[] = [];
   for (const review of reviews) {
+    if (!/^sha256-[A-Za-z0-9+/]{43}=$/.test(review.integrity)) {
+      return null;
+    }
     if (review.ownerAction === "reuse") {
       continue;
     }
@@ -176,6 +180,12 @@ export function renderClawPluginReviews(params: {
           >
         </div>
         <p class="claws-plugin-review__source">${review.ref} · ${review.version}</p>
+        <dl>
+          <div class="claws-plugin-review__fact">
+            <dt>${t("clawsPluginReview.integrity")}</dt>
+            <dd><code>${review.integrity}</code></dd>
+          </div>
+        </dl>
         ${renderDeclaredCapabilities(review.declaredCapabilities)}
         ${renderGrants(review.capabilityGrants)}
         ${

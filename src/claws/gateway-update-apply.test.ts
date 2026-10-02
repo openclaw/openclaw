@@ -63,9 +63,18 @@ const projection: ClawLifecyclePlanResult = {
   actions: [],
   capabilities: [],
   pluginReviews: [],
+  skillReviews: [],
   blockers: [],
   riskAcknowledgementRequired: false,
   readiness: { ready: true, requirements: [] },
+};
+const skillReview = {
+  actionId: "skill:@community/triage",
+  ref: "@community/triage",
+  version: "2.0.0",
+  integrity: "sha256:updated-skill",
+  riskWarning: "This skill release requires review.",
+  reviewToken: "sha256:updated-skill-review",
 };
 const config: OpenClawConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
 const packagePreflight = vi.fn();
@@ -169,6 +178,48 @@ describe("Gateway Claw Update application", () => {
     await expect(applyClawUpdateForGateway(applyInput())).rejects.toThrow("Consent changed");
     expect(mocks.persist).not.toHaveBeenCalled();
     expect(mocks.apply).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing or stale skill warning receipt before touching the prior install", async () => {
+    mocks.build.mockResolvedValue({
+      ...built,
+      projection: { ...projection, skillReviews: [skillReview] },
+    });
+
+    await expect(applyClawUpdateForGateway(applyInput())).rejects.toThrow(/review.*skill/i);
+    await expect(
+      applyClawUpdateForGateway({
+        ...applyInput(),
+        acknowledgeSkillWarnings: [
+          {
+            actionId: skillReview.actionId,
+            ref: skillReview.ref,
+            reviewToken: "sha256:old-review",
+            acknowledgeRiskWarning: true,
+          },
+        ],
+      }),
+    ).rejects.toThrow(/skill trust state changed/i);
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+
+    const result = await applyClawUpdateForGateway({
+      ...applyInput(),
+      acknowledgeSkillWarnings: [
+        {
+          actionId: skillReview.actionId,
+          ref: skillReview.ref,
+          reviewToken: skillReview.reviewToken,
+          acknowledgeRiskWarning: true,
+        },
+      ],
+    });
+    expect(result).toMatchObject({ status: "complete" });
+    expect(mocks.apply).toHaveBeenCalledWith(
+      plan,
+      expect.anything(),
+      expect.objectContaining({ skillConsent: expect.anything() }),
+    );
   });
 
   it("rechecks the current plan under the lease before persisting", async () => {

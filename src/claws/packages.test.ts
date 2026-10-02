@@ -460,11 +460,14 @@ describe("installClawPackages", () => {
       status: "pending",
       integrity: skillIntegrity,
     };
-    const installSkill = vi.fn().mockResolvedValue({
-      ok: true,
-      slug: "triage",
-      version: "1.2.3",
-      targetDir: "/tmp/incident-2/skills/triage",
+    const installSkill = vi.fn(async (params: { beforePersistentApply?: () => void }) => {
+      params.beforePersistentApply?.();
+      return {
+        ok: true as const,
+        slug: "triage",
+        version: "1.2.3",
+        targetDir: "/tmp/incident-2/skills/triage",
+      };
     });
     const persistPackageRef = vi.fn().mockReturnValue(pending);
     const onExternalMutation = vi.fn();
@@ -516,6 +519,90 @@ describe("installClawPackages", () => {
     expect(onExternalMutation).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "skill", ref: "@owner/triage" }),
     );
+  });
+
+  it("rejects an unreviewed skill warning before recording a ref or installing bytes", async () => {
+    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    const planned = plan([
+      {
+        kind: "skill",
+        source: "clawhub",
+        ref: "@owner/triage",
+        version: "1.2.3",
+        integrity: skillIntegrity,
+      },
+    ]);
+    planned.actions[0]!.details!.riskWarning = "Review this skill.";
+    const persistPackageRef = vi.fn();
+    const installSkill = vi.fn();
+
+    await expect(
+      installClawPackages(planned, {
+        deps: {
+          preflightSkill: vi.fn().mockResolvedValue({
+            ok: true,
+            action: "install",
+            integrity: skillIntegrity,
+            warning: "Review this skill.",
+          }),
+          persistPackageRef,
+          installSkill,
+          acquirePackageLease,
+        },
+      }),
+    ).rejects.toMatchObject({ code: "skill_consent_required" });
+    expect(persistPackageRef).not.toHaveBeenCalled();
+    expect(installSkill).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the reviewed skill warning at the installer trust check", async () => {
+    const skillIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    const planned = plan([
+      {
+        kind: "skill",
+        source: "clawhub",
+        ref: "@owner/triage",
+        version: "1.2.3",
+        integrity: skillIntegrity,
+      },
+    ]);
+    planned.actions[0]!.details!.riskWarning = "Review this skill.";
+    const skillConsent = { assertApproved: vi.fn() };
+    const pending = { kind: "skill", ref: "@owner/triage", status: "pending" };
+    const installSkill = vi.fn(
+      async (params: { confirmInstall?: (warning?: string) => boolean | Promise<boolean> }) => {
+        expect(await params.confirmInstall?.("Review this skill.")).toBe(true);
+        expect(await params.confirmInstall?.("Changed trust warning.")).toBe(false);
+        return {
+          ok: true as const,
+          slug: "triage",
+          version: "1.2.3",
+          targetDir: "/tmp/incident-2/skills/triage",
+        };
+      },
+    );
+
+    await installClawPackages(planned, {
+      skillConsent,
+      deps: {
+        preflightSkill: vi.fn().mockResolvedValue({
+          ok: true,
+          action: "install",
+          integrity: skillIntegrity,
+          warning: "Review this skill.",
+        }),
+        persistPackageRef: vi.fn().mockReturnValue(pending),
+        completePackageRef,
+        installSkill,
+        acquirePackageLease,
+      },
+    });
+    expect(skillConsent.assertApproved).toHaveBeenCalledWith({
+      ref: "@owner/triage",
+      version: "1.2.3",
+      integrity: skillIntegrity,
+      riskWarning: "Review this skill.",
+    });
   });
 
   it("installs plugins through the shared plugin surface", async () => {

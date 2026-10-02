@@ -367,6 +367,7 @@ describe("Claw source-host plugin collision", () => {
               code: "plugin_version_conflict",
               request: {} as never,
               installedVersion: "2026.6.1",
+              expectedVersion: pinnedLobster.version,
             }),
             probePlugin,
             inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,

@@ -68,10 +68,19 @@ const projected: ClawLifecyclePlanResult = {
   actions: [],
   capabilities: [],
   pluginReviews: [],
+  skillReviews: [],
   blockers: [],
   riskAcknowledgementRequired: false,
   configuredAccess: reviewedAccess,
   readiness: { ready: true, requirements: [] },
+};
+const skillReview = {
+  actionId: "skill:@community/triage",
+  ref: "@community/triage",
+  version: "1.0.0",
+  integrity: "sha256:artifact",
+  riskWarning: "This skill requires review before installation.",
+  reviewToken: "sha256:skill-review",
 };
 const config: OpenClawConfig = {};
 
@@ -211,6 +220,46 @@ describe("Gateway Claw Add application", () => {
     );
     expect(mocks.persist).not.toHaveBeenCalled();
     expect(mocks.apply).not.toHaveBeenCalled();
+  });
+
+  it("requires review of a warned skill before persisting the Claw", async () => {
+    mocks.project.mockReturnValue({ ...projected, skillReviews: [skillReview] });
+
+    await expect(applyClawAddForGateway(applyInput())).rejects.toThrow(/review.*skill/i);
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+  });
+
+  it("rejects a stale skill warning receipt and passes an exact one to the installer", async () => {
+    mocks.project.mockReturnValue({ ...projected, skillReviews: [skillReview] });
+    const input = applyInput();
+    const acknowledgement = {
+      actionId: skillReview.actionId,
+      ref: skillReview.ref,
+      reviewToken: skillReview.reviewToken,
+      acknowledgeRiskWarning: true as const,
+    };
+
+    await expect(
+      applyClawAddForGateway({
+        ...input,
+        acknowledgeSkillWarnings: [{ ...acknowledgement, reviewToken: "sha256:stale" }],
+      }),
+    ).rejects.toThrow(/skill trust state changed/i);
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.apply).not.toHaveBeenCalled();
+
+    await expect(
+      applyClawAddForGateway({ ...input, acknowledgeSkillWarnings: [acknowledgement] }),
+    ).resolves.toMatchObject({ status: "complete" });
+    const installOptions = mocks.apply.mock.calls[0]?.[1] as {
+      skillConsent: { assertApproved: (review: typeof skillReview) => void };
+    };
+    expect(installOptions.skillConsent).toBeDefined();
+    expect(() => installOptions.skillConsent.assertApproved(skillReview)).not.toThrow();
+    expect(() =>
+      installOptions.skillConsent.assertApproved({ ...skillReview, riskWarning: "changed" }),
+    ).toThrow(/skill trust state changed/i);
   });
 
   it("requires Gateway cron authority before persisting a scheduled Claw", async () => {

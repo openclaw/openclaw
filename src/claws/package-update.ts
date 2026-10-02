@@ -1,18 +1,30 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
+import {
+  acquireClawPackageLifecycleLease,
+  maintainClawPackageLifecycleLease,
+} from "../state/claw-package-lifecycle-lease.js";
 import { clawPackageKey } from "./application-provenance.js";
 import { digestClawValue as digest } from "./digest.js";
+import { readClawInventory } from "./inventory-read.js";
+import { hasOtherWorkspaceSkillOwner, planOwnedClawSkillUpgrade } from "./owned-skill-upgrade.js";
 import {
   digestClawPackageRef,
   replaceClawPackageRefExpected,
 } from "./package-update-provenance.js";
-import { installClawPackages, type ClawPluginInstallConsent } from "./packages.js";
+import {
+  installClawPackages,
+  type ClawPluginInstallConsent,
+  type ClawSkillInstallConsent,
+} from "./packages.js";
 import type { ClawPluginRuntimeOptions } from "./plugin-runtime.js";
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   persistClawPackageRef,
   readClawPackageRefs,
+  type PersistedClawInstall,
   type PersistedClawPackageRef,
 } from "./provenance.js";
 import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
@@ -31,6 +43,7 @@ type PackageInstallerDeps = NonNullable<
 export type ClawPackageUpdateExecution = {
   appliedIds: string[];
   rollback: () => Promise<void>;
+  commit?: () => Promise<void>;
 };
 
 export class ClawPackageUpdateError extends Error {
@@ -51,10 +64,14 @@ export async function applyClawPackageUpdate(
     ClawUpdateStateOptions & {
       config?: OpenClawConfig;
       pluginConsent?: ClawPluginInstallConsent;
+      skillConsent?: ClawSkillInstallConsent;
       installPackages?: typeof installClawPackages;
       readRefs?: (
         options?: Parameters<typeof readClawPackageRefs>[0],
       ) => ReturnType<typeof readClawPackageRefs> | Promise<ReturnType<typeof readClawPackageRefs>>;
+      readInstalls?: () =>
+        | Pick<PersistedClawInstall, "agentId" | "workspace">[]
+        | Promise<Pick<PersistedClawInstall, "agentId" | "workspace">[]>;
       replaceExpected?: (
         expected: Parameters<typeof replaceClawPackageRefExpected>[0],
         replacement: Parameters<typeof replaceClawPackageRefExpected>[1],
@@ -72,6 +89,8 @@ export async function applyClawPackageUpdate(
   }
   const installPackages = options.installPackages ?? installClawPackages;
   const readRefs = options.readRefs ?? readClawPackageRefsForUpdate;
+  const readInstalls =
+    options.readInstalls ?? (async () => (await readClawInventory(options)).installs);
   const replaceExpected = options.replaceExpected ?? replaceClawPackageRefForUpdate;
   const currentRefs = new Map(
     (await readRefs({ ...options, agentId: updatePlan.agentId })).map((ref) => [
@@ -82,6 +101,7 @@ export async function applyClawPackageUpdate(
   const allRefs = await readRefs(options);
   const undo: Array<() => Promise<void>> = [];
   const externalMutations: string[] = [];
+  const skillTransactions: PackageDirInstallTransaction[] = [];
   const appliedIds: string[] = [];
 
   const rollback = async () => {
@@ -90,7 +110,7 @@ export async function applyClawPackageUpdate(
       failures.push(`package artifacts may have been retained: ${externalMutations.join(", ")}`);
     }
     if (failures.length > 0) {
-      throw new ClawPackageUpdateError(failures.join("; "), externalMutations.length > 0);
+      throw new ClawPackageUpdateError(failures.join("; "), true);
     }
   };
 
@@ -126,6 +146,7 @@ export async function applyClawPackageUpdate(
         | (ClawPackage & {
             integrity?: string;
             ownerAction?: "install" | "reuse";
+            riskWarning?: string;
             extension?: PersistedClawPackageRef["extension"];
           })
         | undefined;
@@ -147,6 +168,20 @@ export async function applyClawPackageUpdate(
           `Target package action ${JSON.stringify(action.id)} has no resolved integrity.`,
           false,
         );
+      }
+      if (target.kind === "skill" && target.ownerAction === "install" && target.riskWarning) {
+        if (!options.skillConsent) {
+          throw new ClawPackageUpdateError(
+            `Skill ${target.ref}@${target.version} requires a trust warning acknowledgement.`,
+            false,
+          );
+        }
+        options.skillConsent.assertApproved({
+          ref: target.ref,
+          version: target.version,
+          integrity: targetIntegrity,
+          riskWarning: target.riskWarning,
+        });
       }
       if (
         target.kind === "plugin" &&
@@ -198,13 +233,57 @@ export async function applyClawPackageUpdate(
         installedAtMs: preservesExistingEdge && previous ? previous.installedAtMs : nowMs,
         updatedAtMs: nowMs,
       };
+      const skillUpgrade =
+        target.kind === "skill" &&
+        action.action === "change" &&
+        previous &&
+        previous.version !== target.version
+          ? await planOwnedClawSkillUpgrade({
+              workspace: targetAddPlan.agent.workspace,
+              previous,
+              targetVersion: target.version,
+              refs: allRefs,
+              installs: await readInstalls(),
+            })
+          : undefined;
+      if (skillUpgrade && !skillUpgrade.ok) {
+        throw new ClawPackageUpdateError(skillUpgrade.message, false);
+      }
+      const assertSkillUpgradeCurrent = async () => {
+        if (!skillUpgrade?.ok || !previous) {
+          return;
+        }
+        const checked = await planOwnedClawSkillUpgrade({
+          workspace: targetAddPlan.agent.workspace,
+          previous,
+          targetVersion: target.version,
+          refs: await readRefs(options),
+          installs: await readInstalls(),
+        });
+        if (!checked.ok || digest(checked.plan) !== digest(skillUpgrade.plan)) {
+          throw new ClawPackageUpdateError(
+            checked.ok ? "Skill changed after planning." : checked.message,
+            false,
+          );
+        }
+      };
       await replaceExpected(previous, claimed, options);
-      undo.push(async () => await replaceExpected(claimed, previous, options));
+      const restoreRef = async () => await replaceExpected(claimed, previous, options);
+      const undoIndex = undo.push(restoreRef) - 1;
       const refs = await installPackages(
         { ...targetAddPlan, actions: [targetAction] },
         {
           ...options,
           pluginInstallMode: action.action === "change" ? "update" : "install",
+          ...(skillUpgrade?.ok
+            ? {
+                skillUpgrade: {
+                  ref: target.ref,
+                  plan: skillUpgrade.plan,
+                  assertCurrent: assertSkillUpgradeCurrent,
+                },
+              }
+            : {}),
           deps: {
             ...options.packageDeps,
             preflightPlugin: async (params) => {
@@ -261,7 +340,15 @@ export async function applyClawPackageUpdate(
               ref: PersistedClawPackageRef,
               status: PersistedClawPackageRef["status"],
             ) => {
-              const next = { ...ref, status, updatedAtMs: nowMs };
+              const completedAtMs = status === "complete" ? Math.max(nowMs, Date.now()) : nowMs;
+              const next = {
+                ...ref,
+                status,
+                ...(!preservesExistingEdge && status === "complete"
+                  ? { installedAtMs: completedAtMs }
+                  : {}),
+                updatedAtMs: completedAtMs,
+              };
               await replaceExpected(claimed, next, options);
               claimed = next;
               return next;
@@ -269,6 +356,56 @@ export async function applyClawPackageUpdate(
           },
           onExternalMutation: () => {
             externalMutations.push(`${target.kind}:${target.ref}@${target.version}`);
+          },
+          onSkillTransaction: (_pkg, transaction) => {
+            skillTransactions.push(transaction);
+            undo[undoIndex] = async () => {
+              const acquireLease =
+                options.packageDeps?.acquirePackageLease ?? acquireClawPackageLifecycleLease;
+              const acquired = acquireLease(
+                {
+                  kind: "skill",
+                  source: "clawhub",
+                  ref: target.ref,
+                  workspace: targetAddPlan.agent.workspace,
+                },
+                { env: options.env, path: options.path, required: true },
+              );
+              if (!acquired) {
+                throw new Error(`Could not acquire package lifecycle lease for ${target.ref}.`);
+              }
+              const lease = maintainClawPackageLifecycleLease(acquired);
+              try {
+                lease.assertCurrent();
+                const liveRefs = await readRefs(options);
+                if (
+                  previous &&
+                  hasOtherWorkspaceSkillOwner({
+                    workspace: targetAddPlan.agent.workspace,
+                    previous,
+                    refs: liveRefs,
+                    installs: await readInstalls(),
+                  })
+                ) {
+                  throw new Error(`Another Claw now shares skill ${JSON.stringify(target.ref)}.`);
+                }
+                const liveRef = liveRefs.find(
+                  (candidate) =>
+                    candidate.agentId === updatePlan.agentId &&
+                    clawPackageKey(candidate) === action.id,
+                );
+                if (!liveRef || digestClawPackageRef(liveRef) !== digestClawPackageRef(claimed)) {
+                  throw new Error(
+                    `Skill ${JSON.stringify(target.ref)} ownership changed during rollback.`,
+                  );
+                }
+                await transaction.rollback();
+                lease.assertCurrent();
+                await restoreRef();
+              } finally {
+                lease.release();
+              }
+            };
           },
         },
       );
@@ -300,7 +437,7 @@ export async function applyClawPackageUpdate(
     } catch (rollbackError) {
       throw new ClawPackageUpdateError(
         `${coerceErrorMessage(error)}; rollback incomplete: ${coerceErrorMessage(rollbackError)}`,
-        externalMutations.length > 0,
+        true,
         { cause: new AggregateError([error, rollbackError]) },
       );
     }
@@ -310,5 +447,13 @@ export async function applyClawPackageUpdate(
       { cause: error },
     );
   }
-  return { appliedIds, rollback };
+  return {
+    appliedIds,
+    rollback,
+    commit: async () => {
+      for (const transaction of skillTransactions) {
+        await transaction.commit();
+      }
+    },
+  };
 }

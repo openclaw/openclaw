@@ -1,6 +1,8 @@
 import { stableStringify } from "@openclaw/normalization-core";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import type { ClawPackageStatus } from "./lifecycle-status.js";
-import type { PersistedClawPackageRef } from "./provenance.js";
+import { planOwnedClawSkillUpgrade } from "./owned-skill-upgrade.js";
+import type { PersistedClawInstall, PersistedClawPackageRef } from "./provenance.js";
 import type {
   ClawAddPlanAction,
   ClawDiagnostic,
@@ -28,6 +30,8 @@ export function recordingClawPackagePreflight(
   workspace: string,
   results: Map<string, ClawPackagePreflightResult>,
   currentPackages: ReadonlyMap<string, ClawPackageStatus>,
+  allPackages: readonly PersistedClawPackageRef[] = [],
+  allInstalls: readonly Pick<PersistedClawInstall, "agentId" | "workspace">[] = [],
 ): ClawPackagePreflight {
   return async (pkg) => {
     const result = preflight
@@ -38,15 +42,33 @@ export function recordingClawPackagePreflight(
           message: "Package preflight is unavailable.",
         };
     const current = currentPackages.get(clawPackageKey(pkg));
-    const normalized =
+    const ownedSkillUpgrade =
       !result.ok &&
-      pkg.kind === "plugin" &&
-      result.code === "plugin_version_conflict" &&
+      pkg.kind === "skill" &&
+      result.code === "skill_version_conflict" &&
       current?.state === "present" &&
-      current.origin === "claw-introduced" &&
-      !current.independentOwner &&
       current.version !== pkg.version &&
-      result.installedVersion === current.version
+      result.integrity &&
+      normalizeClawHubSha256Integrity(result.integrity)
+        ? await planOwnedClawSkillUpgrade({
+            workspace,
+            previous: current,
+            targetVersion: pkg.version,
+            refs: allPackages,
+            installs: allInstalls,
+          })
+        : undefined;
+    const ownedSkillConflict = ownedSkillUpgrade?.ok === true;
+    const normalized =
+      ownedSkillConflict ||
+      (!result.ok &&
+        pkg.kind === "plugin" &&
+        result.code === "plugin_version_conflict" &&
+        current?.state === "present" &&
+        current.origin === "claw-introduced" &&
+        !current.independentOwner &&
+        current.version !== pkg.version &&
+        result.installedVersion === current.version)
         ? { ...result, ok: true as const, action: "install" as const }
         : result;
     results.set(clawPackageKey(pkg), normalized);

@@ -12,6 +12,7 @@ import {
 } from "../../claws/gateway-add-apply.js";
 import { planClawAddForGateway } from "../../claws/gateway-add-plan.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
+import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
@@ -103,6 +104,9 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         ...(params.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
           : {}),
+        ...(params.acknowledgeSkillWarnings
+          ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
+          : {}),
         getPlanningContext: async () => {
           assertCurrent();
           const listedMcp = await listConfiguredMcpServers();
@@ -154,6 +158,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
           ? ErrorCodes.FORBIDDEN
           : error instanceof ClawGatewayPlanChangedError ||
               error instanceof ClawGatewayConsentError ||
+              error instanceof ClawSkillConsentError ||
               (error instanceof ClawHubSourceError &&
                 error.code === "clawhub_risk_acknowledgement_required")
             ? ErrorCodes.INVALID_REQUEST
@@ -161,6 +166,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
       const message =
         error instanceof ClawGatewayAuthorityError ||
         error instanceof ClawGatewayConsentError ||
+        error instanceof ClawSkillConsentError ||
         error instanceof ClawGatewayPlanChangedError ||
         error instanceof ClawHubSourceError
           ? error.message

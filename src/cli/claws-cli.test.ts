@@ -522,6 +522,60 @@ describe("claws cli", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("discloses a warned skill and binds local Add consent to its exact reviewed identity", async () => {
+    const { root, workspace } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const warning = "This community skill requires review before installation.";
+    const integrity = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    mocks.preflightClawPackage.mockResolvedValue({
+      ok: true,
+      action: "install",
+      integrity,
+      warning,
+    });
+
+    await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace, "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        id: "skill:@acme/demo-skill",
+        details: expect.objectContaining({ riskWarning: warning }),
+      }),
+    );
+    mocks.logs.length = 0;
+    await runCli(["claws", "add", root, "--dry-run", "--workspace", workspace]);
+    expect(mocks.logs.some((line) => line.includes(warning))).toBe(true);
+    mocks.logs.length = 0;
+
+    await runCli([
+      "claws",
+      "add",
+      root,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--workspace",
+      workspace,
+    ]);
+    const consent = mocks.applyClawAddPlan.mock.calls[0]?.[1]?.skillConsent;
+    expect(consent).toBeDefined();
+    expect(() =>
+      consent.assertApproved({
+        ref: "@acme/demo-skill",
+        version: "1.0.0",
+        integrity,
+        riskWarning: warning,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      consent.assertApproved({
+        ref: "@acme/demo-skill",
+        version: "1.0.0",
+        integrity,
+        riskWarning: "changed",
+      }),
+    ).toThrow(/review.*again/i);
+  });
+
   it("does not apply an add before owning the target agent's deletion lease", async () => {
     const manifestPath = await writeManifest();
     const workspace = join(tempDirs.make("openclaw-claws-add-"), "workspace");
@@ -767,6 +821,79 @@ describe("claws cli", () => {
       mutationAllowed: false,
       agentId: "demo-agent",
     });
+  });
+
+  it("discloses a warned skill Update and passes exact-plan consent to the installer", async () => {
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const warning = "Review this skill update.";
+    const integrity = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    mocks.preflightClawPackage.mockResolvedValue({
+      ok: true,
+      action: "install",
+      integrity,
+      warning,
+    });
+    const baseBuild = mocks.buildClawUpdatePlan.getMockImplementation();
+    if (!baseBuild) {
+      throw new Error("missing update fixture implementation");
+    }
+    mocks.buildClawUpdatePlan.mockImplementation(async (input) => {
+      await input.packagePreflight(
+        { kind: "skill", source: "clawhub", ref: "@acme/demo-skill", version: "1.0.0" },
+        "/tmp/demo-workspace",
+      );
+      return {
+        ...(await baseBuild(input)),
+        actions: [
+          {
+            kind: "package",
+            id: "skill:@acme/demo-skill",
+            action: "change",
+            target: "clawhub:@acme/demo-skill@1.0.0",
+            blocked: false,
+            reason: "Upgrade managed skill",
+            desiredDigest: "sha256:planned-skill",
+          },
+        ],
+      };
+    });
+
+    await runCli(["claws", "update", "demo-agent", "--from", root, "--dry-run", "--json"]);
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      skillWarnings: [
+        { ref: "@acme/demo-skill", version: "1.0.0", integrity, riskWarning: warning },
+      ],
+    });
+    mocks.logs.length = 0;
+    await runCli([
+      "claws",
+      "update",
+      "demo-agent",
+      "--from",
+      root,
+      "--yes",
+      "--plan-integrity",
+      "sha256:update-plan",
+      "--json",
+    ]);
+    const consent = mocks.applyClawUpdatePlan.mock.calls[0]?.[2]?.skillConsent;
+    expect(consent).toBeDefined();
+    expect(() =>
+      consent.assertApproved({
+        ref: "@acme/demo-skill",
+        version: "1.0.0",
+        integrity,
+        riskWarning: warning,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      consent.assertApproved({
+        ref: "@acme/demo-skill",
+        version: "1.0.0",
+        integrity,
+        riskWarning: "changed",
+      }),
+    ).toThrow(/review.*again/i);
   });
 
   it("prints capability escalation details in human update previews", async () => {

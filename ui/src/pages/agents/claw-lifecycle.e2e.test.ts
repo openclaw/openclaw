@@ -12,6 +12,7 @@ import {
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browserAvailable = canRunPlaywrightChromium(executablePath);
 const capture = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
+const pluginIntegrity = `sha256-${"A".repeat(43)}=`;
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
   { name: "tablet", width: 768, height: 1024 },
@@ -98,6 +99,7 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
             capabilities: [],
             blockers: [],
             pluginReviews: [],
+            skillReviews: [],
             riskAcknowledgementRequired: false,
           },
         },
@@ -271,6 +273,7 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
               ref: "@openclaw/workflow-tools",
               version: "1.3.0",
               ownerAction: "install",
+              integrity: pluginIntegrity,
               declaredCapabilities: {
                 channels: [],
                 providers: [],
@@ -287,6 +290,7 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
               reviewToken: "review-workflow-tools-1.3.0",
             },
           ],
+          skillReviews: [],
           blockers: [],
           riskAcknowledgementRequired: false,
           configuredAccess: {
@@ -346,6 +350,7 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
       await update.click();
       const dialog = page.locator(".claw-lifecycle-dialog");
       await dialog.getByText("workflow.start", { exact: true }).waitFor();
+      await dialog.getByText(pluginIntegrity, { exact: true }).waitFor();
       expect((await gateway.waitForRequest("claws.catalog.search")).params).toEqual({
         query: "@openclaw/workflow-operator",
         limit: 100,
@@ -366,6 +371,7 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
       await confirm.scrollIntoViewIfNeeded();
       expect(await confirm.isEnabled()).toBe(true);
       if (capture) {
+        await dialog.getByText(pluginIntegrity, { exact: true }).scrollIntoViewIfNeeded();
         const dir = createControlUiE2eArtifactDir(`claw-update-${viewport.name}`);
         await page.screenshot({ path: `${dir}/review.png`, animations: "disabled" });
       }

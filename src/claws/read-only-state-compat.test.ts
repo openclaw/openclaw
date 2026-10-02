@@ -9,20 +9,25 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY } from "../state/openclaw-state-schema-compatibility.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { readClawInventory } from "./inventory-read.js";
 import { readClawResumeStateReadOnly } from "./package-resume.js";
 import { parseClawManifest } from "./schema.js";
 import type { ClawSourceIdentity } from "./types.js";
 import { buildClawUpdatePlan } from "./update-plan.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => closeOpenClawStateDatabaseForTest());
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeStateDatabaseForTest();
+    cleanup();
+  }),
+);
 
 function createBaseShapeState(params: {
   env: { OPENCLAW_STATE_DIR: string };
   packageRoot: string;
   workspace: string;
+  includePackageRef?: boolean;
 }): string {
   const database = openOpenClawStateDatabase({ env: params.env });
   const databasePath = database.path;
@@ -40,6 +45,21 @@ function createBaseShapeState(params: {
       )`,
     )
     .run(params.packageRoot, join(params.packageRoot, "CLAW.md"), params.workspace);
+  if (params.includePackageRef) {
+    database.db
+      .prepare(
+        `INSERT INTO claw_package_refs (
+          agent_id, package_kind, package_source, package_ref, package_version, package_integrity,
+          schema_version, claw_name, package_status, relationship, origin, independent_owner,
+          installed_at_ms, updated_at_ms
+        ) VALUES (
+          'legacy-worker', 'plugin', 'clawhub', '@openclaw/legacy-plugin', '1.0.0', ?,
+          'openclaw.clawPackageRef.v1', '@acme/legacy', 'complete', 'referenced',
+          'claw-introduced', 0, 1000, 2000
+        )`,
+      )
+      .run(`sha256:${"a".repeat(64)}`);
+  }
   for (const column of OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY.allowedMissingColumns ??
     []) {
     const [table, name] = column.split(".");
@@ -61,7 +81,10 @@ function createBaseShapeState(params: {
   return databasePath;
 }
 
-async function createFixture(label: string): Promise<{
+async function createFixture(
+  label: string,
+  options: { includePackageRef?: boolean } = {},
+): Promise<{
   env: { OPENCLAW_STATE_DIR: string };
   databasePath: string;
   packageRoot: string;
@@ -76,7 +99,7 @@ async function createFixture(label: string): Promise<{
   const env = { OPENCLAW_STATE_DIR: join(root, "state") };
   return {
     env,
-    databasePath: createBaseShapeState({ env, packageRoot, workspace }),
+    databasePath: createBaseShapeState({ env, packageRoot, workspace, ...options }),
     packageRoot,
     workspace,
   };
@@ -92,6 +115,24 @@ describe("read-only Claw state compatibility", () => {
     expect(inventory.installs).toMatchObject([{ agentId: "legacy-worker", status: "complete" }]);
     expect(inventory.installs[0]).not.toHaveProperty("bootstrap");
     expect(inventory.packages).toEqual([]);
+    expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
+  });
+
+  it("preserves a populated legacy package ref through the Claw inventory worker", async () => {
+    const fixture = await createFixture("openclaw-claw-legacy-package-inventory-", {
+      includePackageRef: true,
+    });
+    const before = await readFile(fixture.databasePath);
+
+    const inventory = await readClawInventory({ path: fixture.databasePath, env: fixture.env });
+    const resume = await readClawResumeStateReadOnly("legacy-worker", {
+      path: fixture.databasePath,
+    });
+    await closeStateDatabaseForTest();
+
+    expect(inventory.packages).toHaveLength(1);
+    expect(inventory.packages).toEqual(resume?.packageRefs);
+    expect(inventory.packages[0]?.extension).toBeUndefined();
     expect(before.equals(await readFile(fixture.databasePath))).toBe(true);
   });
 

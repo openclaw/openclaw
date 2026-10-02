@@ -1,4 +1,7 @@
-import type { ClawPluginAcknowledgement } from "../../packages/gateway-protocol/src/schema/claws.js";
+import type {
+  ClawPluginAcknowledgement,
+  ClawSkillAcknowledgement,
+} from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -14,6 +17,7 @@ import {
 import { projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindClawPluginInstallConsent } from "./gateway-plugin-consent.js";
+import { bindClawSkillWarningConsent } from "./gateway-skill-consent.js";
 
 export class ClawGatewayPlanChangedError extends Error {
   constructor(message = "The Claw changed since review. Preview it again.") {
@@ -36,6 +40,7 @@ export async function applyClawAddForGateway(
     planIntegrity: string;
     acknowledgeClawHubRisk?: boolean;
     acknowledgeCapabilities?: readonly ClawPluginAcknowledgement[];
+    acknowledgeSkillWarnings?: readonly ClawSkillAcknowledgement[];
     getPlanningContext: () => Promise<GatewayClawAddPlanningContext>;
     assertCurrent: () => void;
     signal?: AbortSignal;
@@ -115,6 +120,11 @@ export async function applyClawAddForGateway(
               input.acknowledgeCapabilities,
               assertCurrent,
             );
+            const skillConsent = bindClawSkillWarningConsent(
+              currentProjection.skillReviews,
+              input.acknowledgeSkillWarnings,
+              assertCurrent,
+            );
             if (
               currentProjection.pluginReviews.some((review) => review.ownerAction === "install") &&
               !input.reloadPlugins
@@ -188,6 +198,7 @@ export async function applyClawAddForGateway(
               config: persistedContext.config,
               consentPlanIntegrity: persistedPlan.planIntegrity,
               ...(pluginConsent ? { pluginConsent } : {}),
+              ...(skillConsent ? { skillConsent } : {}),
               ...(input.reloadPlugins ? { reloadPlugins: input.reloadPlugins } : {}),
               ...(input.cronGateway ? { cronGateway: input.cronGateway } : {}),
             });

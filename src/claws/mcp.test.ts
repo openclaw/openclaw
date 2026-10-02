@@ -86,6 +86,7 @@ describe("installClawMcpServers", () => {
       },
       createOnly: true,
       recordIndependentOwner: false,
+      assertCurrent: expect.any(Function),
     });
     expect(setMcpServer).toHaveBeenNthCalledWith(2, {
       name: "linear",
@@ -96,6 +97,7 @@ describe("installClawMcpServers", () => {
       },
       createOnly: true,
       recordIndependentOwner: false,
+      assertCurrent: expect.any(Function),
     });
     expect(refs).toMatchObject([
       {

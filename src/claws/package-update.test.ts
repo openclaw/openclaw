@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +8,7 @@ import { commitPluginInstallRecordsWithConfig } from "../plugins/install-record-
 import type { installManagedPlugin } from "../plugins/management-mutations.js";
 import { preflightPluginInstall } from "../plugins/plugin-install-preflight.js";
 import { hasPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { digestClawHubSkillTree } from "../skills/lifecycle/skill-tree-digest.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
@@ -42,6 +44,31 @@ function ref(kind: "skill" | "plugin", name: string, version: string): Persisted
     installedAtMs: 10,
     updatedAtMs: 10,
   };
+}
+
+async function trackSkill(workspace: string, integrity: string) {
+  const skillDir = path.join(workspace, "skills", "triage");
+  const content = "previous skill bytes";
+  await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+  await fs.mkdir(path.join(workspace, ".clawhub"), { recursive: true });
+  await fs.writeFile(path.join(skillDir, "SKILL.md"), content);
+  const metadata = {
+    registry: "https://clawhub.ai",
+    installedAt: 1,
+    artifact: { kind: "archive", integrity, sha256: "a".repeat(64) },
+    skillFile: { path: "SKILL.md", sha256: createHash("sha256").update(content).digest("hex") },
+    fileTreeSha256: await digestClawHubSkillTree(skillDir),
+  };
+  await fs.writeFile(
+    path.join(skillDir, ".clawhub", "origin.json"),
+    JSON.stringify({ version: 1, slug: "triage", installedVersion: "1.0.0", ...metadata }),
+  );
+  const lock = JSON.stringify({
+    version: 1,
+    skills: { triage: { version: "1.0.0", ...metadata } },
+  });
+  await fs.writeFile(path.join(workspace, ".clawhub", "lock.json"), lock);
+  return { skillDir, lock };
 }
 
 const manifest: ClawManifest = {
@@ -136,6 +163,141 @@ describe("applyClawPackageUpdate", () => {
     ).toBe(digestClawPackageRef(persisted));
   });
 
+  it("keeps existing skill bytes and index untouched when update warning consent is missing", async () => {
+    const root = dirs.make("claw-skill-warning-");
+    const skillFile = path.join(root, "skills", "triage", "SKILL.md");
+    const indexFile = path.join(root, "skills", ".clawhub", "lock.json");
+    await fs.mkdir(path.dirname(skillFile), { recursive: true });
+    await fs.mkdir(path.dirname(indexFile), { recursive: true });
+    await fs.writeFile(skillFile, "previous skill bytes");
+    await fs.writeFile(indexFile, '{"version":"1.0.0"}');
+    const previous = ref("skill", "triage", "1.0.0");
+    const targetAction = addPlan.actions.find((action) => action.id === "skill:triage")!;
+    const targetPlan: ClawAddPlan = {
+      ...addPlan,
+      actions: [
+        {
+          ...targetAction,
+          details: { ...targetAction.details, riskWarning: "Review this skill update." },
+        },
+      ],
+    };
+    const replaceExpected = vi.fn();
+    const installPackages = vi.fn(async () => {
+      await fs.writeFile(skillFile, "new skill bytes");
+      await fs.writeFile(indexFile, '{"version":"2.0.0"}');
+      return [];
+    });
+
+    await expect(
+      applyClawPackageUpdate(
+        plan([
+          {
+            kind: "package",
+            id: "skill:triage",
+            action: "change",
+            target: "clawhub:triage@2.0.0",
+            blocked: false,
+            reason: "Upgrade managed skill",
+            currentDigest: digestClawPackageRef(previous),
+          },
+        ]),
+        targetPlan,
+        { readRefs: () => [previous], replaceExpected, installPackages },
+      ),
+    ).rejects.toThrow(/trust warning acknowledgement/i);
+    expect(replaceExpected).not.toHaveBeenCalled();
+    expect(installPackages).not.toHaveBeenCalled();
+    expect(await fs.readFile(skillFile, "utf8")).toBe("previous skill bytes");
+    expect(await fs.readFile(indexFile, "utf8")).toBe('{"version":"1.0.0"}');
+  });
+
+  it("rolls back a skill update when the live installer warning differs from the reviewed warning", async () => {
+    const root = dirs.make("claw-skill-warning-change-");
+    const skillFile = path.join(root, "skills", "triage", "SKILL.md");
+    const indexFile = path.join(root, ".clawhub", "lock.json");
+    const previousIntegrity = `sha256:${"a".repeat(64)}`;
+    const tracked = await trackSkill(root, previousIntegrity);
+    const previous = {
+      ...ref("skill", "triage", "1.0.0"),
+      integrity: previousIntegrity,
+      updatedAtMs: Date.now() + 1_000,
+    };
+    let current: PersistedClawPackageRef | undefined = previous;
+    const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    const targetAction = addPlan.actions.find((action) => action.id === "skill:triage")!;
+    const targetPlan: ClawAddPlan = {
+      ...addPlan,
+      agent: { ...addPlan.agent, workspace: root },
+      actions: [
+        {
+          ...targetAction,
+          details: {
+            ...targetAction.details,
+            integrity,
+            riskWarning: "Reviewed skill warning.",
+          },
+        },
+      ],
+    };
+    const replaceExpected = vi.fn(
+      async (
+        expected: PersistedClawPackageRef | undefined,
+        replacement: PersistedClawPackageRef | undefined,
+      ) => {
+        expect(current).toEqual(expected);
+        current = replacement;
+      },
+    );
+    const installSkill = vi.fn(
+      async (params: {
+        confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
+        beforePersistentApply?: () => void;
+      }) => {
+        expect(await params.confirmInstall?.("Changed skill warning.")).toBe(false);
+        return { ok: false as const, error: "Install cancelled." };
+      },
+    );
+
+    await expect(
+      applyClawPackageUpdate(
+        plan([
+          {
+            kind: "package",
+            id: "skill:triage",
+            action: "change",
+            target: "clawhub:triage@2.0.0",
+            blocked: false,
+            reason: "Upgrade managed skill",
+            currentDigest: digestClawPackageRef(previous),
+          },
+        ]),
+        targetPlan,
+        {
+          readRefs: () => (current ? [current] : []),
+          readInstalls: () => [{ agentId: "worker", workspace: root }],
+          replaceExpected,
+          skillConsent: { assertApproved: vi.fn() },
+          packageDeps: {
+            preflightSkill: vi.fn().mockResolvedValue({
+              ok: false,
+              code: "skill_version_conflict",
+              error: "v1 occupies triage",
+              integrity,
+              warning: "Reviewed skill warning.",
+            }),
+            installSkill,
+            acquirePackageLease: vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() })),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ partial: false });
+    expect(installSkill).toHaveBeenCalledOnce();
+    expect(current).toEqual(previous);
+    expect(await fs.readFile(skillFile, "utf8")).toBe("previous skill bytes");
+    expect(await fs.readFile(indexFile, "utf8")).toBe(tracked.lock);
+  });
+
   it("adds extension metadata to a reused v1 plugin edge without changing ownership", async () => {
     const previous = ref("plugin", "audit", "1.0.0");
     const extension = {
@@ -222,7 +384,7 @@ describe("applyClawPackageUpdate", () => {
   it.each([false, true])(
     "updates exact references but reports retained artifacts on rollback (undo errors: %s)",
     async (rollbackErrors) => {
-      const oldSkill = ref("skill", "triage", "1.0.0");
+      const oldSkill = ref("plugin", "triage", "1.0.0");
       const legacy = ref("plugin", "legacy", "1.0.0");
       const installPackages = vi.fn(
         async (current: ClawAddPlan, options: Parameters<typeof installClawPackages>[1]) => {
@@ -248,7 +410,7 @@ describe("applyClawPackageUpdate", () => {
         plan([
           {
             kind: "package",
-            id: "skill:triage",
+            id: "plugin:triage",
             action: "change",
             target: "clawhub:triage@2.0.0",
             blocked: false,
@@ -273,7 +435,18 @@ describe("applyClawPackageUpdate", () => {
             currentDigest: digestClawPackageRef(legacy),
           },
         ]),
-        addPlan,
+        {
+          ...addPlan,
+          actions: addPlan.actions.map((action) =>
+            action.id === "skill:triage"
+              ? {
+                  ...action,
+                  id: "plugin:triage",
+                  details: { ...action.details, kind: "plugin", installId: "triage" },
+                }
+              : action,
+          ),
+        },
         {
           installPackages,
           readRefs: () => [oldSkill, legacy],
@@ -281,7 +454,7 @@ describe("applyClawPackageUpdate", () => {
         },
       );
 
-      expect(execution.appliedIds).toEqual(["skill:triage", "plugin:audit", "plugin:legacy"]);
+      expect(execution.appliedIds).toEqual(["plugin:triage", "plugin:audit", "plugin:legacy"]);
       expect(installPackages).toHaveBeenCalledTimes(2);
       expect(replaceExpected).toHaveBeenCalledWith(
         oldSkill,
@@ -295,7 +468,7 @@ describe("applyClawPackageUpdate", () => {
         partial: true,
         message:
           (rollbackErrors ? "legacy; audit; triage; " : "") +
-          "package artifacts may have been retained: skill:triage@2.0.0, plugin:audit@1.0.0",
+          "package artifacts may have been retained: plugin:triage@2.0.0, plugin:audit@1.0.0",
       });
       expect(replaceExpected).toHaveBeenCalledWith(undefined, legacy, expect.any(Object));
       expect(replaceExpected).toHaveBeenCalledWith(
@@ -459,6 +632,7 @@ describe("applyClawPackageUpdate", () => {
         if (!result.ok) {
           throw new Error(result.error);
         }
+        await params.beforePersistentEffect?.();
         const write = await commitPluginInstallRecordsWithConfig({
           previousInstallRecords: priorRecords,
           nextInstallRecords: currentRecords,

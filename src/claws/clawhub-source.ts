@@ -21,7 +21,7 @@ import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { readClawManifestFile } from "./reader.js";
 import { isExactSemVer } from "./schema-portability.js";
-import type { ClawReadResult } from "./types.js";
+import type { ClawReadResult, ClawSourceIdentity } from "./types.js";
 
 const CLAW_SOURCE_CACHE_DIR = "claws/sources";
 const CLAWHUB_TIMEOUT_MS = 30_000;
@@ -441,6 +441,84 @@ async function readVerifiedArtifactSource(params: {
       integrity: `sha256:${params.artifactSha256}`,
       byteLength: params.artifactByteLength,
     },
+  };
+}
+
+export async function readMatchingCachedClawHubSource(params: {
+  recorded: ClawSourceIdentity;
+  verified: ResolvedClawHubSource;
+  trust: ClawHubClawTrust;
+  stateDir?: string;
+}): Promise<ResolvedClawHubSource> {
+  const { recorded, verified } = params;
+  if (
+    recorded.kind !== "package" ||
+    recorded.integrityKind !== "artifact" ||
+    verified.source.kind !== "package" ||
+    verified.source.integrityKind !== "artifact" ||
+    recorded.name !== verified.source.name ||
+    recorded.version !== verified.source.version ||
+    recorded.integrity !== verified.source.integrity ||
+    recorded.byteLength !== verified.source.byteLength ||
+    !/^sha256:[a-f0-9]{64}$/.test(verified.source.integrity)
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_recorded_artifact_mismatch",
+      "The recorded Claw artifact does not match the verified ClawHub release.",
+    );
+  }
+  const digest = verified.source.integrity.slice("sha256:".length);
+  const cacheRoot = path.join(params.stateDir ?? resolveStateDir(), CLAW_SOURCE_CACHE_DIR, digest);
+  const cacheEntry = await fs.lstat(cacheRoot).catch(() => undefined);
+  const canonicalCacheRoot = await fs.realpath(cacheRoot).catch(() => undefined);
+  if (
+    !cacheEntry?.isDirectory() ||
+    !canonicalCacheRoot ||
+    recorded.packageRoot !== canonicalCacheRoot
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_recorded_source_unavailable",
+      "The recorded Claw source is not in the verified ClawHub cache.",
+    );
+  }
+  const matches = await sourceDirectoriesMatch(verified.source.packageRoot, cacheRoot).catch(
+    () => false,
+  );
+  if (!matches) {
+    throw new ClawHubSourceError(
+      "clawhub_cached_source_mismatch",
+      "The recorded Claw source differs from the verified release artifact.",
+    );
+  }
+  const cached = await readVerifiedArtifactSource({
+    sourceRoot: cacheRoot,
+    packageName: recorded.name,
+    version: recorded.version,
+    artifactSha256: digest,
+    artifactByteLength: recorded.byteLength,
+  });
+  if (cached.source.manifestPath !== recorded.manifestPath) {
+    throw new ClawHubSourceError(
+      "clawhub_recorded_source_mismatch",
+      "The recorded Claw manifest path differs from the verified release artifact.",
+    );
+  }
+  return {
+    ...cached,
+    diagnostics: [
+      ...cached.diagnostics,
+      ...(params.trust.trustWarning
+        ? [
+            {
+              level: "warning" as const,
+              code: "clawhub_trust_warning",
+              phase: "plan" as const,
+              path: "$",
+              message: params.trust.trustWarning,
+            },
+          ]
+        : []),
+    ],
   };
 }
 

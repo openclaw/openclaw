@@ -72,6 +72,29 @@ describe("installPackageDir rollback", () => {
     return { backupDir, transaction };
   }
 
+  it("reports incomplete recovery when a deferred backup cannot be restored", async () => {
+    const { sourceDir, targetDir } = await createFixture("deferred-restore-blocked");
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall({
+        ...updateOptions(sourceDir, targetDir),
+        afterBackup: async () => {
+          await fs.mkdir(targetDir, { recursive: true });
+          await fs.writeFile(path.join(targetDir, "successor.txt"), "successor");
+          return { ok: false as const, error: "backup rejected" };
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      recoveryIncomplete: true,
+      error: expect.stringContaining("backup retained"),
+    });
+    await expect(fs.readFile(path.join(targetDir, "successor.txt"), "utf8")).resolves.toBe(
+      "successor",
+    );
+  });
+
   it("preserves the Windows EPERM backup copy fallback", async () => {
     const { sourceDir, targetDir } = await createFixture("windows-backup-eperm");
     let denied = false;

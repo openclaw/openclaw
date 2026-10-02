@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClawHubSourceError } from "../../claws/clawhub-source.js";
 import { ClawGatewayPlanChangedError } from "../../claws/gateway-add-apply.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
+import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { clawsAddHandlers } from "./claws-add.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
@@ -24,7 +25,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function callAddPlan(params: unknown, getRuntimeConfig: () => unknown) {
+function callAddPlan(params: Record<string, unknown>, getRuntimeConfig: () => unknown) {
   const replies: Parameters<RespondFn>[] = [];
   return {
     replies,
@@ -44,7 +45,7 @@ function callAddPlan(params: unknown, getRuntimeConfig: () => unknown) {
 }
 
 function callAddApply(
-  params: unknown,
+  params: Record<string, unknown>,
   getRuntimeConfig: () => unknown,
   options: { hasCurrentClientAuthority?: () => boolean; client?: unknown; cron?: unknown } = {},
 ) {
@@ -221,7 +222,7 @@ describe("claws.add.apply Gateway method", () => {
     ]);
   });
 
-  it("returns review errors for a changed plan or plugin acknowledgement", async () => {
+  it("returns review errors for a changed plan or missing plugin or skill acknowledgement", async () => {
     applyClawAddForGateway.mockRejectedValueOnce(new ClawGatewayPlanChangedError());
     const changed = callAddApply(params, () => enabled);
     await changed.run();
@@ -233,6 +234,16 @@ describe("claws.add.apply Gateway method", () => {
     const consent = callAddApply(params, () => enabled);
     await consent.run();
     expect(consent.replies[0]?.[2]).toMatchObject({ code: "INVALID_REQUEST" });
+
+    applyClawAddForGateway.mockRejectedValueOnce(
+      new ClawSkillConsentError("Review and acknowledge each skill trust warning again."),
+    );
+    const skillConsent = callAddApply(params, () => enabled);
+    await skillConsent.run();
+    expect(skillConsent.replies[0]?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "Review and acknowledge each skill trust warning again.",
+    });
   });
 
   it("returns a definite rejection when ClawHub now requires trust acknowledgement", async () => {

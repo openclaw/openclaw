@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { digestClawHubSkillTree } from "../skills/lifecycle/skill-tree-digest.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -51,6 +52,40 @@ function build(
     packagePreflight,
     ...overrides,
   });
+}
+
+async function trackOwnedTriageSkill(current: Awaited<ReturnType<typeof fixture>>) {
+  const workspace = current.addPlan.agent.workspace;
+  const skillDir = join(workspace, "skills", "triage");
+  const content = "---\nname: triage\ndescription: Triage incidents\n---\n";
+  const integrity = `sha256:${"a".repeat(64)}`;
+  const metadata = {
+    registry: "https://clawhub.ai",
+    installedAt: 1,
+    artifact: { kind: "archive", sha256: "a".repeat(64), integrity },
+    skillFile: { path: "SKILL.md", sha256: createHash("sha256").update(content).digest("hex") },
+  };
+  await mkdir(join(skillDir, ".clawhub"), { recursive: true });
+  await mkdir(join(workspace, ".clawhub"), { recursive: true });
+  await writeFile(join(skillDir, "SKILL.md"), content);
+  const fileTreeSha256 = await digestClawHubSkillTree(skillDir);
+  await writeFile(
+    join(skillDir, ".clawhub", "origin.json"),
+    JSON.stringify({
+      version: 1,
+      slug: "triage",
+      installedVersion: "1.0.0",
+      ...metadata,
+      fileTreeSha256,
+    }),
+  );
+  await writeFile(
+    join(workspace, ".clawhub", "lock.json"),
+    JSON.stringify({
+      version: 1,
+      skills: { triage: { version: "1.0.0", ...metadata, fileTreeSha256 } },
+    }),
+  );
 }
 
 describe("buildClawUpdatePlan", () => {
@@ -868,6 +903,53 @@ describe("buildClawUpdatePlan", () => {
           path: "$.packages[2]",
         }),
       ]),
+    );
+  });
+
+  it("blocks replacement of a ClawHub skill shared in the same workspace", async () => {
+    const current = await fixture();
+    await trackOwnedTriageSkill(current);
+    const inventory = await readClawInventory({ env: current.env });
+    const installed = inventory.installs.find((candidate) => candidate.agentId === "worker")!;
+    const skill = inventory.packages.find(
+      (candidate) => candidate.agentId === "worker" && candidate.kind === "skill",
+    )!;
+    inventory.installs.push({ ...installed, agentId: "other" });
+    inventory.packages.push({ ...skill, agentId: "other" });
+    const parsed = parseClawManifest({
+      ...current.manifest,
+      packages: current.manifest.packages.map((pkg) =>
+        pkg.kind === "skill" ? { ...pkg, version: "2.0.0" } : pkg,
+      ),
+    });
+    if (!parsed.ok) {
+      throw new Error(JSON.stringify(parsed.diagnostics));
+    }
+
+    const plan = await build(current, {
+      inventory,
+      exactAgentId: true,
+      targetManifest: parsed.manifest,
+      targetSource: targetSource(current.root, "2.0.0", "sha256:target"),
+      packagePreflight: async (pkg) =>
+        pkg.kind === "skill"
+          ? {
+              ok: false,
+              code: "skill_version_conflict",
+              integrity: `sha256:${"b".repeat(64)}`,
+              message: "v1 occupies triage",
+            }
+          : packagePreflight(pkg),
+    });
+
+    expect(plan.actions).toContainEqual(
+      expect.objectContaining({
+        kind: "package",
+        id: "skill:triage",
+        action: "manual",
+        blocked: true,
+        reason: expect.stringContaining("Another Claw"),
+      }),
     );
   });
 

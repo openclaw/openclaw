@@ -11,6 +11,7 @@ import type {
   ClawCatalogEntry,
 } from "./claws-catalog-client.ts";
 import { pluginAcknowledgements, renderClawPluginReviews } from "./claws-plugin-review.ts";
+import { skillAcknowledgements, renderClawSkillReviews } from "./claws-skill-review.ts";
 import "../../styles/claws-catalog.css";
 
 export type ClawsCatalogViewProps = {
@@ -29,6 +30,7 @@ export type ClawsCatalogViewProps = {
   statusChecking: boolean;
   riskAcknowledged: boolean;
   acceptedPluginRisks: ReadonlySet<string>;
+  acceptedSkillWarnings: ReadonlySet<string>;
   canAdd: boolean;
   onSearch: (query: string) => void;
   onSelect: (entry: ClawCatalogEntry) => void;
@@ -38,6 +40,7 @@ export type ClawsCatalogViewProps = {
   onRetryReview: () => void;
   onRiskAcknowledged: (checked: boolean) => void;
   onPluginRiskAcknowledged: (key: string, checked: boolean) => void;
+  onSkillRiskAcknowledged: (key: string, checked: boolean) => void;
   onConfirm: () => void;
   onCheckStatus: () => void;
 };
@@ -133,7 +136,8 @@ function renderReview(props: ClawsCatalogViewProps) {
     Boolean(detail && plan) &&
     hasCompleteClawDisclosures(plan) &&
     (!plan?.riskAcknowledgementRequired || props.riskAcknowledged) &&
-    pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null;
+    pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null &&
+    skillAcknowledgements(plan?.skillReviews, props.acceptedSkillWarnings) !== null;
   return html`
     <div class="claws-catalog__review">
       <button
@@ -212,6 +216,17 @@ function renderReview(props: ClawsCatalogViewProps) {
                     })
                   : html`<div class="callout danger" role="alert">
                       ${t("clawsCatalog.pluginReviewUnavailable")}
+                    </div>`
+              }
+              ${
+                Array.isArray(plan.skillReviews)
+                  ? renderClawSkillReviews({
+                      reviews: plan.skillReviews,
+                      acceptedWarnings: props.acceptedSkillWarnings,
+                      onRiskAcknowledged: props.onSkillRiskAcknowledged,
+                    })
+                  : html`<div class="callout danger" role="alert">
+                      ${t("clawsCatalog.skillReviewUnavailable")}
                     </div>`
               }
               ${

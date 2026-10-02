@@ -30,6 +30,7 @@ export type ClawsMigrateOptions = {
 export type ClawsStatusOptions = { json?: boolean };
 export type ClawsUpdateOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   from?: string;
+  acknowledgeClawHubRisk?: boolean;
 };
 export type ClawsRemoveOptions = Omit<ClawsAddOptions, "agentId" | "workspace"> & {
   exactAgentId?: boolean;
@@ -143,6 +144,7 @@ export function registerClawsCli(program: Command) {
     .option("--dry-run", "Preview update actions without mutating state", false)
     .option("--yes", "Confirm the exact supported update plan", false)
     .option("--plan-integrity <digest>", "Bind consent to an exact update plan")
+    .option("--acknowledge-clawhub-risk", "Acknowledge ClawHub risk on apply", false)
     .option("--json", "Print JSON", false)
     .action(async (target: string, opts: ClawsUpdateOptions) => {
       const { runClawsUpdateCommand } = await import("./claws-update-cli.runtime.js");

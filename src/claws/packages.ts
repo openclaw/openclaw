@@ -1,13 +1,10 @@
 import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
 import { createPluginInstallLogger } from "../cli/plugins-command-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
+import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
 import type { PluginCapabilityConsentHandler } from "../plugins/capability-consent.js";
-import {
-  buildPluginCapabilitySummary,
-  computeDeclaredSurfaceHash,
-} from "../plugins/capability-summary.js";
+import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { PLUGIN_ARTIFACT_ADAPTER_IDENTITY } from "../plugins/install-artifact-inspection.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
@@ -18,6 +15,7 @@ import {
 } from "../plugins/plugin-install-preflight.js";
 import { defaultRuntime } from "../runtime.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
+import type { ClawHubSkillUninstallPlan } from "../skills/lifecycle/workspace-types.js";
 import {
   acquireClawPackageLifecycleLease,
   maintainClawPackageLifecycleLease,
@@ -29,6 +27,7 @@ import {
   updateClawPackageRefStatusForAdd,
   type ClawAddStateOptions,
 } from "./add-state-write.js";
+import { packageFromAction, type PlannedClawPackage } from "./package-plan-action.js";
 import {
   findResumableIntroducedPluginRequirement,
   ownerInstallIsNewerThanRefs,
@@ -47,13 +46,7 @@ import {
   updateClawPackageRefStatus,
   type PersistedClawPackageRef,
 } from "./provenance.js";
-import type {
-  ClawAddPlan,
-  ClawAddPlanAction,
-  ClawPackage,
-  ClawPackagePreflightResult,
-  ResolvedClawPackage,
-} from "./types.js";
+import type { ClawAddPlan, ClawPackage, ClawPackagePreflightResult } from "./types.js";
 
 export class ClawPackageInstallError extends Error {
   constructor(
@@ -94,58 +87,6 @@ type PackageInstallerDeps = {
   inspectPluginCapabilities?: typeof inspectClawPluginCapabilities;
 };
 
-type PlannedClawPackage = ResolvedClawPackage & {
-  ownerAction: "install" | "reuse";
-  installId?: string;
-  riskWarning?: string;
-  declaredCapabilities?: PluginAcceptedDeclaredSurface;
-  capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
-};
-function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
-  const details = action.details as
-    | (Partial<ResolvedClawPackage> & {
-        ownerAction?: "install" | "reuse";
-        installId?: string;
-        riskWarning?: string;
-        declaredCapabilities?: PluginAcceptedDeclaredSurface;
-        capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
-      })
-    | undefined;
-  if (details?.kind !== "skill" && details?.kind !== "plugin") {
-    throw new Error(`Package action ${JSON.stringify(action.id)} has no valid package kind.`);
-  }
-  if (
-    details.source !== "clawhub" ||
-    !details.ref ||
-    !details.version ||
-    !details.integrity ||
-    !normalizeClawHubSha256Integrity(details.integrity)
-  ) {
-    throw new Error(
-      `Package action ${JSON.stringify(action.id)} is not a pinned ClawHub package with integrity.`,
-    );
-  }
-  if (details.ownerAction !== "install" && details.ownerAction !== "reuse") {
-    throw new Error(`Package action ${JSON.stringify(action.id)} has no planned owner state.`);
-  }
-  if (details.kind === "plugin" && !details.installId) {
-    throw new Error(`Package action ${JSON.stringify(action.id)} has no resolved plugin id.`);
-  }
-  return {
-    kind: details.kind,
-    source: details.source,
-    ref: details.ref,
-    version: details.version,
-    integrity: details.integrity,
-    ownerAction: details.ownerAction,
-    ...(details.extension ? { extension: details.extension } : {}),
-    ...(details.installId ? { installId: details.installId } : {}),
-    ...(details.riskWarning ? { riskWarning: details.riskWarning } : {}),
-    ...(details.declaredCapabilities ? { declaredCapabilities: details.declaredCapabilities } : {}),
-    ...(details.capabilityGrants ? { capabilityGrants: details.capabilityGrants } : {}),
-  };
-}
-
 export async function preflightClawPackage(
   pkg: ClawPackage,
   workspaceDir: string,
@@ -161,7 +102,15 @@ export async function preflightClawPackage(
       slug: pkg.ref,
       version: pkg.version,
     });
-    return result.ok ? result : { ok: false, code: result.code, message: result.error };
+    return result.ok
+      ? result
+      : {
+          ok: false,
+          code: result.code,
+          message: result.error,
+          ...(result.integrity ? { integrity: result.integrity } : {}),
+          ...(result.warning ? { warning: result.warning } : {}),
+        };
   }
   return await preflightClawPluginPackage(pkg, options);
 }
@@ -171,14 +120,27 @@ export type ClawPluginInstallConsent = {
   confirmInstall?: () => Promise<boolean>;
 };
 
+export type ClawSkillInstallConsent = {
+  assertApproved: (
+    pkg: Pick<PlannedClawPackage, "ref" | "version" | "integrity"> & { riskWarning: string },
+  ) => void;
+};
+
 type InstallClawPackagesOptions = ClawPluginRuntimeOptions &
   ClawAddStateOptions & {
     config?: OpenClawConfig;
     pluginConsent?: ClawPluginInstallConsent;
+    skillConsent?: ClawSkillInstallConsent;
     deps?: PackageInstallerDeps;
     pluginInstallMode?: "install" | "update";
     nowMs?: number;
     onExternalMutation?: (pkg: ClawPackage) => void;
+    skillUpgrade?: {
+      ref: string;
+      plan: ClawHubSkillUninstallPlan;
+      assertCurrent: () => Promise<void>;
+    };
+    onSkillTransaction?: (pkg: ClawPackage, transaction: PackageDirInstallTransaction) => void;
   };
 
 export async function installClawPackages(
@@ -275,12 +237,28 @@ async function installClawPackagesUnlocked(
         options.assertCurrent?.();
       };
       if (pkg.kind === "skill") {
-        const preflight = await preflightSkill({
+        const upgrade = options.skillUpgrade?.ref === pkg.ref ? options.skillUpgrade : undefined;
+        if (upgrade) {
+          if (!options.onSkillTransaction) {
+            throw new Error("Skill upgrade transaction receiver is unavailable.");
+          }
+          await upgrade.assertCurrent();
+        }
+        const rawPreflight = await preflightSkill({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
           version: pkg.version,
           expectedIntegrity: pkg.integrity,
         });
+        const preflight =
+          upgrade &&
+          !rawPreflight.ok &&
+          rawPreflight.code === "skill_version_conflict" &&
+          rawPreflight.integrity &&
+          normalizeClawHubSha256Integrity(rawPreflight.integrity) ===
+            normalizeClawHubSha256Integrity(pkg.integrity)
+            ? { ...rawPreflight, ok: true as const, action: "install" as const }
+            : rawPreflight;
         assertCurrent();
         if (!preflight.ok) {
           throw new Error(preflight.error);
@@ -288,6 +266,7 @@ async function installClawPackagesUnlocked(
         if (
           preflight.action !== pkg.ownerAction ||
           preflight.warning !== pkg.riskWarning ||
+          !preflight.integrity ||
           normalizeClawHubSha256Integrity(preflight.integrity) !==
             normalizeClawHubSha256Integrity(pkg.integrity)
         ) {
@@ -309,6 +288,21 @@ async function installClawPackagesUnlocked(
           );
           continue;
         }
+        if (pkg.riskWarning) {
+          if (!options.skillConsent) {
+            throw new ClawPackageInstallError(
+              "skill_consent_required",
+              `Skill ${pkg.ref}@${pkg.version} requires an explicit trust warning acknowledgement.`,
+              installedPackages,
+            );
+          }
+          options.skillConsent.assertApproved({
+            ref: pkg.ref,
+            version: pkg.version,
+            integrity: pkg.integrity,
+            riskWarning: pkg.riskWarning,
+          });
+        }
         let packageRef = await persistPackageRef(plan, pkg, {
           ...options,
           status: "pending",
@@ -317,21 +311,46 @@ async function installClawPackagesUnlocked(
           independentOwner: false,
         });
         installedPackages.push(packageRef);
-        // The installer has no mutation receipt. Mark the boundary before calling it so a throw
-        // after an on-disk change is treated as uncertain instead of falsely reported as rolled back.
         assertCurrent();
-        options.onExternalMutation?.(pkg);
+        if (upgrade) {
+          await upgrade.assertCurrent();
+        }
         const installed = await installSkill({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
           version: pkg.version,
           expectedIntegrity: pkg.integrity,
           clawManaged: true,
-          beforePersistentApply: assertCurrent,
+          ...(upgrade
+            ? { force: true, expectedClawHubState: upgrade.plan, deferCommit: true }
+            : {}),
+          beforePersistentApply: () => {
+            assertCurrent();
+            if (!upgrade) {
+              options.onExternalMutation?.(pkg);
+            }
+          },
+          confirmInstall: (warning) => {
+            assertCurrent();
+            return warning === pkg.riskWarning;
+          },
         });
         assertCurrent();
         if (!installed.ok) {
+          if (installed.recoveryIncomplete) {
+            options.onExternalMutation?.(pkg);
+          }
           throw new Error(installed.error);
+        }
+        if (upgrade) {
+          if (!installed.transaction) {
+            options.onExternalMutation?.(pkg);
+            throw new Error(`Skill ${pkg.ref}@${pkg.version} returned no rollback receipt.`);
+          }
+          options.onSkillTransaction?.(pkg, installed.transaction);
+        }
+        if (installed.version !== pkg.version) {
+          throw new Error(`Skill ${pkg.ref}@${pkg.version} changed during installation.`);
         }
         packageRef = await completePackageRef(packageRef, "complete", options);
         installedPackages[installedPackages.length - 1] = packageRef;
@@ -501,10 +520,7 @@ async function installClawPackagesUnlocked(
       });
       installedPackages.push(packageRef);
 
-      // The installer has no mutation receipt. Mark the boundary before calling it so a throw
-      // after an on-disk change is treated as uncertain instead of falsely reported as rolled back.
       assertCurrent();
-      options.onExternalMutation?.(pkg);
       await installPlugin({
         request: {
           source: "clawhub",
@@ -516,6 +532,10 @@ async function installClawPackagesUnlocked(
         },
         env: options.env,
         beforePersistentApply: assertCurrent,
+        beforePersistentEffect: () => {
+          assertCurrent();
+          options.onExternalMutation?.(pkg);
+        },
         logger: createPluginInstallLogger(runtime),
         confirmInstall: pluginConsent.confirmInstall,
         onCapabilityConsent: async (review) => {

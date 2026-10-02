@@ -24,9 +24,10 @@ import { readClawStatus } from "./lifecycle-state.js";
 import { buildClawAddPlan } from "./lifecycle.js";
 import { digestClawMcpServer, readClawMcpServerRefsByName } from "./mcp.js";
 import { normalizeWorkspaceConfig, resolveMigrationAgentSettings } from "./migrate-validation.js";
+import { hasOtherWorkspaceSkillOwner } from "./owned-skill-upgrade.js";
 import type { PackageRemovalDeps } from "./package-remove.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
-import { readClawPackageRefs } from "./provenance.js";
+import { readClawInstallRecords, readClawPackageRefs } from "./provenance.js";
 import {
   CLAW_OUTPUT_STABILITY,
   type ClawAddPlan,
@@ -173,6 +174,8 @@ export async function buildClawUpdatePlan(params: {
     const currentPackages = new Map(
       record.packages.map((pkg) => [clawPackageKey(pkg), pkg] as const),
     );
+    const allPackages = params.inventory?.packages ?? readClawPackageRefs(readOnlyStateOptions);
+    const allInstalls = params.inventory?.installs ?? readClawInstallRecords(readOnlyStateOptions);
     const targetPlan = await buildClawAddPlan({
       manifest: params.targetManifest,
       clawMarkdownBody: params.targetClawMarkdownBody,
@@ -190,6 +193,8 @@ export async function buildClawUpdatePlan(params: {
           record.install.workspace,
           packagePreflights,
           currentPackages,
+          allPackages,
+          allInstalls,
         ),
       },
     });
@@ -354,7 +359,6 @@ export async function buildClawUpdatePlan(params: {
       });
     }
 
-    const allPackages = params.inventory?.packages ?? readClawPackageRefs(readOnlyStateOptions);
     const targetPackages = clawTargetPackages(params.targetManifest, params.targetOpenClawProfile);
     const targetPackageActions = clawPackageActionsById(targetPlan.actions);
     for (const [key, target] of targetPackages) {
@@ -378,6 +382,18 @@ export async function buildClawUpdatePlan(params: {
             candidate.ref === target.ref &&
             candidate.version !== target.version,
         );
+      const conflictingSkillOwner =
+        target.kind === "skill" &&
+        Boolean(current && current.version !== target.version) &&
+        Boolean(
+          current &&
+          hasOtherWorkspaceSkillOwner({
+            workspace: record.install.workspace,
+            previous: current,
+            refs: allPackages,
+            installs: allInstalls,
+          }),
+        );
       const unresolvedCurrent =
         current && ["modified", "ambiguous", "incomplete"].includes(current.state);
       const independentlyOwnedMutation =
@@ -386,6 +402,7 @@ export async function buildClawUpdatePlan(params: {
         (current.state === "missing" || current.version !== target.version);
       const action =
         conflictingPluginPin ||
+        conflictingSkillOwner ||
         unresolvedCurrent ||
         independentlyOwnedMutation ||
         failedPackageMutationPreflight
@@ -407,11 +424,13 @@ export async function buildClawUpdatePlan(params: {
           action === "manual"
             ? conflictingPluginPin
               ? "Another Claw pins an incompatible version of this shared plugin."
-              : independentlyOwnedMutation
-                ? "Package is independently owned and cannot be restored or changed by this Claw."
-                : failedPackageMutationPreflight
-                  ? (preflight?.message ?? "Package preflight failed.")
-                  : `Current package lifecycle state is ${current?.state ?? "unknown"} and must be reconciled manually.`
+              : conflictingSkillOwner
+                ? "Another Claw shares this workspace skill and blocks its replacement."
+                : independentlyOwnedMutation
+                  ? "Package is independently owned and cannot be restored or changed by this Claw."
+                  : failedPackageMutationPreflight
+                    ? (preflight?.message ?? "Package preflight failed.")
+                    : `Current package lifecycle state is ${current?.state ?? "unknown"} and must be reconciled manually.`
             : action === "add"
               ? "Target manifest adds a package reference."
               : action === "unchanged"

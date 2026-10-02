@@ -64,6 +64,7 @@ describe("Claw plugin install consent", () => {
         ref: pkg.ref,
         version: pkg.version,
         ownerAction: "install",
+        integrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
         declaredCapabilities: emptyPluginCapabilityEvidence.declared,
         capabilityGrants: emptyPluginCapabilityEvidence.grants,
         reviewToken: computeDeclaredSurfaceHash(emptyPluginCapabilityEvidence.declared),
@@ -77,6 +78,15 @@ describe("Claw plugin install consent", () => {
     Object.assign(planned.actions[0]!.details!, {
       declaredCapabilities: { tools: ["audit.read"] },
     });
+
+    expect(() => projectClawPluginCapabilityReviews(planned)).toThrow(
+      /incomplete review evidence/u,
+    );
+  });
+
+  it("refuses to project an unblocked plugin without artifact integrity", () => {
+    const planned = packageInstallPlan([pkg]);
+    Object.assign(planned.actions[0]!.details!, { integrity: undefined });
 
     expect(() => projectClawPluginCapabilityReviews(planned)).toThrow(
       /incomplete review evidence/u,

@@ -18,6 +18,7 @@ import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-sou
 import {
   bindClawLifecycleTrust,
   projectClawRemovePlan,
+  projectClawSkillWarningReviews,
   projectClawUpdatePlan,
 } from "./gateway-plan-projection.js";
 import { readClawInventory } from "./inventory-read.js";
@@ -173,6 +174,23 @@ export async function buildGatewayClawUpdatePlan(input: {
         actions: targetAddPlan.actions.filter((action) => updatePluginActions.has(action.id)),
       })
     : [];
+  const updateSkillActions = new Set(
+    plan.actions
+      .filter(
+        (action) =>
+          action.kind === "package" &&
+          action.id.startsWith("skill:") &&
+          (action.action === "add" || action.action === "change") &&
+          !action.blocked,
+      )
+      .map((action) => action.id),
+  );
+  const skillReviews = targetAddPlan
+    ? projectClawSkillWarningReviews({
+        ...targetAddPlan,
+        actions: targetAddPlan.actions.filter((action) => updateSkillActions.has(action.id)),
+      })
+    : [];
   const projection = projectClawUpdatePlan(plan, source.source.packageRoot, {
     config: input.config,
     desiredAgent,
@@ -181,6 +199,7 @@ export async function buildGatewayClawUpdatePlan(input: {
       .map((ref) => ref.job),
     targetJobs: source.manifest.cronJobs ?? [],
     pluginReviews,
+    skillReviews,
   });
   return {
     plan,

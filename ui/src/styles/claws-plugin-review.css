@@ -63,6 +63,10 @@
   padding: 4px 0;
 }
 
+.claws-plugin-review__fact code {
+  word-break: break-all;
+}
+
 .claws-plugin-review__entry .callout {
   margin-top: 12px;
 }

@@ -550,6 +550,47 @@ describe("skill archive install", () => {
     ).resolves.toHaveLength(0);
   });
 
+  it.each(["before apply", "after target check"] as const)(
+    "refuses a guarded deferred update when the old skill disappears %s",
+    async (when) => {
+      const root = await tempDirs.make("openclaw-skill-missing-upgrade-");
+      const workspaceDir = path.join(root, "workspace");
+      const extractedRoot = path.join(root, "extracted");
+      await fs.mkdir(extractedRoot, { recursive: true });
+      await fs.writeFile(path.join(extractedRoot, "SKILL.md"), "new skill");
+      const targetDir = resolveWorkspaceSkillInstallDir(workspaceDir, "weather");
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(path.join(targetDir, "SKILL.md"), "old skill");
+      const expectedClawHubState = {
+        slug: "weather",
+        skillFilePath: "SKILL.md",
+        skillFileSha256: sha256Hex("old skill"),
+        fileTreeSha256: await digestClawHubSkillTree(targetDir),
+      };
+      if (when === "before apply") {
+        await fs.rm(targetDir, { recursive: true });
+      }
+
+      const result = await applyExtractedSkillRoot({
+        workspaceDir,
+        slug: "weather",
+        extractedRoot,
+        mode: "update",
+        expectedClawHubState,
+        deferCommit: true,
+        beforeInstall: async () => {
+          if (when === "after target check") {
+            await fs.rm(targetDir, { recursive: true });
+          }
+          return undefined;
+        },
+      });
+
+      expect(result).toMatchObject({ ok: false });
+      await expect(fs.stat(targetDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it.each([
     {
       label: "ClawHub",
@@ -671,6 +712,64 @@ describe("skill archive install", () => {
     });
     expect(event.before.revision.contentSha256).not.toBe(event.after.revision.contentSha256);
     expect(event.before.revision.treeSha256).not.toBe(event.after.revision.treeSha256);
+  });
+
+  it("emits a deferred update hook only after the owning transaction commits", async () => {
+    const root = await tempDirs.make("openclaw-skill-change-deferred-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      versionedSkillFileContent("Before Update", "1.0.0"),
+    );
+    const handler = vi.fn();
+    initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "skill_changed", handler }]));
+    await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-update",
+      extractedRoot,
+      mode: "install",
+      policy: { origin: { type: "path", spec: "./skill" } },
+    });
+    handler.mockClear();
+    await fs.writeFile(
+      path.join(extractedRoot, "SKILL.md"),
+      versionedSkillFileContent("After Update", "2.0.0"),
+    );
+
+    const rolledBack = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-update",
+      extractedRoot,
+      mode: "update",
+      deferCommit: true,
+      policy: { origin: { type: "path", spec: "./skill" } },
+    });
+    expect(rolledBack.ok).toBe(true);
+    if (!rolledBack.ok || !rolledBack.transaction) {
+      throw new Error("expected deferred skill transaction");
+    }
+    expect(handler).not.toHaveBeenCalled();
+    await rolledBack.transaction.rollback();
+    expect(handler).not.toHaveBeenCalled();
+
+    const committed = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "hook-update",
+      extractedRoot,
+      mode: "update",
+      deferCommit: true,
+      policy: { origin: { type: "path", spec: "./skill" } },
+    });
+    expect(committed.ok).toBe(true);
+    if (!committed.ok || !committed.transaction) {
+      throw new Error("expected deferred skill transaction");
+    }
+    expect(handler).not.toHaveBeenCalled();
+    await committed.transaction.commit();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0]?.[0]).toMatchObject({ action: "updated" });
   });
 
   it("does not emit when an archive mutation fails", async () => {

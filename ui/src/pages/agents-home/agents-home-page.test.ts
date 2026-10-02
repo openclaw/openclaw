@@ -28,6 +28,7 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { AgentsHomePage } from "./agents-home-page.ts";
 import type { ClawCatalogEntry } from "./claws-catalog-client.ts";
 import { ClawsExplore } from "./claws-explore.ts";
+import { pluginAcknowledgements, type ClawPluginReview } from "./claws-plugin-review.ts";
 
 const elementName = `test-agents-home-${crypto.randomUUID()}`;
 customElements.define(elementName, class extends AgentsHomePage {});
@@ -58,12 +59,13 @@ const workflowOperator = {
   updatedAtMs: 1_000,
 } as const;
 
-const workflowPluginReview = {
+const workflowPluginReview: ClawPluginReview = {
   actionId: "plugin:@openclaw/workflow-tools",
   pluginId: "workflow-tools",
   ref: "@openclaw/workflow-tools",
   version: "1.2.0",
   ownerAction: "install",
+  integrity: `sha256-${"A".repeat(43)}=`,
   declaredCapabilities: {
     channels: [],
     providers: [],
@@ -83,7 +85,7 @@ const workflowPluginReview = {
     },
   },
   reviewToken: "review-workflow-tools",
-} as const;
+};
 
 const reviewedAccess = {
   coverage: "configuration-only",
@@ -117,6 +119,7 @@ function createPage(
     statusRecord?: { agentId: string; version: string; status: string };
     newAgentVisible?: boolean;
     pluginRiskWarning?: string;
+    skillRiskWarning?: string;
     reusePlugin?: boolean;
     missingPluginReview?: boolean;
     missingDisclosure?: boolean;
@@ -264,6 +267,18 @@ function createPage(
           },
         ],
         blockers: [],
+        skillReviews: options.skillRiskWarning
+          ? [
+              {
+                actionId: "skill:@community/triage",
+                ref: "@community/triage",
+                version: "1.0.0",
+                integrity: "sha256:reviewed-skill",
+                riskWarning: options.skillRiskWarning,
+                reviewToken: "sha256:skill-review",
+              },
+            ]
+          : [],
         ...(options.missingPluginReview
           ? {}
           : {
@@ -513,6 +528,7 @@ describe("AgentsHomePage", () => {
     expect(page.textContent).toContain("create workspace");
     expect(page.textContent).toContain("install package");
     expect(page.textContent).toContain("workflow.start");
+    expect(page.textContent).toContain(workflowPluginReview.integrity);
     expect(page.textContent).toContain("Conversation access");
     expect(page.textContent).toContain("Allowed");
     expect(page.textContent).toContain("Configured access");
@@ -549,6 +565,18 @@ describe("AgentsHomePage", () => {
     expect(gateway.setSessionKey).toHaveBeenCalledWith("agent:workflow-operator:team-room");
   });
 
+  it("does not acknowledge a plugin review without artifact integrity", () => {
+    expect(
+      pluginAcknowledgements([{ ...workflowPluginReview, integrity: "" }], new Set()),
+    ).toBeNull();
+    expect(
+      pluginAcknowledgements(
+        [{ ...workflowPluginReview, ownerAction: "reuse", integrity: "" }],
+        new Set(),
+      ),
+    ).toBeNull();
+  });
+
   it("requires explicit acknowledgment of plugin risk before applying the reviewed grant", async () => {
     const { page, request } = createPage({
       clawsEnabled: true,
@@ -573,6 +601,39 @@ describe("AgentsHomePage", () => {
               pluginId: "workflow-tools",
               acknowledgeRiskWarning: true,
             }),
+          ],
+        }),
+      ),
+    );
+  });
+
+  it("requires explicit review of a warned skill before Add", async () => {
+    const { page, request } = createPage({
+      clawsEnabled: true,
+      skillRiskWarning: "This community skill needs review.",
+    });
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-entry] button")).not.toBeNull());
+    page.querySelector<HTMLElement>("[data-claws-entry] button")?.click();
+    await vi.waitFor(() =>
+      expect(page.textContent).toContain("This community skill needs review."),
+    );
+    expect(page.querySelector<HTMLButtonElement>("[data-claws-confirm]")?.disabled).toBe(true);
+    page.querySelector<HTMLInputElement>("[data-claw-skill-risk]")?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector<HTMLButtonElement>("[data-claws-confirm]")?.disabled).toBe(false),
+    );
+    page.querySelector<HTMLElement>("[data-claws-confirm]")?.click();
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "claws.add.apply",
+        expect.objectContaining({
+          acknowledgeSkillWarnings: [
+            {
+              actionId: "skill:@community/triage",
+              ref: "@community/triage",
+              reviewToken: "sha256:skill-review",
+              acknowledgeRiskWarning: true,
+            },
           ],
         }),
       ),

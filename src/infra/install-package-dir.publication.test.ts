@@ -27,6 +27,59 @@ describe("installPackageDir publication failure", () => {
     await fixtureRootTracker.cleanup();
   });
 
+  it("does not return a deferred receipt after the install base moves post-publication", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("deferred-base-moved");
+    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const installBaseDir = path.dirname(targetDir);
+    const movedBaseDir = `${installBaseDir}-moved`;
+    const replacementBaseDir = path.join(fixtureRoot, "replacement-plugins");
+    const realRename = fs.rename.bind(fs);
+    const realStat = fs.stat.bind(fs);
+    let moved = false;
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      if (
+        !moved &&
+        normalizeComparablePath(String(args[0])) === normalizeComparablePath(installBaseDir) &&
+        new Error().stack?.includes("assertInstallBaseStable")
+      ) {
+        const published = await fs
+          .readFile(path.join(targetDir, "marker.txt"), "utf8")
+          .catch(() => "");
+        if (published === "new") {
+          moved = true;
+          await realRename(installBaseDir, movedBaseDir);
+          await fs.mkdir(replacementBaseDir);
+          await fs.symlink(replacementBaseDir, installBaseDir);
+        }
+      }
+      return await realStat(...args);
+    });
+
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall({
+        sourceDir,
+        targetDir,
+        mode: "update",
+        timeoutMs: 1_000,
+        copyErrorPrefix: "failed to copy plugin",
+        hasDeps: false,
+        depsLogMessage: "",
+      }),
+    );
+
+    expect(moved).toBe(true);
+    expect(result).toMatchObject({
+      ok: false,
+      recoveryIncomplete: true,
+      error: expect.stringContaining("install base directory changed"),
+    });
+    expect(resolvePackageDirInstallTransaction(result)).toBeUndefined();
+    await expect(fs.readFile(path.join(movedBaseDir, "demo", "marker.txt"), "utf8")).resolves.toBe(
+      "new",
+    );
+  });
+
   it.each([
     { mode: "install", failure: "source cleanup" },
     { mode: "update", failure: "source cleanup" },

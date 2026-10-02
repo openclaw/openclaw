@@ -19,6 +19,7 @@ import {
   isDefaultClawHubBaseUrlMock,
   searchClawHubSkillsMock,
   archiveCleanupMock,
+  applyExtractedSkillRoot,
   withExtractedArchiveRootMock,
   installPackageDirMock,
   evaluateSkillInstallPolicyMock,
@@ -175,6 +176,55 @@ describe("skills-clawhub", () => {
   });
 
   registerRemoteClawHubTests(() => testWorkspaceDir);
+
+  it("marks a missing deferred directory receipt as recovery incomplete", async () => {
+    pathExistsMock.mockImplementation(
+      async (input: string) => input.endsWith("SKILL.md") || input.endsWith("/skills/agentreceipt"),
+    );
+    installPackageDirMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await applyExtractedSkillRoot({
+      workspaceDir: testWorkspaceDir,
+      slug: "agentreceipt",
+      extractedRoot: "/tmp/extracted-skill",
+      mode: "update",
+      deferCommit: true,
+      expectedClawHubState: {
+        slug: "agentreceipt",
+        skillFilePath: "SKILL.md",
+        skillFileSha256: "old-skill",
+        fileTreeSha256: "old-tree",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, recoveryIncomplete: true });
+  });
+
+  it("marks a missing deferred ClawHub receipt as recovery incomplete", async () => {
+    await writeTrackedSkill(testWorkspaceDir, "agentreceipt", {
+      installedVersion: "1.0.0",
+      skillMd: "old skill",
+    });
+    withExtractedArchiveRootMock.mockResolvedValueOnce({
+      ok: true,
+      targetDir: path.join(testWorkspaceDir, "skills", "agentreceipt"),
+    });
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
+      version: "2.0.0",
+      force: true,
+      clawManaged: true,
+      deferCommit: true,
+      expectedClawHubState: {
+        slug: "agentreceipt",
+        skillFilePath: "SKILL.md",
+        skillFileSha256: "old-skill",
+        fileTreeSha256: "old-tree",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, recoveryIncomplete: true });
+  });
 
   function mockSecurity(overrides: Partial<Parameters<typeof mockSkillSecurityVerdict>[0]>) {
     mockSkillSecurityVerdict({
@@ -335,6 +385,58 @@ describe("skills-clawhub", () => {
     expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
     expect(installPackageDirMock).not.toHaveBeenCalled();
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains exact artifact identity and review warning when v1 occupies the skill target", async () => {
+    const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+    pathExistsMock.mockImplementation(
+      async (input: string) =>
+        input.endsWith("SKILL.md") || input.endsWith(path.join("skills", "agentreceipt")),
+    );
+    mockSecurity({
+      ok: false,
+      decision: "fail",
+      reasons: ["security.status_not_clean"],
+      overview: "Review the skill before updating it.",
+      security: { status: "suspicious", passed: false },
+    });
+
+    const result = await preflightSkillFromClawHub({
+      workspaceDir: testWorkspaceDir,
+      slug: "agentreceipt",
+      version: "1.0.0",
+      expectedIntegrity: integrity,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: "skill_version_conflict",
+      integrity,
+      warning: expect.stringContaining("Outcome: Review"),
+    });
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
+  });
+
+  it("requires live warning confirmation for a forced Claw-managed update", async () => {
+    mockSecurity({
+      ok: false,
+      decision: "fail",
+      reasons: ["security.status_not_clean"],
+      overview: "Review the skill before updating it.",
+      security: { status: "suspicious", passed: false },
+    });
+    const confirmInstall = vi.fn().mockResolvedValue(false);
+
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
+      version: "1.0.0",
+      force: true,
+      clawManaged: true,
+      confirmInstall,
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "Install cancelled." });
+    expect(confirmInstall).toHaveBeenCalledWith(expect.stringContaining("Outcome: Review"));
+    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
   it("rejects a downloaded skill whose bytes do not match the consented plan", async () => {

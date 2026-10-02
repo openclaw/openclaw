@@ -64,8 +64,30 @@ describe("Claws Gateway contract", () => {
       validateClawsAddApplyParams({
         source: { packageName: "@openclaw/workflow-operator", version: "1.0.0" },
         planIntegrity: "sha256:reviewed-plan",
+        acknowledgeSkillWarnings: [
+          {
+            actionId: "skill:@community/triage",
+            ref: "@community/triage",
+            reviewToken: "sha256:reviewed-skill",
+            acknowledgeRiskWarning: true,
+          },
+        ],
       }),
     ).toBe(true);
+    expect(
+      validateClawsAddApplyParams({
+        source: { packageName: "@openclaw/workflow-operator", version: "1.0.0" },
+        planIntegrity: "sha256:reviewed-plan",
+        acknowledgeSkillWarnings: [
+          {
+            actionId: "skill:@community/triage",
+            ref: "@community/triage",
+            reviewToken: "sha256:reviewed-skill",
+            acknowledgeRiskWarning: false,
+          },
+        ],
+      }),
+    ).toBe(false);
     expect(
       validateClawsAddApplyParams({
         source: { packageName: "@someone-else/workflow-operator", version: "1.0.0" },
@@ -96,12 +118,66 @@ describe("Claws Gateway contract", () => {
       actions: [],
       capabilities: [],
       pluginReviews: [],
+      skillReviews: [],
       blockers: [],
       riskAcknowledgementRequired: false,
     };
     expect(validateClawLifecyclePlanResult(plan)).toBe(true);
     expect(validateClawLifecyclePlanResult({ ...plan, sourceRoot: "/private/claw" })).toBe(false);
     expect(validateClawLifecyclePlanResult({ ...plan, answers: { token: "secret" } })).toBe(false);
+  });
+
+  it("requires exact plugin artifact integrity in an install review", () => {
+    const pluginReview = {
+      actionId: "plugin:@openclaw/lobster",
+      pluginId: "lobster",
+      ref: "@openclaw/lobster",
+      version: "2026.9.7",
+      ownerAction: "install",
+      integrity: `sha256-${"A".repeat(43)}=`,
+      declaredCapabilities: {
+        channels: [],
+        providers: [],
+        tools: ["lobster"],
+        contracts: [],
+        hooks: [],
+        mcpServers: [],
+        cliCommands: [],
+        cliBackends: [],
+        skills: [],
+        dangerousConfigFlags: [],
+      },
+      capabilityGrants: {
+        hooks: {
+          allowPromptInjection: { effective: false },
+          allowConversationAccess: { effective: false },
+        },
+      },
+      reviewToken: "sha256:reviewed-surface",
+    };
+    const plan = {
+      schemaVersion: "openclaw.clawsGatewayPlan.v1",
+      operation: "add",
+      planIntegrity: "sha256:reviewed-plan",
+      target: { agentId: "workflow-operator" },
+      actions: [],
+      capabilities: [],
+      pluginReviews: [pluginReview],
+      blockers: [],
+      riskAcknowledgementRequired: false,
+    };
+
+    expect(validateClawLifecyclePlanResult(plan)).toBe(true);
+    const { integrity: _integrity, ...withoutIntegrity } = pluginReview;
+    expect(validateClawLifecyclePlanResult({ ...plan, pluginReviews: [withoutIntegrity] })).toBe(
+      false,
+    );
+    expect(
+      validateClawLifecyclePlanResult({
+        ...plan,
+        pluginReviews: [{ ...pluginReview, integrity: "sha256-not-a-digest" }],
+      }),
+    ).toBe(false);
   });
 
   it("admits bounded access and schedule disclosures without cron prompts", () => {
@@ -113,6 +189,7 @@ describe("Claws Gateway contract", () => {
       actions: [],
       capabilities: [],
       pluginReviews: [],
+      skillReviews: [],
       blockers: [],
       riskAcknowledgementRequired: false,
       configuredAccess: {

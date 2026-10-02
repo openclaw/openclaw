@@ -5,10 +5,12 @@ import type {
   ClawConfiguredAccess,
   ClawLifecyclePlanResult,
   ClawPluginReview,
+  ClawSkillReview,
   ClawScheduledJobs,
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { digestClawValue } from "./digest.js";
 import {
   projectClawAddScheduledJobs,
   projectClawConfiguredAccess,
@@ -38,6 +40,37 @@ function safeAction(action: { kind: string; id: string; action: string; blocked:
 
 function safeCapability(change: { kind: string; id: string; action: string; reason: string }) {
   return { kind: change.kind, id: change.id, action: change.action, reason: change.reason };
+}
+
+export function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
+  return plan.actions.flatMap((action) => {
+    const details = action.details;
+    if (
+      action.kind !== "package" ||
+      action.blocked ||
+      details?.kind !== "skill" ||
+      details.ownerAction !== "install" ||
+      typeof details.riskWarning !== "string" ||
+      !details.riskWarning
+    ) {
+      return [];
+    }
+    if (
+      typeof details.ref !== "string" ||
+      typeof details.version !== "string" ||
+      typeof details.integrity !== "string"
+    ) {
+      throw new Error("The Claw skill trust review is incomplete.");
+    }
+    const review = {
+      actionId: action.id,
+      ref: details.ref,
+      version: details.version,
+      integrity: details.integrity,
+      riskWarning: details.riskWarning,
+    };
+    return [{ ...review, reviewToken: digestClawValue(review) }];
+  });
 }
 
 function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {
@@ -132,6 +165,7 @@ export function projectClawAddPlan(
       actions: plan.actions.map(safeAction),
       capabilities: plan.capabilityChanges.map(safeCapability),
       pluginReviews,
+      skillReviews: projectClawSkillWarningReviews(plan),
       blockers: plan.blockers.map(safeBlocker),
       riskAcknowledgementRequired: false,
       configuredAccess: projectClawConfiguredAccess({
@@ -159,6 +193,7 @@ export function projectClawUpdatePlan(
     currentJobs: readonly ClawCronJob[];
     targetJobs: readonly ClawCronJob[];
     pluginReviews?: ClawPluginReview[];
+    skillReviews?: ClawSkillReview[];
   },
 ): ClawLifecyclePlanResult {
   const expectedPluginActions = plan.actions
@@ -205,6 +240,7 @@ export function projectClawUpdatePlan(
       actions: plan.actions.map(safeAction),
       capabilities: plan.capabilityChanges.map(safeCapability),
       pluginReviews,
+      skillReviews: review.skillReviews ?? [],
       blockers: [
         ...plan.blockers.map(safeBlocker),
         ...(pluginConsentUnavailable
@@ -252,6 +288,7 @@ export function projectClawRemovePlan(
       actions: plan.actions.map(safeAction),
       capabilities: [],
       pluginReviews: [],
+      skillReviews: [],
       blockers: plan.blockers.map((blocker) => ({
         code: blocker.code,
         path: "$",

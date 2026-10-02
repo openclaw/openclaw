@@ -4,7 +4,7 @@ import { checkClawHubPackageTrust } from "./clawhub-install-trust.js";
 const subject = { kind: "claw" as const, packageName: "@openclaw/research-briefing" };
 const version = "1.0.0";
 
-function securityResponse(family: string) {
+function securityResponse(family: string, warned = false) {
   return new Response(
     JSON.stringify({
       package: { name: subject.packageName, displayName: "Research Briefing", family },
@@ -12,10 +12,10 @@ function securityResponse(family: string) {
       overview: "No concerning capabilities found.",
       securityAuditUrl: "https://clawhub.example/audit",
       trust: {
-        scanStatus: "clean",
+        scanStatus: warned ? "suspicious" : "clean",
         moderationState: "approved",
         blockedFromDownload: false,
-        reasons: [],
+        reasons: warned ? ["scan:suspicious"] : [],
         pending: false,
         stale: false,
       },
@@ -54,5 +54,22 @@ describe("ClawHub Claw trust", () => {
     });
 
     expect(result).toMatchObject({ ok: false, code: "clawhub_security_unavailable" });
+  });
+
+  it("passes the exact warning to an install consent callback before download", async () => {
+    let observedWarning: string | undefined;
+    const result = await checkClawHubPackageTrust({
+      subject,
+      version,
+      fetchImpl: async () => securityResponse("claw", true),
+      confirmInstall: (warning) => {
+        observedWarning = warning;
+        return false;
+      },
+    });
+
+    expect(result).toMatchObject({ ok: false, error: "Install cancelled." });
+    expect(observedWarning).toBeTruthy();
+    expect(observedWarning).toBe(result.warning);
   });
 });

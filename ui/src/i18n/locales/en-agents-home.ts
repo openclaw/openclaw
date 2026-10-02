@@ -52,6 +52,7 @@ const enAgentsHome = {
     capabilities: "Capabilities to review",
     noCapabilities: "No additional capabilities requested.",
     pluginReviewUnavailable: "Plugin review is unavailable. Refresh the plan before adding.",
+    skillReviewUnavailable: "Skill review is unavailable. Refresh the plan before adding.",
     blockers: "Cannot add this Claw yet",
     needsSetup: "Needs setup",
     added: "Claw added",
@@ -73,6 +74,7 @@ const enAgentsHome = {
     title: "Plugin capability review",
     install: "Will install",
     reuse: "Already installed",
+    integrity: "Artifact SHA-256",
     declared: "Declared capabilities",
     noneDeclared: "No named capabilities declared.",
     grants: "Effective access",
@@ -98,6 +100,10 @@ const enAgentsHome = {
     completionModels: "Completion models",
     subagentModels: "Subagent models",
     acknowledgeRisk: "I understand this plugin risk warning.",
+  },
+  clawsSkillReview: {
+    title: "Skill trust review",
+    acknowledgeRisk: "I understand this skill trust warning.",
   },
   clawsAccessReview: {
     title: "Configured access",

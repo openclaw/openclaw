@@ -29,6 +29,7 @@ const review: ClawPluginReview = {
   ref: "@openclaw/lobster",
   version: "1.0.0",
   ownerAction: "install",
+  integrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
   declaredCapabilities: declared,
   capabilityGrants: grants,
   reviewToken: "reviewed-surface",

@@ -20,6 +20,7 @@ import {
 } from "../agents-home/claws-catalog-client.ts";
 import { isRejectedClawMutation } from "../agents-home/claws-mutation-error.ts";
 import { pluginAcknowledgements } from "../agents-home/claws-plugin-review.ts";
+import { skillAcknowledgements } from "../agents-home/claws-skill-review.ts";
 import { LAB_FEATURES, resolveLabFeatureState } from "../labs/labs-registry.ts";
 import {
   applyOfficialClawUpdate,
@@ -65,6 +66,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
   @state() private updateStatusChecking = false;
   @state() private updateClawHubRiskAccepted = false;
   @state() private acceptedPluginRisks = new Set<string>();
+  @state() private acceptedSkillWarnings = new Set<string>();
 
   private statusRevision = 0;
   private planRevision = 0;
@@ -408,6 +410,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     this.updateLoading = true;
     this.updateClawHubRiskAccepted = false;
     this.acceptedPluginRisks = new Set();
+    this.acceptedSkillWarnings = new Set();
     try {
       const detail = await readLatestOfficialClawDetail(scope.client, record.name);
       if (
@@ -518,6 +521,9 @@ export class AgentClawPanel extends OpenClawLightDomElement {
     const acknowledgeCapabilities = plan
       ? pluginAcknowledgements(plan.pluginReviews, this.acceptedPluginRisks)
       : null;
+    const acknowledgeSkillWarnings = plan
+      ? skillAcknowledgements(plan.skillReviews, this.acceptedSkillWarnings)
+      : null;
     if (
       !plan ||
       !detail ||
@@ -534,7 +540,8 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       plan.target.currentVersion !== record.version ||
       plan.target.targetVersion !== detail.version ||
       (plan.riskAcknowledgementRequired && !this.updateClawHubRiskAccepted) ||
-      !acknowledgeCapabilities
+      !acknowledgeCapabilities ||
+      !acknowledgeSkillWarnings
     ) {
       return;
     }
@@ -559,6 +566,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
         plan,
         this.updateClawHubRiskAccepted,
         acknowledgeCapabilities,
+        acknowledgeSkillWarnings,
       );
       if (
         !this.gateway.isCurrent(scope) ||
@@ -657,6 +665,7 @@ export class AgentClawPanel extends OpenClawLightDomElement {
       updateStatusChecking: this.updateStatusChecking,
       updateClawHubRiskAccepted: this.updateClawHubRiskAccepted,
       acceptedPluginRisks: this.acceptedPluginRisks,
+      acceptedSkillWarnings: this.acceptedSkillWarnings,
       reviewOpen: this.reviewOpen,
       plan: this.plan,
       planLoading: this.planLoading,
@@ -685,6 +694,15 @@ export class AgentClawPanel extends OpenClawLightDomElement {
           accepted.delete(key);
         }
         this.acceptedPluginRisks = accepted;
+      },
+      onUpdateSkillRiskAcknowledged: (key, checked) => {
+        const accepted = new Set(this.acceptedSkillWarnings);
+        if (checked) {
+          accepted.add(key);
+        } else {
+          accepted.delete(key);
+        }
+        this.acceptedSkillWarnings = accepted;
       },
     });
   }

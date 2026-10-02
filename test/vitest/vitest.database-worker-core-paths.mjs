@@ -302,6 +302,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/claws/package-remove.test.ts",
   "src/claws/provenance-write.test.ts",
   "src/claws/package-update.test.ts",
+  "src/claws/plugin-capability-consent.integration.test.ts",
   "src/claws/packages.runtime.test.ts",
   "src/claws/update-apply.adopted.test.ts",
   "src/claws/packages.capability-consent.test.ts",

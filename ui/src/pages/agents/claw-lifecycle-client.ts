@@ -5,6 +5,7 @@ import type {
   ClawCatalogSource,
 } from "../agents-home/claws-catalog-client.ts";
 import type { ClawPluginAcknowledgement } from "../agents-home/claws-plugin-review.ts";
+import type { ClawSkillAcknowledgement } from "../agents-home/claws-skill-review.ts";
 
 export type ClawLifecyclePlan = Omit<ClawAddPlan, "operation"> & {
   operation: "update" | "remove";
@@ -46,6 +47,7 @@ export async function applyOfficialClawUpdate(
   plan: ClawUpdatePlan,
   acknowledgeClawHubRisk: boolean,
   acknowledgeCapabilities: ClawPluginAcknowledgement[],
+  acknowledgeSkillWarnings: ClawSkillAcknowledgement[],
 ): Promise<ClawUpdateResult> {
   const result = await client.request<ClawUpdateResult>("claws.update.apply", {
     agentId,
@@ -53,6 +55,7 @@ export async function applyOfficialClawUpdate(
     planIntegrity: plan.planIntegrity,
     ...(plan.riskAcknowledgementRequired ? { acknowledgeClawHubRisk } : {}),
     ...(acknowledgeCapabilities.length ? { acknowledgeCapabilities } : {}),
+    ...(acknowledgeSkillWarnings.length ? { acknowledgeSkillWarnings } : {}),
   });
   if (result.agentId !== agentId) {
     throw new Error("The Claw update result targets a different agent.");

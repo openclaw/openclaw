@@ -57,7 +57,8 @@ vi.mock("../../infra/install-flow.js", () => ({
   withExtractedArchiveRoot: withExtractedArchiveRootMock,
 }));
 
-vi.mock("../../infra/install-package-dir.js", () => ({
+vi.mock("../../infra/install-package-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/install-package-dir.js")>()),
   installPackageDir: installPackageDirMock,
 }));
 
@@ -382,6 +383,7 @@ function writeTrackedSkill(
 }
 
 export {
+  applyExtractedSkillRoot,
   readClawHubSkillsLockfileStatusSync,
   resolveClawHubSkillStatusLinkSync,
   fetchClawHubSkillDetailMock,

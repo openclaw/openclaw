@@ -74,6 +74,11 @@ import type {
 import { clawMonitorCleanupGateway } from "./claws-cli.monitor-cleanup.js";
 import { clawPackageRemovalGateway } from "./claws-cli.package-removal.js";
 import { resolveClawPluginInstallConsent } from "./claws-cli.plugin-consent.js";
+import {
+  addPlanSkillWarnings,
+  consentToClawSkillWarnings,
+  logClawSkillWarnings,
+} from "./claws-cli.skill-consent.js";
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
@@ -93,6 +98,7 @@ function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
       `  Requirement ${action.target}: ${requirementState}${action.action === "install" ? " (installation requires this exact plan consent)" : ""}`,
     );
   }
+  logClawSkillWarnings(addPlanSkillWarnings(plan), runtime);
   runtime.log(`MCP servers: ${plan.summary.mcpServerActions}`);
   for (const action of plan.actions.filter((candidate) => candidate.kind === "mcpServer")) {
     const server = action.details as Record<string, unknown> | undefined;
@@ -429,6 +435,8 @@ export async function runClawsAddCommand(
     return;
   }
 
+  const skillConsent = consentToClawSkillWarnings(addPlanSkillWarnings(legacyResumePlan ?? plan));
+
   let addResult;
   if (!opts.json) {
     logClawExperimentalWarning(runtime);
@@ -450,6 +458,7 @@ export async function runClawsAddCommand(
           config,
           assertCurrent: () => lease.assertOwned(),
           pluginConsent: resolveClawPluginInstallConsent(runtime),
+          ...(skillConsent ? { skillConsent } : {}),
           reloadPlugins: await resolvePluginBatchReload(),
           consentPlanIntegrity: opts.planIntegrity,
           resumeRecord: resumableInstallRecord,

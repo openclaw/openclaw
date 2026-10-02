@@ -5,6 +5,7 @@ import {
   type PluginOperatorGrants,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import type { ClawAddPlan } from "./types.js";
 
@@ -14,6 +15,7 @@ export type ClawPluginCapabilityPlanReview = {
   ref: string;
   version: string;
   ownerAction: "install" | "reuse";
+  integrity: string;
   declaredCapabilities: PluginAcceptedDeclaredSurface;
   capabilityGrants: PluginOperatorGrants;
   reviewToken: string;
@@ -29,10 +31,15 @@ export function projectClawPluginCapabilityReviews(
       return [];
     }
     const details = action.details;
+    const integrity =
+      typeof details.integrity === "string"
+        ? normalizeClawHubSha256Integrity(details.integrity)
+        : null;
     if (
       typeof details.installId !== "string" ||
       typeof details.ref !== "string" ||
       typeof details.version !== "string" ||
+      !integrity ||
       (details.ownerAction !== "install" && details.ownerAction !== "reuse") ||
       !Value.Check(PluginDeclaredSurfaceSchema, details.declaredCapabilities) ||
       !Value.Check(PluginOperatorGrantsSchema, details.capabilityGrants)
@@ -47,6 +54,7 @@ export function projectClawPluginCapabilityReviews(
         ref: details.ref,
         version: details.version,
         ownerAction: details.ownerAction,
+        integrity,
         declaredCapabilities,
         capabilityGrants: details.capabilityGrants,
         reviewToken: computeDeclaredSurfaceHash(declaredCapabilities),

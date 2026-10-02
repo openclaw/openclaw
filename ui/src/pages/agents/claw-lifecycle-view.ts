@@ -12,6 +12,10 @@ import {
   pluginAcknowledgements,
   renderClawPluginReviews,
 } from "../agents-home/claws-plugin-review.ts";
+import {
+  skillAcknowledgements,
+  renderClawSkillReviews,
+} from "../agents-home/claws-skill-review.ts";
 import "../../styles/claw-lifecycle.css";
 import type {
   ClawLifecyclePlan,
@@ -39,6 +43,7 @@ type AgentClawPanelProps = {
   updateStatusChecking: boolean;
   updateClawHubRiskAccepted: boolean;
   acceptedPluginRisks: ReadonlySet<string>;
+  acceptedSkillWarnings: ReadonlySet<string>;
   reviewOpen: boolean;
   plan: ClawLifecyclePlan | null;
   planLoading: boolean;
@@ -60,6 +65,7 @@ type AgentClawPanelProps = {
   onCheckUpdateStatus: () => void;
   onUpdateClawHubRiskAcknowledged: (checked: boolean) => void;
   onUpdatePluginRiskAcknowledged: (key: string, checked: boolean) => void;
+  onUpdateSkillRiskAcknowledged: (key: string, checked: boolean) => void;
 };
 
 function labelState(value: string): string {
@@ -164,7 +170,8 @@ function renderUpdateReview(props: AgentClawPanelProps) {
     plan?.target.targetVersion === detail?.version &&
     hasCompleteClawDisclosures(plan) &&
     (!plan?.riskAcknowledgementRequired || props.updateClawHubRiskAccepted) &&
-    pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null;
+    pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null &&
+    skillAcknowledgements(plan?.skillReviews, props.acceptedSkillWarnings) !== null;
   return html`<openclaw-modal-dialog
     label=${t("clawsLifecycle.reviewUpdate")}
     style="--openclaw-modal-width: min(680px, calc(100vw - 24px));"
@@ -273,6 +280,17 @@ function renderUpdateReview(props: AgentClawPanelProps) {
                       })
                     : html`<div class="callout danger" role="alert">
                         ${t("clawsCatalog.pluginReviewUnavailable")}
+                      </div>`
+                }
+                ${
+                  Array.isArray(plan.skillReviews)
+                    ? renderClawSkillReviews({
+                        reviews: plan.skillReviews,
+                        acceptedWarnings: props.acceptedSkillWarnings,
+                        onRiskAcknowledged: props.onUpdateSkillRiskAcknowledged,
+                      })
+                    : html`<div class="callout danger" role="alert">
+                        ${t("clawsCatalog.skillReviewUnavailable")}
                       </div>`
                 }
                 ${

@@ -12,6 +12,7 @@ import {
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const browserAvailable = canRunPlaywrightChromium(executablePath);
 const capture = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
+const pluginIntegrity = `sha256-${"A".repeat(43)}=`;
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
   { name: "tablet", width: 768, height: 1024 },
@@ -128,6 +129,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
             },
           ],
           blockers: [],
+          skillReviews: [],
           pluginReviews: [
             {
               actionId: "package:workflow-tools",
@@ -135,6 +137,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
               ref: "@openclaw/workflow-tools",
               version: "1.2.0",
               ownerAction: "install",
+              integrity: pluginIntegrity,
               declaredCapabilities: {
                 channels: [],
                 providers: [],
@@ -212,6 +215,7 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
       expect(await dialog.locator(".claws-catalog__list").count()).toBe(0);
       await dialog.getByText("Configured access", { exact: true }).waitFor();
       await dialog.getByText("workflow.start", { exact: true }).waitFor();
+      await dialog.getByText(pluginIntegrity, { exact: true }).waitFor();
       await dialog.getByText("Install actions", { exact: true }).waitFor();
       expect(
         await dialog.locator(".claws-catalog__body").evaluate((body) => body.scrollWidth),

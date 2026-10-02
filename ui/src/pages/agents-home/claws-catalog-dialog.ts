@@ -30,6 +30,7 @@ import {
 import { renderClawsCatalogDialog } from "./claws-catalog-view.ts";
 import { isRejectedClawMutation } from "./claws-mutation-error.ts";
 import { pluginAcknowledgements } from "./claws-plugin-review.ts";
+import { skillAcknowledgements } from "./claws-skill-review.ts";
 
 registerAgentsHomeEnglish();
 
@@ -56,6 +57,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
   @state() private statusChecking = false;
   @state() private riskAcknowledged = false;
   @state() private acceptedPluginRisks = new Set<string>();
+  @state() private acceptedSkillWarnings = new Set<string>();
 
   private searchRevision = 0;
   private reviewRevision = 0;
@@ -177,6 +179,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
     this.reviewLoading = true;
     this.riskAcknowledged = false;
     this.acceptedPluginRisks = new Set();
+    this.acceptedSkillWarnings = new Set();
     try {
       const detail = await readOfficialClawDetail(scope.client, source);
       if (!this.gateway.isCurrent(scope) || revision !== this.reviewRevision) {
@@ -267,6 +270,9 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
     const acknowledgeCapabilities = plan
       ? pluginAcknowledgements(plan.pluginReviews, this.acceptedPluginRisks)
       : null;
+    const acknowledgeSkillWarnings = plan
+      ? skillAcknowledgements(plan.skillReviews, this.acceptedSkillWarnings)
+      : null;
     if (
       !source ||
       !plan ||
@@ -279,7 +285,8 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       plan.actions.some((action) => action.blocked) ||
       !hasCompleteClawDisclosures(plan) ||
       (plan.riskAcknowledgementRequired && !this.riskAcknowledged) ||
-      !acknowledgeCapabilities
+      !acknowledgeCapabilities ||
+      !acknowledgeSkillWarnings
     ) {
       return;
     }
@@ -299,6 +306,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
         plan,
         this.riskAcknowledged,
         acknowledgeCapabilities,
+        acknowledgeSkillWarnings,
       );
       if (
         !this.gateway.isCurrent(scope) ||
@@ -385,6 +393,7 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
       statusChecking: this.statusChecking,
       riskAcknowledged: this.riskAcknowledged,
       acceptedPluginRisks: this.acceptedPluginRisks,
+      acceptedSkillWarnings: this.acceptedSkillWarnings,
       canAdd: this.canAdd(),
       onSearch: (query) => this.search(query),
       onSelect: (entry) => this.select(entry),
@@ -401,6 +410,15 @@ export class ClawsCatalogDialog extends OpenClawLightDomElement {
           accepted.delete(key);
         }
         this.acceptedPluginRisks = accepted;
+      },
+      onSkillRiskAcknowledged: (key, checked) => {
+        const accepted = new Set(this.acceptedSkillWarnings);
+        if (checked) {
+          accepted.add(key);
+        } else {
+          accepted.delete(key);
+        }
+        this.acceptedSkillWarnings = accepted;
       },
       onConfirm: () => void this.add(),
       onCheckStatus: () => void this.reconcileApply(),

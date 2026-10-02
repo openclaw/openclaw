@@ -16,6 +16,7 @@ import {
 } from "../../claws/gateway-lifecycle-plan.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { applyClawRemoveForGateway } from "../../claws/gateway-remove-apply.js";
+import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { applyClawUpdateForGateway } from "../../claws/gateway-update-apply.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -115,6 +116,9 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         ...(params.acknowledgeCapabilities
           ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
           : {}),
+        ...(params.acknowledgeSkillWarnings
+          ? { acknowledgeSkillWarnings: params.acknowledgeSkillWarnings }
+          : {}),
         getRuntimeConfig: () => context.getRuntimeConfig(),
         assertCurrent,
         ...(signal ? { signal } : {}),
@@ -161,6 +165,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
           ? ErrorCodes.FORBIDDEN
           : error instanceof ClawGatewayPlanChangedError ||
               error instanceof ClawGatewayConsentError ||
+              error instanceof ClawSkillConsentError ||
               (error instanceof ClawGatewayPlanError &&
                 (error.code === "claw_not_found" ||
                   error.code === "claw_update_source_mismatch")) ||
@@ -172,6 +177,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         error instanceof ClawGatewayAuthorityError ||
         error instanceof ClawGatewayPlanChangedError ||
         error instanceof ClawGatewayConsentError ||
+        error instanceof ClawSkillConsentError ||
         error instanceof ClawGatewayPlanError ||
         error instanceof ClawHubSourceError
           ? error.message

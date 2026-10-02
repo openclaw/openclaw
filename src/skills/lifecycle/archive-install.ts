@@ -8,7 +8,11 @@ import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
-import { installPackageDir } from "../../infra/install-package-dir.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../../infra/install-package-dir.js";
 import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
@@ -106,6 +110,11 @@ export async function installExtractedSkillRoot(
         "Remote workspace skill installation is unavailable",
       );
     }
+    if (params.deferCommit && access) {
+      throw new WorkspaceAccessUnavailableError(
+        "Transactional ClawHub skill replacement is unavailable for a remote workspace",
+      );
+    }
     const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
     const { policy: _policy, ...files } = params;
     params.beforePersistentApply?.();
@@ -143,8 +152,8 @@ export async function installExtractedSkillRoot(
     if (!result.ok) {
       return result;
     }
-    if (captureChanges) {
-      await dispatchCommittedSkillChangeBestEffort({
+    const dispatchChange = () =>
+      dispatchCommittedSkillChangeBestEffort({
         action: result.mode === "update" ? "updated" : "created",
         source: changeSource,
         workspaceDir: params.workspaceDir,
@@ -152,8 +161,27 @@ export async function installExtractedSkillRoot(
         after: result.after,
         logger: params.logger,
       });
+    if (captureChanges && !result.transaction) {
+      await dispatchChange();
     }
-    return { ok: true, targetDir: result.targetDir };
+    const transaction = result.transaction;
+    return {
+      ok: true,
+      targetDir: result.targetDir,
+      ...(transaction
+        ? {
+            transaction: captureChanges
+              ? {
+                  commit: async () => {
+                    await transaction.commit();
+                    await dispatchChange();
+                  },
+                  rollback: () => transaction.rollback(),
+                }
+              : transaction,
+          }
+        : {}),
+    };
   } catch (err) {
     return installFailure(formatErrorMessage(err), "unavailable");
   }
@@ -179,6 +207,9 @@ export async function applyExtractedSkillRoot(
       return installFailure(formatErrorMessage(err), "invalid-request");
     }
     const targetExists = await pathExists(targetDir);
+    if (params.deferCommit && params.expectedClawHubState && !targetExists) {
+      return installFailure("Guarded skill update target disappeared.", "invalid-request");
+    }
     const effectiveMode = params.mode === "update" && targetExists ? "update" : "install";
     if (params.mode === "install" && targetExists) {
       return installFailure(
@@ -202,7 +233,7 @@ export async function applyExtractedSkillRoot(
 
     const expectedClawHubState = params.expectedClawHubState;
     let replacementBlocked: string | undefined;
-    const install = await installPackageDir({
+    const installParams: Parameters<typeof installPackageDir>[0] = {
       sourceDir: params.extractedRoot,
       targetDir,
       mode: effectiveMode,
@@ -210,6 +241,7 @@ export async function applyExtractedSkillRoot(
       logger: params.logger,
       copyErrorPrefix: "failed to install skill",
       beforePersistentApply: params.beforePersistentApply,
+      requireExistingTarget: Boolean(params.deferCommit && expectedClawHubState),
       hasDeps: false,
       depsLogMessage: "",
       ...(expectedClawHubState !== undefined
@@ -230,11 +262,25 @@ export async function applyExtractedSkillRoot(
             },
           }
         : {}),
-    });
+    };
+    const install = await installPackageDir(
+      params.deferCommit ? requestDeferredPackageDirInstall(installParams) : installParams,
+    );
     if (!install.ok) {
       return {
         ...installFailure(install.error, replacementBlocked ? "invalid-request" : "unavailable"),
         ...(replacementBlocked ? { replacementBlocked } : {}),
+        ...(install.recoveryIncomplete ? { recoveryIncomplete: true } : {}),
+      };
+    }
+    const transaction = resolvePackageDirInstallTransaction(install);
+    if (params.deferCommit && !transaction) {
+      return {
+        ...installFailure(
+          "Transactional skill replacement did not return a receipt.",
+          "unavailable",
+        ),
+        recoveryIncomplete: true,
       };
     }
     const after = params.changes
@@ -246,7 +292,14 @@ export async function applyExtractedSkillRoot(
           logger: params.logger,
         })
       : undefined;
-    return { ok: true, targetDir, mode: effectiveMode, before, after };
+    return {
+      ok: true,
+      targetDir,
+      mode: effectiveMode,
+      before,
+      after,
+      ...(transaction ? { transaction } : {}),
+    };
   } catch (err) {
     return installFailure(formatErrorMessage(err), "unavailable");
   }

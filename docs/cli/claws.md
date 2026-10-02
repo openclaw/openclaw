@@ -459,6 +459,12 @@ openclaw claws update incident-triage \
   --dry-run --json
 ```
 
+For a Claw installed from ClawHub, the default CLI update re-verifies the exact
+recorded release and its cached source. An explicit `--from` path is treated as
+a local development source and does not inherit ClawHub artifact provenance.
+For a review-required ClawHub release, inspect the trust warning in the preview
+and add `--acknowledge-clawhub-risk` when applying the exact reviewed plan.
+
 The plan compares current provenance and live state with the target manifest.
 It reports agent, workspace, package, MCP, cron, and ownership changes,
 including capability escalations and blockers. Capability escalations have
