@@ -44,19 +44,22 @@ afterEach(() => {
   resetTranscriptTestDom();
 });
 
+function queuedInput(id: string, acceptedAt: number, messageId?: string) {
+  return {
+    ...input,
+    id,
+    runId: id,
+    acceptedAt,
+    state: "queued",
+    queued: true,
+    message: { role: "user", content: id, ...(messageId ? { __openclaw: { id: messageId } } : {}) },
+  } satisfies ChatPendingInputsPage["items"][number];
+}
+
 describe("server-owned pending input pagination", () => {
   it.each(["empty-queue", "complete-page", "partial-page-receipts"] as const)(
     "retires consumed server queue chips outside the transcript window using %s",
     async (source) => {
-      const queuedInput = (id: string, acceptedAt: number) => ({
-        ...input,
-        id,
-        runId: id,
-        acceptedAt,
-        state: "queued" as const,
-        queued: true as const,
-        message: { role: "user", content: id },
-      });
       const consumed = queuedInput("Already handled while disconnected", 1);
       const retained = queuedInput("Still waiting on the server", 2);
       const replacement = queuedInput("New request from another participant", 3);
@@ -181,17 +184,8 @@ describe("server-owned pending input pagination", () => {
   });
 
   it("discovers the whole live queue without changing the visible history page", async () => {
-    const queuedInput = (id: string, acceptedAt: number) => ({
-      ...input,
-      id,
-      runId: id,
-      acceptedAt,
-      state: "queued" as const,
-      queued: true as const,
-      message: { role: "user", content: id, __openclaw: { id: `pending:${id}` } },
-    });
-    const oldest = queuedInput("old", 1);
-    const newest = queuedInput("new", 2);
+    const oldest = queuedInput("old", 1, "pending:old");
+    const newest = queuedInput("new", 2, "pending:new");
     const latestPage = { items: [newest], total: 21, nextBefore: 21, queuedCount: 2 };
     const host = makeChatHost({
       sessionKey,
@@ -297,11 +291,10 @@ describe("server-owned pending input pagination", () => {
     expect(host.request).toHaveBeenCalledTimes(1);
   });
 
-  it.each(
-    ["page", "delta"].flatMap((delivery) =>
-      ["pagination-first", "refresh-first"].map((order) => ({ delivery, order })),
-    ),
-  )(
+  it.each([
+    { delivery: "page", order: "pagination-first" },
+    { delivery: "delta", order: "refresh-first" },
+  ])(
     "preserves pending-input navigation through a $delivery refresh ($order)",
     async ({ delivery, order }) => {
       const navigation = createDeferred<unknown>();

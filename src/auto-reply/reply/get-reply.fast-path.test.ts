@@ -305,7 +305,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       sessionKey,
       workspaceDir: state.workspaceDir,
     });
-    expect(listSessionStateEventsSince(sessionKey, "main", 0, 20).events).toContainEqual(
+    expect((await listSessionStateEventsSince(sessionKey, "main", 0, 20)).events).toContainEqual(
       expect.objectContaining({
         kind: "created",
         actorType: "human",

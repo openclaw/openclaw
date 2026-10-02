@@ -8,7 +8,7 @@ import type { TranscriptEntryAnchor } from "../../config/sessions/transcript-ent
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import {
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  OPENCLAW_SYSTEM_UPDATE_CUSTOM_TYPE,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
 } from "../internal-runtime-context.js";
 import { isSessionContextMetadataEntry } from "./session-manager-codec.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
@@ -52,7 +52,7 @@ function traversalEntry(
       entry.type === "compaction" ||
       (entry.type === "custom_message" &&
         (entry.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE ||
-          entry.customType === OPENCLAW_SYSTEM_UPDATE_CUSTOM_TYPE)) ||
+          entry.customType === SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE)) ||
       (isInterruptedTail?.(entry) ?? false),
   };
 }

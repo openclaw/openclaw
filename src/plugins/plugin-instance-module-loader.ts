@@ -10,6 +10,7 @@ import {
   resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -65,7 +66,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  const nativeHooks = typeof Module.registerHooks === "function";
   const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
@@ -120,7 +120,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     allowedParentRoots: [artifact.boundaryRoot],
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  if (!nativeHooks) {
+  if (!useNodeModuleHooks()) {
     const capturedSource = artifact.resolve(params.source);
     artifact.prepareModule(capturedSource);
     const bunSourceFacts =

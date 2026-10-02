@@ -4,7 +4,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
-  OPENCLAW_SYSTEM_UPDATE_CUSTOM_TYPE,
+  SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
   type CurrentInboundPromptContext,
   type RuntimeContextFragment,
 } from "../../internal-runtime-context.js";
@@ -158,7 +158,7 @@ export function buildSystemUpdateMessage(
 ): RuntimeContextCustomMessage {
   return {
     role: "custom",
-    customType: OPENCLAW_SYSTEM_UPDATE_CUSTOM_TYPE,
+    customType: SYSTEM_UPDATE_MESSAGE_CUSTOM_TYPE,
     content,
     display: false,
     details: { kind, turnScoped },

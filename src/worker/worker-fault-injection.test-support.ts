@@ -18,7 +18,10 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { captureSessionTranscriptTargetBinding } from "../config/sessions/transcript-target-binding.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  captureSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
@@ -178,6 +181,10 @@ export class ComposedGatewayHarness {
   transcriptGate: TranscriptGate | undefined;
   providerPlan: ProviderPlan = { kind: "immediate", text: "done" };
 
+  // The simulated worker changes process.env; Gateway storage must survive service restarts.
+  private readonly gatewayStorageEnvironment = captureSessionTranscriptStorageEnvironment(
+    process.env,
+  );
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly connectionWork = new GatewayConnectionWork();
@@ -204,14 +211,12 @@ export class ComposedGatewayHarness {
       { agentId: "main", sessionKey: SESSION_KEY, storePath },
       { sessionId: SESSION_ID, updatedAt: 1 },
     );
-    const sessionTarget = captureSessionTranscriptTargetBinding(
-      await resolveSessionTranscriptRuntimeTarget({
-        agentId: "main",
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        storePath,
-      }),
-    );
+    const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+      agentId: "main",
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      storePath,
+    });
     const database = stateDb.openOpenClawStateDatabase({
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
@@ -229,7 +234,7 @@ export class ComposedGatewayHarness {
 
   private constructor(
     readonly root: string,
-    readonly sessionTarget: ReturnType<typeof captureSessionTranscriptTargetBinding>,
+    readonly sessionTarget: Awaited<ReturnType<typeof resolveSessionTranscriptRuntimeTarget>>,
     readonly database: stateDb.OpenClawStateDatabase,
     readonly store: envStore.WorkerEnvironmentStore,
   ) {
@@ -560,7 +565,13 @@ export class ComposedGatewayHarness {
           gate.entered.resolve();
           await gate.release.promise;
         }
-        const result = await committer.commit(params);
+        const result = await committer.commit({
+          ...params,
+          sessionTarget: captureSessionTranscriptTargetBinding({
+            ...params.sessionTarget,
+            env: this.gatewayStorageEnvironment,
+          }),
+        });
         if (gate?.phase === "after-apply") {
           gate.entered.resolve();
           await gate.release.promise;

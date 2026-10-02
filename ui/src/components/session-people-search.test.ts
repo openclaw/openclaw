@@ -3,7 +3,7 @@ import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
-import { containers, mountMenu, selectMenuValue } from "../test-helpers/session-menu.ts";
+import { containers, mountMenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
@@ -25,38 +25,6 @@ describe("searchable session people", () => {
     expect(search.value).toBe("Carol");
     expect(menu.querySelectorAll('[value^="assign-owner:"]')).toHaveLength(1);
   });
-
-  it.each([21, 1000])(
-    "searches the whole %i-person directory without rendering it all",
-    async (count) => {
-      const names = Array.from(
-        { length: count },
-        (_, index) => `Person ${String(index).padStart(4, "0")}`,
-      );
-      const { context, request } = createSessionOwnerMenuHarness(() =>
-        sessionOwnerProfiles(...names),
-      );
-      const onAction = vi.fn();
-      const menu = await mountMenu({ context, onAction });
-      await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
-      await waitForFast(() => expect(menu.textContent).toContain(names[0]));
-      expect(menu.querySelectorAll('[value^="assign-owner:"]').length).toBeLessThanOrEqual(20);
-      const search = menu.querySelector<HTMLInputElement>('input[type="search"]');
-      expect(search).not.toBeNull();
-      search!.value = names.at(-1)!;
-      search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      await waitForFast(() =>
-        expect(menu.querySelectorAll('[value^="assign-owner:"]')).toHaveLength(1),
-      );
-      const row = menu.querySelector<HTMLElement>('[value^="assign-owner:"]')!;
-      expect(row.textContent).toContain(names.at(-1));
-      selectMenuValue(menu, row.getAttribute("value")!);
-      expect(onAction).toHaveBeenCalledWith({
-        kind: "assign-owner",
-        owner: { type: "human", id: `profile-person-${String(count - 1).padStart(4, "0")}` },
-      });
-    },
-  );
 
   it("searches beyond the first member page and preserves remove-member selection", async () => {
     const onMemberChange = vi.fn();

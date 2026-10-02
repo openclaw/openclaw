@@ -124,7 +124,10 @@ import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { finalizeCliContextEngineTurn } from "./cli-run-transcript.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
-import { registerCliMcpPreparationTests } from "./prepare-mcp.test-support.js";
+import {
+  registerCliMcpPreparationTests,
+  setRawCliBackendForPrepareTest,
+} from "./prepare-mcp.test-support.js";
 import { registerCliThinkingPreparationTests } from "./prepare-thinking.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
@@ -303,13 +306,6 @@ function createJsonlStdinBackendConfig(command: string): CliBackendPlugin["confi
     input: "stdin",
     sessionMode: "existing",
   };
-}
-
-function setRawCliBackendForPrepareTest(backend: CliBackendPlugin & { pluginId: string }) {
-  cliBackendsTesting.setDepsForTest({
-    resolvePluginSetupCliBackend: () => undefined,
-    resolveRuntimeCliBackends: () => [backend],
-  });
 }
 
 type CliContextBudgetTestCase = {

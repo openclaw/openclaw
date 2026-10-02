@@ -703,8 +703,23 @@ current session authority; upstream observations compare the captured source in
 the committing transaction. Goal events and normalized child-run terminal outcomes
 share that recording command. Child completion joins recording and rechecks its
 current lifecycle or ACP actor authority at transaction and commit admission.
-Synchronous creation, compaction, watch, reset, and deletion callbacks remain
-separate migration work.
+Watch registration and consumed-notice acknowledgment use that same writer. Group
+turns keep an unchanged watch read-only; registration preserves explicit provenance
+and seeds only a new physical watcher store. Completion callers supply source-bound
+lineage and requester predicates: workers reread durable session facts at admission
+and after the host grant, while the host checks live caller authority without querying SQLite.
+Incognito callers use committed facts from their original in-memory store owner.
+The unchanged-watch path retains the same fresh lineage check without writing.
+Custom-store discovery prepares the
+existing system-event owner's path cache through the session read worker. Acknowledgment
+captures the consumed notices' store addresses before yielding, rechecks the host's current system-event store at transaction
+and commit admission, and publishes interleaved follow-up notices after commit. It
+advances only the frozen notification watermark. Version enrichment and bounded event
+pages use the shared-state reader, preserving composite session identity and per-session
+pruned watermarks. Accepted operations retain the existing worker's FIFO and settlement
+owner. Schemas, retention, and update behavior are unchanged.
+Synchronous creation, compaction, reset, deletion, and the public SDK's ambient prompt
+probe remain separate migration work; the restart notice sweep stays in boot admission.
 
 Durable session entry replacement reads its detached snapshot in the history
 worker and commits through the existing agent database executor. The transaction
@@ -1072,6 +1087,16 @@ Edit and dismiss resolutions retain caller authority through finalization. These
 guards reuse committed in-memory facts for process-held incognito sessions without
 adding native SQL reads. Stored formats, schemas, retention, and update behavior
 are unchanged.
+
+Sharing management retains the original session and physical source before
+membership preparation yields. Member add/remove grants and list disclosure
+recompute manager access from current prepared profile, role, and sharing facts.
+Dirty membership refuses authorization even when an older membership value is
+still resident. Member evidence and public-share details use the existing reader
+worker; visibility and public-share mutations use the same prepared authority
+through their existing entry-patch owner. Participant and category writes retain
+their existing collaboration worker, and incognito retains its native owner.
+This changes no schema, permission, retention, or update contract.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results

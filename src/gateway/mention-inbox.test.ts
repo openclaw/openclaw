@@ -2,8 +2,10 @@ import { statSync } from "node:fs";
 import { StatementSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { validateMentionsListResult } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   openOpenClawStateDatabase,
@@ -31,6 +33,93 @@ import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { identifiedClient, soloClient } from "./server-methods/sessions-sharing.test-support.js";
 
 describe("temporary human mention Inbox", () => {
+  it("fences committed input when the Gateway scheduler closes", async () => {
+    await withInbox(async (f) => {
+      f.post("before-close");
+      const before = readMentionStoreSnapshot(-1);
+      f.scheduler.beginClose();
+      f.post("after-close");
+      expect(readMentionStoreSnapshot(-1)).toEqual(before);
+      expect(f.push).toHaveBeenCalledTimes(1);
+      expect(f.inbox.list(f.bobClient)).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE" },
+      });
+    });
+  });
+
+  it("joins expiry descendants after callback disposal without stopping sibling work", async () => {
+    await withInbox(async (f) => {
+      f.post("expiry-join");
+      const release = createDeferred();
+      const settled: string[] = [];
+      let disposal: Promise<void> | undefined;
+      f.broadcast.mockImplementationOnce(() => {
+        void trackAsyncWork(async () => {
+          await release.promise;
+          settled.push("descendant");
+        });
+        disposal = Promise.resolve(f.inbox.dispose()).then(() => {
+          settled.push("disposed");
+        });
+      });
+      const wake = f.clock.advanceBy(7 * 24 * 60 * 60_000);
+      try {
+        expect(disposal).toBeDefined();
+        const sibling = vi.fn();
+        f.scheduler.schedule({ id: "mention-test:sibling", delayMs: 1, run: sibling });
+        await f.clock.advanceBy(1);
+        expect(sibling).toHaveBeenCalledOnce();
+        expect(settled).toEqual([]);
+      } finally {
+        release.resolve();
+        await Promise.all([wake, disposal]);
+      }
+      expect(settled).toEqual(["descendant", "disposed"]);
+    });
+  });
+
+  it("retries failed refresh before an already armed distant expiry", async () => {
+    await withInbox(async (f) => {
+      f.post("distant-expiry");
+      const snapshot = readMentionStoreSnapshot(-1)!;
+      const { db } = openOpenClawStateDatabase();
+      const headKey = "notifications.mentions.head";
+      const saved = db
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+        .get(headKey)?.value_json;
+      if (typeof saved !== "string") {
+        throw new Error("Expected persisted Mention Inbox head JSON");
+      }
+      db.prepare("UPDATE config_machine_state SET value_json = '{}' WHERE state_key = ?").run(
+        headKey,
+      );
+      try {
+        f.inbox.invalidate();
+      } finally {
+        db.prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?").run(
+          saved,
+          headKey,
+        );
+      }
+      runOpenClawStateWriteTransaction(({ db: writer }) =>
+        writeMentionStoreChanges(
+          writer,
+          snapshot.head,
+          new Map([[snapshot.sources[0]!.key, undefined]]),
+        ),
+      );
+      f.broadcast.mockClear();
+      await f.clock.advanceBy(60_000);
+      expect(f.broadcast).toHaveBeenCalledWith(
+        "mentions.changed",
+        { gatewayInstanceId: "mention-gateway", revision: 2 },
+        new Set([f.bobClient.connId]),
+      );
+      expect(read(f.inbox, f.bobClient).items).toEqual([]);
+    });
+  });
+
   it("retains original ids, order, and expiry across Gateway restart without replaying push", async () => {
     await withInbox(async (f) => {
       f.post("first");
@@ -38,7 +127,7 @@ describe("temporary human mention Inbox", () => {
       f.post("second");
       const retained = read(f.inbox, f.bobClient).items;
       expect(retained.map((item) => item.messageId)).toEqual(["message-second", "message-first"]);
-      f.inbox.dispose();
+      await f.inbox.dispose();
       f.push.mockClear();
       await f.clock.advanceBy(6 * 24 * 60 * 60_000);
       const restarted = f.openInbox("restarted-gateway");
@@ -92,7 +181,7 @@ describe("temporary human mention Inbox", () => {
             .all();
         f.post("original-deadline");
         expect(storedSources()).toHaveLength(1);
-        f.inbox.dispose();
+        await f.inbox.dispose();
         await f.clock.advanceBy(6 * 24 * 60 * 60_000);
         const restarted = f.openInbox("restarted-gateway");
         expect(storedSources()).toHaveLength(1);
@@ -111,7 +200,7 @@ describe("temporary human mention Inbox", () => {
         }
         if (scenario !== "normal") {
           if (scenario === "dispose after failure") {
-            restarted.dispose();
+            await restarted.dispose();
           }
           await f.clock.advanceBy(60_000);
           expect(storedSources()).toHaveLength(scenario === "dispose after failure" ? 1 : 0);
@@ -189,7 +278,7 @@ describe("temporary human mention Inbox", () => {
       expect(retained.at(-1)?.messageId).toBe("message-retained-1");
       expect(f.inbox.dismiss(f.bobClient, [retained[0]!.id]).ok).toBe(true);
       const expected = retained.slice(1);
-      f.inbox.dispose();
+      await f.inbox.dispose();
       f.push.mockClear();
       const restarted = f.openInbox("restarted-gateway");
 
@@ -222,8 +311,8 @@ describe("temporary human mention Inbox", () => {
       expect(read(f.inbox, f.bobClient).items).toEqual([both[0]]);
       expect(f.push.mock.calls[0]?.[0].isCurrent()).toBe(false);
       expect(f.push.mock.calls[1]?.[0].isCurrent()).toBe(false);
-      f.inbox.dispose();
-      peer.dispose();
+      await f.inbox.dispose();
+      await peer.dispose();
       f.push.mockClear();
       const restarted = f.openInbox("restarted-gateway");
 
@@ -249,7 +338,7 @@ describe("temporary human mention Inbox", () => {
         f.post("retained");
         const original = read(f.inbox, f.bobClient).items;
         expect(f.inbox.dismiss(f.bobClient, [original[1]!.id]).ok).toBe(true);
-        f.inbox.dispose();
+        await f.inbox.dispose();
         const restarted = f.openInbox("restarted-gateway");
         expect(read(restarted, f.bobClient).items).toEqual([original[0]]);
         expect(schema()).toEqual(before);
@@ -290,7 +379,7 @@ describe("temporary human mention Inbox", () => {
             db.exec(`DROP TRIGGER reject_mention_${action}`);
           }
         }
-        f.inbox.dispose();
+        await f.inbox.dispose();
         const restarted = f.openInbox("restarted-gateway");
         expect(read(restarted, f.bobClient).items).toEqual(retained);
         if (operation === "dismissal") {
@@ -362,7 +451,7 @@ describe("temporary human mention Inbox", () => {
         ok: false,
         error: { code: "UNAVAILABLE", retryable: true },
       });
-      f.inbox.dispose();
+      await f.inbox.dispose();
       expect(f.inbox.list(f.bobClient)).toMatchObject({
         ok: false,
         error: { code: "UNAVAILABLE" },
@@ -429,7 +518,7 @@ describe("temporary human mention Inbox", () => {
         await Promise.resolve();
         const retained = read(f.inbox, f.bobClient).items;
         expect(retained[0]?.senderLabel).toBe("Alice Updated");
-        f.inbox.dispose();
+        await f.inbox.dispose();
         f.push.mockClear();
         const restarted = f.openInbox("restarted-gateway");
 
@@ -553,7 +642,7 @@ describe("temporary human mention Inbox", () => {
       });
       expect(read(f.inbox, f.bobClient).items).toEqual([]);
       expect(delayed?.isCurrent()).toBe(false);
-      f.inbox.dispose();
+      await f.inbox.dispose();
       expect(delayed?.isCurrent()).toBe(false);
     }, cfg);
   });
@@ -573,7 +662,7 @@ describe("temporary human mention Inbox", () => {
       f.post("new-deadline");
       await f.clock.advanceBy(7 * 24 * 60 * 60_000);
       expect(read(f.inbox, f.bobClient).items).toEqual([]);
-      f.inbox.dispose();
+      await f.inbox.dispose();
       const replacement = createMentionInbox({
         scheduler: f.scheduler,
         gatewayInstanceId: "replacement-gateway",
@@ -587,7 +676,7 @@ describe("temporary human mention Inbox", () => {
           items: [],
         });
       } finally {
-        replacement.dispose();
+        await replacement.dispose();
       }
     });
   });

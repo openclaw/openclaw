@@ -10,18 +10,34 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
+const background: GatewaySessionRow = {
+  key: "agent:main:background",
+  sessionId: "background-session",
+  kind: "direct",
+  updatedAt: 10,
+  snapshotAt: 100,
+  status: "done",
+  hasActiveRun: false,
+  activeRunIds: [],
+};
+
+function emitRuntime(harness: ReturnType<typeof createGatewayHarness>, session: GatewaySessionRow) {
+  harness.emitEvent({
+    type: "event",
+    event: "sessions.changed",
+    payload: {
+      agentId: "main",
+      reason: "run-capacity",
+      session,
+      ancestorSessions: [],
+      ts: session.snapshotAt,
+    },
+  });
+}
+
 describe("cached session list freshness", () => {
   it("keeps a background run visible when a later request replays a pre-event page", async () => {
-    const row: GatewaySessionRow = {
-      key: "agent:main:background",
-      sessionId: "background-session",
-      kind: "direct",
-      updatedAt: 10,
-      snapshotAt: 100,
-      status: "done",
-      hasActiveRun: false,
-      activeRunIds: [],
-    };
+    const row = background;
     let page = sessionsResult([row], 100);
     const harness = createGatewayHarness(
       createTestGatewayClient(async () => structuredClone(page)),
@@ -29,22 +45,12 @@ describe("cached session list freshness", () => {
     const sessions = createTestSessionCapability(harness.gateway);
     try {
       await sessions.refresh({ agentId: "main", force: true });
-      harness.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          agentId: "main",
-          reason: "run-capacity",
-          session: {
-            ...row,
-            snapshotAt: 200,
-            status: "running",
-            hasActiveRun: true,
-            activeRunIds: ["background-run"],
-          },
-          ancestorSessions: [],
-          ts: 200,
-        },
+      emitRuntime(harness, {
+        ...row,
+        snapshotAt: 200,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["background-run"],
       });
       expect(sessions.state.result?.sessions[0]).toMatchObject({
         status: "running",
@@ -75,38 +81,19 @@ describe("cached session list freshness", () => {
   });
 
   it("does not revive a finished run when its older sampled event arrives after a list", async () => {
-    const row: GatewaySessionRow = {
-      key: "agent:main:background",
-      sessionId: "background-session",
-      kind: "direct",
-      updatedAt: 10,
-      snapshotAt: 300,
-      status: "done",
-      hasActiveRun: false,
-      activeRunIds: [],
-    };
+    const row = { ...background, snapshotAt: 300 };
     const harness = createGatewayHarness(
       createTestGatewayClient(async () => sessionsResult([structuredClone(row)], 300)),
     );
     const sessions = createTestSessionCapability(harness.gateway);
     try {
       await sessions.refresh({ agentId: "main", force: true });
-      harness.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          agentId: "main",
-          reason: "run-capacity",
-          session: {
-            ...row,
-            snapshotAt: 200,
-            status: "running",
-            hasActiveRun: true,
-            activeRunIds: ["background-run"],
-          },
-          ancestorSessions: [],
-          ts: 200,
-        },
+      emitRuntime(harness, {
+        ...row,
+        snapshotAt: 200,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["background-run"],
       });
       expect(sessions.state.result?.sessions[0]).toMatchObject(row);
     } finally {
@@ -116,11 +103,7 @@ describe("cached session list freshness", () => {
 
   it("settles a runtime-only run from a newer sampled event without a persisted write", async () => {
     const row: GatewaySessionRow = {
-      key: "agent:main:background",
-      sessionId: "background-session",
-      kind: "direct",
-      updatedAt: 10,
-      snapshotAt: 100,
+      ...background,
       status: "running",
       hasActiveRun: true,
       activeRunIds: ["background-run"],
@@ -131,24 +114,14 @@ describe("cached session list freshness", () => {
     const sessions = createTestSessionCapability(harness.gateway);
     try {
       await sessions.refresh({ agentId: "main", force: true });
-      const settled = {
+      const settled: GatewaySessionRow = {
         ...row,
         snapshotAt: 200,
         status: "done",
         hasActiveRun: false,
         activeRunIds: [],
       };
-      harness.emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          agentId: "main",
-          reason: "run-capacity",
-          session: settled,
-          ancestorSessions: [],
-          ts: 200,
-        },
-      });
+      emitRuntime(harness, settled);
       expect(sessions.state.result?.sessions[0]).toMatchObject(settled);
     } finally {
       sessions.dispose();

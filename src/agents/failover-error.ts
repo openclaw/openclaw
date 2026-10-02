@@ -52,7 +52,9 @@ const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
+  "CodexNodeExecServerDisconnectedError",
   "GatewayDrainingError",
+  "NodeRunnerUpdateRequiredError",
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
