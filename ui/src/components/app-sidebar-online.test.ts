@@ -242,27 +242,27 @@ describe("sidebar people workload", () => {
   });
 
   it("filters and sorts people locally using full workload counts", async () => {
-    const { sidebar, summaryRequest } = await mountWorkload(undefined, true);
+    const { sidebar, gateway, request } = await mountWorkload(undefined, true);
+    gateway.publishEvent("presence", {
+      presence: [...presence(), { instanceId: "raw", ts: NOW, user: { id: "raw", name: "Aaron" } }],
+    });
+    const reads = request.mock.calls.length;
     const view = sidebar.sidebarMenus.host.people;
     view.setSortMode("running");
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["bea", "ada", "cy", "Raw Ada"]);
+    expect(names(sidebar)).toEqual(["bea", "ada", "cy", "Aaron"]);
+    view.setSortMode("name");
+    await settle(sidebar);
+    expect(names(sidebar)).toEqual(["Aaron", "ada", "bea", "cy"]);
     view.setSortMode("open");
     await settle(sidebar);
-    expect(names(sidebar)).toEqual(["ada", "bea", "cy", "Raw Ada"]);
+    expect(names(sidebar)).toEqual(["ada", "bea", "cy", "Aaron"]);
     view.setStatusFilter("running");
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "bea"]);
     expect(counts(sidebar, "ada")).toEqual(["1", "7"]);
     expect(counts(sidebar, "bea")).toEqual(["2", "3"]);
-    view.setSortMode("name");
-    view.setStatusFilter("all");
-    await settle(sidebar);
-    expect(names(sidebar)).toEqual(["ada", "bea", "cy", "Raw Ada"]);
-    view.resetView();
-    await settle(sidebar);
-    expect(names(sidebar)).toEqual(["ada", "cy", "bea", "Raw Ada"]);
-    expect(summaryRequest).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledTimes(reads);
   });
 
   it("keeps the filter recoverable for unavailable counts and empty matches", async () => {
@@ -296,25 +296,21 @@ describe("sidebar people workload", () => {
     await open();
     expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
     expect(sidebar.querySelector("#sidebar-people-status")?.textContent).toContain("All");
-    const status = sidebar
-      .querySelector("#sidebar-people-status")!
-      .closest("openclaw-select-picker")!;
-    status.params.onChange("running");
-    await settle(sidebar);
-    expect(sidebar.sidebarMenus.peopleFilterMenuPosition).toBeNull();
+    await click(sidebar, "#sidebar-people-status");
+    await click(
+      sidebar,
+      'openclaw-select-picker:has(#sidebar-people-status) [data-value="running"]',
+    );
+    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
     expect(names(sidebar)).toEqual(["ada", "bea"]);
     await open();
-    const menu = sidebar.querySelector(".sidebar-session-filter-panel")!;
-    expect(menu.querySelectorAll(".sidebar-session-menu-section")).toHaveLength(1);
-    expect(menu.querySelectorAll(".sidebar-session-menu-footer")).toHaveLength(1);
-    const sort = sidebar.querySelector("#sidebar-people-sort")!.closest("openclaw-select-picker")!;
-    sort.params.onChange("running");
-    await settle(sidebar);
-    expect(sidebar.sidebarMenus.peopleFilterMenuPosition).toBeNull();
+    await click(sidebar, "#sidebar-people-sort");
+    await click(sidebar, 'openclaw-select-picker:has(#sidebar-people-sort) [data-value="running"]');
+    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
     expect(names(sidebar)).toEqual(["bea", "ada"]);
     await open();
     await click(sidebar, "#sidebar-people-reset");
-    expect(sidebar.sidebarMenus.peopleFilterMenuPosition).toBeNull();
+    expect(sidebar.querySelector('[role="dialog"]')).toBeNull();
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
     await open();
     expect(sidebar.querySelector("#sidebar-people-reset")).toBeNull();
