@@ -5,6 +5,7 @@ import {
   openSqliteWorkerStore,
   runSqliteWorkerStoreOperation,
 } from "openclaw/plugin-sdk/sqlite-runtime";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -19,7 +20,6 @@ import type {
   WorkboardSqliteWorkerOperations,
 } from "./sqlite-store-contract.js";
 import { unwrapWorkboardSqliteResult } from "./sqlite-store-errors.js";
-import { resolveWorkboardSqlitePath } from "./sqlite-store-paths.js";
 
 type WorkboardSqliteStores = {
   cards: WorkboardCardStore;
@@ -35,10 +35,11 @@ type WorkboardSqliteStores = {
 
 export function createWorkboardSqliteStores(options: {
   dbPath?: string;
-  env?: NodeJS.ProcessEnv;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
-  const databasePath = path.resolve(options.dbPath ?? resolveWorkboardSqlitePath(options.env));
+  const databasePath = path.resolve(
+    options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
+  );
   const worker = openSqliteWorkerStore<WorkboardSqliteWorkerOperations>({
     moduleUrl: options.workerModuleUrl,
     databasePath,

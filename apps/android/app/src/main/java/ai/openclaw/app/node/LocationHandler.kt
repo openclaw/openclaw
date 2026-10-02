@@ -2,11 +2,10 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.location.Location
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.serialization.json.Json
@@ -36,17 +35,11 @@ internal interface LocationDataSource {
 private class DefaultLocationDataSource(
   private val capture: LocationCaptureManager,
 ) : LocationDataSource {
-  override fun hasFinePermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
-      PackageManager.PERMISSION_GRANTED
+  override fun hasFinePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION)
 
-  override fun hasCoarsePermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-      PackageManager.PERMISSION_GRANTED
+  override fun hasCoarsePermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
 
-  override fun hasBackgroundPermission(context: Context): Boolean =
-    ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
-      PackageManager.PERMISSION_GRANTED
+  override fun hasBackgroundPermission(context: Context): Boolean = context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
 
   override suspend fun fetchLocation(
     desiredProviders: List<String>,

@@ -162,8 +162,10 @@ joined descendant cleanup. Release validation runs the complete Node selection
 before the compatible Bun/Vitest and native Bun portions in that same slot;
 every result remains required. Native execution adds no CI jobs or worker fanout.
 
-The process lane runs `terminal-pty-bun.test.ts` on Bun and retains its other
-files on Node. The pinned fork supports `Bun.Terminal.pause()` and `resume()`,
+The process lane runs `terminal-pty-bun.test.ts` and the spawn-broker
+`event-order.test.ts` and `group-custody.test.ts` files on Bun. The broker tests
+exercise inherited `NODE_OPTIONS` preloads; their Windows exclusions remain.
+Other process files retain Node. The pinned fork supports `Bun.Terminal.pause()` and `resume()`,
 so its native real-PTY cases run on Linux. macOS and Linux select the native PTY
 without Node on builds with that capability, including the pinned fork's macOS
 child-exit fix. Other Bun
@@ -177,11 +179,14 @@ The Code Mode executor runs with Vitest on Bun using the fork's
 copy-on-write diagnostics-channel subscriber handling. Markdown render-aware
 chunking stays on Node because the pinned WebKit lacks the `Intl.Segmenter`
 surrogate-boundary fix needed by that suite.
-The complete fake-timer lane, plugin and proxy retention tests, and Control UI
-support Bun. UI retains its six GC assertions in `chat-pane-retention.test.ts`,
-`chat-thread-retention.test.ts`, and `usage-page-retention.test.ts`; they use
-runtime-neutral collection and WeakRef checks. V8-specific heap and worker-limit
-assertions and the remaining qualified Node-only selections still run on Node.
+The complete fake-timer lane, plugin and proxy retention tests, and other
+Control UI tests support Bun. Control UI WeakRef-collection proofs in
+`desktop-mobile-keyboard.test.ts`, `chat-pane-retention.test.ts`,
+`chat-thread-retention.test.ts`, `session-snapshot-store.test.ts`, and
+`usage-page-retention.test.ts` stay on Node because JavaScriptCore's
+conservative stack scanning can keep an unreachable target alive after a forced
+collection. V8-specific heap and worker-limit assertions and the remaining
+qualified Node-only selections still run on Node.
 The missing-Docker test also runs on Bun, using an empty executable directory
 instead of an empty `PATH`, which Bun resolves through its default search path.
 Other families retain Node until they pass on the pinned fork within their
@@ -191,6 +196,7 @@ configs, exact files, and partitions; ambiguous selections retain Node. No tests
 are removed from the selected inventory.
 
 Worktree removal recovery (`src/agents/worktrees/service.removal-recovery.test.ts`),
+OpenAI realtime worker messaging (`extensions/openai/realtime-quicksilver-peer-worker.test.ts`),
 plugin CommonJS interoperability (`src/plugins/plugin-module-generation.interop.test.ts`),
 oxlint configuration (`test/scripts/oxlint-config.test.ts`), and update timeout
 diagnostics (`test/scripts/upgrade-survivor-timeout-diagnostics.test.ts`) also
@@ -270,14 +276,20 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `86bd9e19723d353b761451ac6f5f63b3f38e863e` with WebKit
+The pinned build pairs Bun `1e6f0e7f70462d3c0c3fc121f4ffa453091a74e8` with WebKit
 `fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261002-86bd9e1972-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `b3684189fe` pin. The build fixes worker heap
-capacity reporting, OS-visible `process.title`, synchronous event-listener exception
-propagation, and delivery of queued WebSocket upgrades. Runtime auto-install defaults
-to off: fixtures must declare and install their dependencies. Darwin watch coalescing
-does not affect Linux CI.
+`openclaw-v1.4.3-20261002-1e6f0e7f70-webkit-fb1167ebf2`.
+WebKit is unchanged from the previous `86bd9e1972` pin. The build fixes child-process
+spawn tracing outcomes, preservation of destroy errors during in-flight socket writes,
+MessagePort creation async context and emitted payloads, retained duplicated standard
+I/O descriptors, inherited `NODE_OPTIONS` preloads, and socket standard I/O shutdown.
+Forced full GC now completes in-flight JIT plans, addressing the usage-page retention
+failure. Synchronous `module.registerHooks` remains unavailable. The standard I/O
+shutdown workaround remains necessary for supported stock Bun releases.
+It retains fixes for worker heap capacity reporting, OS-visible `process.title`,
+synchronous event-listener exception propagation, and queued WebSocket upgrades.
+Runtime auto-install defaults to off: fixtures must declare and install their
+dependencies. Darwin watch coalescing does not affect Linux CI.
 It retains fixes for post-script `--` argument separators, hidden CommonJS data
 exports, large native standard I/O writes, and Darwin kqueue file watches.
 It retains fixes for compile-cache idle wakeups, `v8.queryObjects`, idempotent

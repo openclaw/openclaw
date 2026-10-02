@@ -62,7 +62,7 @@ export function runSessionMaintenanceMetadataInWorker(params: {
                 preservation: plan.input.preservation,
               },
             }
-          : { kind: plan.kind };
+          : plan;
       const result = await worker.execute({ type: "session.maintenance.metadata", input });
       workerThreadId = result.workerThreadId;
       if (params.diagnostics) {
@@ -142,7 +142,12 @@ export function runSessionMaintenanceMetadataInWorker(params: {
                     await worker.execute(
                       {
                         type: "session.maintenance.prepare",
-                        input: { id: preparationId, input: plan.input },
+                        input: {
+                          id: preparationId,
+                          input: plan.input,
+                          ageOwner: plan.ageOwner,
+                          ageChanges: plan.ageChanges,
+                        },
                       },
                       { signal: params.signal },
                     );

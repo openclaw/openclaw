@@ -401,7 +401,7 @@ export async function withChromeMcpTarget<T>(
 ): Promise<T> {
   return await withChromeMcpLease(
     params.profileName,
-    params.profile ?? params.userDataDir,
+    params.profile,
     params,
     async (lease, normalizedProfileOptions) => {
       const routing = getChromeMcpRoutingState(lease.session);

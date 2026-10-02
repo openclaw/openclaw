@@ -16,14 +16,17 @@ import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-acce
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { spyOnSessionStoreSummaries } from "../config/sessions/session-store-summary.test-support.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { getStatusSummary } from "../status/summary.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -57,10 +60,11 @@ describe("getStatusSummary read-only session access", () => {
     setActivePluginRegistry(createTestRegistry());
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cliBackendsTesting.resetDepsForTest();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
   });
 
   afterAll(() => {
@@ -125,7 +129,8 @@ describe("getStatusSummary read-only session access", () => {
             { sessionId: `${agentId}-session`, updatedAt: agentId === "main" ? 10 : 20 },
           );
         }
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(tempDir);
+        closeOpenClawAgentDatabasesForTest(tempDir);
 
         const expectedPaths = ["main", "ops"].map(
           (agentId) => resolveSqliteTargetFromSessionStorePath(storePath, { agentId }).path,
@@ -172,8 +177,9 @@ describe("getStatusSummary read-only session access", () => {
           now.mockRestore();
         }
       } finally {
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
+        await closeOpenClawAgentDatabasesAsync(tempDir);
+        closeOpenClawAgentDatabasesForTest(tempDir);
+        await closeStateDatabaseForTest();
       }
     },
   );
@@ -189,7 +195,8 @@ describe("getStatusSummary read-only session access", () => {
           { agentId: "main", sessionKey: "agent:main:main", storePath },
           { sessionId: "prepared-config", updatedAt: 10 },
         );
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
         clearRuntimeConfigSnapshot();
         const readFileSync = vi.spyOn(fs, "readFileSync");
         try {
@@ -318,7 +325,8 @@ describe("getStatusSummary read-only session access", () => {
           totalTokensVersion: 1,
         },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      closeOpenClawAgentDatabasesForTest(state.root);
 
       const summary = await getStatusSummary({ includeChannelSummary: false, config });
       const session = summary.sessions.recent[0];
@@ -355,7 +363,8 @@ describe("getStatusSummary read-only session access", () => {
             },
           );
         }
-        closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawAgentDatabasesAsync(state.root);
+        closeOpenClawAgentDatabasesForTest(state.root);
 
         const stored = readSessionStoreSummaryReadOnly(
           { agentId: "main", storePath },

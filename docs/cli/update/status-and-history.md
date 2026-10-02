@@ -323,6 +323,16 @@ diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
 
+If a candidate check exits by signal, its failed step retains `termination`,
+`signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,
+and 8,192 characters total, reserving the fatal header when present). The report names the check, including **Checking
+data migrations** for Doctor, and shows the native diagnostics ahead of adjacent
+plugin warnings. The terminal and local Markdown report retain the excerpt;
+the short status report can truncate it. JSON history keeps the bounded excerpt,
+and reviewed public reports retain the termination class and recognized signal. This capture
+requires the updated updater; a candidate cannot restore diagnostics that an
+older installed driver discarded.
+
 Current updaters record their process identities and refresh the ledger
 every 30 seconds during long build, install, and finalization phases. Those
 writes pause whenever a Doctor child is repairing state: finalization pauses them

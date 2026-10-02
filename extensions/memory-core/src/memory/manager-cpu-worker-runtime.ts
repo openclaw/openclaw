@@ -50,8 +50,27 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
 
-export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
+function hasResultKind<Kind extends MemorySearchWorkerOutput["kind"]>(
+  result: MemorySearchWorkerOutput,
+  kind: Kind,
+): result is Extract<MemorySearchWorkerOutput, { kind: Kind }> {
+  return result.kind === kind;
+}
+
+async function runRetrieval<Kind extends MemorySearchWorkerInput["kind"]>(
+  request: MemorySearchWorkerInput & { kind: Kind },
+  options: Parameters<typeof retrieval.run>[1],
+  description: string,
+) {
   ensureSqliteLibrarySelected();
+  const result = await retrieval.run(request, options);
+  if (!hasResultKind(result, request.kind)) {
+    throw new Error(`Invalid memory ${description} worker result`);
+  }
+  return result;
+}
+
+export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
   let inputBytes =
     2 * (request.agentId.length + request.databasePath.length + request.stateDir.length);
   for (const values of [
@@ -66,10 +85,7 @@ export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
       inputBytes += value.length * 2;
     }
   }
-  const result = await retrieval.run(request, { inputBytes });
-  if (result.kind !== "forget-index-plan") {
-    throw new Error("Invalid memory Forget index plan worker result");
-  }
+  const result = await runRetrieval(request, { inputBytes }, "Forget index plan");
   return result.plan;
 }
 
@@ -88,14 +104,11 @@ export async function runMemoryOriginRows(
   target: MemoryOriginReadTarget,
   filters: MemoryOriginReadFilters,
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  const result = await runRetrieval(
     { ...target, ...filters, kind: "origin-rows" },
     { inputBytes: originReadBytes(target, filters) },
+    "origin rows",
   );
-  if (result.kind !== "origin-rows") {
-    throw new Error("Invalid memory origin rows worker result");
-  }
   return result.rows;
 }
 
@@ -103,14 +116,11 @@ export async function runMemoryTombstoneRows(
   target: MemoryOriginReadTarget,
   sessionIds?: readonly string[],
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  const result = await runRetrieval(
     { ...target, sessionIds, kind: "session-tombstones" },
     { inputBytes: originReadBytes(target, { sessionIds }) },
+    "tombstone rows",
   );
-  if (result.kind !== "session-tombstones") {
-    throw new Error("Invalid memory tombstone rows worker result");
-  }
   return result.rows;
 }
 
@@ -118,26 +128,20 @@ export async function runMemoryOriginExists(
   target: MemoryOriginReadTarget,
   filters: MemoryOriginReadFilters & { entryKeys: readonly string[] },
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  const result = await runRetrieval(
     { ...target, ...filters, kind: "origin-exists" },
     { inputBytes: originReadBytes(target, filters) },
+    "origin existence",
   );
-  if (result.kind !== "origin-exists") {
-    throw new Error("Invalid memory origin existence worker result");
-  }
   return result.exists;
 }
 
 export async function runMemoryIndexedOriginKeys(target: MemoryOriginReadTarget) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  const result = await runRetrieval(
     { ...target, kind: "origin-index-keys" },
     { inputBytes: originReadBytes(target) },
+    "indexed origin keys",
   );
-  if (result.kind !== "origin-index-keys") {
-    throw new Error("Invalid memory indexed origin keys worker result");
-  }
   return result.keys;
 }
 
@@ -147,11 +151,7 @@ export async function prewarmMemorySearchWorker(): Promise<void> {
 }
 
 export async function runMemoryIndexState(target: MemoryReadTarget, signal?: AbortSignal) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run({ ...target, kind: "index-state" }, { signal });
-  if (result.kind !== "index-state") {
-    throw new Error("Invalid memory index state worker result");
-  }
+  const result = await runRetrieval({ ...target, kind: "index-state" }, { signal }, "index state");
   return result.state;
 }
 
@@ -163,8 +163,7 @@ export async function runMemoryRecallMetadata(
   >,
   signal?: AbortSignal,
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  return runRetrieval(
     { ...target, kind: "recall-metadata", ...query },
     {
       signal,
@@ -173,11 +172,8 @@ export async function runMemoryRecallMetadata(
         0,
       ),
     },
+    "recall metadata",
   );
-  if (result.kind !== "recall-metadata") {
-    throw new Error("Invalid memory recall metadata worker result");
-  }
-  return result;
 }
 
 export async function runMemoryCuratedCandidates(
@@ -187,26 +183,19 @@ export async function runMemoryCuratedCandidates(
     keyof MemoryReadTarget | "kind"
   >,
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  return runRetrieval(
     { ...target, kind: "curated", ...query },
     { inputBytes: query.activeProjectKeys?.reduce((bytes, key) => bytes + key.length * 2, 0) ?? 0 },
+    "curated candidates",
   );
-  if (result.kind !== "curated") {
-    throw new Error("Invalid memory curated candidates worker result");
-  }
-  return result;
 }
 
 export async function runMemoryPresenceInspection(databasePath: string): Promise<boolean> {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  const result = await runRetrieval(
     { kind: "presence", databasePath },
     { inputBytes: databasePath.length * 2 },
+    "presence",
   );
-  if (result.kind !== "presence") {
-    throw new Error("Invalid memory presence worker result");
-  }
   return result.present;
 }
 
@@ -216,8 +205,7 @@ export async function runMemoryKeywordSearch(
   signal?: AbortSignal,
   includeIndexState = false,
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  return runRetrieval(
     { ...target, kind: "keyword", query, includeIndexState },
     {
       signal,
@@ -228,11 +216,8 @@ export async function runMemoryKeywordSearch(
           query.path.query.length +
           (query.path.exactPathQuery?.length ?? 0)),
     },
+    "keyword",
   );
-  if (result.kind !== "keyword") {
-    throw new Error("Invalid memory keyword worker result");
-  }
-  return result;
 }
 
 export async function runMemoryVectorFallback(
@@ -240,17 +225,14 @@ export async function runMemoryVectorFallback(
   query: MemoryVectorWorkerQuery,
   signal?: AbortSignal,
 ) {
-  ensureSqliteLibrarySelected();
-  const result = await retrieval.run(
+  const result = await runRetrieval(
     { ...target, kind: "vector", query },
     {
       signal,
       inputBytes: query.queryVec.length * 8,
     },
+    "vector",
   );
-  if (result.kind !== "vector") {
-    throw new Error("Invalid memory vector worker result");
-  }
   return result.rows;
 }
 

@@ -6,6 +6,7 @@ import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { stringify as stringifyYaml } from "yaml";
 import type { AgentConfig } from "../config/types.agents.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { digestClawBytes } from "./digest.js";
 import { portableAgent, portableOpenClawProfile } from "./export.js";
 import { ClawMigrationError } from "./migrate-errors.js";
 import { MAX_MANAGED_FILE_BYTES } from "./source-limits.js";
@@ -194,17 +195,13 @@ export async function removeGeneratedPackageIfUnchanged(
         }),
       )
       .catch(() => undefined);
-    if (actual && sha256(actual.buffer) === sha256(expected)) {
+    if (actual && digestClawBytes(actual.buffer) === digestClawBytes(expected)) {
       await unlink(target).catch(() => undefined);
     }
   }
   for (const directory of [resolve(root, "profiles"), resolve(root, "workspace"), root]) {
     await rmdir(directory).catch(() => undefined);
   }
-}
-
-function sha256(value: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
 export async function createPackagePreview(packageFiles: Map<string, Buffer>): Promise<string> {

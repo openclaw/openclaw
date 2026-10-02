@@ -4,6 +4,7 @@ import path from "node:path";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { hasExactKeys } from "../../chrome-extension/modules/strict-json.js";
 import {
   assertCurrentNativeHostLaunchContext,
   assertExpectedNativeHostProfile,
@@ -257,7 +258,6 @@ export async function inspectRegistration(
         issue: "same host name is registered to a foreign manifest or launcher",
       };
     }
-    const exactKeys = ["name", "description", "path", "type", "allowed_origins"];
     const stringOrigins = origins.filter((origin): origin is string => typeof origin === "string");
     const validOrigins =
       origins.length > 0 &&
@@ -269,8 +269,7 @@ export async function inspectRegistration(
       ? expectedOriginsForExtensionIds(expectedPathExtensionIds)
       : null;
     if (
-      Object.keys(manifest).length !== exactKeys.length ||
-      !exactKeys.every((key) => Object.hasOwn(manifest, key)) ||
+      !hasExactKeys(manifest, ["name", "description", "path", "type", "allowed_origins"]) ||
       manifest.description !== NATIVE_HOST_DESCRIPTION ||
       manifest.type !== "stdio" ||
       !validOrigins ||

@@ -8,6 +8,7 @@ import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -58,12 +59,6 @@ describe("accepted input custody", () => {
     timestamp: 100,
     idempotencyKey: `${runId}:user`,
   });
-  const readEventId = (event: unknown) => {
-    if (!event || typeof event !== "object" || !("id" in event)) {
-      return undefined;
-    }
-    return typeof event.id === "string" ? event.id : undefined;
-  };
   const stage = async (
     runId: string,
     options: Partial<Parameters<typeof stageSessionPendingInput>[1]> = {},
@@ -388,7 +383,9 @@ describe("accepted input custody", () => {
     }, databaseOptions);
 
     for (const eventId of ["rolled-back-outer", "rolled-back-savepoint"]) {
-      expect((await loadTranscriptEvents(scope())).map(readEventId)).not.toContain(eventId);
+      expect(await loadTranscriptEvents(scope())).not.toContainEqual(
+        expect.objectContaining({ id: eventId }),
+      );
     }
     expect(() =>
       receipt.run(() => appendCopy("first-savepoint-copy", "stale-savepoint-source")),
@@ -629,6 +626,7 @@ describe("accepted input custody", () => {
     async (entry) => {
       const receipt = await stage("restart");
       rotateAgentEventLifecycleGeneration();
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const retained = await readSessionPendingInput(scope(), receipt.inputId);
       expect(retained?.state).toBe("interrupted");

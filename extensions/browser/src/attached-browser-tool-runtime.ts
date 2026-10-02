@@ -1,6 +1,4 @@
 /**
- * Attach-only Browser tool runtime for a caller-owned loopback Chrome process.
- *
  * The bridge owns only authenticated Browser HTTP ingress. Chrome remains owned
  * by the caller and survives bridge disposal.
  */

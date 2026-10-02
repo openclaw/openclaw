@@ -911,6 +911,7 @@ describe("worker inference provider runtime", () => {
       maxTokens: 256,
       reasoning: "low",
       thinkingBudgets: { low: 1 },
+      fastMode: false,
     });
     expect(runtime.stream.mock.calls[0]?.[2]?.thinkingBudgets).toEqual({ low: 96 });
     expect(inferenceRequest.options.thinkingBudgets).toEqual({ low: 96 });

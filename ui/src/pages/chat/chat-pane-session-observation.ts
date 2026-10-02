@@ -13,7 +13,6 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
-import { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneSessionCreation } from "./chat-pane-session-creation.ts";
 import { holdProviderReviewQueuedInputs } from "./chat-provider-review.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
@@ -99,8 +98,6 @@ function applyObservedChatSessionRow(
 }
 
 export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation {
-  protected readonly activeSessionResources = new ChatPaneActiveResources();
-
   private sessionObservation: {
     matchesPane: () => boolean;
     observation: SessionRowObservation | null;

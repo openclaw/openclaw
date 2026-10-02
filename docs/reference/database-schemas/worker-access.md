@@ -202,17 +202,19 @@ snapshot, including both MCP reconstruction passes. Process-held incognito
 databases retain their native owner. There is no synchronous fallback when the
 worker is busy and no retained summary cache.
 
-Legacy session-entry patches yield while waiting for a competing SQLite writer.
-Each `BEGIN IMMEDIATE` attempt uses a zero busy timeout and can retry within the
-connection's existing admission budget. Once admitted, the synchronous callback
-and commit retain the connection's original busy timeout: rollback-journal
-readers can temporarily block commit even after writer admission succeeds.
-The session writer queue retains FIFO order, the captured connection stays
-retained, and each attempt rechecks its owner. The admitted transaction revalidates
-the prepared rows and caller authority before mutation. Its callback and committed
-publications never replay. Entry reads and transaction bodies still execute on
-the calling thread; this bounded cutover removes native writer-admission waits without
-changing schemas, durability, or update behavior.
+Audited internal session-entry patches use the agent executor for snapshot reads,
+CAS validation, mutation, and COMMIT. Usage accounting, unguarded compaction
+accounting, restart cleanup, activity recaps, and the entry owner's prepared
+upsert, replacement, and route-metadata operations select this path explicitly.
+The host runs each updater once and retains live authority. Recap transcript
+predicates run inside the write transaction before CAS. Bounded provisional
+result transfers precede the final grant; a compact native receipt certifies the
+exact committed result. Publication, committed callbacks, and identity observers
+settle before the physical database FIFO is released. Unknown writes never replay.
+Incognito, maintenance, opaque plugin callbacks, and unclassified internal guards
+retain native transactions and yielding writer admission. Arbitrary async plugin
+updaters retain their existing nested-admission behavior. Schemas, durability,
+public callback contracts, and update behavior are unchanged.
 
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
@@ -1084,6 +1086,15 @@ worker; visibility and public-share mutations use the same prepared authority
 through their existing entry-patch owner. Participant and category writes retain
 their existing collaboration worker, and incognito retains its native owner.
 This changes no schema, permission, retention, or update contract.
+
+Session-scoped command and skill discovery uses those same current sharing facts.
+It captures the session and physical source before membership readiness yields,
+refuses dirty membership, and rechecks caller, role, session, and source authority
+after discovery. Exact row preparation carries pinned skill selections separately
+from compact sharing facts; response publication compares the current selections
+in the same synchronous consuming frame. Personal skill-library storage, exec-policy
+eligibility, and process-held incognito ownership remain with their existing owners.
+This changes no SDK, RPC schema, stored data, permission, or update contract.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results

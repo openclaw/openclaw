@@ -226,6 +226,7 @@ function reclaimSqliteRowsInTransaction(
   }
   if (
     plan.kind === "maintenance-plan" ||
+    plan.kind === "maintenance-age" ||
     plan.kind === "maintenance-finalize" ||
     plan.kind === "maintenance-statistics"
   ) {
@@ -410,10 +411,12 @@ export function createLifecycleArtifactReclamationPlan(params: {
 export function createSessionMaintenancePlanningOperation(params: {
   databaseOptions: OpenClawAgentDatabaseOptions;
   input: SessionEntryMaintenanceInput;
+  ageOwner?: string;
 }): Extract<SqliteSessionReclamationPlan, { kind: "maintenance-plan" }> {
   return {
     databaseOptions: resolveSessionReclamationDatabaseOptions(params.databaseOptions),
     input: params.input,
+    ageOwner: params.ageOwner,
     kind: "maintenance-plan",
     materializedPlans: [],
   };

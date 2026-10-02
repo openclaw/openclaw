@@ -18,7 +18,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.sharedPluginModuleIden
 }));
 const log = createSubsystemLogger("plugins");
 
-/** The loaded module owns its original artifact identity across registry replacements. */
+/** Canonical exports retain file identity across Jiti wrappers and registry replacements. */
 export function bindSharedPluginModuleLoader(params: {
   instance: PluginModuleLoaderOwner;
   rootDir: string;
@@ -57,11 +57,13 @@ function createSharedModuleBinding(
       if ((typeof value !== "object" || value === null) && typeof value !== "function") {
         return value;
       }
-      let identities = state.sources.get(value);
-      if (!identities) {
-        identities = new Map();
-        state.sources.set(value, identities);
-      }
+      const exported: unknown = Reflect.get(value, "default");
+      const identity =
+        exported && (typeof exported === "object" || typeof exported === "function")
+          ? exported
+          : value;
+      const identities = state.sources.get(identity) ?? new Map<string, string | undefined>();
+      state.sources.set(identity, identities);
       if (!identities.has(root)) {
         identities.set(root, currentIdentity);
       } else {
@@ -70,8 +72,8 @@ function createSharedModuleBinding(
           state.warnings.set(
             target,
             !loadedIdentity || !currentIdentity
-              ? "Compiled bundled plugin code remains loaded and its files could not be verified. Restart the Gateway to load edited code."
-              : "Compiled bundled plugin code remains loaded. Restart the Gateway to load edited code.",
+              ? "Bundled plugin code remains loaded and its files could not be verified. Restart the Gateway to load edited code."
+              : "Bundled plugin code remains loaded. Restart the Gateway to load edited code.",
           );
         }
       }

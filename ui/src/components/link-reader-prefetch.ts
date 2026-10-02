@@ -4,6 +4,7 @@ import { directive, type ElementPart } from "lit/directive.js";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
+  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { linkReaderHovercardBootstrap as bootstrap } from "./link-reader-hovercard-registration.ts";
 import {
@@ -63,25 +64,16 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
     return claim;
   };
 
-  render(
-    _sessionKey: string,
-    _active = true,
-    _connected = true,
-    _presentation?: PresentationBinding,
-  ) {
+  render(_sessionKey: string, _presented: PresentationValue, _connected = true) {
     return nothing;
   }
 
   override update(
     part: ElementPart,
-    [sessionKey, active = true, connected = true, presentation]: [
-      string,
-      boolean?,
-      boolean?,
-      PresentationBinding?,
-    ],
+    [sessionKey, presented, connected = true]: [string, PresentationValue, boolean?],
   ) {
     const previousOwner = this.presentation?.owner;
+    const presentation = typeof presented === "boolean" ? undefined : presented;
     this.presentation = presentation;
     if (previousOwner !== presentation?.owner) {
       previousOwner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
@@ -109,7 +101,8 @@ class LinkReaderPrefetchDirective extends AsyncDirective {
       this.release();
       this.attempted.clear();
     }
-    this.active = active && connected && presentation?.isPresented() !== false;
+    this.active =
+      connected && (typeof presented === "boolean" ? presented : presented.isPresented());
     document.addEventListener("visibilitychange", this.handleVisibilityChange);
     this.handleVisibilityChange();
     return nothing;

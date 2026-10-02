@@ -130,11 +130,9 @@ import ai.openclaw.wear.shared.WearReplyTextPage
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.Manifest
 import android.content.Context
-import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
-import androidx.core.content.ContextCompat
 import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -1290,10 +1288,6 @@ class NodeRuntime private constructor(
 
   private val _gatewayConnectionDisplay = MutableStateFlow(GatewayConnectionDisplay(false, GATEWAY_STATUS_OFFLINE, null))
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> = _gatewayConnectionDisplay.asStateFlow()
-  private val _statusText = MutableStateFlow(GATEWAY_STATUS_OFFLINE)
-  val statusText: StateFlow<String> = _statusText.asStateFlow()
-  private val _gatewayConnectionProblem = MutableStateFlow<GatewayConnectionProblem?>(null)
-  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = _gatewayConnectionProblem.asStateFlow()
   private val _operatorScopes = MutableStateFlow<List<String>>(emptyList())
   val operatorScopes: StateFlow<List<String>> = _operatorScopes.asStateFlow()
   val operatorAdminScopeAvailable: StateFlow<Boolean> =
@@ -2567,8 +2561,6 @@ class NodeRuntime private constructor(
         )
       _gatewayConnectionDisplay.value = display
       _isConnected.value = display.isConnected
-      _statusText.value = display.statusText
-      _gatewayConnectionProblem.value = display.problem
     }
   }
 
@@ -5270,11 +5262,7 @@ class NodeRuntime private constructor(
       }
     }
 
-  private fun hasRecordAudioPermission(): Boolean =
-    (
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
-        PackageManager.PERMISSION_GRANTED
-    )
+  private fun hasRecordAudioPermission(): Boolean = appContext.hasPermission(Manifest.permission.RECORD_AUDIO)
 
   private fun loadStoredRoleDeviceAuthEntry(
     endpoint: GatewayEndpoint,
@@ -5719,7 +5707,7 @@ class NodeRuntime private constructor(
     idempotencyKey: String,
     canAdmit: () -> Boolean = { true },
   ): Boolean =
-    chat.sendMessageForOwnerAwaitAcceptance(
+    chat.sendMessageAwaitAcceptance(
       message = message,
       thinkingLevel = thinking,
       attachments = attachments,

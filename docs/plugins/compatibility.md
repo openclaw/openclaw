@@ -113,7 +113,7 @@ This does not authorize removal or claim a completed published-reader sweep.
 | `plugin-sdk-provider-owned-helper-shims`      | Move each deprecated provider helper to its provider-local API and prove no published reader remains.  | 2026-10-01    |
 | `message-presentation-legacy-bridges`         | Move reply producers and official channel packages to `MessagePresentation`.                           | 2026-10-01    |
 | `plugin-sdk-focused-compat-aliases`           | Prove every enumerated alias has no bundled or published reader.                                       | 2026-10-01    |
-| `agent-harness-terminal-result-aliases`       | Move harnesses to `terminal` and `visibleReplies`, then prove the legacy result fields are unread.     | 2026-10-01    |
+| `agent-harness-terminal-result-aliases`       | Move published harnesses to `terminal`, then prove the legacy result fields are unused.                | 2026-10-01    |
 | `official-plugin-export-aliases`              | Move channel presentation and Discord timeout consumers to canonical APIs and clear published readers. | 2026-10-01    |
 | `memory-host-compatibility-aliases`           | Verify canonical memory tables and preserved legacy data before retiring overrides.                    | 2026-10-01    |
 | `plugin-runtime-api-compat-aliases`           | Move flat plugin registration/runtime calls to their namespaced or focused replacements.               | 2026-10-01    |
@@ -126,6 +126,12 @@ its reported migration condition is satisfied and its reader references are
 cleared; the existing `--fail-on-eligible-compat` gate continues to apply only
 to dated `deprecated` records. Reader references are surface-token matches for
 triage; use the published-artifact sweep before authorizing removal.
+
+The `sourceVisibleReplies` harness delivery-default alias has been removed
+after its October 1 window; use
+[`deliveryDefaults.visibleReplies`](/plugins/sdk-agent-harness/sessions-and-results#harness-delivery-defaults).
+Terminal-result aliases remain supported because published harnesses, including
+`openclaw-deepseek-harness@0.2.0`, still return those fields.
 
 ### Session-store bridge retirement
 

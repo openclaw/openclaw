@@ -17,6 +17,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { recordSessionParticipant } from "../../config/sessions/session-accessor.sqlite-participants.native.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
@@ -122,6 +123,7 @@ it.each(
     }
     const database = openOpenClawAgentDatabase(selected);
     if (write.startsWith("legacy sibling")) {
+      expect(loadSessionEntry(sibling)?.sessionId).toBe("sibling");
       database.db
         .prepare(
           "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.owner', json(?), '$.participants', json(?), '$.participantCount', 1) WHERE session_key = ?",
@@ -483,8 +485,9 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
         authProfileOverrideSource: "user",
         toolOverrides: { webSearch: false },
       });
-      const before = expectDefined(loadSessionEntry(selected), "selected entry");
+      await closeOpenClawAgentDatabasesAsync(state.root);
       const database = openOpenClawAgentDatabase(selected);
+      const before = expectDefined(loadSessionEntry(selected), "selected entry");
       const readRow = () =>
         expectDefined(
           database.db
@@ -542,6 +545,7 @@ it("keeps prepared chat metadata across only a committed read acknowledgment", a
           if (changeReadMarker) {
             await patchSessionEntryCore(selected, () => ({ lastReadAt: 2 }), {
               preserveActivity: true,
+              skipMaintenance: true,
             });
           }
           expect(loadSessionEntry(selected)).toEqual(
