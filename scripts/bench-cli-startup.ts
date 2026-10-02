@@ -341,6 +341,14 @@ const COMMAND_CASES: readonly CommandCase[] = [
     firstOutputBudgetMs: 1_000,
     exitBudgetMs: 2_000,
   }),
+  {
+    id: "helpInertPlugins",
+    name: "--help (inert plugins)",
+    args: ["--help"],
+    presets: ["startup"],
+    firstOutputBudgetMs: 500,
+    exitBudgetMs: 1_000,
+  },
   responseCase("onboardHelp", ["onboard", "--help"]),
   responseCase("setupHelp", ["setup", "--help"]),
   responseCase("configureHelp", ["configure", "--help"]),
@@ -650,6 +658,9 @@ function collectExitSummary(samples: Sample[]): string {
 }
 
 function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  if (commandCase.id === "helpInertPlugins") {
+    return { plugins: {} };
+  }
   const usesSharedToken =
     commandCase.id === "gatewayHealthJsonWarmState" ||
     commandCase.id === "gatewayHealthJsonFreshState";
