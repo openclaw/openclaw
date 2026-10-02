@@ -61,18 +61,14 @@ final class NodePairingApprovalPrompter {
     private var pendingLocalDecisionRequestIds: Set<String> = []
     private var echoedResolutionsByRequestId: [String: PairingResolution] = [:]
 
-    private struct PairingList: Codable {
+    private struct PairingList: Decodable {
         let pending: [PendingRequest]
         let paired: [PairedNode]?
     }
 
-    private struct PairedNode: Codable, Equatable {
+    private struct PairedNode: Decodable {
         let nodeId: String
         let approvedAtMs: Double?
-        let displayName: String?
-        let platform: String?
-        let version: String?
-        let remoteIp: String?
     }
 
     struct PendingRequest: Codable, Equatable, Identifiable {

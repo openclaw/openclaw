@@ -4,7 +4,6 @@ import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
-import { clawHubSkillRef } from "../../lib/skills/clawhub-search.ts";
 import { renderPluginCardSummary } from "../plugins/plugin-card.ts";
 import { skillDiscoveryEntries, type SkillDiscoveryEntry } from "./discovery.ts";
 import { renderSkillStateStatus, verdictForSkill } from "./skill-status.ts";
@@ -16,7 +15,7 @@ registerSkillsBrowserEnglish();
 function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
   const { state } = props;
   const remote = entry.remote;
-  const reference = remote ? clawHubSkillRef(remote) : "";
+  const reference = remote?.installRef ?? "";
   const installed = Boolean(entry.skill || entry.library);
   const canOpen = installed || !remote?.installOnly;
   const icon = remote?.icon ? state.clawhubIconUrls?.[remote.icon] : undefined;

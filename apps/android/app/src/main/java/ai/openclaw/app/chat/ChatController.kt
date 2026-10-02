@@ -1398,10 +1398,25 @@ class ChatController internal constructor(
     group: String,
     category: String?,
   ) {
+    val gatewayScope = currentCacheScope()
+    val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+    val lease = captureRequestLease(gatewayScope)
+
+    fun ownsCurrentAgent(): Boolean = gatewayScope == currentCacheScope() && ownerAgentId == resolveAgentIdForSessionKey(_sessionKey.value)
+
+    fun reportError(error: Throwable) {
+      val publish = {
+        synchronized(gatewayScopeApplyLock) {
+          if (ownsCurrentAgent()) updateErrorText(error.message)
+        }
+      }
+      if (lease == null) publish() else lease.commitIfCurrent(publish)
+    }
+
     try {
-      val ownerAgentId = resolveAgentIdForSessionKey(_sessionKey.value) ?: return
+      val connection = lease ?: throw GatewayRequestNotEnqueued("not connected")
       var firstError: Throwable? = null
-      for (member in listSessionGroupMembers(group, ownerAgentId)) {
+      for (member in listSessionGroupMembers(group, ownerAgentId, connection)) {
         try {
           val params =
             buildJsonObject {
@@ -1409,7 +1424,7 @@ class ChatController internal constructor(
               put("agentId", JsonPrimitive(ownerAgentId))
               put("category", category?.let(::JsonPrimitive) ?: JsonNull)
             }
-          requestGateway("sessions.patch", params.toString())
+          connection.request("sessions.patch", params.toString())
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
@@ -1417,12 +1432,14 @@ class ChatController internal constructor(
           if (firstError == null) firstError = err
         }
       }
-      firstError?.let { updateErrorText(it.message) }
-      fetchSessionsForCurrentWindow()
+      firstError?.let(::reportError)
+      if (connection.isCurrent() && synchronized(gatewayScopeApplyLock) { ownsCurrentAgent() }) {
+        fetchSessionsForCurrentWindow()
+      }
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
-      updateErrorText(err.message)
+      reportError(err)
     }
   }
 
@@ -1435,11 +1452,12 @@ class ChatController internal constructor(
   private suspend fun listSessionGroupMembers(
     group: String,
     ownerAgentId: String,
+    lease: GatewaySession.RequestLease,
   ): List<ChatSessionEntry> {
     val members = LinkedHashMap<String, ChatSessionEntry>()
     for (archived in listOf(false, true)) {
       val params = sessionListParams(ownerAgentId, GROUP_MEMBER_FETCH_LIMIT, archived)
-      val rows = parseSessions(requestGateway("sessions.list", params.toString())).sessions
+      val rows = parseSessions(lease.request("sessions.list", params.toString())).sessions
       for (row in rows) {
         if (row.category?.trim() == group && !members.containsKey(row.key)) members[row.key] = row
       }

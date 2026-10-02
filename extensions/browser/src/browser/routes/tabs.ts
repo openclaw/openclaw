@@ -24,7 +24,6 @@ const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
 
 function handleTabsRouteError(
-  ctx: BrowserRouteContext,
   res: BrowserResponse,
   err: unknown,
   opts?: { mapTabError?: boolean },
@@ -33,7 +32,7 @@ function handleTabsRouteError(
     throw err;
   }
   if (opts?.mapTabError) {
-    const mapped = ctx.mapTabError(err);
+    const mapped = toBrowserErrorResponse(err);
     if (mapped) {
       return jsonBrowserError(res, mapped);
     }
@@ -61,7 +60,7 @@ async function runTabsProfileRoute(params: {
       run: async (signal) => await params.run(profileCtx, signal),
     });
   } catch (err) {
-    handleTabsRouteError(params.ctx, params.res, err, { mapTabError: params.mapTabError });
+    handleTabsRouteError(params.res, err, { mapTabError: params.mapTabError });
     return;
   }
   if (result) {

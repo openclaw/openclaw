@@ -498,6 +498,19 @@ function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord)
   if (!entry || !isSameSubagentRunOwner(entry, expected)) {
     return Promise.resolve();
   }
+  if (
+    entry.execution.status === "terminal" &&
+    entry.expectsCompletionMessage === true &&
+    entry.suppressCompletionDelivery !== true &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    !entry.requesterTurnRunId &&
+    !entry.requesterSettleWake &&
+    !entry.cleanupCompletedAt
+  ) {
+    startSubagentAnnounceCleanupFlow(runId, entry);
+    return Promise.resolve();
+  }
   const wake = entry.requesterSettleWake;
   const cohort = [...getSubagentRunsForChildSession(entry.childSessionKey)].filter((candidate) =>
     entry.requesterTurnRunId
@@ -507,7 +520,7 @@ function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord)
   );
   const isCurrent = () =>
     isSameSubagentRunOwner(subagentRuns.get(runId), entry) &&
-    isRequesterCompletionCohortCurrent(entry, cohort, getLatestLiveSubagentRunByChildSessionKey);
+    isRequesterCompletionCohortCurrent(entry, getLatestLiveSubagentRunByChildSessionKey);
   if (
     isCurrent() &&
     entry.expectsCompletionMessage === true &&
@@ -551,7 +564,7 @@ const subagentSweeper = createSubagentRegistrySweeper({
   resumeRequesterSettleWake,
   startSubagentAnnounceCleanupFlow,
   completeCleanupBookkeeping,
-  isEndedHookOwnerCurrent: subagentLifecycleController.isEndedHookOwnerCurrent,
+  isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
   sessionEffectsHostCurrent: (entry) =>
     subagentLifecycleController.sessionEffectsHostCurrent(entry),
   shouldSuppressSessionEffects: (entry, effects) =>

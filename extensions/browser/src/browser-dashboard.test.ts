@@ -552,7 +552,6 @@ describe("Browser dashboard lifetime", () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserTabRoutes(app, {
       forProfile: () => ({ profile, isReachable, listTabs }),
-      mapTabError: () => null,
     } as unknown as BrowserRouteContext);
     const response = createBrowserRouteResponse();
     await getHandlers.get("/tabs")!(

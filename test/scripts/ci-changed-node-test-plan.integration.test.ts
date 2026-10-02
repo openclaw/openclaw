@@ -452,6 +452,15 @@ it("keeps new-plugin, core, and manifest changes within the complete PR matrix c
   expect(new Set(shards.map((shard) => shard.checkName)).size).toBe(shards.length);
   const files = selectedFiles(shards);
   expect(files).toContain("src/plugins/official-external-plugin-catalog.test.ts");
+  // Global inputs keep protection for suites split out of protected owners.
+  for (const split of [
+    "src/cli/run-main.bare-root.test.ts",
+    "src/cli/run-main.command-dispatch.test.ts",
+    "src/cli/run-main.gateway-startup.test.ts",
+    "src/plugins/official-external-plugin-catalog.hosted.test.ts",
+  ]) {
+    expect(files, split).toContain(split);
+  }
   expect(files).toContain("src/plugins/bundled-plugin-metadata.test.ts");
   expect(files).toContain("test/scripts/bundled-plugin-build-entries.test.ts");
   expect(shards.some((shard) => shard.checkName.startsWith("checks-node-changed-extensions"))).toBe(

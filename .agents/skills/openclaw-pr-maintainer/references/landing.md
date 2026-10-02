@@ -68,6 +68,13 @@ Keep images embedded and video URLs on their own lines for GitHub playback.
 Feature-detect format/size support rather than assuming a particular CLI release.
 Do not disclose private desktop content, identifiers, model routes, or secrets.
 
+## Red main and inherited failures
+
+- **Red `main` is an emergency, not a queue item.** When CI on `main` is red, fix it in a fresh worktree, prove it with the exact failing check plus the focused tests (locally or on a Testbox), and push that exact fix directly to `main` — no PR, no auto-merge wait — so every open PR unblocks at once. This applies to deterministic breaks and to flaky tests seen red on `main` alike; open a PR only if the direct push is refused by a ruleset, and say so. Reruns do not clear a red `main`, and PRs whose merge ref went red need a fresh push after the fix lands.
+- Pushes to `main` run only `security-fast`; full `main` CI runs hourly.
+- **CI is expensive; do not spend it on proof.** Prove changes with focused local runs (Crabbox/Testbox for suites too heavy for the host) and trust those results. Do not dispatch workflow runs, rerun jobs, re-push, or update branches just to obtain or confirm green. Breaking `main` is an acceptable cost; fix it forward.
+- **Pre-existing reds do not block landing.** A PR whose only failing checks also fail on current `main` (same test, in files the PR does not touch) may land through the native landing workflow's admin exception; name the inherited failure in the PR. A tiny PR-caused failure (lint, types, a stale test expectation) may land the same way only if the lander pushes the fix to `main` immediately afterward. Anything larger stays blocked.
+
 ## Review, prepare, merge
 
 For main-targeted PRs, prefer the native sequence; adapt as needed.

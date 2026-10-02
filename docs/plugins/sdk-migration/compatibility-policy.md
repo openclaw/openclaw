@@ -143,6 +143,21 @@ They do not supply a provider bearer credential or authorize importing one into
 an OpenClaw profile. The optional `pluginRoot` context comes from the plugin
 loader; use it to resolve the declared dependency from that plugin's installation.
 
+### Memory session inventory readers
+
+`loadArchivedSessions` and `resolveMemorySessionTargets` from
+`openclaw/plugin-sdk/memory-core-host-engine-sessions` are deprecated as of
+October 1, 2026. Await `loadArchivedSessionsAsync` and
+`resolveMemorySessionTargetsAsync` from the same subpath. The replacements
+run durable archive and selector reads in the retained session worker and
+preserve selection, ordering, missing-store behavior, and result shapes.
+Process-held incognito stores keep their native owner.
+
+Bundled memory search and memory-forget use the awaited readers. The synchronous
+exports retain their signatures and behavior for existing consumers until removal
+at the next Plugin SDK major. Deprecation is communicated through JSDoc and the
+compatibility registry; these readers emit no runtime warnings.
+
 ### Memory read missing results
 
 Memory managers now return `status: "ok"` for successful excerpts and

@@ -247,8 +247,9 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const action = read.personal.kind === "eligible" ? read.personal.action : null;
       let personal = action ? await service!.status(action) : null;
       const session = read.currentSession();
+      const assertResponseCurrent = () => read.assertSessionUnchanged(session);
       const pendingPersonal = action ? await coordinator.personalPending(action, session) : null;
-      read.currentSession();
+      assertResponseCurrent();
       if (action && personal) {
         personal = service!.revalidateStatus(action, personal);
       }
@@ -256,17 +257,17 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         session,
         options.params.idempotencyKey,
         (snapshot) =>
-          isSessionPublicationSuperseded(options, session, snapshot, read.currentSession),
+          isSessionPublicationSuperseded(options, session, snapshot, assertResponseCurrent),
       );
-      read.currentSession();
+      assertResponseCurrent();
       if (action && personal) {
         personal = service!.revalidateStatus(action, personal);
       }
       if (shared && read.sessionScoped) {
-        if (!(await hasSupportedGitHubPublicationTarget(session, read.currentSession))) {
+        if (!(await hasSupportedGitHubPublicationTarget(session, assertResponseCurrent))) {
           shared = null;
         }
-        read.currentSession();
+        assertResponseCurrent();
       }
       options.respond(true, { personal, shared, pendingPersonal, latestShared });
     },
@@ -295,7 +296,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
       const session = read.currentSession();
       const shared = await service.sharedStatus(session, options.params.requestId);
       if (shared) {
-        read.currentSession();
+        read.assertSessionUnchanged(session);
         options.respond(true, shared);
         return;
       }
@@ -308,7 +309,7 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
         options.params.requestId,
         prepared,
       );
-      read.currentSession();
+      read.assertSessionUnchanged(session);
       options.respond(true, result);
     },
   ),

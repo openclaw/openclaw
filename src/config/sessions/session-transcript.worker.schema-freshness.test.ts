@@ -3,9 +3,11 @@ import type { Transferable } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import type { UsageCostWorkerReply } from "../../infra/session-cost-usage-worker.types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { getOpenClawAgentDatabaseValidationForTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
@@ -114,6 +116,19 @@ it.for([
         }
         // Refresh the retained admission, rather than hiding the bug with a cold reader.
         expect(countOpens()).toBe(1);
+        if (!error) {
+          const receipt = getOpenClawAgentDatabaseValidationForTransfer(database);
+          assert(receipt);
+          await applyAgentDatabaseReaderRequest({
+            kind: "close",
+            candidates: [{ path }],
+            deleted: false,
+          });
+          worker.close(JSON.stringify([{ path }]));
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(1);
+          expect(Atomics.load(new Int32Array(receipt.canonicalReady), 0)).toBe(1);
+        }
       } finally {
         vi.runOnlyPendingTimers();
         await Promise.allSettled([pending]);

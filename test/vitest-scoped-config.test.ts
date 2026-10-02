@@ -491,7 +491,11 @@ describe("scoped vitest configs", () => {
         execArgv: process.versions.bun ? ["--no-install"] : [],
       },
     ]);
-    for (const file of ["loader.lazy-alias.test.ts", "plugin-sdk-native-resolver.test.ts"]) {
+    for (const file of [
+      "loader.lazy-alias.test.ts",
+      "plugin-module-loader-cache.source-prescan.test.ts",
+      "plugin-sdk-native-resolver.test.ts",
+    ]) {
       expect(
         projects
           .filter(

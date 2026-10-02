@@ -17,6 +17,7 @@ export function expectSubagentFollowupReactivation(params: {
   expect(params.replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
     previousRunId: "run-old",
     nextRunId: "run-new",
+    preserveCompletedRun: true,
     assertCurrent: expect.any(Function),
     runTimeoutSeconds: 0,
     ...(params.task ? { task: params.task } : {}),

@@ -3346,7 +3346,7 @@ describe("subagent registry lifecycle hardening", () => {
     expect(finalPostimage?.delivery?.announcedAt).toBeUndefined();
   });
 
-  it("retires a stale cleanup before deleting a newer session generation", async () => {
+  it("finishes old cleanup without deleting a newer session generation", async () => {
     const entry = createRunEntry({
       cleanup: "delete",
       expectsCompletionMessage: false,
@@ -3354,11 +3354,10 @@ describe("subagent registry lifecycle hardening", () => {
       generation: 1,
     });
     const runs = new Map([[entry.runId, entry]]);
-    const retireSupersededRun = vi.fn(async (runId: string) => {
-      runs.delete(runId);
-    });
+    const retireSupersededRun = vi.fn(async () => {});
     const controller = createLifecycleController({ entry, runs, retireSupersededRun });
 
+    const join = observeRootWork();
     expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
     const newer = createRunEntry({
       runId: "run-2",
@@ -3368,12 +3367,12 @@ describe("subagent registry lifecycle hardening", () => {
     });
     runs.set(newer.runId, newer);
 
-    await waitForLifecycleState(() =>
-      expect(retireSupersededRun).toHaveBeenCalledWith(
-        entry.runId,
-        expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
-      ),
-    );
+    await join();
+    expect(retireSupersededRun).not.toHaveBeenCalled();
+    expect(readLifecycleRun(entry)).toMatchObject({
+      cleanupCompletedAt: expect.any(Number),
+      execution: { suppressSessionEffects: true },
+    });
     expect(runs.get(newer.runId)).toBe(newer);
     expect(gatewayMocks.callGateway).not.toHaveBeenCalledWith(
       expect.objectContaining({ method: "sessions.delete" }),

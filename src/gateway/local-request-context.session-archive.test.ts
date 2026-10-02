@@ -152,12 +152,18 @@ describe("scoped session archive tools", () => {
             "assignment-only tool",
           );
           expect(assignment.parameters).toMatchObject({
-            properties: { action: { enum: ["assign_owner"] } },
+            properties: {
+              action: {
+                enum: caller === "session-writer" ? ["patch", "assign_owner"] : ["assign_owner"],
+              },
+            },
           });
           expect(assignment.parameters).not.toHaveProperty("properties.archived");
           await expect(
             assignment.execute("no-archive", { action: "patch", archived: true }),
-          ).rejects.toThrow(/Only assign_owner/);
+          ).rejects.toThrow(
+            caller === "session-writer" ? /current operator write grant/ : /Only assign_owner/,
+          );
           expect(
             resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools.some(
               (tool) => tool.name === "sessions",

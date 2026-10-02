@@ -48,17 +48,8 @@ function isUrlFetcherCommand(command: string): boolean {
   return commandName(command) === "curl" || commandName(command) === "wget";
 }
 
-function buildLinkCliArgs(params: {
-  args: string[];
-  ctx: MsgContext;
-  finalUrl: string;
-  url: string;
-}): string[] {
-  const templCtx = {
-    ...params.ctx,
-    LinkFinalUrl: params.finalUrl,
-    LinkUrl: params.url,
-  };
+function buildLinkCliArgs(params: { args: string[]; ctx: MsgContext }): string[] {
+  const templCtx = { ...params.ctx };
   return params.args
     .filter((arg) => !isLinkUrlTemplate(arg))
     .map((arg) => applyTemplate(arg, templCtx));
@@ -127,8 +118,6 @@ async function runCliEntry(params: {
     ...buildLinkCliArgs({
       args,
       ctx: params.ctx,
-      finalUrl: params.finalUrl,
-      url: params.url,
     }),
   ];
 

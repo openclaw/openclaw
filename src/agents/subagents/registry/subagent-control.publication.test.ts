@@ -355,8 +355,11 @@ it.each([
             ),
           ).toBe(true);
           const b1 = subagentRuns.get("publication-b1")!;
-          expect(subagentRuns.has(b0.runId)).toBe(false);
-          expect(b1).toMatchObject({ taskRunId: b0.taskRunId, execution: { status: "running" } });
+          expect(subagentRuns.get(b0.runId)).toMatchObject({
+            taskRunId: b0.taskRunId,
+            execution: { status: "terminal", suppressSessionEffects: true },
+          });
+          expect(b1).toMatchObject({ taskRunId: b1.runId, execution: { status: "running" } });
           if (typeof b0.generation !== "number") {
             throw new Error("Registration did not mint a run generation");
           }
@@ -404,6 +407,17 @@ it.each([
       });
       await successorCompleted.promise;
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("terminal");
+      if (priorChildKill && !handoff) {
+        // Successor admission retires the first child's delayed cleanup authority.
+        await expect(fixture.settle()).rejects.toMatchObject({
+          message: "Failed to settle subagent cleanup roots",
+          errors: [
+            expect.objectContaining({
+              message: "Subagent kill publication lost its original claim",
+            }),
+          ],
+        });
+      }
     } finally {
       stopObserving();
       cancellationClock?.mockRestore();

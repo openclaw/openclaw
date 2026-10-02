@@ -16,13 +16,6 @@ struct HealthDecodeTests {
         #expect(snap?.sessions.count == 1)
     }
 
-    @Test func `decodes with leading noise`() {
-        let noisy = "debug: something logged\n" + self.sampleJSON + "\ntrailer"
-        let snap = decodeHealthSnapshot(from: Data(noisy.utf8))
-
-        #expect(snap?.channels["telegram"]?.probe?.elapsedMs == 800)
-    }
-
     @Test(arguments: ["no json here", "{", "}", "} diagnostic {"])
     func `rejects output without a JSON object`(_ output: String) {
         #expect(decodeHealthSnapshot(from: Data(output.utf8)) == nil)

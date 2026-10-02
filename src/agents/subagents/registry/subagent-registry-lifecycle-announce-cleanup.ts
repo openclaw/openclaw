@@ -32,14 +32,16 @@ import {
 } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import {
-  buildSafeLifecycleErrorMeta,
   formatAnnounceDeliveryError,
   hasPriorRequesterDeliveryMirror,
-  maskLifecycleIdentifier,
   recordAnnounceDeliveryResult,
 } from "./subagent-registry-lifecycle-delivery.js";
 import { finalizeSubagentCleanup } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+} from "./subagent-registry-lifecycle-log.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {

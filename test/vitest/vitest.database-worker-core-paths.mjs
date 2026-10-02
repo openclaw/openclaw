@@ -1,5 +1,10 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/system-agent/audit.test.ts",
+  "src/system-agent/operations.test.ts",
+  "src/system-agent/operations.setup.test.ts",
+  "src/system-agent/rescue-message.test.ts",
+  "src/system-agent/transcript-store.test.ts",
   "src/auto-reply/reply/conversation-turn-capture.test.ts",
   "src/status/status-plugin-health.runtime.test.ts",
   "src/status/status-plugin-health.installed.test.ts",
@@ -171,6 +176,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/bash-tools.process.finished-retention.test.ts",
   "src/agents/bash-tools.test.ts",
   "src/agents/code-mode.bridge.host-denial.test.ts",
+  "src/agents/code-mode.bridge.lifecycle.test.ts",
   "src/agents/command/session-store.snooze.test.ts",
   "src/agents/command/session-store.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
@@ -557,6 +563,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.integrity-lease.test.ts",
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution-incognito.test.ts",
+  "src/state/openclaw-agent-execution-incognito.sessions.test.ts",
+  "src/state/openclaw-agent-execution-incognito.side-data.test.ts",
   "src/state/openclaw-agent-execution.creation-witness.test.ts",
   "src/state/openclaw-agent-execution.close-wedge.test.ts",
   "src/state/openclaw-agent-execution-cleanup.test.ts",
@@ -572,6 +580,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/runtime-agent.codex-initialization.integration.test.ts",
   "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
   "packages/memory-host-sdk/src/host/session-files-archive-identity.test.ts",
+  "packages/memory-host-sdk/src/host/session-files.test.ts",
   "packages/memory-host-sdk/src/host/session-transcript-corpus.test.ts",
   "src/agents/harness/native-hook-relay-store.test.ts",
   "src/agents/harness/native-hook-relay.approval-binding.test.ts",
@@ -729,6 +738,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tts/tts-summary.resources.test.ts",
   "src/agents/simple-completion-runtime.plugin-scope.test.ts",
   "src/agents/tools/pdf-tool.static-runtime.test.ts",
+  "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.chat-metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.test.ts",
@@ -913,6 +923,10 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/system-agent/audit.test.ts", "unitFastIsolated"],
+  ["src/system-agent/operations.test.ts", "unitFastIsolated"],
+  ["src/system-agent/rescue-message.test.ts", "unitFastIsolated"],
+  ["packages/memory-host-sdk/src/host/session-files.test.ts", "unitFastIsolated"],
   ["src/commands/doctor-maintenance.session-workers.test.ts", "unitFast"],
   ["src/commands/doctor-session-canonical-keys.completions.test.ts", "unitFast"],
   ["src/plugins/installed-plugin-index-store.availability.test.ts", "unitFast"],

@@ -43,6 +43,7 @@
   "codex-session-transcript-runtime",
   "command-status-runtime",
   "command-surface",
+  "compiled-subprocess-testing",
   "concurrency-runtime",
   "context-visibility-runtime",
   "conversation-binding-runtime",

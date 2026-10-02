@@ -157,11 +157,11 @@ it("hydrates a cold durable source before advancing its replacement generation",
   ).toBe(true);
   expect(subagentRuns.get("cold-successor")).toMatchObject({
     generation: 3,
-    taskRunId: "cold-original",
+    taskRunId: "cold-successor",
     execution: { status: "running" },
   });
   const stored = loadSubagentRegistryFromSqlite();
-  expect(stored.has("cold-predecessor")).toBe(false);
+  expect(stored.get("cold-predecessor")?.execution.suppressSessionEffects).toBe(true);
   expect(stored.get("cold-successor")?.generation).toBe(3);
 });
 
@@ -383,7 +383,7 @@ it.each(["end", "error"] as const)(
           }),
         ).toBe(true);
         const successor = subagentRuns.get("timeout-successor")!;
-        expect(successor.taskRunId).toBe(previous.runId);
+        expect(successor.taskRunId).toBe(successor.runId);
         expect(getAgentRunContext(previous.runId)).toBe(owner);
         expect(getAgentRunContextOwnerStatus(previous.runId, claimId, lifecycleGeneration)).toBe(
           "active",
@@ -672,7 +672,14 @@ it("admits a child follow-up while its predecessor's browser cleanup is still pe
       }),
     ).resolves.toBe(true);
     const stored = loadSubagentRegistryFromSqlite();
-    expect(stored.has("browser-cleanup-predecessor")).toBe(false);
+    expect(stored.get("browser-cleanup-predecessor")).toMatchObject({
+      task: "Finish browser work",
+      execution: {
+        status: "terminal",
+        outcome: { status: "ok" },
+        suppressSessionEffects: true,
+      },
+    });
     expect(stored.get("browser-cleanup-successor")).toMatchObject({
       task: "Continue with the next task",
       execution: { status: "running" },
@@ -904,12 +911,19 @@ it.each([
         );
       } else {
         expect(await followup).toEqual({ value: true });
-        expect(loadSubagentRegistryFromSqlite().get("after-ended-hook")).toMatchObject({
+        const stored = loadSubagentRegistryFromSqlite();
+        expect(stored.get("after-ended-hook")).toMatchObject({
           task: "follow-up work",
           generation: original.generation! + 1,
           execution: { status: "running" },
         });
-        expect(loadSubagentRegistryFromSqlite().has(original.runId)).toBe(false);
+        expect(stored.get(original.runId)).toMatchObject({
+          task: "original work",
+          generation: original.generation,
+          execution: { status: "terminal", suppressSessionEffects: true },
+          ...(lateCleanup ? { cleanupCompletedAt: 3 } : { endedHookEmittedAt: expect.any(Number) }),
+          ...(lateWrite ? { label: "prepared" } : {}),
+        });
       }
     } finally {
       releaseFirst.resolve();

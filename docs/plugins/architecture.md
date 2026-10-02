@@ -292,6 +292,8 @@ and child processes started from its modules can resolve the host SDK. This link
 does not depend on the main thread's module hooks and is recreated during recovery.
 Imports of resolved SDK file URLs and absolute paths keep the same host identity;
 they do not create a selective copy of the host package or its runtime chunks.
+Deferred SDK imports and `import.meta.resolve()` retain the generation's selected
+source or built host even after the active plugin cache changes.
 Snapshot cleanup and update source inspection do not descend through these links
 into the host package.
 

@@ -1,3 +1,5 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Mock } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
 
@@ -22,6 +24,7 @@ export type SessionManagerMocks = {
   appendCustomEntry: UnknownMock;
   appendCustomEntryAsync: UnknownMock;
   appendMessage: UnknownMock;
+  appendMessageAsync: (...args: unknown[]) => Promise<unknown>;
   appendSessionInfo: UnknownMock;
   appendLabelChange: UnknownMock;
   flushPendingPersistence: UnknownMock;
@@ -31,6 +34,39 @@ export type SessionManagerMocks = {
   clearNextUserMessagePersistenceSuppression: UnknownMock;
   removeTrailingEntries: UnknownMock;
 };
+
+export function readMockSessionCacheTtlTimestamp(
+  sessionManager: {
+    appendCustomEntryAsync?: { mock?: { calls?: unknown[][] } };
+  },
+  context?: { provider?: string; modelId?: string },
+): number | null {
+  const calls = sessionManager.appendCustomEntryAsync?.mock?.calls ?? [];
+  for (let index = calls.length - 1; index >= 0; index -= 1) {
+    const [customType, data] = calls[index] ?? [];
+    if (customType !== "openclaw.cache-ttl") {
+      continue;
+    }
+    const entry = asOptionalObjectRecord(data);
+    if (
+      context?.provider &&
+      normalizeOptionalLowercaseString(entry?.provider) !==
+        normalizeOptionalLowercaseString(context.provider)
+    ) {
+      continue;
+    }
+    if (
+      context?.modelId &&
+      normalizeOptionalLowercaseString(entry?.modelId) !==
+        normalizeOptionalLowercaseString(context.modelId)
+    ) {
+      continue;
+    }
+    const timestamp = entry?.timestamp;
+    return typeof timestamp === "number" ? timestamp : null;
+  }
+  return null;
+}
 
 export function resetSessionManagerMocks(
   sessionManager: SessionManagerMocks,

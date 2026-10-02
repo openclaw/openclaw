@@ -7,6 +7,7 @@ import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
+import "./chat-detail-panel.ts";
 import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
 
 type DetailPanel = HTMLElement & {

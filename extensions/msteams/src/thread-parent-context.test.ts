@@ -1,4 +1,5 @@
 // Msteams tests cover thread parent context plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
 

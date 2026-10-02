@@ -184,9 +184,11 @@ it.each([false, true])(
           task: "Check the remaining finding.",
         }),
       ).toBe(true);
-      expect(subagentRuns.has(childRunId)).toBe(false);
+      expect(subagentRuns.get(childRunId)).toMatchObject({
+        execution: { status: "terminal", suppressSessionEffects: true },
+      });
       expect(subagentRuns.get(nextRunId)?.execution.status).toBe("running");
-      expect(leasedSteering.isCurrent()).toBe(false);
+      expect(leasedSteering.isCurrent()).toBe(true);
       return { content: [{ type: "text" as const, text: "Follow-up accepted." }], details: {} };
     });
     const { session } = await createTestSession({
@@ -226,8 +228,12 @@ it.each([false, true])(
 
     expect(followUp).toHaveBeenCalledOnce();
     expect(JSON.stringify(requests[0])).toContain(escapedAnswer);
-    expect(subagentRuns.has(childRunId)).toBe(false);
+    expect(subagentRuns.get(childRunId)).toMatchObject({
+      execution: { status: "terminal", suppressSessionEffects: true },
+      delivery: { status: "delivered" },
+    });
     expect(subagentRuns.get(nextRunId)).toMatchObject({
+      taskRunId: nextRunId,
       task: "Check the remaining finding.",
       execution: { status: "running" },
     });

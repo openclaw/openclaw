@@ -84,12 +84,11 @@ type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingCon
   agentId?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  primaryWorkspaceDir?: string;
   config: TConfig;
   logger: Logger;
   subagent?: DreamNarrativeRequest["subagent"];
   detachNarratives?: boolean;
-  nowMs?: number;
+  nowMs: number;
   admissionPolicy?: SessionAdmissionPolicy;
 };
 const DAILY_INGESTION_SCORE = 0.62;
@@ -484,14 +483,10 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
 function resolveSessionAgentsForWorkspace(params: {
   cfg: OpenClawConfig;
   workspaceDir: string;
-  primaryWorkspaceDir?: string;
 }): string[] {
-  const { cfg, workspaceDir, primaryWorkspaceDir } = params;
+  const { cfg, workspaceDir } = params;
   const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
-  const workspaces = resolveMemoryDreamingWorkspaces(cfg, {
-    primaryWorkspaceDir,
-    primaryAgentId: "main",
-  });
+  const workspaces = resolveMemoryDreamingWorkspaces(cfg);
   const match = workspaces.find(
     (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
   );
@@ -504,7 +499,6 @@ function resolveSessionAgentsForWorkspace(params: {
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -522,7 +516,6 @@ async function collectSessionIngestionBatches(params: {
   const agentIds = resolveSessionAgentsForWorkspace({
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
-    primaryWorkspaceDir: params.primaryWorkspaceDir,
   });
   const cutoffMs = calculateLookbackCutoffMs(params.nowMs, params.lookbackDays);
   const batchByDay = new Map<string, SessionIngestionMessage[]>();
@@ -661,7 +654,6 @@ async function collectSessionIngestionBatches(params: {
 async function ingestSessionTranscriptSignals(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  primaryWorkspaceDir?: string;
   lookbackDays: number;
   nowMs: number;
   timezone?: string;
@@ -1213,8 +1205,7 @@ export function previewRemDreaming(params: {
 async function ingestDreamingPhaseSignals(
   params: DreamingPhaseRunParams<LightDreamingConfig | RemDreamingConfig>,
 ): Promise<number> {
-  const nowMs =
-    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
+  const { nowMs } = params;
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
     lookbackDays: dailyIngestionLookbackDays(params.config.lookbackDays),
@@ -1225,7 +1216,6 @@ async function ingestDreamingPhaseSignals(
   await ingestSessionTranscriptSignals({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
-    primaryWorkspaceDir: params.primaryWorkspaceDir,
     lookbackDays: params.config.lookbackDays,
     nowMs,
     timezone: params.config.timezone,
@@ -1290,7 +1280,7 @@ async function runLightDreaming(
       keys: capped.map((entry) => entry.key),
       nowMs,
     });
-    if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
+    if (entries.length > 0 && params.config.storage.mode !== "separate") {
       params.logger.info(
         `memory-core: light dreaming staged ${Math.min(entries.length, params.config.limit)} candidate(s) [workspace=${params.workspaceDir}].`,
       );
@@ -1374,7 +1364,7 @@ async function runRemDreaming(
       keys: preview.candidateKeys,
       nowMs,
     });
-    if (params.config.enabled && entries.length > 0 && params.config.storage.mode !== "separate") {
+    if (entries.length > 0 && params.config.storage.mode !== "separate") {
       params.logger.info(
         `memory-core: REM dreaming wrote reflections from ${entries.length} recent memory trace(s) [workspace=${params.workspaceDir}].`,
       );
