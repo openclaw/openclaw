@@ -394,6 +394,7 @@ export async function runReplyAgent(
 
   if (activeRunQueueAction === "enqueue-followup") {
     bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
+    followupRun.typing = typing;
     const typingSettlesWithQueuedItem = bindQueuedFollowupTyping(followupRun, typing);
     const enqueued = enqueueFollowupRun(
       queueKey,

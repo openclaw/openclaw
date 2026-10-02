@@ -447,6 +447,25 @@ describe("createFollowupRunner", () => {
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
   });
 
+  it("completes the executing item's own typing, not the latest enqueuer's", async () => {
+    const ownTyping = createTypingController();
+    const laterTyping = createTypingController();
+    const controller = new AbortController();
+    controller.abort();
+    const queued = createQueuedRun({ abortSignal: controller.signal, typing: ownTyping });
+
+    await createFollowupRunner({
+      typing: laterTyping,
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(queued);
+
+    expect(ownTyping.markRunComplete).toHaveBeenCalledOnce();
+    expect(ownTyping.markDispatchIdle).toHaveBeenCalledOnce();
+    expect(laterTyping.markRunComplete).not.toHaveBeenCalled();
+    expect(laterTyping.markDispatchIdle).not.toHaveBeenCalled();
+  });
+
   it("turns active-lane deferral into a restorable queue error", async () => {
     const typing = createTypingController();
     const queued = createQueuedRun();
