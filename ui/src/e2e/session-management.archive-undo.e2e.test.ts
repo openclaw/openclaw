@@ -277,4 +277,100 @@ suite.define(() => {
       }
     },
   );
+
+  it("shows attached automation names and schedules before archive and keeps Undo separate", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1280, height: 900 },
+    });
+    const page = await context.newPage();
+    const target = sessionRow("agent:main:release-follow-up", "Release follow-up", 2, {
+      hasAutomation: true,
+    });
+    const jobs = [
+      {
+        id: "release-check",
+        name: "Check release readiness",
+        enabled: true,
+        scheduleKind: "every",
+        schedule: { kind: "every", everyMs: 3_600_000 },
+      },
+      {
+        id: "morning-report",
+        name: "Morning issue summary",
+        enabled: true,
+        scheduleKind: "cron",
+        schedule: { kind: "cron", expr: "0 9 * * 1-5", tz: "Europe/London" },
+      },
+      {
+        id: "release-reminder",
+        name: "Release reminder",
+        enabled: false,
+        scheduleKind: "at",
+        schedule: { kind: "at", at: "2026-10-02T12:00:00.000Z" },
+      },
+    ];
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "The release is ready. Scheduled checks are attached to this session.",
+            },
+          ],
+        },
+      ],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([sessionRow("agent:main:main", "Main", 1), target]),
+        "cron.list": {
+          jobs,
+          snapshotRevision: "archive-proof",
+          total: jobs.length,
+          limit: 200,
+          offset: 0,
+          hasMore: false,
+          nextOffset: null,
+        },
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: "agent:main:main",
+    });
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, target.key));
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+      await row.waitFor({ state: "visible" });
+      await page
+        .getByText("The release is ready. Scheduled checks are attached to this session.", {
+          exact: true,
+        })
+        .waitFor();
+      await row.hover();
+      await row.locator("[data-sidebar-session-archive]").click();
+      const dialog = page.locator("openclaw-modal-dialog");
+      try {
+        await expect.poll(() => dialog.count(), { timeout: 1500 }).toBe(1);
+      } finally {
+        await captureUiProof(suite, page, "archive-automations.png");
+      }
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      expect(await dialog.textContent()).toContain("Check release readiness");
+      expect(await dialog.textContent()).toContain("Every 1h");
+      expect(await dialog.textContent()).toContain("Morning issue summary");
+      expect(await dialog.textContent()).toContain("Europe/London");
+      expect(await dialog.textContent()).toContain("Release reminder");
+      expect(await dialog.textContent()).toContain("Already paused");
+      await dialog.getByRole("button", { name: "Archive and pause", exact: true }).click();
+      await gateway.waitForRequest("sessions.patch", { match: { archived: true } });
+      const undo = page.locator(".app-toast__action");
+      await undo.waitFor({ state: "visible" });
+      await undo.click();
+      await gateway.waitForRequest("sessions.patch", { match: { archived: false } });
+      expect(await gateway.getRequests("cron.update")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
 });

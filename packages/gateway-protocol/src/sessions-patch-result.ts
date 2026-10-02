@@ -1,9 +1,12 @@
+import type { SessionAutomationPauseResult } from "./schema/sessions-patch.js";
+
 // Local structural result keeps this package independent of core session types.
 export type SessionsPatchResult = {
   ok: true;
   path: string;
   key: string;
   entry: Record<string, unknown>;
+  automationPause?: SessionAutomationPauseResult;
   resolved?: {
     modelProvider?: string;
     model?: string;

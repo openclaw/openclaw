@@ -163,7 +163,16 @@ describe("sessions tool batch patch", () => {
         ],
         archived: true,
       });
-      expect(result.details).toMatchObject({ status: "partial", succeeded: [2], failed: [0, 1] });
+      expect(result.details).toMatchObject({
+        status: "partial",
+        succeeded: [2],
+        failed: [0, 1],
+        automationPause: {
+          incomplete: [2],
+          results: [{ index: 2, result: { status: "skipped", reason: "requires-admin" } }],
+          omitted: [],
+        },
+      });
       expect(
         loadSessionEntry({ agentId: "main", sessionKey: currentKey })?.archivedAt,
       ).toBeUndefined();
@@ -266,6 +275,35 @@ describe("sessions tool batch patch", () => {
       tool.execute("invalid-batch", { action: "patch", pinned: true, ...args }),
     ).rejects.toThrow();
     expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("accounts for 100 incomplete automation pauses within the response budget", async () => {
+    const targets = Array.from({ length: 100 }, (_, index) => ({
+      sessionKey: `agent:main:dashboard:${index}`,
+      expectedSessionId: `session-${index}`,
+    }));
+    const callGateway = vi.fn(async () => ({
+      outcomes: targets.map(({ sessionKey }, index) => ({
+        ok: true,
+        key: sessionKey,
+        automationPause: { status: "partial", pausedCount: index, failedCount: 1 },
+      })),
+    }));
+    const tool = createSessionsTool({
+      agentSessionKey: currentKey,
+      config: {},
+      callGateway: callGateway as AgentToolGatewayRequestCaller,
+    });
+    const result = await tool.execute("archive-many", { action: "patch", targets, archived: true });
+    const indexes = Array.from({ length: 100 }, (_, index) => index);
+    expect(result.details).toMatchObject({
+      status: "updated",
+      succeeded: indexes,
+      failed: [],
+      automationPause: { incomplete: indexes, omitted: expect.arrayContaining([99]) },
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(3_840);
   });
 
   it("accounts for all 100 failures within the response budget", async () => {

@@ -140,7 +140,11 @@ openclaw automations create "0 6 * * *" "Check ops queue" --name "Ops sweep" --s
 openclaw automations edit <jobId> --clear-agent
 ```
 
-Archiving a session (Control UI, or `sessions.patch { key, archived: true, expectedSessionId }` using the durable ID from `sessions.list`) disables every enabled automation job bound to that session: its isolated `cron:<jobId>` session, a `session:<key>` target, or a delivery/wake `sessionKey` lane. Restoring the session requires the same observed identity and does not re-enable those jobs; use `openclaw automations enable <jobId>`. Sessions with an enabled bound job show a clock badge in the Control UI sidebar.
+Archiving a session attempts to pause its enabled, bound automations when the caller has administrator access. Bindings include the isolated `cron:<jobId>` session, a `session:<key>` target, and a delivery/wake `sessionKey` lane. Sessions with an enabled bound job show a clock badge in the Control UI sidebar. Before archiving a session with attached automations, the Control UI lists visible automation names and schedules, including sessions whose jobs are all already paused. A caller without administrator access sees an explicit warning that archiving will leave enabled automations enabled. If the inventory cannot be loaded, the confirmation clearly says the details are unknown and offers **Archive anyway**; an inventory outage does not remove the archive action.
+
+The archive response reports the automation pause separately: complete, partial, unavailable, or skipped for missing administrator access. A committed archive remains successful even when pausing fails; the Control UI shows the warning rather than hiding it behind an archive-success message. Check Automations when the pause is incomplete. Direct callers use `sessions.patch { key, archived: true, expectedSessionId }` with the durable ID from `sessions.list` and inspect `automationPause` in the result; batch results carry it per successful session.
+
+Restoring or undoing an archive requires the same observed session identity and **does not re-enable automations**. Resume a job explicitly with `openclaw automations enable <jobId>`.
 
 `openclaw automations run <jobId>` returns after enqueueing the manual run. Use `--wait` for shutdown hooks, maintenance scripts, or other automation that must block until the queued run finishes; it polls the returned `runId` (default timeout `10m`, poll interval `2s`) and exits `0` only for `completionStatus: "succeeded"`. Failed or unknown completion and wait timeouts exit non-zero.
 

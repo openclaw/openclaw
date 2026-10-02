@@ -88,3 +88,15 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   failureAlertAccountId: "",
   timeoutSeconds: "",
 };
+
+export function emptyCronListResponseFixture(): CronJobsListResult {
+  return {
+    jobs: [],
+    total: 0,
+    snapshotRevision: "empty",
+    offset: 0,
+    limit: 50,
+    nextOffset: null,
+    hasMore: false,
+  };
+}

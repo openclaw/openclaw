@@ -3108,6 +3108,51 @@ td.data-table-key-col {
   font-size: 13px;
 }
 
+.confirm-dialog-items {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  max-height: min(40dvh, 320px);
+  overflow-y: auto;
+  border-block: 1px solid var(--border);
+}
+
+.confirm-dialog-item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+}
+
+.confirm-dialog-item + .confirm-dialog-item {
+  border-top: 1px solid var(--border);
+}
+
+.confirm-dialog-item__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.confirm-dialog-item__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.confirm-dialog-item__description,
+.confirm-dialog-item__status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.confirm-dialog-item__description {
+  margin-top: 4px;
+}
+
+.confirm-dialog-item__status {
+  flex-shrink: 0;
+}
+
 .exec-approval-command-span {
   border-radius: 3px;
   padding: 0 2px;

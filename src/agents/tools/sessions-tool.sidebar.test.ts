@@ -3,7 +3,8 @@ import { createSessionsTool } from "./sessions-tool.js";
 
 describe("sessions tool sidebar settings", () => {
   it("patches and clears title, icon, group, status, attention, and archive state", async () => {
-    const callGateway = vi.fn(async () => ({ ok: true }));
+    const automationPause = { status: "partial", pausedCount: 1, failedCount: 2 } as const;
+    const callGateway = vi.fn(async () => ({ ok: true, automationPause }));
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",
       agentSessionId: "session-main",
@@ -11,7 +12,7 @@ describe("sessions tool sidebar settings", () => {
       callGateway: callGateway as never,
     });
 
-    await tool.execute("declare", {
+    const archived = await tool.execute("declare", {
       action: "patch",
       label: "Waiting on staging",
       icon: "🦞",
@@ -21,6 +22,7 @@ describe("sessions tool sidebar settings", () => {
       ttlMinutes: 45,
       archived: true,
     });
+    expect(archived.details).toMatchObject({ status: "updated", automationPause });
     await tool.execute("clear", {
       action: "patch",
       label: "",

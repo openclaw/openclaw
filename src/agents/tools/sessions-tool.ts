@@ -687,6 +687,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
             status: "updated",
             sessionKey: key,
             updated: Object.keys(patch).filter((field) => field !== "key"),
+            ...(result.automationPause ? { automationPause: result.automationPause } : {}),
           },
           includeResolved ? result.resolved : undefined,
         ),

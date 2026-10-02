@@ -129,6 +129,35 @@ describe("sessions lifecycle commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])(
+    "reports partial automation pauses without denying the committed archive (json=%s)",
+    async (json) => {
+      const automationPause = { status: "partial", pausedCount: 1, failedCount: 2 };
+      mocks.callGateway
+        .mockResolvedValueOnce({ session: { key: "agent:work:scratch-1", sessionId: "session-1" } })
+        .mockResolvedValueOnce({ ok: true, entry: { archivedAt: 123 }, automationPause });
+      const runtime = createNonExitingRuntimeEnv();
+      await sessionsArchiveCommand({ keys: ["agent:work:scratch-1"], json }, runtime);
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+            results: [
+              { key: "agent:work:scratch-1", ok: true, status: "archived", automationPause },
+            ],
+          }),
+          2,
+        );
+      } else {
+        expect(runtime.log).toHaveBeenCalledWith("Archived session agent:work:scratch-1.");
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("2 could not be paused"),
+        );
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses archived state for a mutation-free archive dry run", async () => {
     mocks.callGateway
       .mockResolvedValueOnce({ session: { key: "agent:main:active", sessionId: "active-session" } })

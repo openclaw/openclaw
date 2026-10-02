@@ -37,6 +37,8 @@ import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
 } from "./application-context.ts";
+import { successfulSessionPatch } from "./control-ui-session-fixtures.ts";
+import { emptyCronListResponseFixture } from "./cron.ts";
 import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
 
 // The attention widget owns independent health RPC tests. Keep those requests
@@ -44,6 +46,8 @@ import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway
 // Sidebar attention is inert in this harness; cover attention rendering in
 // sidebar-attention.test.ts, not app-sidebar cases.
 vi.mock("../components/sidebar-attention.ts", () => ({}));
+
+export { successfulSessionPatch } from "./control-ui-session-fixtures.ts";
 
 export type SessionGroupMutationResult = Awaited<ReturnType<SessionCapability["groupsRename"]>>;
 type SessionDeleteResult = Awaited<ReturnType<SessionCapability["delete"]>>;
@@ -126,7 +130,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
   ): Promise<T> => {
     const [method] = args;
     if (method === "cron.list") {
-      return Promise.resolve({ jobs: [], total: 0 } as T);
+      return Promise.resolve(emptyCronListResponseFixture() as T);
     }
     if (method === "cron.status") {
       return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 } as T);
@@ -227,15 +231,6 @@ export function createSessionState(agentId: string, keys: string[]): SessionStat
     groups: [],
     groupSettings: [],
     sectionOrder: [],
-  };
-}
-
-export function successfulSessionPatch(key: string) {
-  return {
-    ok: true as const,
-    path: "",
-    key,
-    entry: { sessionId: key },
   };
 }
 

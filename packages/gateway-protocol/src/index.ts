@@ -88,3 +88,4 @@ export {
 export type * from "./schema-types.js";
 export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";
+export type { SessionAutomationPauseResult } from "./schema/sessions-patch.js";

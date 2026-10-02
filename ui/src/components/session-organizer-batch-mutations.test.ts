@@ -70,32 +70,38 @@ function createHarness(
   // it so a dialog wired to `scope.signal` dismisses itself for real, and
   // renewing stands in for the next `beginSessionMutation()` after a reconnect.
   let abortController = new AbortController();
-  const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
-    const patchParams = rawParams as SessionsPatchManyParams;
-    const requestFailure = params.requestFailure;
-    requestCount += 1;
-    if (requestFailure && requestCount === requestFailure.at) {
-      throw requestFailure.error;
-    }
-    const result = {
-      outcomes: patchParams.targets.map((target) => {
-        if (params.failedKeys?.includes(target.key)) {
-          const error = { code: "INVALID_REQUEST" as const, message: `failed ${target.key}` };
-          return target.agentId
-            ? { ok: false as const, key: target.key, agentId: target.agentId, error }
-            : { ok: false as const, key: target.key, error };
-        }
-        if (target.agentId) {
-          return { ok: true as const, key: target.key, agentId: target.agentId };
-        }
-        return { ok: true as const, key: target.key };
-      }),
-    } satisfies SessionsPatchManyResult;
-    if (requestCount === params.staleAfterRequest) {
-      current = false;
-    }
-    return result;
-  });
+  const request = vi.fn(
+    async (
+      _method: string,
+      rawParams?: unknown,
+      _options?: unknown,
+    ): Promise<SessionsPatchManyResult> => {
+      const patchParams = rawParams as SessionsPatchManyParams;
+      const requestFailure = params.requestFailure;
+      requestCount += 1;
+      if (requestFailure && requestCount === requestFailure.at) {
+        throw requestFailure.error;
+      }
+      const result = {
+        outcomes: patchParams.targets.map((target) => {
+          if (params.failedKeys?.includes(target.key)) {
+            const error = { code: "INVALID_REQUEST" as const, message: `failed ${target.key}` };
+            return target.agentId
+              ? { ok: false as const, key: target.key, agentId: target.agentId, error }
+              : { ok: false as const, key: target.key, error };
+          }
+          if (target.agentId) {
+            return { ok: true as const, key: target.key, agentId: target.agentId };
+          }
+          return { ok: true as const, key: target.key };
+        }),
+      } satisfies SessionsPatchManyResult;
+      if (requestCount === params.staleAfterRequest) {
+        current = false;
+      }
+      return result;
+    },
+  );
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
@@ -323,6 +329,30 @@ describe("patchSessionRows", () => {
       `${rows[0]!.key}: failed ${rows[0]!.key}; ${rows[2]!.key}: failed ${rows[2]!.key}`,
     );
     expect(harness.reconcileMutation).toHaveBeenCalledOnce();
+  });
+
+  it("keeps archived rows successful while reporting partial automation pauses", async () => {
+    const harness = createHarness();
+    const rows = [sessionRow(0)];
+    harness.request.mockResolvedValue({
+      outcomes: [
+        {
+          ok: true,
+          key: rows[0]!.key,
+          automationPause: { status: "partial", pausedCount: 1, failedCount: 1 },
+        },
+      ],
+    });
+    const onConfirmed = vi.fn();
+    await expect(
+      patchSessionRows(harness.host, rows, { archived: true }, harness.scope, { onConfirmed }),
+    ).resolves.toEqual(rows);
+    expect(onConfirmed).toHaveBeenCalledOnce();
+    expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
+      harness.scope,
+      expect.stringContaining("Automation pause incomplete"),
+    );
+    expect(harness.pruneSidebarSessionEntry).toHaveBeenCalledWith(rows[0]!.key);
   });
 
   it("stops before a later chunk when the mutation scope becomes stale", async () => {

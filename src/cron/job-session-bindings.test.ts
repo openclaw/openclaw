@@ -19,13 +19,12 @@ async function disableCronJobsBoundToSession(
   params: Omit<Parameters<typeof disableCronJobsBoundToSessions>[0], "sessionKeys"> & {
     sessionKey: string;
   },
-): Promise<string[]> {
+) {
   const disabled = await disableCronJobsBoundToSessions({
-    cron: params.cron,
-    cfg: params.cfg,
+    ...params,
     sessionKeys: [params.sessionKey],
   });
-  return disabled.get(params.sessionKey.trim()) ?? [];
+  return disabled.get(params.sessionKey.trim())!;
 }
 
 describe("resolveCronJobBoundSessionKeys", () => {
@@ -93,14 +92,22 @@ describe("disableCronJobsBoundToSession", () => {
   type Precondition = (job: CronJob, nowMs: number) => void | Promise<void>;
 
   function fakeUpdateWithPrecondition(currentJobs: () => CronJob[]) {
-    return vi.fn(async (id: string, _patch: unknown, precondition: Precondition) => {
-      const current = currentJobs().find((candidate) => candidate.id === id);
-      if (!current) {
-        throw new Error(`cron job not found: ${id}`);
-      }
-      await precondition(current, 0);
-      return current;
-    });
+    return vi.fn(
+      async (
+        id: string,
+        _patch: unknown,
+        precondition: Precondition,
+        opts?: { commitGuard?: () => void },
+      ) => {
+        const current = currentJobs().find((candidate) => candidate.id === id);
+        if (!current) {
+          throw new Error(`cron job not found: ${id}`);
+        }
+        await precondition(current, 0);
+        opts?.commitGuard?.();
+        return current;
+      },
+    );
   }
 
   test("disables only enabled jobs bound to the archived session", async () => {
@@ -120,7 +127,7 @@ describe("disableCronJobsBoundToSession", () => {
       cfg,
       sessionKey: "agent:main:cron:bound",
     });
-    expect(disabled).toEqual(["bound"]);
+    expect(disabled).toEqual({ disabledJobIds: ["bound"], failures: [] });
     expect(update).toHaveBeenCalledTimes(1);
     expect(update.mock.calls[0]?.slice(0, 2)).toEqual(["bound", { enabled: false }]);
   });
@@ -136,7 +143,7 @@ describe("disableCronJobsBoundToSession", () => {
       cfg,
       sessionKey: "agent:main:slack:group:x",
     });
-    expect(disabled).toEqual([]);
+    expect(disabled).toEqual({ disabledJobIds: [], failures: [] });
     expect(update).not.toHaveBeenCalled();
   });
 
@@ -154,7 +161,7 @@ describe("disableCronJobsBoundToSession", () => {
       cfg,
       sessionKey: "agent:main:cron:bound",
     });
-    expect(disabled).toEqual([]);
+    expect(disabled).toEqual({ disabledJobIds: [], failures: [] });
     expect(update).toHaveBeenCalledTimes(1);
   });
 
@@ -162,17 +169,17 @@ describe("disableCronJobsBoundToSession", () => {
     const listed = [job({ id: "vanished", sessionKey: "cron:bound" }), job({ id: "bound" })];
     // "vanished" was removed concurrently; the fake only knows "bound".
     const update = fakeUpdateWithPrecondition(() => [job({ id: "bound" })]);
-    await expect(
-      disableCronJobsBoundToSession({
-        cron: {
-          list: async () => listed,
-          updateWithPrecondition: update,
-          getDefaultAgentId: () => "main",
-        },
-        cfg,
-        sessionKey: "agent:main:cron:bound",
-      }),
-    ).rejects.toThrow(AggregateError);
+    const result = await disableCronJobsBoundToSession({
+      cron: {
+        list: async () => listed,
+        updateWithPrecondition: update,
+        getDefaultAgentId: () => "main",
+      },
+      cfg,
+      sessionKey: "agent:main:cron:bound",
+    });
+    expect(result.disabledJobIds).toEqual(["bound"]);
+    expect(result.failures).toEqual([{ jobId: "vanished", error: expect.any(Error) }]);
     expect(update).toHaveBeenCalledTimes(2);
     expect(update.mock.calls.map((call) => call[0])).toEqual(["vanished", "bound"]);
   });
@@ -198,8 +205,8 @@ describe("disableCronJobsBoundToSession", () => {
 
     expect(list).toHaveBeenCalledOnce();
     expect(update.mock.calls.map((call) => call[0])).toEqual(["shared", "last"]);
-    expect(disabled.get(sessionKeys[0]!)).toEqual(["shared"]);
-    expect(disabled.get(sessionKeys[1]!)).toEqual(["shared"]);
-    expect(disabled.get(sessionKeys[29]!)).toEqual(["last"]);
+    expect(disabled.get(sessionKeys[0]!)?.disabledJobIds).toEqual(["shared"]);
+    expect(disabled.get(sessionKeys[1]!)?.disabledJobIds).toEqual(["shared"]);
+    expect(disabled.get(sessionKeys[29]!)?.disabledJobIds).toEqual(["last"]);
   });
 });

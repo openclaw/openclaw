@@ -14,8 +14,8 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
+import type { SessionMenuWork } from "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
   withSessionWorkspaceRecovery,
@@ -38,6 +38,7 @@ import {
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
 import { resolveSessionRenamePatch, resolveSessionRenameValue } from "../../lib/session-rename.ts";
+import { archiveAutomationPauseNotice } from "../../lib/sessions/automation-pause.ts";
 import type { SessionsGroupBy } from "../../lib/sessions/grouping.ts";
 import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
@@ -69,7 +70,7 @@ import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { runControlUiPluginAction } from "../../plugins/control-ui-actions.ts";
 import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-scope.ts";
-import { prepareArchiveOutcome } from "./archive-outcome.ts";
+import { archiveSessionWithUndo } from "./archive-outcome.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { SessionsPageDialog } from "./page-dialog.ts";
@@ -1073,6 +1074,10 @@ class SessionsPage extends OpenClawLightDomElement {
       const selected = new Map(this.selectedSessions);
       selected.delete(key);
       this.selectedSessions = selected;
+      const notice = archiveAutomationPauseNotice([patched.automationPause]);
+      if (notice?.warning) {
+        this.error = notice.message;
+      }
       return "completed";
     } catch (error) {
       if (this.isRequestScopeCurrent(scope)) {
@@ -1088,26 +1093,17 @@ class SessionsPage extends OpenClawLightDomElement {
     if (!scope) {
       return;
     }
-    const onConfirmed = prepareArchiveOutcome(
-      scope.sessions,
-      row,
-      this.sessionAgentId(row.key, scope.context),
-    );
-    if (!onConfirmed) {
-      return;
-    }
-    const finishArchive = scope.sessions.beginArchive(row.key, row.sessionId);
-    if (!finishArchive) {
-      return;
-    }
-    try {
-      await this.patchSession(row.key, { archived: true }, scope, row.sessionId, {
-        onConfirmed,
-        sessionScope: true,
-      });
-    } finally {
-      finishArchive();
-    }
+    await archiveSessionWithUndo(scope.sessions, row, this.sessionAgentId(row.key, scope.context), {
+      client: scope.client,
+      snapshot: scope.context.gateway.snapshot,
+      signal: this.pluginActionLifetime.signal,
+      isCurrent: () => this.isRequestScopeCurrent(scope),
+      patch: (onConfirmed) =>
+        this.patchSession(row.key, { archived: true }, scope, row.sessionId, {
+          onConfirmed,
+          sessionScope: true,
+        }),
+    });
   }
 
   private async forkSession(key: string, fromLastCompleted = false) {

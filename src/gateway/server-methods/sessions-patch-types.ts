@@ -1,4 +1,7 @@
-import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type {
+  ErrorShape,
+  SessionAutomationPauseResult,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
@@ -28,6 +31,7 @@ export type MutationOutcome =
       applied: boolean;
       accessChanged: boolean;
       entry: SessionEntry;
+      automationPause?: SessionAutomationPauseResult;
     }
   | { ok: false; error: ErrorShape };
 

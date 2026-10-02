@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   SESSIONS_PATCH_MANY_MAX_TARGETS,
   type SessionsPatchManyResult,
+  type SessionAutomationPauseResult,
   type SessionsPatchManyTarget,
   type SessionsPatchMutation,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
@@ -122,6 +123,7 @@ export async function runSessionsToolPatchMany(params: {
     }
   }
   const succeeded: number[] = [];
+  const pauses: Array<{ index: number; result: SessionAutomationPauseResult }> = [];
   if (targets.length > 0) {
     const result = await params.callGateway<SessionsPatchManyResult>({
       method: "sessions.patchMany",
@@ -137,6 +139,9 @@ export async function runSessionsToolPatchMany(params: {
       const target = targets[position]!;
       if (outcome.ok) {
         succeeded.push(target.index);
+        if (outcome.automationPause) {
+          pauses.push({ index: target.index, result: outcome.automationPause });
+        }
       } else {
         failures.set(target.index, outcome.error.message);
       }
@@ -156,11 +161,24 @@ export async function runSessionsToolPatchMany(params: {
   }
   const failed = [...failures.keys()].toSorted((a, b) => a - b);
   const errors: Array<{ index: number; message: string }> = [];
+  const pauseDetails: typeof pauses = [];
   const result = {
     status: failed.length === 0 ? "updated" : succeeded.length === 0 ? "error" : "partial",
     succeeded,
     failed,
     errors,
+    ...(pauses.length > 0
+      ? {
+          automationPause: {
+            // Keep every incomplete index even if detailed counts exhaust the result budget.
+            incomplete: pauses
+              .filter(({ result: pause }) => pause.status !== "complete")
+              .map(({ index }) => index),
+            results: pauseDetails,
+            omitted: pauses.map(({ index }) => index),
+          },
+        }
+      : {}),
     ...(failed.length > 0
       ? { warning: "Patch failed indexes separately for any omitted error details." }
       : {}),
@@ -177,6 +195,21 @@ export async function runSessionsToolPatchMany(params: {
   }
   if (result.errors.length === failed.length) {
     delete result.warning;
+  }
+  const pauseSummary = result.automationPause;
+  if (pauseSummary) {
+    for (const pause of pauses) {
+      const next = {
+        ...pauseSummary,
+        results: [...pauseSummary.results, pause],
+        omitted: pauseSummary.omitted.filter((index) => index !== pause.index),
+      };
+      if (!sessionsToolResultFitsBudget({ ...result, automationPause: next })) {
+        break;
+      }
+      pauseSummary.results = next.results;
+      pauseSummary.omitted = next.omitted;
+    }
   }
   return result;
 }

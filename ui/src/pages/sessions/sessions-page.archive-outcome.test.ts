@@ -9,6 +9,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
+import { emptyCronListResponseFixture } from "../../test-helpers/cron.ts";
 import {
   createContext,
   createGateway,
@@ -31,7 +32,10 @@ const result: SessionPatchResult = {
 
 async function setup() {
   const pending = createDeferred<SessionPatchResult>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
+    if (method === "cron.list") {
+      return emptyCronListResponseFixture();
+    }
     if (method === "sessions.list") {
       return sessionsResult([row], 1);
     }
@@ -62,6 +66,103 @@ afterEach(() => {
 });
 
 describe("Sessions archive outcome lifetime", () => {
+  it("confirms attached automation names and schedules before archiving", async () => {
+    const fixture = await setup();
+    const originalRequest = fixture.request.getMockImplementation()!;
+    fixture.request.mockImplementation(async (method, params) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              id: "daily",
+              name: "Daily release check",
+              enabled: true,
+              scheduleKind: "every",
+              schedule: { kind: "every", everyMs: 3_600_000 },
+            },
+          ],
+          snapshotRevision: "one",
+          total: 1,
+          limit: 200,
+          offset: 0,
+          hasMore: false,
+          nextOffset: null,
+        };
+      }
+      return originalRequest(method, params);
+    });
+    fixture.pending.resolve(result);
+    const archived = fixture.page.archiveSessionWithUndo({ ...row, hasAutomation: true });
+    await vi.waitFor(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
+    expect(fixture.patches()).toHaveLength(0);
+    const dialog = document.querySelector("openclaw-modal-dialog")!;
+    expect(dialog.textContent).toContain("Daily release check");
+    expect(dialog.textContent).toContain("Every 1h");
+    expect(dialog.textContent).toContain("Unarchiving will not resume them");
+    const confirm = [...dialog.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Archive and pause"),
+    );
+    expect(confirm).toBeDefined();
+    confirm!.click();
+    await archived;
+    expect(fixture.patches()).toHaveLength(1);
+  });
+  it("allows an informed archive when the automation inventory is unavailable", async () => {
+    const fixture = await setup();
+    const originalRequest = fixture.request.getMockImplementation()!;
+    fixture.request.mockImplementation(async (method, params) => {
+      if (method === "cron.list") {
+        throw new Error("Inventory unavailable");
+      }
+      return originalRequest(method, params);
+    });
+    fixture.pending.resolve({
+      ...result,
+      automationPause: { status: "failed", reason: "unavailable" },
+    });
+    const archived = fixture.page.archiveSessionWithUndo(row);
+    await vi.waitFor(() => expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull());
+    const dialog = document.querySelector("openclaw-modal-dialog")!;
+    expect(dialog.textContent).toContain("Automation details could not be loaded");
+    expect(fixture.patches()).toHaveLength(0);
+    const confirm = [...dialog.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === "Archive anyway",
+    );
+    expect(confirm).toBeDefined();
+    confirm!.click();
+    await archived;
+    await fixture.toast.updateComplete;
+    expect(fixture.patches()).toHaveLength(1);
+    expect(fixture.toast.textContent).toContain("Automation pause incomplete");
+  });
+
+  it.each([
+    {
+      pause: { status: "partial", pausedCount: 1, failedCount: 1 } as const,
+      text: "Automation pause incomplete",
+    },
+    {
+      pause: { status: "failed", reason: "unavailable" } as const,
+      text: "Automation pause incomplete",
+    },
+    {
+      pause: { status: "skipped", reason: "requires-admin" } as const,
+      text: "administrator access is required",
+    },
+  ])(
+    "keeps committed archive and Undo visible when pause is $pause.status",
+    async ({ pause, text }) => {
+      const fixture = await setup();
+      fixture.pending.resolve({ ...result, automationPause: pause });
+      await fixture.page.archiveSessionWithUndo(row);
+      await fixture.toast.updateComplete;
+      expect(fixture.toast.textContent).toContain(text);
+      expect(fixture.page.error).toContain(text);
+      expect(fixture.undo()).not.toBeNull();
+      expect(fixture.patches()).toHaveLength(1);
+    },
+  );
+
   it.each(["before confirmation", "after confirmation"])(
     "restores the captured pinned session after leaving %s",
     async (navigation) => {

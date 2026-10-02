@@ -581,37 +581,59 @@ describe("AppSidebar session mutation feedback", () => {
     expect(sidebar.querySelector("[data-sidebar-session-error]")).toBeNull();
   });
 
-  it("suppresses a late batch archive result after a reconnect", async () => {
-    const { gateway, harness, sidebar } = await mountMutationHarness();
-    const pending = deferred<Awaited<ReturnType<typeof harness.patchMany>>>();
-    harness.patchMany.mockImplementationOnce(() => pending.promise);
-    selectSession(sidebar, "agent:main:a");
-    selectSession(sidebar, "agent:main:b");
-    await sidebar.updateComplete;
-    const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
-    row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
-    await sidebar.updateComplete;
-    const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
-    await menu?.updateComplete;
-    menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
-    await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
+  it.each(["reconnect", "leave-view"] as const)(
+    "keeps batch archive receipts connection-scoped after %s",
+    async (transition) => {
+      const { gateway, harness, sidebar } = await mountMutationHarness();
+      const toast = await mountToastHost();
+      const pending = deferred<Awaited<ReturnType<typeof harness.patchMany>>>();
+      harness.patchMany.mockImplementationOnce(() => pending.promise);
+      selectSession(sidebar, "agent:main:a");
+      selectSession(sidebar, "agent:main:b");
+      await sidebar.updateComplete;
+      const row = sidebar.querySelector('[data-session-key="agent:main:b"]');
+      row?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      await sidebar.updateComplete;
+      const menu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");
+      await menu?.updateComplete;
+      menu?.querySelector<HTMLButtonElement>('[data-shortcut="a"]')?.click();
+      await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledOnce());
 
-    gateway.publish({ phase: "reconnecting" });
-    gateway.publish({ phase: "connected" });
-    pending.resolve({
-      outcomes: [
-        { ok: true, key: "agent:main:a" },
-        { ok: true, key: "agent:main:b" },
-      ],
-    });
-    await pending.promise;
-    await new Promise<void>((resolve) => {
-      globalThis.setTimeout(resolve, 0);
-    });
+      if (transition === "reconnect") {
+        gateway.publish({ phase: "reconnecting" });
+        gateway.publish({ phase: "connected" });
+      } else {
+        sidebar.remove();
+      }
+      pending.resolve({
+        outcomes: [
+          {
+            ok: true,
+            key: "agent:main:a",
+            automationPause: { status: "partial", pausedCount: 1, failedCount: 1 },
+          },
+          { ok: true, key: "agent:main:b" },
+        ],
+      });
+      await pending.promise;
+      await new Promise<void>((resolve) => {
+        globalThis.setTimeout(resolve, 0);
+      });
 
-    expect(harness.patchMany).toHaveBeenCalledOnce();
-    expect(harness.patch).not.toHaveBeenCalled();
-  });
+      expect(harness.patchMany).toHaveBeenCalledOnce();
+      expect(harness.patch).not.toHaveBeenCalled();
+      await toast.updateComplete;
+      if (transition === "reconnect") {
+        expect(toast.textContent).not.toContain("Automation pause incomplete");
+      } else {
+        expect(toast.textContent).toContain("Automation pause incomplete");
+        const undo = toast.querySelector<HTMLButtonElement>(".app-toast__action");
+        expect(undo).not.toBeNull();
+        undo!.click();
+        await waitForFast(() => expect(harness.patchMany).toHaveBeenCalledTimes(2));
+      }
+    },
+  );
 
   it("does not truncate a pending batch when another mutation starts", async () => {
     const { harness, sidebar } = await mountMutationHarness();

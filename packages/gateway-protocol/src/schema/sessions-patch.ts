@@ -140,12 +140,31 @@ const SessionsPatchManyOutcomeIdentitySchema = {
   agentId: Type.Optional(NonEmptyString),
 };
 
+/** Automation effects are separate from the already committed session archive. */
+const SessionAutomationPauseResultSchema = Type.Union([
+  closedObject({
+    status: Type.Literal("complete"),
+    pausedCount: Type.Integer({ minimum: 0 }),
+    failedCount: Type.Literal(0),
+  }),
+  closedObject({
+    status: Type.Literal("partial"),
+    pausedCount: Type.Integer({ minimum: 0 }),
+    failedCount: Type.Integer({ minimum: 1 }),
+  }),
+  closedObject({ status: Type.Literal("failed"), reason: Type.Literal("unavailable") }),
+  closedObject({ status: Type.Literal("skipped"), reason: Type.Literal("requires-admin") }),
+]);
+
+export type SessionAutomationPauseResult = Static<typeof SessionAutomationPauseResultSchema>;
+
 export const SessionsPatchManyResultSchema = closedObject({
   outcomes: Type.Array(
     Type.Union([
       closedObject({
         ok: Type.Literal(true),
         ...SessionsPatchManyOutcomeIdentitySchema,
+        automationPause: Type.Optional(SessionAutomationPauseResultSchema),
       }),
       closedObject({
         ok: Type.Literal(false),

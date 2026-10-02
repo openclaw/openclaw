@@ -19,6 +19,7 @@ export type ConfirmDialogOptions = {
   title?: string;
   message: string;
   details?: string;
+  items?: readonly { title: string; description: string; status?: string }[];
   confirmLabel?: string;
   cancelLabel?: string;
   danger?: boolean;
@@ -53,6 +54,21 @@ function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
             ${
               options.details
                 ? html`<div class="exec-approval-command mono">${options.details}</div>`
+                : nothing
+            }
+            ${
+              options.items?.length
+                ? html`<ul class="confirm-dialog-items">
+                    ${options.items.map(
+                      (item) => html` <li class="confirm-dialog-item">
+                        <div class="confirm-dialog-item__text">
+                          <div class="confirm-dialog-item__title">${item.title}</div>
+                          <div class="confirm-dialog-item__description">${item.description}</div>
+                        </div>
+                        ${item.status ? html`<span class="confirm-dialog-item__status">${item.status}</span>` : nothing}
+                      </li>`,
+                    )}
+                  </ul>`
                 : nothing
             }
             ${

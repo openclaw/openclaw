@@ -700,10 +700,12 @@ export async function executeSessionPatchMutations(params: {
     context: params.context,
     callerScopes,
     callerCanManageCron: callerIsAdmin,
+    hasCurrentCronAuthority: () =>
+      client === null || client.connect?.scopes?.includes(ADMIN_SCOPE) === true,
     targets: activePrepared.flatMap((target) => {
       const outcome = outcomes[target.index];
       return outcome?.ok && outcome.applied
-        ? [{ target, entry: outcome.entry, accessChanged: outcome.accessChanged }]
+        ? [{ target, outcome, assertCurrent: originalCommitGuards[target.index]! }]
         : [];
     }),
   });

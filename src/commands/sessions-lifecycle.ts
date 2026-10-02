@@ -5,6 +5,7 @@ import type {
   SessionRow,
   SessionsDeleteResult,
   SessionsPatchResult,
+  SessionAutomationPauseResult,
   WorktreePreservationReason,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredAgentId } from "../agents/agent-scope-config.js";
@@ -48,6 +49,7 @@ type SessionsLifecycleResult = {
   error?: string;
   archived?: string[];
   worktreePreserved?: PreservedSessionWorktree;
+  automationPause?: SessionAutomationPauseResult;
 };
 
 type SessionsListRow = Pick<SessionRow, "key" | "sessionId" | "agentId" | "archived" | "isMain">;
@@ -150,9 +152,28 @@ function outputLifecycleResults(
   } else {
     for (const result of results) {
       switch (result.status) {
-        case "archived":
+        case "archived": {
           runtime.log(`Archived session ${result.key}.`);
+          const pause = result.automationPause;
+          if (pause?.status === "partial") {
+            runtime.error(
+              `Automation pause incomplete: ${pause.pausedCount} paused; ${pause.failedCount} could not be paused and may remain enabled. Check the automations list.`,
+            );
+          } else if (pause?.status === "failed") {
+            runtime.error(
+              "Attached automations could not be checked or paused and may remain enabled. Check the automations list.",
+            );
+          } else if (pause?.status === "skipped") {
+            runtime.error(
+              "Attached automations were not paused: administrator permission is required.",
+            );
+          } else if (pause && pause.pausedCount > 0) {
+            runtime.log(
+              `Paused ${pause.pausedCount} attached automation(s). Restoring the session will not resume them.`,
+            );
+          }
           break;
+        }
         case "already_archived":
           runtime.log(`Session ${result.key} is already archived.`);
           break;
@@ -308,7 +329,12 @@ async function runSessionsLifecycleCommand(
         if (!response?.ok || response.entry?.archivedAt === undefined) {
           throw new Error("Gateway did not confirm that the session was archived.");
         }
-        results[index] = { key: response.key ?? session.key, ok: true, status: "archived" };
+        results[index] = {
+          key: response.key ?? session.key,
+          ok: true,
+          status: "archived",
+          ...(response.automationPause ? { automationPause: response.automationPause } : {}),
+        };
       } else {
         const response = (await callGatewayFromCliWithTransport(
           "sessions.delete",

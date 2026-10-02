@@ -923,6 +923,7 @@ test("sessions.list breaks timestamp ties by key for stable paging", async () =>
 });
 
 test("archiving a session disables cron jobs bound to it", async () => {
+  const target = { key: "agent:main:subagent:cronbound", expectedSessionId: "sess-bound" };
   await createSessionStoreDir();
   const now = Date.now();
   await writeSessionStore({
@@ -940,12 +941,18 @@ test("archiving a session disables cron jobs bound to it", async () => {
     { id: "elsewhere", enabled: true, sessionTarget: "isolated" },
   ] as unknown as CronJob[];
   const update = vi.fn(
-    async (id: string, _patch: unknown, precondition: (job: CronJob, nowMs: number) => void) => {
+    async (
+      id: string,
+      _patch: unknown,
+      precondition: (job: CronJob, nowMs: number) => void,
+      opts?: { commitGuard?: () => void },
+    ) => {
       const current = jobs.find((candidate) => candidate.id === id);
       if (!current) {
         throw new Error(`cron job not found: ${id}`);
       }
       precondition(current, Date.now());
+      opts?.commitGuard?.();
       return current;
     },
   );
@@ -957,14 +964,13 @@ test("archiving a session disables cron jobs bound to it", async () => {
 
   const archived = await directSessionHandlerReq(
     "sessions.patch",
-    {
-      key: "agent:main:subagent:cronbound",
-      archived: true,
-      expectedSessionId: "sess-bound",
-    },
+    { ...target, archived: true },
     { context: { cron } },
   );
   expect(archived.ok).toBe(true);
+  expect(archived.payload).toMatchObject({
+    automationPause: { status: "complete", pausedCount: 1, failedCount: 0 },
+  });
   expect(update.mock.calls.map((call) => call.slice(0, 2))).toEqual([
     ["bound", { enabled: false }],
   ]);
@@ -973,14 +979,11 @@ test("archiving a session disables cron jobs bound to it", async () => {
   update.mockClear();
   const restored = await directSessionHandlerReq(
     "sessions.patch",
-    {
-      key: "agent:main:subagent:cronbound",
-      archived: false,
-      expectedSessionId: "sess-bound",
-    },
+    { ...target, archived: false },
     { context: { cron } },
   );
   expect(restored.ok).toBe(true);
+  expect(restored.payload).not.toHaveProperty("automationPause");
   expect(update).not.toHaveBeenCalled();
 
   // Cron mutations are admin surface: a write-scoped operator can archive but
@@ -990,13 +993,86 @@ test("archiving a session disables cron jobs bound to it", async () => {
   } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
   const writeScopedArchive = await directSessionHandlerReq(
     "sessions.patch",
-    {
-      key: "agent:main:subagent:cronbound",
-      archived: true,
-      expectedSessionId: "sess-bound",
-    },
+    { ...target, archived: true },
     { context: { cron }, client: writeScopedClient },
   );
   expect(writeScopedArchive.ok).toBe(true);
+  expect(writeScopedArchive.payload).toMatchObject({
+    automationPause: { status: "skipped", reason: "requires-admin" },
+  });
   expect(update).not.toHaveBeenCalled();
+
+  jobs.push({ ...jobs[0]!, id: "fails" });
+  update.mockImplementation(async (id, _patch, precondition, opts) => {
+    if (id === "fails") {
+      throw new Error("private storage failure");
+    }
+    const current = jobs.find((candidate) => candidate.id === id)!;
+    precondition(current, Date.now());
+    opts?.commitGuard?.();
+    return current;
+  });
+  const partial = await directSessionHandlerReq(
+    "sessions.patch",
+    { ...target, archived: true },
+    { context: { cron } },
+  );
+  expect(partial.ok).toBe(true);
+  expect(partial.payload).toMatchObject({
+    entry: { archivedAt: expect.any(Number) },
+    automationPause: { status: "partial", pausedCount: 1, failedCount: 1 },
+  });
+  expect(JSON.stringify(partial.payload)).not.toContain("private storage failure");
+
+  const unavailable = await directSessionHandlerReq(
+    "sessions.patchMany",
+    {
+      targets: [target],
+      patch: { archived: true },
+    },
+    {
+      context: {
+        cron: {
+          ...cron,
+          list: async () => {
+            throw new Error("private list failure");
+          },
+        },
+      },
+    },
+  );
+  expect(unavailable.ok).toBe(true);
+  expect(unavailable.payload).toEqual({
+    outcomes: [
+      {
+        key: "agent:main:subagent:cronbound",
+        ok: true,
+        automationPause: { status: "failed", reason: "unavailable" },
+      },
+    ],
+  });
+
+  const revokedClient = {
+    connect: { scopes: ["operator.admin"] },
+  } as unknown as NonNullable<Parameters<typeof directSessionHandlerReq>[2]>["client"];
+  const revoked = await directSessionHandlerReq(
+    "sessions.patch",
+    { ...target, archived: true },
+    {
+      context: {
+        cron: {
+          ...cron,
+          list: async () => {
+            revokedClient!.connect.scopes = ["operator.write"];
+            return jobs;
+          },
+        },
+      },
+      client: revokedClient,
+    },
+  );
+  expect(revoked.ok).toBe(true);
+  expect(revoked.payload).toMatchObject({
+    automationPause: { status: "partial", pausedCount: 0, failedCount: 2 },
+  });
 });
