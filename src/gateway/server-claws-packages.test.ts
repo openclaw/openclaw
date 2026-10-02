@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { constants } from "node:sqlite";
 import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { z } from "zod";
@@ -20,6 +21,7 @@ import {
   readClawInstallRecord,
   readClawPackageRefs,
   updateClawInstallRecordStatus,
+  updateClawPackageRefStatus,
 } from "../claws/provenance.js";
 import {
   PluginRuntimeApplicationError,
@@ -31,6 +33,7 @@ import {
   beginAgentDeletionJournal,
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { clawsPackageHandlers } from "./server-methods/claws-packages.js";
@@ -70,7 +73,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     version: "1.0.0",
     integrity: "sha256:audit",
   };
-  persistClawPackageRef(plan, pkg);
+  const packageRef = persistClawPackageRef(plan, pkg);
   const claim = () =>
     beginAgentDeletionJournal({
       operationId: randomUUID(),
@@ -175,6 +178,7 @@ async function fixture(uninstallWarnings: string[] = []) {
     state,
     plan,
     pkg,
+    packageRef,
     decisions,
     input,
     application,
@@ -209,15 +213,26 @@ describe("Gateway Claw package cleanup owner", () => {
   ])("returns actual removal application and all cleanup warnings %j", async (warnings) => {
     const f = await fixture(warnings.uninstallWarnings);
     f.applyRuntime.mockResolvedValue({ ...f.application, warnings: warnings.runtimeWarnings });
-    const result = await f.invoke();
-    const { expectedWarnings } = warnings;
-    expect(result).toEqual({
-      packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
-      application: f.application,
-      ...(expectedWarnings.length ? { warnings: expectedWarnings } : {}),
-    });
-    expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
-    expect(mocks.uninstall).toHaveBeenCalledOnce();
+    const { db } = openOpenClawStateDatabase();
+    db.setAuthorizer((action, table) =>
+      action === constants.SQLITE_UPDATE && table === "claw_package_refs"
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      expect(() => updateClawPackageRefStatus(f.packageRef, "pending")).toThrow(/not authorized/i);
+      const result = await f.invoke();
+      const { expectedWarnings } = warnings;
+      expect(result).toEqual({
+        packages: [{ kind: "plugin", ref: "audit", version: "1.0.0", action: "uninstalled" }],
+        application: f.application,
+        ...(expectedWarnings.length ? { warnings: expectedWarnings } : {}),
+      });
+      expect(readClawPackageRefs({ agentId: "worker" })[0]?.status).toBe("complete");
+      expect(mocks.uninstall).toHaveBeenCalledOnce();
+    } finally {
+      db.setAuthorizer(null);
+    }
   });
 
   it.each([true, false])(

@@ -133,7 +133,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
         : undefined;
     for (const { specifier } of bunSourceFacts?.staticImports ?? []) {
       if (path.isAbsolute(specifier) || specifier.startsWith("file:")) {
-        artifact.captureModule(capturedSource, specifier, ["node", "import"]);
+        artifact.captureModule(capturedSource, specifier, ["node", "module-sync", "import"]);
       }
     }
     const bunNeedsNativeSource =

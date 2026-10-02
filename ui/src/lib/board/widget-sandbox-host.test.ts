@@ -899,18 +899,26 @@ describe("BoardWidgetSandboxHost", () => {
     vi.useFakeTimers();
     const frame = document.createElement("iframe");
     document.body.append(frame);
+    // Document failures share the retry backoff; keep only the proxy unavailable.
+    const fetchMock = vi.fn(async () => new Response("<!doctype html><p>weather</p>"));
+    vi.stubGlobal("fetch", fetchMock);
     const onReadyTimeout = vi.fn();
+    const onLoadFailed = vi.fn();
     const host = new BoardWidgetSandboxHost(
       hostOptions(frame, {
         onReadyTimeout,
+        onLoadFailed,
       }),
     );
 
     host.setActive(false);
     await vi.advanceTimersByTimeAsync(20_000);
     expect(onReadyTimeout).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
     host.setActive(true);
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(onReadyTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
     expect(onReadyTimeout).toHaveBeenCalledOnce();
     expect(frame.src).toBe("");
     await vi.advanceTimersByTimeAsync(1_000);
@@ -922,7 +930,10 @@ describe("BoardWidgetSandboxHost", () => {
     expect(reloadSpy).toHaveBeenCalledWith(SANDBOX_URL);
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
     host.dispose();
-    await vi.advanceTimersByTimeAsync(20_000);
+    // Cross both the canceled readiness deadline and its next retry window.
+    await vi.advanceTimersByTimeAsync(34_000);
     expect(onReadyTimeout).toHaveBeenCalledTimes(2);
+    expect(reloadSpy).toHaveBeenCalledOnce();
+    expect(onLoadFailed).not.toHaveBeenCalled();
   });
 });

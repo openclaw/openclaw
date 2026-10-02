@@ -18,6 +18,10 @@ import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-wri
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  assertAgentCreationClaimAccess,
+  assertAgentCreationClaimCurrent,
+} from "./agent-creation-claim.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import {
   assertAgentDeletionDatabaseCleanupAccess,
@@ -94,6 +98,7 @@ function assertAgentDatabaseOperationCurrent(
   }
   // Coalesced callers keep their own scope; admission cannot lend its cleanup authority.
   assertAgentDeletionDatabaseCleanupAccess(database, options);
+  assertAgentCreationClaimAccess(database, options);
   assertCurrent?.();
 }
 
@@ -180,6 +185,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         database.db,
         () => {
           assertAgentDeletionDatabaseCleanupAccess(database, options);
+          assertAgentCreationClaimAccess(database, options);
           const operationResult = operation(database);
           if (!enteredNestedTransaction && !cache.incognito.has(database)) {
             // Permission failure must roll back with the write. Repairing after
@@ -438,6 +444,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
       throw new Error(`Agent database open was replaced: ${pathname}`);
     }
     // Cleanup may end during the native check; reject before schema repair can resume.
+    assertAgentCreationClaimCurrent(options);
     getAgentDeletionDatabaseCleanup(options)?.assertCurrent();
     pending.assertHeld?.();
     if (database) {

@@ -216,6 +216,7 @@ src/agents/model-extra-params.ts
 src/agents/model-ref-profile.ts
 src/agents/model-ref-shared.ts
 src/agents/model-runtime-policy.ts
+src/agents/model-selection-alias-scope.ts
 src/agents/model-selection-config.ts
 src/agents/model-selection-normalize.ts
 src/agents/model-selection-shared.ts
@@ -332,8 +333,6 @@ src/commands/doctor/shared/legacy-config-migrations.audio.ts
 src/commands/doctor/shared/legacy-config-migrations.channels.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot-account.ts
 src/commands/doctor/shared/legacy-config-migrations.qqbot.ts
-src/commands/doctor/shared/legacy-config-migrations.queue.ts
-src/commands/doctor/shared/legacy-config-migrations.runtime.agent-policy.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.agents.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.cli-backends.ts
 src/commands/doctor/shared/legacy-config-migrations.runtime.code-mode.ts
@@ -755,6 +754,7 @@ src/infra/node-runner-inventory.ts
 src/infra/node-runtime-executable.ts
 src/infra/node-sqlite.ts
 src/infra/non-fatal-cleanup.ts
+src/infra/npm-error.ts
 src/infra/npm-registry-spec.ts
 src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
@@ -1492,6 +1492,7 @@ test/vitest/vitest.performance-config.ts
 test/vitest/vitest.plugin-sdk-paths.mjs
 test/vitest/vitest.startup-corpus-paths.mjs
 test/vitest/vitest.test-shards.mjs
+test/vitest/vitest.timeouts.ts
 test/vitest/vitest.tooling-isolated-paths.mjs
 test/vitest/vitest.ui-isolated-paths.mjs
 test/vitest/vitest.ui-paths.mjs

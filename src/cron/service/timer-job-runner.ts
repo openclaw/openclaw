@@ -439,7 +439,7 @@ export function authorCronRunCompletion<
     | "delivered"
     | "deliveryAttempted"
   >,
->(_state: CronServiceState, job: CronJob, result: T) {
+>(job: CronJob, result: T) {
   const deliveryState =
     result.deliveryState ??
     resolveDeliveryState({
@@ -470,5 +470,5 @@ export async function executeJobCoreWithTimeout(
   opts?: CronCoreRunOptions,
 ) {
   const result = await executeJobCoreWithTimeoutUnfinalized(state, job, opts);
-  return authorCronRunCompletion(state, job, result);
+  return authorCronRunCompletion(job, result);
 }

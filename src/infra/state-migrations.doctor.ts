@@ -31,7 +31,10 @@ import {
   resolveLivePluginDoctorStateMigrationInventory,
   resolvePluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
-import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
+import {
+  legacyInstalledPluginIndexUnsupportedMessage,
+  resolveLegacyInstalledPluginIndexStorePath,
+} from "../plugins/installed-plugin-index-store-path.js";
 import {
   EMPTY_LEGACY_SESSION_SURFACES,
   type PreparedLegacySessionSurfaces,
@@ -143,7 +146,6 @@ import {
   buildPlannedPluginStateMigrationDescriptor,
   preparePostSessionPluginMigration,
 } from "./state-migrations.plugin-plan.js";
-import { migrateLegacyInstalledPluginIndex } from "./state-migrations.plugin-state.js";
 import {
   buildLegacyStateMigrationPreludeSteps,
   buildUnresolvedBlockedPreludeSteps,
@@ -624,7 +626,7 @@ export async function detectLegacyStateMigrations(params: {
     );
   }
   if (hasPluginInstallIndex) {
-    preview.push(`- Plugin install index: ${pluginInstallIndexPath} → shared SQLite state`);
+    preview.push(`- ${legacyInstalledPluginIndexUnsupportedMessage(pluginInstallIndexPath)}`);
   }
   if (debugProxyCaptureSidecar.hasLegacy) {
     preview.push(
@@ -910,23 +912,20 @@ function createPluginInstallIndexStep(params: {
   env: NodeJS.ProcessEnv;
   hasLegacy: boolean;
 }): LegacyStateMigrationStep {
+  const sourcePath = resolveLegacyInstalledPluginIndexStorePath(params);
+  const message = legacyInstalledPluginIndexUnsupportedMessage(sourcePath);
   return {
     id: "plugin-install-index",
     phase: "shared",
-    source: [{ kind: "path", path: resolveLegacyInstalledPluginIndexStorePath(params) }],
-    target: [
-      {
-        kind: "sqlite",
-        path: resolveOpenClawStateSqlitePath({
-          ...params.env,
-          OPENCLAW_STATE_DIR: params.stateDir,
-        }),
-      },
-    ],
+    source: [{ kind: "path", path: sourcePath }],
+    target: [],
     requiredness: params.hasLegacy ? "required" : "not-required",
-    reversibility: "checkpoint-required",
-    collectNotices: true,
-    run: () => migrateLegacyInstalledPluginIndex({ stateDir: params.stateDir }),
+    reversibility: "not-applicable",
+    ...(params.hasLegacy ? { refusal: { code: "unsupported-plugin-install-index", message } } : {}),
+    run: () => ({
+      changes: [],
+      warnings: migrationFileExists(sourcePath) ? [message] : [],
+    }),
   };
 }
 

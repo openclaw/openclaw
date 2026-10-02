@@ -326,7 +326,7 @@ describe("worker turn execution", () => {
           timestamp: 2,
         }),
       );
-      createWorkerSessionPlacementGate(placements).updateAckCursors({
+      await createWorkerSessionPlacementGate(placements).updateAckCursors({
         claim: request.turnClaim,
         transcriptSeq: 2,
         liveSeq: 1,

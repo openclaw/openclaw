@@ -35,6 +35,8 @@ import {
   rememberAuthoritativeTerminal,
   rememberLiveTerminalRun,
 } from "./terminal-message-identity.ts";
+import type { ToolStreamHost } from "./tool-stream-contract.ts";
+import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -334,13 +336,12 @@ function createStateWithRunningSession(overrides: Partial<ChatState>): SessionTe
 }
 
 type HistoryToolSegment = { text: string; ts: number; toolCallId?: string };
-type LiveToolState = ChatHistoryHost & {
-  chatStreamSegments: HistoryToolSegment[];
-  chatToolMessages: Record<string, unknown>[];
-  toolStreamById: Map<string, unknown>;
-  toolStreamOrder: string[];
-  toolStreamSyncTimer: number | null;
-};
+type LiveToolState = ChatHistoryHost &
+  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder"> & {
+    chatStreamSegments: HistoryToolSegment[];
+    chatToolMessages: Record<string, unknown>[];
+    toolStreamSyncTimer: number | null;
+  };
 
 function attachLiveToolState(
   state: ChatHistoryHost,
@@ -351,9 +352,23 @@ function attachLiveToolState(
   liveState.chatStreamSegments = segments;
   liveState.chatToolMessages = tools;
   liveState.toolStreamById = new Map(
-    tools.map((tool) => [String(tool.toolCallId), { message: tool }]),
+    tools.map((tool) => {
+      const toolCallId = String(tool.toolCallId);
+      const runId = typeof tool.runId === "string" ? tool.runId : (state.chatRunId ?? "run-1");
+      return [
+        buildToolStreamIdentity(runId, toolCallId),
+        {
+          toolCallId,
+          runId,
+          message: tool,
+          name: "shell",
+          startedAt: 0,
+          receivedAt: 0,
+        },
+      ];
+    }),
   );
-  liveState.toolStreamOrder = tools.map((tool) => String(tool.toolCallId));
+  liveState.toolStreamOrder = [...liveState.toolStreamById.keys()];
   liveState.toolStreamSyncTimer = null;
   return liveState;
 }
@@ -2006,10 +2021,16 @@ describe("loadChatHistory retry handling", () => {
     ).toEqual(remainingSegments);
     expect(state.toolStreamById.size).toBe(remainingTools.length);
     expect(state.toolStreamOrder).toEqual(
-      remainingTools.map((index) => String(tools[index]?.toolCallId)),
+      remainingTools.map((index) =>
+        buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+      ),
     );
     for (const index of remainingTools) {
-      expect(state.toolStreamById.has(String(tools[index]?.toolCallId))).toBe(true);
+      expect(
+        state.toolStreamById.has(
+          buildToolStreamIdentity("run-1", String(tools[index]?.toolCallId)),
+        ),
+      ).toBe(true);
     }
   });
 
@@ -2194,7 +2215,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatToolMessages).toEqual([liveToolMessage]);
     expect(visibleParts(state)).toEqual([]);
     expect(state.toolStreamById.size).toBe(1);
-    expect(state.toolStreamOrder).toEqual(["call_current"]);
+    expect(state.toolStreamOrder).toEqual([buildToolStreamIdentity("run-1", "call_current")]);
   });
 
   it("shows a targeted message when chat history is unauthorized", async () => {

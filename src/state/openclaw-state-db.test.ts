@@ -3494,46 +3494,6 @@ INSERT INTO device_identities VALUES (
     );
   });
 
-  it("classifies the released agent registry primary key as Doctor-repairable", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const databasePath = materializeCurrentStateDatabase(stateDir);
-
-    const { DatabaseSync } = requireNodeSqlite();
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec(`
-      ALTER TABLE agent_databases RENAME TO agent_databases_current;
-      CREATE TABLE agent_databases (
-        agent_id TEXT NOT NULL PRIMARY KEY,
-        path TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL,
-        size_bytes INTEGER
-      );
-      INSERT INTO agent_databases (
-        agent_id,
-        path,
-        schema_version,
-        last_seen_at,
-        size_bytes
-      )
-      SELECT
-        agent_id,
-        path,
-        schema_version,
-        last_seen_at,
-        size_bytes
-      FROM agent_databases_current;
-      DROP TABLE agent_databases_current;
-    `);
-    legacy.close();
-
-    expectStateSchemaMigrationRequired(() => openOpenClawStateDatabase(options), {
-      kind: "agent-databases-composite-primary-key",
-      pathname: databasePath,
-    });
-  });
-
   it("keeps an unrecognized agent registry schema fail-closed and nonrepairable", () => {
     const stateDir = createTempStateDir();
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -3557,9 +3517,7 @@ INSERT INTO device_identities VALUES (
     }
     expect(caught).not.toBeInstanceOf(OpenClawStateDatabaseSchemaMigrationRequiredError);
     expect(caught).toBeInstanceOf(Error);
-    expect((caught as Error).message).toContain(
-      "noncanonical agent database registry schema that cannot be repaired automatically",
-    );
+    expect((caught as Error).message).toContain("unsupported agent database registry schema");
   });
 
   it("does not claim a legacy audit database with conflicting ownership", () => {

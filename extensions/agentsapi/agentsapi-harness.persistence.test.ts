@@ -90,11 +90,10 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
     };
     const openStore = () =>
       createPluginStateKeyedStoreForTests<AgentsApiBinding>("agentsapi", storeOptions);
-    // Captured pre-environment-setting identity: SHA-256 of the JSON array
-    // ["fixture-model", "fixture-not-a-real-api-key"].
+    // Saved configuration identity: SHA-256 of ["fixture-model"].
     const hosted = {
       sessionId: "persisted-hosted-session",
-      authFingerprint: "3c26b68488ce497a69d2c9fce9ee19c461fa67a3d959b0dc3bafe5718c56119d",
+      configFingerprint: "7279f68deebd4e52eb136c95ccbb8c642a7f141b836a33de22c8aa9a4a93c022",
     };
     await openStore().register(params.sessionId, hosted);
     await reopenState();
@@ -129,7 +128,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
           kind: "failed",
           error: expect.objectContaining({
             message:
-              "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+              "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
           }),
         },
       });
@@ -158,7 +157,7 @@ it("reopens an existing hosted binding and requires reset before persisting a fr
       const fresh = await openStore().lookup(params.sessionId);
       expect(fresh).toMatchObject({
         sessionId: "fresh-self-hosted-session",
-        authFingerprint: expect.any(String),
+        configFingerprint: expect.any(String),
       });
       await harness.dispose();
       await reopenState();

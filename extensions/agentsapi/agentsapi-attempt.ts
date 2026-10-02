@@ -30,6 +30,7 @@ import {
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { AgentsApiClient } from "./agentsapi-client.js";
+import { resolveAgentsApiSessionAccessError } from "./agentsapi-errors.js";
 import * as files from "./agentsapi-files.js";
 import { buildAgentsApiMcpTools } from "./agentsapi-mcp.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
@@ -234,28 +235,15 @@ export async function runAgentsApiAttempt(
     assertCurrent();
     const sessionIdentity = [
       params.model.id,
-      params.resolvedApiKey,
       // Preserve existing hosted identities only when no network policy is configured.
       ...(environment.type === "self_hosted" || environment.network != null ? [environment] : []),
       ...(mcpTools.length ? [mcpTools] : []),
     ];
     const fingerprint = createHash("sha256").update(JSON.stringify(sessionIdentity)).digest("hex");
-    if (binding && binding.authFingerprint !== fingerprint) {
-      // Normalize bindings created by the unmerged tools implementation.
-      const toolsFingerprint = createHash("sha256")
-        .update(JSON.stringify([params.model.id, params.resolvedApiKey, surface.declarations]))
-        .digest("hex");
-      if (
-        environment.type !== "openai_hosted" ||
-        environment.network != null ||
-        mcpTools.length > 0 ||
-        binding.authFingerprint !== toolsFingerprint
-      ) {
-        throw new Error(
-          "Agents API model, credential, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
-        );
-      }
-      await bind({ sessionId: binding.sessionId, authFingerprint: fingerprint });
+    if (binding && binding.configFingerprint !== fingerprint) {
+      throw new Error(
+        "Agents API model, environment, or MCP configuration changed; reset the OpenClaw session before continuing",
+      );
     }
     const inputMedia =
       environment.type === "openai_hosted" && params.hostCapabilities.resolveInputAttachmentMedia
@@ -349,7 +337,7 @@ export async function runAgentsApiAttempt(
         },
       );
       assertCurrent();
-      await bind({ sessionId: remoteSessionId, authFingerprint: fingerprint });
+      await bind({ sessionId: remoteSessionId, configFingerprint: fingerprint });
     } else {
       await client.setReasoningEffort(remoteSessionId, reasoningEffort, controller.signal);
     }
@@ -598,6 +586,12 @@ export async function runAgentsApiAttempt(
     }
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey, params.sessionFile);
     lifecycle.emitLifecycleTerminal({ phase: terminal.kind === "failed" ? "error" : "end" });
+  }
+  if (terminal.kind === "failed") {
+    terminal = {
+      ...terminal,
+      error: resolveAgentsApiSessionAccessError(terminal.error, remoteSessionId),
+    };
   }
   const result: EmbeddedRunAttemptResult = {
     terminal,
