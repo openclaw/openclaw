@@ -15,7 +15,7 @@ extension ChatSessionSidebar {
             ? self.sessionAgentID(session)
             .map { id in self.viewModel.agentChoices.first { $0.id == id } ?? .init(id: id) } : nil
         let pageSummary = pageAgent.map { _ in ChatSidebarTreeSummary(
-            page: node, expanded: self.childrenExpanded(node), isConnected: self.viewModel.healthOK) }
+            page: node, expanded: self.childExpansion(node).wrappedValue, isConnected: self.viewModel.healthOK) }
         let attention = self.attentionSummary(
             sessions: pageSummary?.sessions ?? node.previewSessions,
             agentID: self.sessionAgentID(session),

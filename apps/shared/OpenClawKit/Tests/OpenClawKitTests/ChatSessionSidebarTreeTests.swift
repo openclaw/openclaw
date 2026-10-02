@@ -2,6 +2,7 @@
 import Foundation
 import Observation
 import OpenClawProtocol
+import SwiftUI
 import Testing
 @testable import OpenClawChatUI
 
@@ -288,9 +289,18 @@ struct ChatSessionSidebarTreeTests {
             let collapsed = try #require(self.projected(store, model, owner).first)
             #expect(collapsed.children.map(\.id) == ["agent:main:child"])
             #expect(collapsed.hasNavigationChildren)
+            var modes: [String: ChatSidebarChildMode] = [:]
+            let binding = ChatSidebarChildMode.expansionBinding(
+                modes: Binding(get: { modes }, set: { modes = $0 }),
+                key: collapsed.id,
+                automaticallyExpanded: false)
+            #expect(!binding.wrappedValue)
+            binding.wrappedValue = true
+            #expect(binding.wrappedValue)
 
             let expansion = Task { await store.synchronize(model: model, requiredParents: [parent]) }
             let call = await requests.nextChild()
+            #expect(binding.wrappedValue)
             let loaded = returnsRows ? try self.rows(child + "," +
                 #"{"key":"agent:main:loaded","sessionId":"loaded","parentSessionKey":"agent:main:parent"}"#) : []
             call.reply.resume(returning: .init(rows: loaded, isComplete: true))
@@ -303,6 +313,11 @@ struct ChatSessionSidebarTreeTests {
                     ? ["agent:main:child", "agent:main:loaded"] : ["agent:main:child"]))
             #expect(expanded.hasNavigationChildren)
             #expect(expanded.loadParentKeys == [parent.key])
+            #expect(binding.wrappedValue)
+            binding.wrappedValue = false
+            #expect(!binding.wrappedValue)
+            binding.wrappedValue = true
+            #expect(binding.wrappedValue)
         }
     }
 

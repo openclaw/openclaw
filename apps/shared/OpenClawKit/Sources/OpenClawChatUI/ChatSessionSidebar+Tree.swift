@@ -247,7 +247,21 @@ extension ChatSessionSidebarModel {
     }
 }
 
-enum ChatSidebarChildMode { case collapsed, expanded, all }
+enum ChatSidebarChildMode {
+    case collapsed, expanded, all
+
+    static func expansionBinding(
+        modes: Binding<[String: Self]>,
+        key: String,
+        automaticallyExpanded: Bool) -> Binding<Bool>
+    {
+        // The disclosure can reread its binding before SwiftUI rebuilds the row.
+        // A render-time snapshot hides the toggle, including across child hydration.
+        Binding(
+            get: { modes.wrappedValue[key].map { $0 != .collapsed } ?? automaticallyExpanded },
+            set: { modes.wrappedValue[key] = $0 ? .expanded : .collapsed })
+    }
+}
 
 extension ChatSessionSidebarModel.Node {
     func containsSelection(_ key: String) -> Bool {
@@ -338,7 +352,7 @@ extension ChatSessionSidebar {
         var inlineParents = Set<String>()
         var homeParents: [OpenClawChatSessionEntry] = []
         func visit(_ node: ChatSessionSidebarModel.Node) {
-            let expanded = self.childrenExpanded(node)
+            let expanded = self.childExpansion(node).wrappedValue
             if expanded || ChatSessionSidebarModel.sidebarKey(node.id) == ChatSessionSidebarModel
                 .sidebarKey(model.sessionKey)
             {
@@ -385,9 +399,11 @@ extension ChatSessionSidebar {
             homeParents: homeParents)
     }
 
-    func childrenExpanded(_ node: ChatSessionSidebarModel.Node) -> Bool {
-        self.childModes[node.id].map { $0 != .collapsed } ?? node.children
-            .contains { $0.containsSelection(self.viewModel.sessionKey) }
+    func childExpansion(_ node: ChatSessionSidebarModel.Node) -> Binding<Bool> {
+        ChatSidebarChildMode.expansionBinding(
+            modes: self.$childModes,
+            key: node.id,
+            automaticallyExpanded: node.children.contains { $0.containsSelection(self.viewModel.sessionKey) })
     }
 
     func treeRow(
@@ -397,7 +413,6 @@ extension ChatSessionSidebar {
         ownership: ChatSidebarOwnership,
         previewRequest: ChatSessionSidebarPreviews.Request) -> AnyView
     {
-        let expanded = self.childrenExpanded(node)
         let row = self.row(for: node, isChild: isChild, now: now, ownership: ownership, previewRequest: previewRequest)
         let visible = node.visibleChildren(
             selectedKey: self.viewModel.sessionKey,
@@ -408,9 +423,7 @@ extension ChatSessionSidebar {
         }
         return AnyView(Group {
             if node.hasNavigationChildren || !node.children.isEmpty {
-                DisclosureGroup(isExpanded: Binding(get: { expanded }, set: {
-                    self.childModes[node.id] = $0 ? .expanded : .collapsed
-                })) {
+                DisclosureGroup(isExpanded: self.childExpansion(node)) {
                     ForEach(visible) { child in
                         self.treeRow(
                             child,
