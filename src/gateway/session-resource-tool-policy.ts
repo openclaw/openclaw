@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
-import { hasGatewayAdminScope } from "./server-methods/chat-origin-routing.js";
+import { hasGatewayAdminScope } from "./operator-scopes.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";

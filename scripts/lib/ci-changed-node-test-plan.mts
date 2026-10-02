@@ -631,8 +631,9 @@ function createChangedTargetShards(
   rowBudget?: number,
 ) {
   const timings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings("blacksmith") };
+  // Target children use source routing, even when selection remaps their canonical owner.
   const buildModeOf = (chunk: typeof targets) =>
-    chunk.some(({ plans }) => plans.some((plan) => plan.config === E2E_VITEST_CONFIG))
+    chunk.some(({ sourcePlans }) => sourcePlans.some((plan) => plan.config === E2E_VITEST_CONFIG))
       ? "private-qa"
       : resolveVitestPretestBuildMode([{ includePatterns: chunk.map(({ target }) => target) }]);
   const targetChunks: (typeof targets)[] = [];

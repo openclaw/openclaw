@@ -17,6 +17,7 @@ import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-clean
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
 import { emitCompletionEndedHookIfNeeded } from "./subagent-registry-lifecycle-delivery.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
+import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -34,14 +35,20 @@ export const finalizeResumedAnnounceGiveUp = async (
   },
 ) => {
   const params = context.options;
-  const { runId, entry, reason, cleanup, cleanupGeneration, retryCount, completedAt } =
-    giveUpParams;
+  const { reason, cleanup, cleanupGeneration, retryCount, completedAt } = giveUpParams;
+  let entry = giveUpParams.entry;
+  let runId = entry.runId;
   const stateContext = giveUpParams.stateContext ?? captureOpenClawStateWorkerContext();
   const generation = entry.generation;
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
+    const current = getCurrentSubagentRunOwner(params.runs, entry);
+    if (!current) {
+      return false;
+    }
+    entry = current;
+    runId = entry.runId;
     return (
-      params.runs.get(runId) === entry &&
       entry.generation === generation &&
       (cleanupGeneration === undefined ||
         context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration))
@@ -59,8 +66,7 @@ export const finalizeResumedAnnounceGiveUp = async (
     });
     return;
   }
-  const deliveryError = getDeliveryLastError(entry) ?? reason;
-  await commitSubagentLifecycleMutation(context, {
+  entry = await commitSubagentLifecycleMutation(context, {
     entry,
     stateContext,
     assertCurrent() {
@@ -71,21 +77,29 @@ export const finalizeResumedAnnounceGiveUp = async (
         throw new Error("Subagent give-up owner changed before persistence.");
       }
     },
-    mutate() {
-      clearSubagentPendingDelivery(entry);
-      const failedDelivery = ensureDeliveryState(entry);
+    mutate(draft) {
+      if (draft.delivery?.status === "delivered") {
+        return false;
+      }
+      const deliveryError = getDeliveryLastError(draft) ?? reason;
+      clearSubagentPendingDelivery(draft);
+      const failedDelivery = ensureDeliveryState(draft);
       failedDelivery.status = "failed";
       failedDelivery.lastError = deliveryError;
       if (retryCount != null) {
         failedDelivery.attemptCount = retryCount;
         failedDelivery.lastAttemptAt = completedAt ?? Date.now();
       }
-      entry.wakeOnDescendantSettle = undefined;
-      const completion = ensureCompletionState(entry);
+      draft.wakeOnDescendantSettle = undefined;
+      const completion = ensureCompletionState(draft);
       completion.fallbackResultText = undefined;
       completion.fallbackCapturedAt = undefined;
+      return undefined;
     },
   });
+  if (entry.delivery?.status === "delivered") {
+    return;
+  }
   await finishSubagentCleanup(context, {
     runId,
     entry,
@@ -115,7 +129,9 @@ export async function finishSubagentCleanup(
     giveUpReason?: "expiry" | "permanent_failure";
   },
 ): Promise<void> {
-  const { runId, entry, cleanup, cleanupGeneration, stateContext, isCurrent } = args;
+  const { cleanup, cleanupGeneration, stateContext, isCurrent } = args;
+  let entry = args.entry;
+  let runId = entry.runId;
   if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
     await safeRemoveAttachmentsDir(entry, isCurrent);
   }
@@ -125,6 +141,8 @@ export async function finishSubagentCleanup(
     }
     return;
   }
+  entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
+  runId = entry.runId;
   const completionReason = args.giveUpReason
     ? (entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE)
     : args.completionReason;
@@ -145,6 +163,8 @@ export async function finishSubagentCleanup(
     stateContext,
     isCurrent: cleanupOwnerCurrent,
   });
+  entry = getCurrentSubagentRunOwner(context.options.runs, entry) ?? entry;
+  runId = entry.runId;
   const endedHookOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     return (

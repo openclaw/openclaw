@@ -25,6 +25,7 @@ import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { firstWrittenJsonArg } from "../test-runtime-capture.js";
+import { stubNodeRuntime } from "../update-cli/update-command-runtime-recovery.test-support.js";
 import { inspectManagedGatewayServiceBeforeUpdate } from "../update-cli/update-command-service-plan.js";
 import { runDaemonInstall } from "./install.js";
 
@@ -72,8 +73,8 @@ vi.mock("../../daemon/runtime-paths.js", async (original) => ({
   resolveNodeRuntimeInfo: async () => ({
     status: "supported",
     path: process.execPath,
-    version: "26.8.1",
-    sqliteVersion: "3.53.4",
+    version: process.versions.node,
+    sqliteVersion: process.versions.sqlite,
   }),
   emitNodeRuntimeWarning: async () => {},
 }));
@@ -139,6 +140,7 @@ beforeEach(() => {
   originalEnv = process.env;
   originalArgv = process.argv;
   vi.clearAllMocks();
+  stubNodeRuntime();
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();

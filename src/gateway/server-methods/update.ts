@@ -1,7 +1,6 @@
 // Update gateway methods run self-update flows, report status, write restart
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
@@ -57,7 +56,7 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
@@ -300,27 +299,15 @@ export const updateHandlers: GatewayRequestHandlers = {
         installKind: status.installKind,
         git: status.git,
       }).channel;
-      const requestedTarget = params.target;
-      const explicitDevTarget =
-        isRecord(requestedTarget) &&
-        requestedTarget.kind === "git" &&
-        typeof requestedTarget.upstreamRef === "string" &&
-        /^[^\s\p{Cc}]+$/u.test(requestedTarget.upstreamRef) &&
-        typeof requestedTarget.upstreamSha === "string" &&
-        /^[a-f\d]{40}$/iu.test(requestedTarget.upstreamSha)
-          ? devUpdateTargetFromGitTarget({
-              upstreamRef: requestedTarget.upstreamRef,
-              upstreamSha: requestedTarget.upstreamSha,
-            })
-          : undefined;
+      const explicitDevTarget = params.target
+        ? devUpdateTargetFromGitTarget(params.target)
+        : undefined;
       let targetFailureReason =
-        requestedTarget !== undefined && !explicitDevTarget
-          ? "invalid-update-target"
-          : explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
-            ? "unsupported-update-target"
-            : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
-              ? "update-target-upstream-mismatch"
-              : undefined;
+        explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
+          ? "unsupported-update-target"
+          : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
+            ? "update-target-upstream-mismatch"
+            : undefined;
       const adoption = targetFailureReason
         ? undefined
         : updateLifecycle.campaign?.adopt(explicitDevTarget);

@@ -625,7 +625,7 @@ export type SessionTranscriptWorkerValues = {
   };
 };
 
-type SessionTranscriptWorkerError =
+export type SessionTranscriptWorkerError =
   | SessionTranscriptWorkerReadError
   | { kind: "delta-visibility"; partial: SessionHistoryDelta };
 

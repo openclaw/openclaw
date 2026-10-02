@@ -1,9 +1,38 @@
 #if os(macOS)
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
 struct ChatSessionSidebarRowTests {
+    @Test @MainActor func `web badges preserve agent identity and never replace sharing draft or native facts`() throws {
+        let owner = OpenClawWebConversation()
+        owner.mode = .web
+        owner.sessionFacts = try JSONDecoder().decode(NativeConversationSessionFacts.self, from: Data(#"""
+        {"revision":1,"sessions":[
+          {"agentId":"research","sessionKey":"shared","hasComposerDraft":true,"outboxAttentionCount":2},
+          {"agentId":"main","sessionKey":"shared","hasComposerDraft":false,"outboxAttentionCount":8}
+        ]}
+        """#.utf8)).sessions
+        let session = try self.session(#"{"key":"shared","agentId":"research","visibility":"draft"}"#)
+        let context = NativeConversationContext(agentId: "research", sessionKey: "shared")
+        func badges() -> [ChatSessionSidebarRowFacts.Badge] {
+            ChatSessionSidebarRowFacts(
+                node: ChatSessionSidebarModel.tree(from: [session])[0], isChild: false, attention: nil,
+                showPreview: false, webFacts: owner.sidebarFacts(for: context), preview: nil,
+                now: Date(timeIntervalSince1970: 2)).badges
+        }
+        #expect(badges().map(\.glyph) == [.emoji("👻"), .symbol("exclamationmark.triangle"), .symbol("pencil")])
+        #expect(badges().compactMap(\.count) == [2])
+        #expect(badges().last?.label == "Unsent draft")
+        #expect(owner.sidebarFacts(for: .init(agentId: "missing", sessionKey: "shared")) == nil)
+        owner.mode = .native
+        #expect(badges().map(\.glyph) == [.emoji("👻")])
+        owner.mode = .web
+        owner.sessionFacts = nil
+        #expect(badges().map(\.glyph) == [.emoji("👻")])
+    }
+
     @Test(arguments: [
         (#"{"key":"agent:main:row","lastMessagePreview":"Server answer"}"#, true, "Server answer" as String?),
         (#"{"key":"agent:main:row","status":"failed","lastRunError":"Permission denied","endedAt":1000}"#, true, nil),

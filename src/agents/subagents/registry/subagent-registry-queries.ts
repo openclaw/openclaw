@@ -7,15 +7,11 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
-  compareSubagentRunGeneration,
+  isSameSubagentRun,
   latestSubagentRun,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
-import {
-  hasSubagentRunEnded,
-  isRetainedUnendedSubagentRun,
-  isSubagentRunQueued,
-} from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
   return entry.collect
@@ -245,16 +241,15 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
     if (isRetainedUnendedSubagentRun(entry, clock)) {
       return true;
     }
-    if (hasSubagentRunEnded(entry) || entry.execution.status !== "queued") {
+    if (hasSubagentRunEnded(entry)) {
       return false;
     }
-    // Compact projections cannot own reservations; only the matching raw owner can.
+    // Compact facts resolve status through the captured resident owner, never acquire custody.
     const current = inMemoryDisplayByChildSessionKey.get(entry.childSessionKey.trim());
     return (
       current !== undefined &&
-      current.requesterSessionKey === entry.requesterSessionKey &&
-      compareSubagentRunGeneration(current, entry) === 0 &&
-      isSubagentRunQueued(current)
+      isSameSubagentRun(current, entry) &&
+      isRetainedUnendedSubagentRun(current, clock)
     );
   };
 

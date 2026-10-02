@@ -171,6 +171,11 @@ describe("buildExternalRunFailureReply", () => {
       localWorker: false,
     },
     {
+      name: "local request timeout with a synthesized status",
+      makeError: () => new Error("LLM request timed out."),
+      localWorker: false,
+    },
+    {
       name: "typed local worker timeout",
       makeError: () => new WorkerTaskError("worker task timed out: secret-canary", "timeout"),
       localWorker: true,
@@ -218,12 +223,19 @@ describe("buildExternalRunFailureReply", () => {
     if (localWorker) {
       expect(reply.text).toMatch(/local worker/i);
       expect(reply.text).not.toMatch(/HTTP|openai\/test-model|context preparation/);
+    } else if (error.reason === "timeout") {
+      expect(reply.text).toBe(
+        "⚠️ The request timed out. Please try again. If it keeps happening, try a shorter request or a different model.",
+      );
+      expect(error).toMatchObject({
+        reason: "timeout",
+        status: 408,
+        provider: "openai",
+        model: "test-model",
+      });
     } else {
       expect(reply.text).toContain("openai/test-model");
       expect(reply.text).not.toMatch(/local worker/i);
-      if (error.reason === "timeout") {
-        expect(reply.text).toContain("HTTP 408");
-      }
     }
   });
 

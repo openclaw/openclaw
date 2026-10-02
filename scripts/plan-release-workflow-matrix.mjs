@@ -137,6 +137,11 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "OpenCode",
     providers: "opencode-go",
+    // The release workspace does not enable Global regions, so the default high-signal
+    // selection includes DeepSeek routes that reject every request. Keep this list aligned
+    // with models proven reachable from the release workspace.
+    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "3",
     profiles: "full",
   },
   {

@@ -16,7 +16,7 @@ import {
 } from "../../commands/models/list.probe.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatForLog } from "../ws-log.js";
-import { modelAuthAgentScopeError, resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
+import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -156,7 +156,7 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const scope = resolveModelAuthAgentScope(cfg, request.agentId);
       if (!scope.ok) {
-        respond(false, undefined, modelAuthAgentScopeError(scope));
+        respond(false, undefined, scope.error);
         return;
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, scope.agentId);

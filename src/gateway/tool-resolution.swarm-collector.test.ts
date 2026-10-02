@@ -10,23 +10,17 @@
  * enforced exactly.
  */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByRunId,
-  resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { useMcpCollectorRegistry } from "./mcp-http.collector-registry.test-support.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
-
-vi.mock("../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => ({
-  ...(await importOriginal<
-    typeof import("../agents/subagents/registry/subagent-registry-state.js")
-  >()),
-  persistSubagentRunsToDiskOrThrow: () => {},
-}));
 
 const runId = "cli-collector-run";
 const schemalessRunId = "cli-schemaless-collector-run";
@@ -106,24 +100,14 @@ function resolveLoopbackGrantToolNames(toolsAllow: string[], admittedRunId: stri
   }).then((scoped) => scoped.tools.map((tool) => (tool as { name: string }).name));
 }
 
-beforeEach(() => {
-  resetSubagentRegistryForTests({ persist: false });
-  addSubagentRunForTests({
-    runId,
-    childSessionKey: collectorSessionKey,
-    collect: true,
-    outputSchema: schema,
-  });
-  addSubagentRunForTests({
+useMcpCollectorRegistry({ runId, childSessionKey: collectorSessionKey, outputSchema: schema });
+
+beforeEach(async () => {
+  await addSubagentRunForTests({
     runId: schemalessRunId,
     childSessionKey: schemalessCollectorSessionKey,
     collect: true,
   });
-});
-
-afterEach(() => {
-  consumeSwarmStructuredOutput(runId);
-  resetSubagentRegistryForTests({ persist: false });
 });
 
 describe("resolveGatewayScopedTools swarm collectors", () => {
@@ -172,9 +156,22 @@ describe("resolveGatewayScopedTools swarm collectors", () => {
     expect(names).toContain("sessions_yield");
   });
 
-  it("stops serving the collector transport after the result is captured", () => {
-    const entry = expectDefined(getSubagentRunByRunId(runId), "collector run");
-    entry.collectorCompletion = { status: "done", structured: { answer: "ok" } };
+  it("stops serving the collector transport after the result is captured", async () => {
+    await mutateSubagentRuns([runId], (rows) => {
+      const entry = expectDefined(rows.get(runId), "collector run");
+      return {
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord>([
+          [
+            runId,
+            {
+              ...entry,
+              collectorCompletion: { status: "done", structured: { answer: "ok" } },
+            },
+          ],
+        ]),
+      };
+    });
 
     const names = resolveLoopbackTools(collectorSessionKey).map((tool) => tool.name);
 
@@ -261,12 +258,20 @@ describe("collector contract is bound to the admitted collector run", () => {
     expect(names).toContain("sessions_yield");
   });
 
-  it("admits the collector through the launch id a queued relaunch retains", () => {
+  it("admits the collector through the launch id a queued relaunch retains", async () => {
     // A relaunch moves `runId` to the new Gateway run and keeps the original as
     // `swarmRunId`; `getSubagentRunByRunId` answers to both, so the gate does too.
-    const entry = expectDefined(getSubagentRunByRunId(runId), "collector run");
-    entry.swarmRunId = runId;
-    entry.runId = "cli-collector-relaunched";
+    const nextRunId = "cli-collector-relaunched";
+    await mutateSubagentRuns([runId, nextRunId], (rows) => {
+      const entry = expectDefined(rows.get(runId), "collector run");
+      return {
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord | null>([
+          [runId, null],
+          [nextRunId, { ...entry, runId: nextRunId, swarmRunId: runId }],
+        ]),
+      };
+    });
 
     for (const admittedRunId of [runId, "cli-collector-relaunched"]) {
       const names = resolveLoopbackTools(collectorSessionKey, {
@@ -343,15 +348,24 @@ describe("collector write authority is re-checked before persistence", () => {
       "collector output transport",
     );
 
-    const entry = expectDefined(getSubagentRunByRunId(runId), "collector run");
-    entry.runId = "cli-collector-rebound";
-    entry.swarmRunId = "cli-collector-rebound";
+    const nextRunId = "cli-collector-rebound";
+    await mutateSubagentRuns([runId, nextRunId], (rows) => {
+      const entry = expectDefined(rows.get(runId), "collector run");
+      return {
+        value: undefined,
+        postimages: new Map<string, SubagentRunRecord | null>([
+          [runId, null],
+          [nextRunId, { ...entry, runId: nextRunId, swarmRunId: nextRunId }],
+        ]),
+      };
+    });
 
     await expect(
       structuredOutput.execute("rebound-collector-result", {
         result: { answer: "ok" },
       }),
     ).rejects.toThrow("caller no longer owns the admitted collector run");
+    const entry = expectDefined(getSubagentRunByRunId(nextRunId), "rebound collector run");
     expect(entry.structuredOutput).toBeUndefined();
     expect(entry.collectorCompletion).toBeUndefined();
   });

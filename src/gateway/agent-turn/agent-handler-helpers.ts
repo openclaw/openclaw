@@ -19,7 +19,6 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import { createClosedSessionTranscriptSource } from "../session-end-transcript-reader.js";
 import {
@@ -66,11 +65,6 @@ export type RestoredCronContinuation = Pick<
   model: string;
   thinking?: string;
 };
-
-export function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
 
 export function respondDeletedAgentSession(params: {
   cfg: OpenClawConfig;

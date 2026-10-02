@@ -178,10 +178,14 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   Source-only edits may reuse the lease; base, dependency, wrapper, or Testbox
   workflow drift requires a fresh lease. Do not set
   `OPENCLAW_TESTBOX_ALLOW_STALE=1` for release evidence.
-- For a committed release candidate, warm the box with
-  `blacksmith testbox warmup ... --ref <candidate-branch-or-sha>`. Do not rely
-  on source sync to overlay committed branch changes onto the workflow's
-  default ref.
+- For a committed release candidate with the supported capsule-aware wrapper,
+  run `node scripts/crabbox-wrapper.mjs run --blacksmith-ref main -- <command>`
+  from that candidate's checkout when using Testbox. The capsule preserves
+  candidate source and frozen dependencies while `main` supplies current
+  admission limits. If the candidate lacks that wrapper contract, use the
+  exact-target release-validation route below with separate Validation and
+  Tooling SHAs. Do not dispatch candidate Testbox workflow refs or borrow
+  another checkout's wrapper.
 
 ## Deferred CI recovery
 

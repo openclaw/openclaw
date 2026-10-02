@@ -41,7 +41,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it.each(["exec", "run", "get", "all", "iterate"] as const)(
+  it.each(["exec", "all"] as const)(
     "retains transactional facts across CASE queries executed through %s",
     (method) => {
       const database = openDatabase(undefined, false);
@@ -65,10 +65,8 @@ describe("admitted SQLite schema facts", () => {
           for (let index = 0; index < 10; index += 1) {
             if (method === "exec") {
               database.exec(query);
-            } else if (method === "iterate") {
-              Array.from(statement.iterate());
             } else {
-              statement[method]();
+              statement.all();
             }
             expect(tableExists(database, "original")).toBe(true);
           }

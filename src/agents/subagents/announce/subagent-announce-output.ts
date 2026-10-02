@@ -12,7 +12,10 @@ import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import {
@@ -223,10 +226,22 @@ export async function captureSubagentCompletionReply(
   });
 }
 
+type AnnounceRunReader = (runId: string) => SubagentRunRecord | undefined;
+
+async function prepareAnnounceRunReader(runIds: string[]): Promise<AnnounceRunReader> {
+  const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, runIds);
+  return (runId) => {
+    const current = prepared.consume((runs) => runs.get(runId));
+    return current.ready ? current.value : undefined;
+  };
+}
+
 export async function readSubagentRunAnnounceResult(
-  child: Parameters<typeof readSubagentRunAnnounceResultUsing>[0],
+  child: SubagentRunRecord,
+  readSubagentRun?: AnnounceRunReader,
 ): Promise<PreparedAnnounceResult> {
   return await readSubagentRunAnnounceResultUsing(child, {
+    readSubagentRun: readSubagentRun ?? (await prepareAnnounceRunReader([child.runId])),
     findTranscriptEvent,
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,
@@ -238,13 +253,20 @@ export async function readSubagentRunAnnounceResult(
 
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
 export async function readChildCompletionFindings(
-  children: Array<ChildCompletionRow & { runId: string }>,
+  children: SubagentRunRecord[],
+  readSubagentRun?: AnnounceRunReader,
 ): Promise<PreparedAnnounceResult> {
+  const readCurrent =
+    readSubagentRun ?? (await prepareAnnounceRunReader(children.map((child) => child.runId)));
   const results = await Promise.all(
-    children.map(async (child) => ({
-      child,
-      ...(await readSubagentRunAnnounceResult(child)),
-    })),
+    children.map(async (observed) => {
+      const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
+      const child = readCurrent(observed.runId);
+      if (!child || !prepared.isCurrent()) {
+        throw new Error("A child result changed while preparing the completion batch.");
+      }
+      return { child, ...prepared };
+    }),
   );
   const isCurrent = () => results.every((result) => result.isCurrent());
   if (!isCurrent()) {

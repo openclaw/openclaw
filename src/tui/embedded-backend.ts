@@ -43,6 +43,7 @@ import {
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { bindEmbeddedSessionRowProjection } from "../agents/tools/embedded-gateway-stub.js";
 import { resolveTextCommand } from "../auto-reply/commands-registry.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 import { executeSessionGoalCommand, parseGoalCommand } from "../auto-reply/reply/commands-goal.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
 import {
@@ -60,7 +61,6 @@ import {
   mergeAssistantText,
   resolveAssistantTextInput,
 } from "../gateway/agent-event-assistant-text.js";
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
   capLiveAssistantText,
@@ -337,7 +337,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       agentId,
     };
     const abortableSessionRun = this.hasAbortableSessionRun(runScope);
-    const stopCommand = abortableSessionRun && isChatStopCommandText(opts.message);
+    const stopCommand = abortableSessionRun && isAbortRequestText(opts.message);
     const queuedAfter =
       question || stopCommand || isQueueCommand
         ? undefined

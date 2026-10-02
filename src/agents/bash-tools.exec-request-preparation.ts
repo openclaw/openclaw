@@ -68,16 +68,25 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
 export function assertSupportedExecParams(args: unknown): void {
-  if (isRecord(args) && args.required !== undefined && typeof args.required !== "boolean") {
+  if (!isRecord(args)) {
+    return;
+  }
+  if (args.required !== undefined && typeof args.required !== "boolean") {
     throw new ToolInputError("exec required must be a boolean");
   }
-  if (isRecord(args) && args.required === true && args.background === true) {
+  if (args.required === true && args.background === true) {
     throw new ToolInputError("required exec cannot be detached with background=true");
   }
-  if (isRecord(args) && Object.hasOwn(args, "timeout")) {
+  if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
       'exec parameter "timeout" is unsupported; use "timeoutSeconds" instead',
     );
+  }
+  // `cwd` is a tool-level default, never a model-facing parameter: a dropped cwd runs the
+  // command somewhere the caller did not choose, and the failure surfaces as a path the
+  // caller never named.
+  if (Object.hasOwn(args, "cwd")) {
+    throw new ToolInputError('exec parameter "cwd" is unsupported; use "workdir" instead');
   }
 }
 

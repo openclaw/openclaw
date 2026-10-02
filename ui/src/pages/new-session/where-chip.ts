@@ -275,29 +275,6 @@ export function renderWhereChip(params: {
   const busy = params.submitting || params.pendingPlacement;
   const showDeviceSkeletons = params.catalogLoading && devices.length === 0;
   const showCloudSkeletons = params.isAdmin && params.catalogLoading && cloudProfiles.length === 0;
-  let cleanupScrollFade: (() => void) | undefined;
-  const bindScrollFade = (element: Element | undefined) => {
-    cleanupScrollFade?.();
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    const update = () => {
-      const overflow = element.scrollHeight - element.clientHeight;
-      element.toggleAttribute("data-fade-top", overflow > 1 && element.scrollTop > 1);
-      element.toggleAttribute("data-fade-bottom", overflow > 1 && element.scrollTop < overflow - 1);
-    };
-    const resize = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
-    resize?.observe(element);
-    const content = new MutationObserver(update);
-    content.observe(element, { childList: true, subtree: true, characterData: true });
-    element.addEventListener("scroll", update, { passive: true });
-    cleanupScrollFade = () => {
-      resize?.disconnect();
-      content.disconnect();
-      element.removeEventListener("scroll", update);
-    };
-    update();
-  };
   return html`
     <span class="new-session-page__select new-session-page__select--where">
       <button
@@ -371,7 +348,7 @@ export function renderWhereChip(params: {
               }}
             />
           </label>
-          <div ${ref(bindScrollFade)} class="new-session-page__environment-list">
+          <div class="new-session-page__environment-list">
             ${
               showLocal || devices.length || showAuto
                 ? renderEnvironmentHeading(

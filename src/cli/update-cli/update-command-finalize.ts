@@ -367,6 +367,7 @@ async function updateFinalizeCommandInternal(
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
             onWarnings: onDoctorWarnings,
+            onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
           }),
         undefined,
         {
@@ -439,6 +440,7 @@ async function updateFinalizeCommandInternal(
           json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
           onWarnings: onDoctorWarnings,
+          onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
         const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();

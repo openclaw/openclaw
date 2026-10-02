@@ -12,8 +12,8 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-// Periodic WAL maintenance is independent of the request SQL budget.
-beforeEach(() => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] }));
+// Hold GatewayScheduler timeouts so WAL maintenance stays outside the request SQL budget.
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -71,7 +71,12 @@ it.for(["search", "full"] as const)(
         await withReadySessionRows(
           projection,
           () => queries,
-          () => undefined,
+          (read) => {
+            // Establish access order after the concurrent worker batches have finished.
+            for (const query of queries) {
+              expect(read.describe(query)?.entry.category).toBe("Work");
+            }
+          },
         );
         const materialized = projection.materializedCount;
         expect(materialized).toBe(101);

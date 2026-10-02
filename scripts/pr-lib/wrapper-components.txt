@@ -177,7 +177,7 @@ scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
 scripts/lib/vitest-worker-run.mts
-scripts/lib/watch-pr-ci-dependencies.mjs
+scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
@@ -306,6 +306,7 @@ src/channels/plugins/legacy-state-migration-preview.ts
 src/channels/plugins/merge-plugin-section.ts
 src/channels/plugins/meta-normalization.ts
 src/channels/plugins/module-loader.ts
+src/channels/plugins/optional-public-artifact.ts
 src/channels/plugins/package-state-probes.ts
 src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/registry-loaded.ts
@@ -614,6 +615,7 @@ src/global-state.ts
 src/globals.ts
 src/infra/abort-signal.ts
 src/infra/acquire-with-wait.ts
+src/infra/agent-database-readers.ts
 src/infra/agent-event-execution-context.ts
 src/infra/agent-event-lifecycle.ts
 src/infra/agent-events.ts
@@ -879,6 +881,7 @@ src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
+src/infra/update-managed-service-handoff-children.ts
 src/infra/update-managed-service-handoff-cleanup.ts
 src/infra/update-managed-service-handoff-database.ts
 src/infra/update-managed-service-handoff-lease.ts
@@ -926,6 +929,7 @@ src/infra/worker-task-native-sections.ts
 src/infra/worker-task-pool-completion.ts
 src/infra/worker-task-pool-core.ts
 src/infra/worker-task-pool-owned.ts
+src/infra/worker-task-pool-registry.ts
 src/infra/worker-task-pool-resources.ts
 src/infra/worker-task-pool-retirement.ts
 src/infra/worker-task-pool-worker.ts
@@ -1063,7 +1067,6 @@ src/plugins/installed-plugin-index.ts
 src/plugins/installed-plugin-package-ownership.ts
 src/plugins/installed-plugin-record-match.ts
 src/plugins/jiti-factory.ts
-src/plugins/legacy-npm-declaration.ts
 src/plugins/loader-cache-state.ts
 src/plugins/managed-npm-retention-contract.ts
 src/plugins/managed-npm-retention.ts
@@ -1419,6 +1422,7 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
+src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-request.ts

@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { setTimeout as sleep } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -85,14 +85,6 @@ const loadAgentModelSelectionModule = createLazyRuntimeModule(
 );
 
 const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
-
-function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !env.VITEST && env.NODE_ENV !== "test";
-}
-
-function hasGatewayStartHooks(pluginRegistry: PluginRegistry): boolean {
-  return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
-}
 
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await loadInternalHooksModule();
@@ -461,7 +453,7 @@ export async function startGatewaySidecars(params: {
       waitForPostReadyWork: params.waitForPostReadyWork,
       shouldRun: params.shouldCreatePostReadySidecars,
       run: async (isStopped) => {
-        if (!shouldCheckRestartSentinel() || isStopped()) {
+        if (process.env.VITEST || process.env.NODE_ENV === "test" || isStopped()) {
           return;
         }
         if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
@@ -632,7 +624,6 @@ export async function startGatewayPostAttachRuntime(
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
-    controlUiBasePath: string;
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
@@ -839,15 +830,10 @@ export async function startGatewayPostAttachRuntime(
     }
     params.onPluginServices?.(pluginServices);
   };
-  const waitForSidecarStartTurn = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
   const startSidecars = () =>
     params.minimalTestGateway
       ? startStartupLog().then(() => pluginRegistry)
-      : waitForSidecarStartTurn().then(async () => {
+      : nextTurn().then(async () => {
           if (params.isClosing?.()) {
             skipStartupLog();
             return pluginRegistry;
@@ -875,7 +861,9 @@ export async function startGatewayPostAttachRuntime(
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
-            gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+            gatewayStartHooks: pluginRegistry.typedHooks.some(
+              (hook) => hook.hookName === "gateway_start",
+            ),
           });
           const workerEnvironmentSidecar = params.isClosing?.()
             ? null

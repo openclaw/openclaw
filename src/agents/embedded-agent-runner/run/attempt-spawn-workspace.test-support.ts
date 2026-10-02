@@ -2,10 +2,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -38,6 +35,7 @@ import {
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
 import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import {
+  readMockSessionCacheTtlTimestamp,
   resetSessionManagerMocks,
   type SessionManagerMocks,
 } from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
@@ -195,6 +193,8 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     appendCustomEntry: vi.fn(),
     appendCustomEntryAsync: vi.fn(),
     appendMessage: vi.fn(),
+    appendMessageAsync: async (...args: unknown[]): Promise<unknown> =>
+      sessionManager.appendMessage(...args),
     appendSessionInfo: vi.fn(),
     appendLabelChange: vi.fn(),
     flushPendingPersistence: vi.fn(),
@@ -698,44 +698,8 @@ vi.mock("../cache-ttl.js", () => ({
     data: unknown,
   ) => sessionManager.appendCustomEntry?.("openclaw.cache-ttl", data),
   isCacheTtlEligibleProvider: (provider?: string) => provider === "anthropic",
-  readLastCacheTtlTimestamp: (
-    sessionManager: {
-      appendCustomEntryAsync?: { mock?: { calls?: unknown[][] } };
-    },
-    context?: { provider?: string; modelId?: string },
-  ) => {
-    const calls = sessionManager.appendCustomEntryAsync?.mock?.calls ?? [];
-    for (let index = calls.length - 1; index >= 0; index -= 1) {
-      const [customType, data] = calls[index] ?? [];
-      if (customType !== "openclaw.cache-ttl") {
-        continue;
-      }
-      const entry = data as
-        | {
-            timestamp?: unknown;
-            provider?: string;
-            modelId?: string;
-          }
-        | undefined;
-      if (
-        context?.provider &&
-        normalizeOptionalLowercaseString(entry?.provider) !==
-          normalizeOptionalLowercaseString(context.provider)
-      ) {
-        continue;
-      }
-      if (
-        context?.modelId &&
-        normalizeOptionalLowercaseString(entry?.modelId) !==
-          normalizeOptionalLowercaseString(context.modelId)
-      ) {
-        continue;
-      }
-      const timestamp = entry?.timestamp;
-      return typeof timestamp === "number" ? timestamp : null;
-    }
-    return null;
-  },
+  readLastCacheTtlTimestamp: (...args: Parameters<typeof readMockSessionCacheTtlTimestamp>) =>
+    readMockSessionCacheTtlTimestamp(...args),
 }));
 
 vi.mock("../compaction-runtime-context.js", () => ({

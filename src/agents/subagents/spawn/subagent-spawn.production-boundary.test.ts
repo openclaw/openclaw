@@ -181,7 +181,7 @@ beforeEach(async () => {
     entries: [model],
     routeVariants: [model],
   });
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   preparedRuntime.loadAgentRuntimePluginRegistryHandle.mockImplementation(
     () => getActivePluginRegistry() ?? createTestRegistry([]),
   );
@@ -203,7 +203,7 @@ afterEach(async ({ task }) => {
   // Retire workspace observers before fixture cleanup removes their roots.
   const { closeSkillsWatchers } = await import("../../../skills/runtime/refresh.js");
   await closeSkillsWatchers(true);
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   vi.mocked(runSubagentAnnounceFlow).mockReset();
   vi.mocked(callGateway).mockReset();
   clearRuntimeConfigSnapshot();

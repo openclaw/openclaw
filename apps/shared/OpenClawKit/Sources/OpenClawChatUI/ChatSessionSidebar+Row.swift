@@ -1,4 +1,5 @@
 #if os(macOS)
+import OpenClawKit
 import SwiftUI
 
 extension ChatSessionSidebar {
@@ -12,12 +13,16 @@ extension ChatSessionSidebar {
         let session = node.session
         let attention = self.attentionSummary(sessions: node.previewSessions, now: now)
         let targetID = "session:\(session.key)"
+        let agentID = OpenClawChatSessionKey.agentID(from: session.key) ??
+            self.viewModel.sessionMutationTarget(key: session.key, agentID: session.agentId).agentID
         let facts = ChatSessionSidebarRowFacts(
             node: node,
             isChild: isChild,
             attention: attention,
             showPreview: self.showMessagePreview,
             isConnected: self.viewModel.healthOK,
+            webFacts: agentID.flatMap { self.viewModel.webConversation?.sidebarFacts(
+                for: .init(agentId: $0, sessionKey: session.key)) },
             preview: self.rowPreview(for: session, previewRequest: previewRequest),
             now: now)
         let viewers = Set((self.sidebarPeople?.people ?? []).filter { $0.watchedSessions.contains(session.key) }
@@ -35,6 +40,10 @@ extension ChatSessionSidebar {
             isChild: isChild,
             facts: facts,
             attribution: attribution,
+            wakeDescription: (self.sessionStatus == .snoozed || self.sessionStatus == .all) &&
+                session.isSnoozed(at: now) ? session.snoozedUntil.map {
+                    OpenClawChatSessionSnooze.wakeDescription(Date(timeIntervalSince1970: $0 / 1000), now: now)
+                } : nil,
             attention: attention,
             connected: self.viewModel.healthOK,
             mainSessionKey: self.viewModel.selectedAgentMainSessionKey,
@@ -52,7 +61,7 @@ extension ChatSessionSidebar {
             }
             // The tag type must equal the List selection type (String?) exactly.
             .tag(Optional(session.key))
-            .contextMenu { self.contextMenu(for: session, isChild: isChild) }
+            .contextMenu { self.contextMenu(for: session, isChild: isChild, now: now) }
             .modifier(ChatSidebarAttentionAccessibility(
                 title: ChatSessionSidebarModel.sidebarDisplayName(for: session),
                 targetID: targetID,
@@ -111,6 +120,7 @@ private struct ChatSidebarRow: View {
     let isChild: Bool
     let facts: ChatSessionSidebarRowFacts
     let attribution: ChatSidebarOwnership.Attribution?
+    let wakeDescription: String?
     let attention: OpenClawChatAttentionSummary?
     let connected: Bool
     let mainSessionKey: String
@@ -153,13 +163,22 @@ private struct ChatSidebarRow: View {
                 }
                 ForEach(self.facts.badges.indices, id: \.self) { index in
                     let badge = self.facts.badges[index]
-                    self.graphic(badge.glyph)
-                        .foregroundStyle(self.color(badge.tone))
-                        .help(badge.label)
-                        .accessibilityLabel(badge.label)
+                    HStack(spacing: 2) {
+                        self.graphic(badge.glyph)
+                        if let count = badge.count { Text(verbatim: String(count)).monospacedDigit() }
+                    }
+                    .foregroundStyle(self.color(badge.tone))
+                    .help(badge.label)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(badge.label)
                 }
                 if self.isChild, self.node.session.runtimeMs != nil || self.node.session.startedAt != nil {
                     ChatSidebarRuntime(session: self.node.session, isConnected: self.connected)
+                }
+                if let wakeDescription = self.wakeDescription {
+                    Text(String(format: String(localized: "Wakes %@"), wakeDescription))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             .font(OpenClawChatTypography.caption)

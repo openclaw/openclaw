@@ -120,6 +120,16 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
       currentRequestCount: 0,
     });
     expect(warning?.[1]).not.toHaveProperty("clientInstanceId");
+    if (boundary === "initialize") {
+      expect(JSON.parse(String(warning?.[1]?.initializeSnapshot))).toMatchObject({
+        boundary: "request",
+        outcome: "pending",
+        wireOutcome: "retained-pending",
+        writeState: "callback-ok",
+        clientClosed: false,
+      });
+      expect(warning?.[1]).not.toHaveProperty("initializeBeforeCleanup");
+    }
     if (
       ["initialize", "catalog-observation", "runtime-binding", "auth-handoff"].includes(boundary)
     ) {
@@ -149,6 +159,7 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
     const finish = createDeferred<void>();
     const close = harness.client.closeAndWait.bind(harness.client);
     const closing = vi.spyOn(harness.client, "closeAndWait").mockImplementation(async () => {
+      harness.client.close();
       await finish.promise;
       return await close();
     });
@@ -169,6 +180,20 @@ export function registerSharedClientAcquisitionDiagnosticsTests({
       acquireLastObservedBoundary: "cleanup",
       acquireBoundaryBeforeCleanup: "initialize",
       lastStartedClientInstanceId: harness.client.getInstanceId(),
+    });
+    const attributes = vi
+      .mocked(embeddedAgentLog.warn)
+      .mock.calls.find(([message]) => message === "codex app-server scope timed out")?.[1];
+    expect(JSON.parse(String(attributes?.initializeBeforeCleanup))).toMatchObject({
+      outcome: "pending",
+      wireOutcome: "retained-pending",
+      clientClosed: false,
+    });
+    expect(attributes?.initializeBeforeCleanupSource).toBe("before-client-close");
+    expect(JSON.parse(String(attributes?.initializeSnapshot))).toMatchObject({
+      outcome: "failed",
+      wireOutcome: "correlation-closed",
+      clientClosed: true,
     });
     finish.resolve();
     harness.emitExit();

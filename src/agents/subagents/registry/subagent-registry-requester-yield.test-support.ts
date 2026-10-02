@@ -1,75 +1,87 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
-import {
-  assertSubagentRegistryWriteSourceCurrent,
-  captureSubagentRunMutationSnapshot,
-  publishSubagentRunPostimages,
-  SubagentRegistryWriteError,
-} from "./subagent-registry-persistence.js";
+import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
+import { commitRequesterInitialTransfer } from "./subagent-registry-requester-wake-commit.js";
 import {
   markRequesterTurnYieldedInRuns,
   type RequesterInitialTransfer,
 } from "./subagent-registry-requester-yield.js";
-import { persistSubagentRunsToDiskAsyncOrThrow } from "./subagent-registry-state.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { latestSubagentRun } from "./subagent-run-generation.js";
 
-/** Unit persistence faults use the real staging/publication owner; registered tests use SQLite. */
+export function createRequesterWakeContextFixture(
+  runs: Map<string, SubagentRunRecord>,
+  warn: SubagentLifecycleWakeContext["options"]["warn"] = () => {},
+): SubagentLifecycleWakeContext {
+  const unexpected = async (): Promise<never> => {
+    throw new Error("Unexpected requester fixture effect");
+  };
+  return {
+    options: {
+      runs,
+      warn,
+      resumedRuns: new Set(),
+      subagentAnnounceTimeoutMs: 1_000,
+      getRuntimeConfig: () => ({}),
+      clearPendingLifecycleError: () => {},
+      countPendingDescendantRuns: async () => 0,
+      getLatestRunForChildSession: (key, matches) =>
+        latestSubagentRun(
+          [...runs.values()].filter((entry) => entry.childSessionKey === key),
+          matches,
+        ) ?? null,
+      suppressAnnounceForSteerRestart: () => false,
+      shouldEmitEndedHookForRun: () => false,
+      emitSubagentEndedHookForRun: unexpected,
+      emitSubagentProgressEndedForRun: unexpected,
+      notifyContextEngineSubagentEnded: unexpected,
+      retireSupersededRun: unexpected,
+      resumeSubagentRun: () => {},
+      callGateway: unexpected,
+      captureSubagentCompletionReply: unexpected,
+      runSubagentAnnounceFlow: unexpected,
+      maybeWakeRequesterAfterAllChildrenSettled: unexpected,
+    },
+    pendingRequesterSettleWakeCommits: new Map(),
+    pendingRequesterSettleWakeRearms: new Set(),
+    cancelledRequesterSettleWakeRuns: new Set(),
+    scheduledRequesterSettleWakeRuns: new Set(),
+    scheduledRequesterSettleWakeTimers: new Map(),
+    newerGenerationOwnsSession: () => false,
+    shouldSuppressSessionEffects: async () => false,
+    sessionEffectsHostCurrent: () => true,
+    getSessionEffects: () => undefined,
+    resumeAncestorCleanup: () => {},
+    runRequesterSettleWake: unexpected,
+    unmarkRequesterSettleWakeRunScheduled: () => {},
+  };
+}
+
+/** Seed SQLite, then exercise the real handoff and admitted worker mutation owners. */
 export function createRequesterInitialTransferFixture(
   runs: Map<string, SubagentRunRecord>,
-  persistOrThrow?: (...runIds: string[]) => void,
+  beforeWrite?: (...runIds: string[]) => void,
+  options: { assertCurrent?: () => void } = {},
 ): RequesterInitialTransfer {
-  return async ({
-    entries,
-    alreadyPublished,
-    prepare,
-    assertHandoffCurrent,
-    mutate,
-    retire,
-    finish,
-    release,
-    afterRelease,
-  }) => {
-    const context = captureOpenClawStateWorkerContext();
-    const write = async (applyMutation: () => void) => {
-      const previous = new Map(
-        entries.map((entry) => [entry, captureSubagentRunMutationSnapshot(entry)] as const),
-      );
-      assertSubagentRegistryWriteSourceCurrent(context);
-      applyMutation();
-      await publishSubagentRunPostimages({
-        runs,
-        previous,
-        retire,
-        context,
-        assertCurrent: () => assertSubagentRegistryWriteSourceCurrent(context),
-        persist: persistOrThrow
-          ? async (_context, publication, ...runIds) => {
-              publication.assertCurrent();
-              try {
-                persistOrThrow(...runIds);
-              } catch (error) {
-                throw new SubagentRegistryWriteError("not-committed", error);
-              }
-              await Promise.resolve();
-              publication.onCommitted?.();
-            }
-          : (writeContext, callbacks, ...runIds) =>
-              persistSubagentRunsToDiskAsyncOrThrow(runs, runIds, {
-                context: writeContext,
-                ...callbacks,
-              }),
-      });
-    };
-    await prepare?.();
-    if (!alreadyPublished) {
-      await write(mutate);
-    }
-    assertHandoffCurrent();
-    finish();
-    if (release) {
-      await write(release);
-    }
-    afterRelease?.();
+  const context = createRequesterWakeContextFixture(runs);
+  return async (params) => {
+    saveSubagentRegistryChangesToSqlite(runs, [...runs.keys()]);
+    const wrap =
+      (mutate: (entries: SubagentRunRecord[]) => ReadonlySet<string> | void) =>
+      (entries: SubagentRunRecord[]) => {
+        const retired = mutate(entries);
+        beforeWrite?.(...entries.map((entry) => entry.runId));
+        return retired;
+      };
+    await commitRequesterInitialTransfer(context, {
+      ...params,
+      mutate: wrap(params.mutate),
+      ...(params.release ? { release: wrap(params.release) } : {}),
+      stateContext: captureOpenClawStateWorkerContext(),
+      assertCurrent: options.assertCurrent ?? (() => {}),
+      scheduleRetry: () => {},
+    });
   };
 }
 

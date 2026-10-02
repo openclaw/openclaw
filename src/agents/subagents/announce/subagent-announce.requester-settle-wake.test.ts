@@ -588,6 +588,15 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
 
     expect(
       await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: staleChild })),
+    ).toBe(false);
+    expect(deliverSpy).not.toHaveBeenCalled();
+
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      { ...staleChild, requesterSettleWake: undefined },
+      ...children,
+    ]);
+    expect(
+      await maybeWakeRequesterAfterAllChildrenSettled(wakeParams({ settledEntry: children[0] })),
     ).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("stale output");

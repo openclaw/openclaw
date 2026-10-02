@@ -95,10 +95,10 @@ export async function loadAgentReplacementOperations() {
             });
           }
         });
-        const publication = kernel.prepareSessionEntryReplacementPublication(result);
+        const publication = kernel.prepareSessionEntryReplacementPublication(result, current);
         deferSqliteWorkerCommitReceipt(current.db, publication);
         context.admit("commit", publication);
-        return result;
+        return { ...result, publication };
       }),
   } satisfies Handlers;
 }
@@ -272,8 +272,46 @@ export async function loadConversationDeliveryOperations() {
   } satisfies Handlers;
 }
 
+export async function loadUsageCacheOperations() {
+  const kernel = await import("../infra/session-cost-usage-cache.kernel.js");
+  return {
+    "usageCache.writeRollup": (
+      input: Parameters<typeof kernel.writeSessionCostUsageRollupInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
+        const result = kernel.writeSessionCostUsageRollupInDatabase(db, input);
+        admit("commit");
+        return result;
+      }),
+    "usageCache.prune": (
+      input: Parameters<typeof kernel.pruneSessionCostUsageRollupsInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
+        kernel.pruneSessionCostUsageRollupsInDatabase(db, input);
+        admit("commit");
+      }),
+    "usageCache.acquireLock": (
+      input: Parameters<typeof kernel.acquireSessionCostUsageRefreshLockInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session-cost-usage.refresh-lock.acquire", "Usage cache", ({ db }) => {
+        const result = kernel.acquireSessionCostUsageRefreshLockInDatabase(db, input);
+        admit("commit");
+        return result;
+      }),
+    "usageCache.releaseLock": (input: string, { writeTransaction, admit }) =>
+      writeTransaction("session-cost-usage.refresh-lock.delete", "Usage cache", ({ db }) => {
+        kernel.deleteSessionCostUsageRefreshLockInDatabase(db, input);
+        admit("commit");
+      }),
+  } satisfies Handlers;
+}
+
 export type RegisteredAgentWorkerOperations = WorkerOperations<
-  Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
+  Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+    Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
     Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
     Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
     Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &

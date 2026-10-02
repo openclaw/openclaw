@@ -8,6 +8,7 @@ import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { loadEnabledClaudeBundleCommands } from "../../plugins/bundle-commands.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveSkillFileHost } from "../loading/skill-file-host.js";
 import { resolveSkillTelemetrySource } from "../loading/source.js";
 import { filterSkillEntries } from "../loading/workspace-skill-filter.js";
 import { loadVisibleSkills, prepareWorkspaceSkills } from "../loading/workspace-skill-loader.js";
@@ -19,6 +20,7 @@ import type {
 } from "../types.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
 import { sanitizeSkillCommandName, SKILL_COMMAND_MAX_LENGTH } from "./command-name.js";
+import { recordSkillCommandFileHost } from "./skill-command-provenance.js";
 import { isSkillPromptVisible, isSkillUserInvocable } from "./skill-index.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -200,7 +202,7 @@ function assembleWorkspaceSkillCommandSpecs(
           return { kind: "tool", toolName, argMode: "raw" } as const;
         })();
 
-    specs.push({
+    const spec: SkillCommandSpec = {
       name: unique,
       displayName: entry.skill.displayName ?? rawName,
       skillFile: canonicalizePath(entry.skill.filePath),
@@ -209,7 +211,12 @@ function assembleWorkspaceSkillCommandSpecs(
       modelVisible: isSkillPromptVisible(entry),
       skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
-    });
+    };
+    const fileHost = resolveSkillFileHost(entry.skill);
+    if (fileHost) {
+      recordSkillCommandFileHost(spec, fileHost);
+    }
+    specs.push(spec);
   }
 
   const bundleCommands = loadEnabledClaudeBundleCommands({

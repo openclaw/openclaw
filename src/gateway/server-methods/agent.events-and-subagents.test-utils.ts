@@ -289,15 +289,14 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{
-      sessionEffects?: string;
-      suppressPromptPersistence?: boolean;
-    }>();
-    expect(callArgs.sessionEffects).toBe("internal");
-    expect(callArgs.suppressPromptPersistence).toBe(true);
+    expectRecordFields(await waitForAgentCommandCall(), {
+      sessionEffects: "internal",
+      suppressPromptPersistence: true,
+    });
     expect(mocks.updateSessionStore).not.toHaveBeenCalled();
     expect(context.addChatRun).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-backend-internal-effects", {
+      agentId: "main",
       isControlUiVisible: false,
       lifecycleGeneration: "test-generation",
     });
@@ -572,12 +571,7 @@ describe("gateway agent handler", () => {
       },
     );
 
-    const callArgs = await waitForAgentCommandCall<{
-      modelRun?: boolean;
-      promptMode?: string;
-      sessionEffects?: string;
-    }>();
-    expectRecordFields(callArgs, {
+    expectRecordFields(await waitForAgentCommandCall(), {
       modelRun: true,
       promptMode: "none",
       sessionEffects: "internal",
@@ -588,6 +582,7 @@ describe("gateway agent handler", () => {
     expect(mocks.getLatestSubagentRunByChildSessionKey).not.toHaveBeenCalled();
     expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
     expect(mocks.registerAgentRunContext).toHaveBeenCalledWith("test-stateless-model-run", {
+      agentId: "main",
       isControlUiVisible: false,
       lifecycleGeneration: "test-generation",
     });

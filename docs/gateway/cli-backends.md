@@ -40,6 +40,32 @@ model-scoped `agentRuntime.id` references its backend.
 
 Utility completions for session digests, progress narration, and tool-call titles use the selected model's runtime too. Claude CLI runs a fresh, tool-free completion with its own authentication. This includes canonical `anthropic/*` refs configured with `agentRuntime.id: "claude-cli"`.
 
+When `agents.defaults.utilityModel` is unset, these completions use the primary provider's declared small model. If that model has no usable provider credential or explicit runtime, it borrows the runtime pinned on the primary model's entry:
+
+| Primary's runtime                      | Provider credential | Derived utility model runs on             |
+| -------------------------------------- | ------------------- | ----------------------------------------- |
+| `claude-cli` pinned on its model entry | none                | `claude-cli`, the primary's runtime       |
+| `claude-cli` pinned on its model entry | configured          | the HTTP route, billed to that credential |
+| default                                | either              | the HTTP route                            |
+
+The session observer checks a borrowed route again at the next digest. Adding a provider credential during a run restores HTTP routing on that next digest. Routes that already have credentials keep their existing preparation cache. An explicitly configured utility model keeps its own runtime.
+
+To choose the route yourself rather than letting the credential decide, name a runtime on the derived model's own entry. The entry has to name one: a bare entry, or `id: "default"`, still falls back.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } },
+        // Always HTTP, even with no provider credential configured.
+        "anthropic/claude-haiku-4-5": { agentRuntime: { id: "openclaw" } },
+      },
+    },
+  },
+}
+```
+
 ## Using it as a fallback
 
 Add the CLI backend to your fallback list so it only runs when primary models fail:

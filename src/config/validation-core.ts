@@ -13,12 +13,12 @@ import {
 import { resolveSandboxDockerEnv, resolveSandboxScope } from "../agents/sandbox/config-contract.js";
 import { collectLegacyToolsBySenderIssues } from "../commands/doctor/shared/legacy-tools-by-sender.js";
 import { getContainerEnvFileEntryIssue } from "../infra/container-env-file.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   hasAvatarUriScheme,
   isAvatarDataUrl,
   isAvatarHttpUrl,
-  isPathWithinRoot,
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import {
@@ -151,7 +151,7 @@ function collectMcpServerNameIssues(raw: unknown): ConfigValidationIssue[] {
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
   const resolved = path.resolve(workspaceRoot, value);
-  return isPathWithinRoot(workspaceRoot, resolved);
+  return isPathInside(workspaceRoot, resolved);
 }
 
 function createIdentityAvatarIssue(

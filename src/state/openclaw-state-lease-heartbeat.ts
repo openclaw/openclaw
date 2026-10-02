@@ -5,7 +5,10 @@ import {
   toErrorObject,
 } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import {
+  resolveRuntimeWorkerThreadExecArgv,
+  resolveRuntimeWorkerUrl,
+} from "../infra/runtime-worker-url.js";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
@@ -371,10 +374,10 @@ export function startOpenClawStateLeaseHeartbeat(
   try {
     params.retainCleanup?.(lifecycle.cleanup);
     const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
-    const workerArgv = resolveRuntimeWorkerArgv(url);
+    const execArgv = resolveRuntimeWorkerThreadExecArgv(url);
     // Source aliases belong to the parent-selected tsconfig, not an unrelated cwd.
     // Keep the lease worker isolated from every other ambient environment setting.
-    const sourceTsconfig = workerArgv.length > 1 ? process.env.TSX_TSCONFIG_PATH : undefined;
+    const sourceTsconfig = execArgv.length > 0 ? process.env.TSX_TSCONFIG_PATH : undefined;
     startupContext?.admission.assertCurrent();
     worker = lifecycle.start(() =>
       runInDetachedAsyncContext(() =>
@@ -396,7 +399,7 @@ export function startOpenClawStateLeaseHeartbeat(
             renewalProgress: renewalProgress.buffer,
           } satisfies LeaseHeartbeatWorkerData,
           env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
-          execArgv: workerArgv.slice(0, -1),
+          execArgv,
           stdout: true,
           stderr: true,
         }),

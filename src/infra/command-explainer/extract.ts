@@ -8,8 +8,8 @@ import {
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
-  SOURCE_EXECUTABLES,
 } from "../command-analysis/risks.js";
+import { SOURCE_EXECUTABLES } from "../command-carriers.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,

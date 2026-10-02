@@ -157,7 +157,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "agentDatabaseRegistry.read" ||
       (input.command.type === "agentDatabaseDeletion.snapshot" &&
         (input.command.purpose === "runtime" || input.command.purpose === "maintenance")) ||
-      (input.command.type === "agentDeletionJournal.status" &&
+      ((input.command.type === "agentDeletionJournal.status" ||
+        input.command.type === "agentDeletionJournal.authority") &&
         typeof input.command.agentId === "string") ||
       input.command.type === "sessionGroups.snapshot" ||
       (input.command.type === "sessionGroups.members" && isRecord(input.command.cfg)) ||

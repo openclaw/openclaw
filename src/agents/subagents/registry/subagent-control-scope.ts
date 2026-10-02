@@ -29,6 +29,7 @@ import {
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isRequesterSettleWakeForRun } from "./subagent-requester-settle-identity.js";
+import { isSameSubagentRun, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
@@ -100,7 +101,9 @@ export function listControlledSubagentRunsForTurn(
   });
   const runsById = new Map(
     requesterRuns
-      .filter((entry) => getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey) === entry)
+      .filter((entry) =>
+        isSameSubagentRun(getLatestLiveSubagentRunByChildSessionKey(entry.childSessionKey), entry),
+      )
       .map((entry) => [entry.runId, entry]),
   );
   return controlledRuns.filter(
@@ -277,11 +280,8 @@ export function getLatestOwnedSubagentRun(
 }
 
 export function isCurrentSubagentRun(entry: SubagentRunRecord, cfg: OpenClawConfig): boolean {
-  return (
-    getLatestOwnedSubagentRun(
-      entry.childSessionKey,
-      resolveRunRequesterAgentId(entry, cfg),
-      cfg,
-    ) === entry
+  return isSameSubagentRunOwner(
+    getLatestOwnedSubagentRun(entry.childSessionKey, resolveRunRequesterAgentId(entry, cfg), cfg),
+    entry,
   );
 }

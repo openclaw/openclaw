@@ -74,6 +74,8 @@ it("keeps incognito Board mutations on the process-held database without creatin
   const { database, options, store, target } = fixture(true);
   const changes: SessionRowChange[] = [];
   const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
+  const facts: SessionRowChange[] = [];
+  const stopFacts = sessionChanges.subscribeFacts((change) => facts.push(change));
   try {
     expect(existsSync(options.path)).toBe(false);
     await store.putWidget({
@@ -98,10 +100,18 @@ it("keeps incognito Board mutations on the process-held database without creatin
       { sessionKey: target.sessionKey, storePath: options.path },
       { sessionKey: target.sessionKey, storePath: options.path },
     ]);
+    expect(facts).toEqual(
+      changes.map(() => ({
+        sessionKey: target.sessionKey,
+        storePath: options.path,
+        facts: { kind: "unchanged" },
+      })),
+    );
     for (const suffix of ["", "-wal", "-shm"]) {
       expect(existsSync(`${options.path}${suffix}`)).toBe(false);
     }
   } finally {
+    stopFacts();
     unsubscribe();
   }
 });
@@ -119,6 +129,12 @@ it("executes Board mutations off the host and publishes each committed change on
       });
     }
   });
+  const facts: SessionRowChange[] = [];
+  const stopFacts = sessionChanges.subscribeFacts((change) => {
+    if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
+      facts.push(change);
+    }
+  });
   clearNodeSqliteKyselyCacheForDatabase(database.db);
   const host = observeHostDataSql();
   const expectPublication = (revision: number) => {
@@ -129,7 +145,11 @@ it("executes Board mutations off the host and publishes each committed change on
         revision,
       },
     ]);
+    expect(facts).toEqual([
+      { sessionKey: target.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
+    ]);
     changes.length = 0;
+    facts.length = 0;
   };
   try {
     expect(
@@ -178,6 +198,7 @@ it("executes Board mutations off the host and publishes each committed change on
     expect(changes).toEqual([]);
   } finally {
     host.restore();
+    stopFacts();
     unsubscribe();
   }
 });

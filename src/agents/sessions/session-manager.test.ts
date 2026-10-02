@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configEnv from "../../config/config-env-vars.js";
 import {
@@ -59,24 +59,11 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
 }
 
 describe("SessionManager.open", () => {
-  it("commits ordered metadata with Windows environment semantics off-thread", async () => {
+  it("commits ordered metadata and custom messages with Windows environment semantics off-thread", async () => {
     const { dir, scope: target } = createScope("metadata-worker");
     target.storePath = path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const manager = SessionManager.open(target, dir);
-    // Preserve the implementation so each observed call uses its actual database receiver.
-    // oxlint-disable-next-line typescript/unbound-method
-    const nativePrepare = DatabaseSync.prototype.prepare;
-    const hostWrites: string[] = [];
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
-      this: DatabaseSync,
-      sql,
-    ) {
-      const mutation = /^\s*(insert|update|delete|replace)\b/i.exec(sql)?.[1];
-      if (mutation && /\b(?:transcript_events|session_windows|session_nodes)\b/i.test(sql)) {
-        hostWrites.push(mutation);
-      }
-      return nativePrepare.call(this, sql);
-    });
+    const sql = observeHostDataSql();
     const cloneEnv = configEnv.cloneEnvWithPlatformSemantics;
     const clone = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockImplementation((env) => {
       const { OPENCLAW_STATE_DIR, ...rest } = env;
@@ -95,17 +82,30 @@ describe("SessionManager.open", () => {
       );
       return captured;
     });
-    let ids: string[];
+    let ids: Array<string | undefined>;
     try {
       ids = await Promise.all([
         manager.appendModelChange("test-provider", "test-model"),
         manager.appendThinkingLevelChange("high"),
+        manager.appendMessageAsync({
+          role: "custom",
+          customType: "synthetic-note",
+          content: "saved on the canonical worker",
+          display: false,
+          timestamp: 1,
+        }),
       ]);
     } finally {
-      prepare.mockRestore();
+      sql.restore();
       clone.mockRestore();
     }
-    expect(hostWrites).toEqual([]);
+    expect(
+      sql.queries.filter((query) =>
+        /\b(?:transcript_events|transcript_payloads|session_windows|session_nodes)\b|BEGIN\s+IMMEDIATE/i.test(
+          query,
+        ),
+      ),
+    ).toEqual([]);
     expect(manager.getEntries()).toMatchObject([
       {
         type: "model_change",
@@ -115,6 +115,12 @@ describe("SessionManager.open", () => {
         modelId: "test-model",
       },
       { type: "thinking_level_change", id: ids[1], parentId: ids[0], thinkingLevel: "high" },
+      {
+        type: "message",
+        id: ids[2],
+        parentId: ids[1],
+        message: { role: "custom", content: "saved on the canonical worker" },
+      },
     ]);
     expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
     expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);

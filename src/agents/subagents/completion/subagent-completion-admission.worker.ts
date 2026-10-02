@@ -27,9 +27,13 @@ import {
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
-  type SubagentRunSqliteRow,
 } from "../registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import {
+  conflictingSubagentRunVersions,
+  upsertSubagentRunRowInDatabase,
+  type SubagentRegistryWrite,
+} from "../registry/subagent-registry.store.kernel.js";
+import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import { readSubagentRunRow } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
@@ -39,23 +43,27 @@ import type {
   SubagentCompletionMutationResult,
 } from "./subagent-completion-mutation.types.js";
 
+type SubagentCompletionVersionConflict = { writeId: string; conflictRunIds: string[] };
 const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, "subagent_runs">>(db);
 
 /** The shared-state worker owns queue insertion and its exact native completion owner. */
 export function admitSubagentCompletionInWorker(
   input: {
     writeId: string;
+    versions: SubagentRegistryWrite["versions"];
     queueEntry: QueuedSessionDelivery;
     expected: SubagentRunRecord;
     subagent: SubagentRunRecord;
   },
   database: OpenClawStateDatabase,
-): {
-  writeId: string;
-  claimed: boolean;
-  status: DeliveryQueueStoredStatus;
-  row: SubagentRunSqliteRow;
-} {
+):
+  | SubagentCompletionVersionConflict
+  | {
+      writeId: string;
+      claimed: boolean;
+      status: DeliveryQueueStoredStatus;
+      row: SubagentRunSqliteRow;
+    } {
   const { expected, subagent, queueEntry, writeId } = input;
   const owner = queueEntry.kind === "agentTurn" ? queueEntry.owner : undefined;
   const delivery = subagent.delivery;
@@ -75,11 +83,14 @@ export function admitSubagentCompletionInWorker(
     entry: queueEntry,
     insertOnly: true,
   });
-  const expectedPayload = bindSubagentRunRecord(expected).payload_json;
   const boundSubagent = bindSubagentRunRecord(subagent);
   return runOpenClawStateWriteTransaction(
     () => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
+      const conflictRunIds = conflictingSubagentRunVersions(database, input.versions);
+      if (conflictRunIds.length > 0) {
+        return { writeId, conflictRunIds };
+      }
       const originalRow = readSubagentRunRow(database, expected.runId);
       const current = originalRow && rowToSubagentRunRecord(originalRow);
       if (
@@ -112,9 +123,6 @@ export function admitSubagentCompletionInWorker(
           queueEntry.id,
         ).get(SESSION_DELIVERY_QUEUE_NAME)?.status ?? "pending";
       if (claimed) {
-        if (bindSubagentRunRecord(current).payload_json !== expectedPayload) {
-          throw new Error("subagent completion state changed before admission");
-        }
         upsertSubagentRunRowInDatabase(database, boundSubagent);
       } else {
         // The namespace owns this payload; a duplicate may acknowledge only its original generation.
@@ -161,12 +169,20 @@ export function admitSubagentCompletionInWorker(
 }
 
 export function mutateSubagentCompletionInWorker(
-  input: { writeId: string; mutation: SubagentCompletionMutation },
+  input: {
+    writeId: string;
+    mutation: SubagentCompletionMutation;
+    versions: SubagentRegistryWrite["versions"];
+  },
   database: OpenClawStateDatabase,
-): SubagentCompletionMutationResult & { writeId: string } {
+): (SubagentCompletionMutationResult & { writeId: string }) | SubagentCompletionVersionConflict {
   return runOpenClawStateWriteTransaction(
     () => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: input.writeId });
+      const conflictRunIds = conflictingSubagentRunVersions(database, input.versions);
+      if (conflictRunIds.length > 0) {
+        return { writeId: input.writeId, conflictRunIds };
+      }
       const receipt = {
         writeId: input.writeId,
         ...mutateSubagentCompletionInDatabase(database, input.mutation),

@@ -84,10 +84,31 @@ flow:
         - set: proofPath
           value:
             expr: path.join(env.gateway.workspaceDir, proofFile)
-        - set: execCommand
+        - set: helperFile
+          value:
+            expr: "`issue-109025-completion-exec-${randomUUID()}.cjs`"
+        - set: helperPath
+          value:
+            expr: path.join(env.gateway.workspaceDir, helperFile)
+        - set: helperSource
           value:
             expr: |-
-              `node -e ${JSON.stringify(`const fs=require("node:fs");const crypto=require("node:crypto");const completion=process.argv[1];if(!completion.startsWith("CHILD_DONE:"))throw new Error("missing delivered completion");const marker="${config.completionPrefix}:"+crypto.randomUUID();fs.writeFileSync(${JSON.stringify(proofFile)},marker+"\n"+completion+"\n");process.stdout.write(marker+"\n");`)} __CHILD_COMPLETION_TOKEN__`
+              `const fs = require("node:fs");
+              const crypto = require("node:crypto");
+              const completion = process.argv[2];
+              if (typeof completion !== "string" || !completion.startsWith("CHILD_DONE:")) throw new Error("missing delivered completion");
+              const marker = ${JSON.stringify(config.completionPrefix)} + ":" + crypto.randomUUID();
+              fs.writeFileSync(${JSON.stringify(proofFile)}, marker + "\\n" + completion + "\\n");
+              process.stdout.write(marker + "\\n");
+              `
+        - set: execCommand
+          value:
+            expr: "`node ${JSON.stringify(helperFile)} __CHILD_COMPLETION_TOKEN__`"
+        - call: fs.writeFile
+          args:
+            - ref: helperPath
+            - ref: helperSource
+            - utf8
         - call: fs.writeFile
           args:
             - expr: path.join(env.gateway.workspaceDir, chainFiles[0])

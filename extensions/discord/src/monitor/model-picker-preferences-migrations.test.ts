@@ -1,289 +1,108 @@
-// Discord tests cover model picker preferences migrations plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stateMigrations } from "../../doctor-contract-api.js";
-import { detectDiscordLegacyStateMigrations } from "./model-picker-preferences-migrations.js";
+
+const migration = stateMigrations.find((entry) => entry.id === "discord-legacy-state");
+if (!migration) {
+  throw new Error("Discord Doctor migration is missing");
+}
 
 let stateWorkspace: TempWorkspace;
 
 beforeEach(async () => {
   stateWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
-    prefix: "openclaw-discord-model-picker-migration-",
+    prefix: "openclaw-discord-state-migration-",
   });
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await stateWorkspace.cleanup();
 });
 
-function detectMigrations(stateDir: string) {
-  return detectDiscordLegacyStateMigrations({
-    cfg: {},
-    env: {},
-    oauthDir: path.join(stateDir, "credentials"),
+function migrationInput() {
+  const stateDir = stateWorkspace.dir;
+  return {
+    config: {},
+    env: { OPENCLAW_STATE_DIR: stateDir },
     stateDir,
-  });
+    oauthDir: path.join(stateDir, "credentials"),
+    context: {
+      openPluginStateKeyedStore: vi.fn(() => {
+        throw new Error("Retired JSON must not open canonical stores");
+      }),
+    },
+  } satisfies Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 }
 
-describe("Discord model picker preference migration", () => {
-  it("plans legacy command deployment cache deletion without importing hashes", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "command-deploy-cache.json");
+describe("Discord Doctor state migration", () => {
+  it.each(["model-picker-preferences.json", "thread-bindings.json"])(
+    "preserves %s discovered after preview and requires the bridge release",
+    async (name) => {
+      const input = migrationInput();
+      expect(await migration.detectLegacyState(input)).toBeNull();
+      const sourcePath = path.join(input.stateDir, "discord", name);
+      const bytes = Buffer.from([0xff, 0x7b, 0x00, 0x0a]);
+      await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+      await fs.writeFile(sourcePath, bytes);
+
+      const advice = expect.stringContaining(
+        'Install OpenClaw 2026.9.5, run "openclaw doctor --fix", then upgrade to latest.',
+      );
+      const result = await migration.migrateLegacyState(input);
+      expect(result).toEqual({ changes: [], warnings: [advice] });
+      expect(result.warnings[0]).toContain(sourcePath);
+      expect(await migration.detectLegacyState(input)).toEqual({ preview: [advice] });
+      expect(await fs.readFile(sourcePath)).toEqual(bytes);
+      expect(await fs.readdir(path.dirname(sourcePath))).toEqual([name]);
+      expect(await fs.readdir(input.stateDir)).toEqual(["discord"]);
+      expect(input.context.openPluginStateKeyedStore).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves dangling retired source links without following them", async () => {
+    const input = migrationInput();
+    const sourcePath = path.join(input.stateDir, "discord", "thread-bindings.json");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, "{malformed cache", "utf8");
+    await fs.symlink("missing-target", sourcePath);
 
-    const plans = await detectMigrations(stateDir);
+    const result = await migration.migrateLegacyState(input);
 
-    expect(plans).toHaveLength(1);
-    const plan = plans?.[0];
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    expect(plan).toMatchObject({
-      label: "Discord command deployment cache",
-      pluginId: "discord",
-      namespace: "command-deploy-hashes",
-      maxEntries: 10_000,
-      cleanupSource: "remove",
-      cleanupWhenEmpty: true,
-    });
-    expect(await plan.readEntries()).toEqual([]);
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining(sourcePath)]);
+    expect(result.warningDisposition).toBeUndefined();
+    expect(await fs.readlink(sourcePath)).toBe("missing-target");
+    expect(await fs.readdir(input.stateDir)).toEqual(["discord"]);
   });
 
-  it("plans legacy JSON import into plugin state", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        entries: {
-          "discord:default:dm:user:123": {
-            recent: ["OpenAI/gpt-5", "bad", "openai/gpt-5"],
-            updatedAt: "2026-05-29T00:00:00.000Z",
-          },
-        },
-      }),
-    );
-
-    const plans = await detectMigrations(stateDir);
-
-    if (!plans) {
-      throw new Error("expected migration plans");
-    }
-    expect(plans).toHaveLength(1);
-    const plan = plans[0];
-    expect(plan?.kind).toBe("plugin-state-import");
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    expect(plan.pluginId).toBe("discord");
-    expect(plan.namespace).toBe("model-picker-preferences");
-    const entries = await plan.readEntries();
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.key).toMatch(/^v1:[0-9a-f]{32}:[0-9a-f]{24}$/u);
-    expect(entries[0]?.value).toEqual({
-      scopeKey: "discord:default:dm:user:123",
-      modelRef: "openai/gpt-5",
-      updatedAt: "2026-05-29T00:00:00.001Z",
-    });
-  });
-
-  it("keeps legacy JSON import order near max Date", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "model-picker-preferences.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        entries: {
-          "discord:default:dm:user:near-max-date": {
-            recent: ["openai/gpt-5", "openai/gpt-4.1"],
-            updatedAt: "+275760-09-12T23:59:59.999Z",
-          },
-        },
-      }),
-    );
-
-    const plans = await detectMigrations(stateDir);
-
-    const plan = plans?.[0];
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    const entries = await plan.readEntries();
-    expect(
-      entries.map((entry) => {
-        const value = entry.value as { modelRef?: unknown };
-        return value.modelRef;
-      }),
-    ).toEqual(["openai/gpt-5", "openai/gpt-4.1"]);
-    expect(
-      entries.map((entry) => {
-        const value = entry.value as { updatedAt?: unknown };
-        return value.updatedAt;
-      }),
-    ).toEqual(["+275760-09-13T00:00:00.000Z", "+275760-09-12T23:59:59.999Z"]);
-  });
-
-  it("plans legacy thread bindings JSON import into plugin state", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    const boundAt = Date.now() - 10_000;
-    const expiresAt = boundAt + 60_000;
-    await fs.writeFile(
-      sourcePath,
-      JSON.stringify({
-        version: 1,
-        bindings: {
-          "legacy-thread": {
-            accountId: "default",
-            channelId: "parent-1",
-            threadId: "legacy-thread",
-            targetKind: "subagent",
-            targetSessionKey: "agent:main:subagent:legacy",
-            agentId: "main",
-            boundBy: "system",
-            boundAt,
-            expiresAt,
-          },
-        },
-      }),
-    );
-
-    const plans = await detectMigrations(stateDir);
-
-    expect(plans).toHaveLength(1);
-    const plan = plans?.[0];
-    expect(plan?.kind).toBe("plugin-state-import");
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    expect(plan.pluginId).toBe("discord");
-    expect(plan.namespace).toBe("thread-bindings");
-    const entries = await plan.readEntries();
-    expect(entries).toStrictEqual([
-      {
-        key: "default:legacy-thread",
-        value: {
-          accountId: "default",
-          channelId: "parent-1",
-          threadId: "legacy-thread",
-          targetKind: "subagent",
-          targetSessionKey: "agent:main:subagent:legacy",
-          agentId: "main",
-          boundBy: "system",
-          boundAt,
-          lastActivityAt: boundAt,
-          idleTimeoutMs: 0,
-          maxAgeMs: expiresAt - boundAt,
-        },
-      },
-    ]);
-  });
-
-  it("detects model picker and thread binding legacy JSON together", async () => {
-    const stateDir = stateWorkspace.dir;
-    const discordDir = path.join(stateDir, "discord");
+  it("ignores retained archives without creating canonical state", async () => {
+    const input = migrationInput();
+    const discordDir = path.join(input.stateDir, "discord");
     await fs.mkdir(discordDir, { recursive: true });
-    await fs.writeFile(path.join(discordDir, "command-deploy-cache.json"), "{}");
-    await fs.writeFile(
-      path.join(discordDir, "model-picker-preferences.json"),
-      JSON.stringify({ version: 1, entries: {} }),
-    );
-    await fs.writeFile(
-      path.join(discordDir, "thread-bindings.json"),
-      JSON.stringify({ version: 1, bindings: {} }),
-    );
+    const name = "thread-bindings.json.migrated";
+    await fs.writeFile(path.join(discordDir, name), "retained archive");
 
-    const plans = await detectMigrations(stateDir);
-    if (!plans) {
-      throw new Error("expected migration plans");
-    }
-
-    expect(
-      plans?.map((plan) => ({
-        kind: plan.kind,
-        label: plan.label,
-        sourcePath: plan.sourcePath,
-        targetPath: plan.targetPath,
-        namespace: plan.kind === "plugin-state-import" ? plan.namespace : null,
-      })),
-    ).toEqual([
-      {
-        kind: "plugin-state-import",
-        label: "Discord command deployment cache",
-        sourcePath: path.join(discordDir, "command-deploy-cache.json"),
-        targetPath: "plugin state:command-deploy-hashes",
-        namespace: "command-deploy-hashes",
-      },
-      {
-        kind: "plugin-state-import",
-        label: "Discord model picker preferences",
-        sourcePath: path.join(discordDir, "model-picker-preferences.json"),
-        targetPath: "plugin state:model-picker-preferences",
-        namespace: "model-picker-preferences",
-      },
-      {
-        kind: "plugin-state-import",
-        label: "Discord thread bindings",
-        sourcePath: path.join(discordDir, "thread-bindings.json"),
-        targetPath: "plugin state:thread-bindings",
-        namespace: "thread-bindings",
-      },
-    ]);
-    await expect(
-      stateMigrations[0]?.detectLegacyState({
-        config: {},
-        env: {},
-        stateDir,
-        oauthDir: path.join(stateDir, "credentials"),
-        context: { openPluginStateKeyedStore: () => ({}) } as never,
-      }),
-    ).resolves.toEqual({ preview: plans.map(buildLegacyMigrationPreview) });
+    expect(await migration.detectLegacyState(input)).toBeNull();
+    expect(await migration.migrateLegacyState(input)).toEqual({ changes: [], warnings: [] });
+    expect(await fs.readdir(discordDir)).toEqual([name]);
+    expect(await fs.readdir(input.stateDir)).toEqual(["discord"]);
   });
 
-  it("archives valid empty legacy thread bindings after an empty import", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, JSON.stringify({ version: 1, bindings: {} }));
+  it("does not report inaccessible retired state as absent", async () => {
+    const input = migrationInput();
+    const error = Object.assign(new Error("inspection denied"), { code: "EACCES" });
+    vi.spyOn(fs, "lstat").mockRejectedValue(error);
 
-    const plans = await detectMigrations(stateDir);
-
-    const plan = plans?.[0];
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    expect(plan.cleanupWhenEmpty).toBe(true);
-    expect(plan.readEntries()).toEqual([]);
-  });
-
-  it("keeps malformed legacy thread bindings for doctor warning", async () => {
-    const stateDir = stateWorkspace.dir;
-    const sourcePath = path.join(stateDir, "discord", "thread-bindings.json");
-    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
-    await fs.writeFile(sourcePath, JSON.stringify({ version: 2, bindings: {} }));
-
-    const plans = await detectMigrations(stateDir);
-
-    const plan = plans?.[0];
-    if (plan?.kind !== "plugin-state-import") {
-      throw new Error("expected plugin-state import plan");
-    }
-    expect(() => plan.readEntries()).toThrow(
-      "legacy Discord thread bindings store must have version 1 bindings",
-    );
+    await expect(migration.detectLegacyState(input)).rejects.toBe(error);
+    await expect(migration.migrateLegacyState(input)).rejects.toBe(error);
+    expect(await fs.readdir(input.stateDir)).toEqual([]);
   });
 });

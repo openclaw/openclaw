@@ -532,15 +532,24 @@ describe("invocation-scoped update ownership reader", () => {
         import { DatabaseSync } from 'node:sqlite';
         const database = new DatabaseSync(process.argv[1]);
         database.exec("PRAGMA busy_timeout=0; PRAGMA synchronous=FULL; PRAGMA cache_size=2; PRAGMA cache_spill=ON; BEGIN IMMEDIATE; UPDATE managed_update_handoffs SET owner='uncommitted'; UPDATE padding SET data=zeroblob(16384)");
-        process.exit(0);
+        process.kill(process.pid, "SIGKILL");
       `,
           databasePath,
         ],
         { encoding: "utf8", env: {}, timeout: 5000 },
       );
       expect(crashed.error).toBeUndefined();
-      expect(crashed.status, crashed.stderr).toBe(0);
-      expect(fs.statSync(databasePath + "-journal").size).toBeGreaterThan(512);
+      // A self-directed Windows kill uses TerminateProcess(1), not a POSIX signal exit.
+      expect({ status: crashed.status, signal: crashed.signal }, crashed.stderr).toEqual(
+        process.platform === "win32"
+          ? { status: 1, signal: null }
+          : { status: null, signal: "SIGKILL" },
+      );
+      const journal = fs.readFileSync(databasePath + "-journal");
+      expect(journal.length).toBeGreaterThan(512);
+      expect(journal.subarray(0, 8)).toEqual(
+        Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]),
+      );
     });
   });
 });

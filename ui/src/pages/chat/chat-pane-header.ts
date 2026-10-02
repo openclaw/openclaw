@@ -35,6 +35,7 @@ import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
+import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -72,6 +73,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   private headerBoardMenu?: BoardWidgetPageMenu;
   private readonly headerPanelsMemo = new ChatPaneHeaderMemo<HeaderMenuQuickAction[]>();
   private readonly headerLayoutMemo = new ChatPaneHeaderMemo<HeaderMenuQuickAction[]>();
+  private readonly headerSessionActions = new ChatPaneNativeSessionActions();
   private readonly headerReasonsMemo = new ChatPaneHeaderMemo<
     Partial<Record<HeaderMenuActionKind, string>>
   >();
@@ -627,6 +629,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
               .boardWidgetMenu=${boardWidgetMenu}
+              .sessionActions=${this.headerSessionActions.read(
+                this.context,
+                row,
+                placement.reclaimDisabledReason,
+                this.onHeaderAction,
+              )}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}

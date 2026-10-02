@@ -177,6 +177,40 @@ final class ChatSessionSidebarActions {
             !rest.hasPrefix("subagent:") && mainKeys.contains { normalize($0) == normalize(parent) }
     }
 
+    func setSnooze(
+        _ patch: OpenClawChatSnoozePatch,
+        session: OpenClawChatSessionEntry,
+        viewModel: OpenClawChatViewModel) async throws
+    {
+        guard let connection, connection.allows("sessions.patch"),
+              let expectedID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId)
+        else { throw OpenClawChatTransportSendError.notDispatched }
+        let owner = viewModel.sidebarData
+        let snoozedAt = Date.now.timeIntervalSince1970 * 1000
+        let token = owner?.beginMutation(target: session, field: .snoozed) { row in
+            switch patch {
+            case let .until(date):
+                row.snoozedUntil = date.timeIntervalSince1970 * 1000
+                row.snoozedAt = snoozedAt
+            case .wake:
+                row.snoozedUntil = nil
+                row.snoozedAt = nil
+            }
+        }
+        var receipt: OpenClawChatSessionPatchReceipt?
+        defer { owner?.finishMutation(token, receipt: receipt) }
+        let lease = OpenClawChatSessionMutationRouteLease(
+            sessionTarget: { .init(sessionKey: $0, agentID: session.agentId) },
+            unreadAckContract: nil,
+            receivesPatchReceipts: true,
+            request: { try await connection.request($0) })
+        receipt = try await lease.patchSession(
+            key: session.key,
+            agentID: session.agentId,
+            expectedSessionID: expectedID,
+            snoozedUntil: patch)
+    }
+
     static func ownerID(_ actor: OpenClawChatSessionEntry.CreatedActor?) -> String? {
         actor?.identity.flatMap { try? GatewayPayloadDecoding.decode($0, as: [String: String].self)["id"] } ?? actor?.id
     }

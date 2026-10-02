@@ -343,7 +343,6 @@ export async function appendAssistantTranscriptMessage(
     "config" | "now" | "transcriptPath"
   > &
     AssistantTranscriptScopeParams & {
-      sessionFile?: string;
       createIfMissing?: boolean;
       cfg?: OpenClawConfig;
     },

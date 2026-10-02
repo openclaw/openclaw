@@ -19,131 +19,89 @@ describe("default pattern table", () => {
 
   describe("bare pass assignment boundary", () => {
     it("keeps prose where pass: ends a clause but still masks pass as a config key", () => {
+      function expectRedaction(input: string, expected = input) {
+        expect(redactSensitiveText(input, { mode: "tools" })).toBe(expected);
+      }
       const prose =
         "The boundary tests now pass: older clients receive compatible speed values. All checks pass: lint, types.";
-      expect(redactSensitiveText(prose, { mode: "tools" })).toBe(prose);
+      expectRedaction(prose);
       const value = "opaque-pass-secret-1234567890";
-      expect(redactSensitiveText(`smtp.pass: ${value}`, { mode: "tools" })).toBe(
-        "smtp.pass: opaque…7890",
-      );
-      expect(redactSensitiveText(`db-pass: ${value}`, { mode: "tools" })).toBe(
-        "db-pass: opaque…7890",
-      );
-      expect(redactSensitiveText(`pass: "${value}"`, { mode: "tools" })).toBe(
-        'pass: "opaque…7890"',
-      );
-      expect(redactSensitiveText(`pass = ${value}`, { mode: "tools" })).toBe("pass = opaque…7890");
-      expect(redactSensitiveText(`pass= ${value}`, { mode: "tools" })).toBe("pass= opaque…7890");
-      expect(redactSensitiveText(`pass: ${value}`, { mode: "tools" })).toBe("pass: opaque…7890");
-      expect(redactSensitiveText(`smtp:\n  pass: ${value}\n  user: bot`, { mode: "tools" })).toBe(
+      expectRedaction(`smtp.pass: ${value}`, "smtp.pass: opaque…7890");
+      expectRedaction(`db-pass: ${value}`, "db-pass: opaque…7890");
+      expectRedaction(`pass: "${value}"`, 'pass: "opaque…7890"');
+      expectRedaction(`pass = ${value}`, "pass = opaque…7890");
+      expectRedaction(`pass= ${value}`, "pass= opaque…7890");
+      expectRedaction(`pass: ${value}`, "pass: opaque…7890");
+      expectRedaction(
+        `smtp:\n  pass: ${value}\n  user: bot`,
         "smtp:\n  pass: opaque…7890\n  user: bot",
       );
-      expect(redactSensitiveText(`{ user: bot, pass: ${value} }`, { mode: "tools" })).toBe(
-        "{ user: bot, pass: opaque…7890 }",
+      expectRedaction(`{ user: bot, pass: ${value} }`, "{ user: bot, pass: opaque…7890 }");
+      expectRedaction(
+        `accounts:\n  - pass: ${value}\n  - user: bot`,
+        "accounts:\n  - pass: opaque…7890\n  - user: bot",
       );
-      expect(
-        redactSensitiveText(`accounts:\n  - pass: ${value}\n  - user: bot`, { mode: "tools" }),
-      ).toBe("accounts:\n  - pass: opaque…7890\n  - user: bot");
-      expect(redactSensitiveText(`user=bot; pass: ${value}`, { mode: "tools" })).toBe(
-        "user=bot; pass: opaque…7890",
-      );
-      expect(redactSensitiveText(`user: bot\rpass: ${value}`, { mode: "tools" })).toBe(
-        "user: bot\rpass: opaque…7890",
-      );
-      expect(redactSensitiveText(`user=bot pass: ${value}`, { mode: "tools" })).toBe(
-        "user=bot pass: opaque…7890",
-      );
-      expect(redactSensitiveText(`user = bot pass: ${value}`, { mode: "tools" })).toBe(
-        "user = bot pass: opaque…7890",
-      );
-      expect(redactSensitiveText(`user= bot pass: ${value}`, { mode: "tools" })).toBe(
-        "user= bot pass: opaque…7890",
-      );
-      expect(redactSensitiveText(`user =     bot pass: ${value}`, { mode: "tools" })).toBe(
-        "user =     bot pass: opaque…7890",
-      );
+      expectRedaction(`user=bot; pass: ${value}`, "user=bot; pass: opaque…7890");
+      expectRedaction(`user: bot\rpass: ${value}`, "user: bot\rpass: opaque…7890");
+      expectRedaction(`user=bot pass: ${value}`, "user=bot pass: opaque…7890");
+      expectRedaction(`user = bot pass: ${value}`, "user = bot pass: opaque…7890");
+      expectRedaction(`user= bot pass: ${value}`, "user= bot pass: opaque…7890");
+      expectRedaction(`user =     bot pass: ${value}`, "user =     bot pass: opaque…7890");
       const longValue = "v".repeat(300);
-      expect(redactSensitiveText(`key=${longValue} pass: ${value}`, { mode: "tools" })).toBe(
-        `key=${longValue} pass: opaque…7890`,
+      expectRedaction(`key=${longValue} pass: ${value}`, `key=${longValue} pass: opaque…7890`);
+      expectRedaction(`user\tpass: ${value}`, "user\tpass: opaque…7890");
+      expectRedaction(`pass: ${value} pass: ${value}`, "pass: opaque…7890 pass: opaque…7890");
+      expectRedaction(
+        "pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+        "pass: opaque…ghij pass: opaque…qrst",
       );
-      expect(redactSensitiveText(`user\tpass: ${value}`, { mode: "tools" })).toBe(
-        "user\tpass: opaque…7890",
+      expectRedaction(
+        "smtp.pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+        "smtp.pass: opaque…ghij pass: opaque…qrst",
       );
-      expect(redactSensitiveText(`pass: ${value} pass: ${value}`, { mode: "tools" })).toBe(
-        "pass: opaque…7890 pass: opaque…7890",
+      expectRedaction(
+        "pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+        "pass:\n  opaque…ghij pass: opaque…qrst",
       );
-      expect(
-        redactSensitiveText(
-          "pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-          {
-            mode: "tools",
-          },
-        ),
-      ).toBe("pass: opaque…ghij pass: opaque…qrst");
-      expect(
-        redactSensitiveText(
-          "smtp.pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-          { mode: "tools" },
-        ),
-      ).toBe("smtp.pass: opaque…ghij pass: opaque…qrst");
-      expect(
-        redactSensitiveText(
-          "pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-          { mode: "tools" },
-        ),
-      ).toBe("pass:\n  opaque…ghij pass: opaque…qrst");
-      expect(
-        redactSensitiveText(
-          "db_pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-          { mode: "tools" },
-        ),
-      ).toBe("db_pass: opaque…ghij pass: opaque…qrst");
-      expect(redactSensitiveText(`bypass:\n  pass: ${value}`, { mode: "tools" })).toBe(
-        "bypass:\n  pass: opaque…7890",
+      expectRedaction(
+        "db_pass: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+        "db_pass: opaque…ghij pass: opaque…qrst",
       );
-      expect(
-        redactSensitiveText(
-          "smtp.pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-          { mode: "tools" },
-        ),
-      ).toBe("smtp.pass:\n  opaque…ghij pass: opaque…qrst");
-      expect(
-        redactSensitiveText(
-          "password: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
-          { mode: "tools" },
-        ),
-      ).toBe("password: opaque…ghij pass: opaque…qrst");
-      expect(
-        redactSensitiveText(
-          "Authorization: Bearer opaque-bearer-token-value-1234567890 pass: opaque-second-value-klmnopqrst",
-          { mode: "tools" },
-        ),
-      ).toBe("Authorization: Bearer opaque…7890 pass: opaque…qrst");
-      expect(
-        redactSensitiveText("pass: prefix/pass:embedded\npass: opaque-second-value-klmnopqrst", {
-          mode: "tools",
-        }),
-      ).toBe("pass: prefix…dded\npass: opaque…qrst");
-      expect(redactSensitiveText(`? pass\n: ${value}`, { mode: "tools" })).toBe(
-        "? pass\n: opaque…7890",
+      expectRedaction(`bypass:\n  pass: ${value}`, "bypass:\n  pass: opaque…7890");
+      expectRedaction(
+        "smtp.pass:\n  opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+        "smtp.pass:\n  opaque…ghij pass: opaque…qrst",
       );
+      expectRedaction(
+        "password: opaque-first-value-abcdefghij pass: opaque-second-value-klmnopqrst",
+        "password: opaque…ghij pass: opaque…qrst",
+      );
+      expectRedaction(
+        "Authorization: Bearer opaque-bearer-token-value-1234567890 pass: opaque-second-value-klmnopqrst",
+        "Authorization: Bearer opaque…7890 pass: opaque…qrst",
+      );
+      expectRedaction(
+        "pass: prefix/pass:embedded\npass: opaque-second-value-klmnopqrst",
+        "pass: prefix…dded\npass: opaque…qrst",
+      );
+      expectRedaction(`? pass\n: ${value}`, "? pass\n: opaque…7890");
       const wordProse = "Use the bypass: it keeps the compass: north.";
-      expect(redactSensitiveText(wordProse, { mode: "tools" })).toBe(wordProse);
-      expect(redactSensitiveText(`host:db.example.test pass: ${value}`, { mode: "tools" })).toBe(
+      expectRedaction(wordProse);
+      expectRedaction(
+        `host:db.example.test pass: ${value}`,
         "host:db.example.test pass: opaque…7890",
       );
-      expect(redactSensitiveText(`login (pass: ${value})`, { mode: "tools" })).toBe(
-        "login (pass: opaque…7890)",
-      );
+      expectRedaction(`login (pass: ${value})`, "login (pass: opaque…7890)");
       const moreProse = "Release notes: all suites pass: nothing else changed. Both pass: done.";
-      expect(redactSensitiveText(moreProse, { mode: "tools" })).toBe(moreProse);
-      expect(
-        redactSensitiveText(`smtp:\n  pass:\n    ${value}\n  user: bot`, { mode: "tools" }),
-      ).toBe("smtp:\n  pass:\n    opaque…7890\n  user: bot");
+      expectRedaction(moreProse);
+      expectRedaction(
+        `smtp:\n  pass:\n    ${value}\n  user: bot`,
+        "smtp:\n  pass:\n    opaque…7890\n  user: bot",
+      );
       const wrappedProse = "The boundary tests now pass:\nolder clients receive compatible values.";
-      expect(redactSensitiveText(wrappedProse, { mode: "tools" })).toBe(wrappedProse);
+      expectRedaction(wrappedProse);
       const summaryProse = "Suite result: 12 pass: 0 fail, 1 skipped.";
-      expect(redactSensitiveText(summaryProse, { mode: "tools" })).toBe(summaryProse);
+      expectRedaction(summaryProse);
     });
 
     it("keeps mid-sentence pass: prose when it lands on a bounded-replacement chunk start", () => {

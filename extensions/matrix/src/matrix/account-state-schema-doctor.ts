@@ -2,6 +2,7 @@
 import path from "node:path";
 import type { OpenClawStateDatabaseSchemaMigration } from "openclaw/plugin-sdk/doctor-repair-runtime";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { describeRetiredMatrixState } from "./retired-state.js";
 import { resolveMatrixSqliteStateEnv } from "./sqlite-state.js";
 import { walkMatrixStateFiles } from "./state-layout-walk.js";
 
@@ -10,11 +11,18 @@ const STATE_DATABASE_FILENAME = "openclaw.sqlite";
 async function collectMatrixAccountStateRoots(stateDir: string): Promise<string[]> {
   const { entries, failedDirs } = await walkMatrixStateFiles(
     stateDir,
-    (name, depth) => depth === 5 && name === STATE_DATABASE_FILENAME,
+    (name, depth) =>
+      (depth === 5 && name === STATE_DATABASE_FILENAME) ||
+      ((depth === 2 || depth === 4) &&
+        (name === "thread-bindings.json" || name === "startup-verification.json")),
     [2, 4],
   );
   if (failedDirs.length > 0) {
     throw failedDirs[0]!.error;
+  }
+  const retired = entries.filter((entry) => path.basename(entry.path) !== STATE_DATABASE_FILENAME);
+  if (retired.length > 0) {
+    throw new Error(retired.map((entry) => describeRetiredMatrixState(entry.path)).join("\n"));
   }
   return entries.map((entry) => path.dirname(path.dirname(entry.path))).toSorted();
 }

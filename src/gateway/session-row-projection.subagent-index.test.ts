@@ -1,19 +1,25 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
 import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListReadSnapshotIdentity,
-  persistSubagentRunsToDiskOrThrow,
   withSubagentRunReadSnapshot,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -66,7 +72,7 @@ it("settles a registry revision after persisting an already absent run", async (
         await projection.ensureMaterialized();
         expect(projection.needsMaterialization).toBe(false);
 
-        persistSubagentRunsToDiskOrThrow(subagentRuns, ["already-absent-run"]);
+        persistRegistryFixture(subagentRuns, ["already-absent-run"]);
 
         expect(projection.dirtyRowCount).toBe(0);
         remainingRefreshes = 10;
@@ -85,7 +91,14 @@ it("settles a registry revision after persisting an already absent run", async (
   );
 });
 
-it.each(["existing", "new"] as const)(
+it.each([
+  "existing",
+  "new",
+  "native replacement",
+  "worker replacement",
+  "native reset",
+  "worker reset",
+] as const)(
   "retains a %s archive publication while unrelated compact recovery is pending",
   async (kind) => {
     await withOpenClawTestState(
@@ -97,13 +110,21 @@ it.each(["existing", "new"] as const)(
         const key = "agent:main:archive-during-recovery";
         const target = { agentId: "main", sessionKey: key };
         const sessionId = "archive-during-recovery";
+        const replacesIdentity = kind.endsWith("replacement");
+        const resetsIdentity = kind.endsWith("reset");
+        const changesIdentity = replacesIdentity || resetsIdentity;
+        const previousSessionId = replacesIdentity ? "archive-before-replacement" : sessionId;
         const anchorKey = "agent:main:archive-recovery-anchor";
         replaceSessionEntrySync(
           { agentId: "main", sessionKey: anchorKey },
           { sessionId: "archive-recovery-anchor", updatedAt: 1 },
         );
-        if (kind === "existing") {
-          replaceSessionEntrySync(target, { sessionId, updatedAt: 1 });
+        if (kind !== "new") {
+          replaceSessionEntrySync(target, {
+            sessionId: previousSessionId,
+            updatedAt: 1,
+            ...(resetsIdentity ? { lifecycleRevision: "before-reset" } : {}),
+          });
         }
         const previous = createSubagentRunRecord({
           runId: "previous-unrelated-run",
@@ -127,9 +148,8 @@ it.each(["existing", "new"] as const)(
           projection = await createSessionRowProjection({ cfg, context, modelCatalog: [] });
           bindSessionRowProjection(context, () => projection);
           await projection.ensureMaterialized();
-          expect(projection.capture({ agentId: "main", key })?.entry?.sessionId).toBe(
-            kind === "existing" ? sessionId : undefined,
-          );
+          const captured = projection.capture({ agentId: "main", key });
+          expect(captured?.entry?.sessionId).toBe(kind === "new" ? undefined : previousSessionId);
           const executeRead = stateReads.executeExistingOpenClawStateRead;
           vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
             async (...args) => {
@@ -176,18 +196,83 @@ it.each(["existing", "new"] as const)(
             });
             expect(respond).toHaveBeenCalledTimes(1);
             expect(respond.mock.calls[0]?.[0]).toBe(true);
+          } else if (changesIdentity) {
+            const entry = {
+              sessionId,
+              updatedAt: 2,
+              archivedAt: 2,
+              ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+            };
+            if (kind.startsWith("worker")) {
+              expect(isMainThread).toBe(true);
+              const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+              const stop = onSessionIdentityMutation((mutation) => {
+                if ("current" in mutation && mutation.current.sessionKeys.includes(key)) {
+                  publications.push(readPreparedSessionEntryChange(mutation, key));
+                }
+              });
+              try {
+                await applySessionEntryExactReplacements({
+                  agentId: target.agentId,
+                  storePath: captured!.storeTarget.storePath,
+                  sessionKeys: [key],
+                  update: ([row]) => ({
+                    result: undefined,
+                    replacements: [{ sessionKey: key, entry: { ...row!.entry, ...entry } }],
+                  }),
+                });
+                expect(publications).toEqual([
+                  expect.objectContaining({
+                    entry: expect.objectContaining(entry),
+                    source: expect.objectContaining({ revision: expect.any(Number) }),
+                  }),
+                ]);
+              } finally {
+                stop();
+              }
+            } else {
+              replaceSessionEntrySync(target, entry);
+            }
           } else {
             replaceSessionEntrySync(target, { sessionId, updatedAt: 2, archivedAt: 2 });
           }
           const archived = loadSessionEntry(target);
           expect(archived).toMatchObject({ sessionId, archivedAt: expect.any(Number) });
-          expect(projection.sharingTarget({ agentId: "main", key })?.entry).toMatchObject({
-            sessionId,
-            archivedAt: archived?.archivedAt,
-          });
+          if (kind === "native reset") {
+            expect(projection.sharingTarget({ agentId: "main", key })).toBeNull();
+          } else {
+            expect(projection.sharingTarget({ agentId: "main", key })?.entry).toMatchObject({
+              sessionId,
+              archivedAt: archived?.archivedAt,
+            });
+          }
+          if (changesIdentity) {
+            expect(captured).toBeDefined();
+            expect(projection.isCurrent(captured!)).toBe(false);
+            const pending = projection.capture({ agentId: "main", key });
+            expect(pending?.entry).toBeUndefined();
+            expect(pending?.storedEntry).toMatchObject({
+              sessionId,
+              archivedAt: archived?.archivedAt,
+              ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+            });
+            if (replacesIdentity) {
+              expect(
+                projection.findBySessionId({ agentId: "main", sessionId: previousSessionId }),
+              ).toEqual([]);
+            }
+          }
           release.resolve();
           expect(await recovery).toEqual({ value: [replacement.runId] });
           await projection.ensureMaterialized();
+          if (changesIdentity) {
+            expect(projection.isCurrent(captured!)).toBe(false);
+            expect(projection.capture({ agentId: "main", key })?.entry).toMatchObject({
+              sessionId,
+              archivedAt: archived?.archivedAt,
+              ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
+            });
+          }
           const active = await listProjectedSessions({ projection, opts: { archived: false } });
           const archives = await listProjectedSessions({ projection, opts: { archived: true } });
           expect(active.sessions.map((row) => row.key)).toEqual([anchorKey]);
@@ -240,7 +325,7 @@ it.each(["exact", "bulk"] as const)(
           delivery: { status: "not_required" },
         };
         subagentRuns.set(run.runId, run);
-        persistSubagentRunsToDiskOrThrow(subagentRuns, [...subagentRuns.keys()]);
+        persistRegistryFixture(subagentRuns);
         const entered = createDeferredCore();
         const release = createDeferredCore();
         let holdNextRead = false;
@@ -364,7 +449,7 @@ it("reuses the subagent index across a 2,048-session drain with unrelated writes
             ...run,
             execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
           });
-          persistSubagentRunsToDiskOrThrow(subagentRuns, [run.runId]);
+          persistRegistryFixture(subagentRuns, [run.runId]);
         }
       }
     })();
@@ -471,7 +556,7 @@ it.each(
             } else if (publication === "ownership") {
               subagentRuns.commitOwnership(replacement);
             } else {
-              persistSubagentRunsToDiskOrThrow(subagentRuns, [run.runId]);
+              persistRegistryFixture(subagentRuns, [run.runId]);
             }
           } else if (publication === "retirement") {
             subagentRuns.delete(run.runId);
