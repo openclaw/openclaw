@@ -24,6 +24,12 @@ import {
   type BrowserTabsResult,
 } from "./browser-tool.runtime.js";
 import {
+  createBrowserDomFieldInspector,
+  hasSecureInputRedactions,
+  readBrowserSecureInputTabState,
+  redactSecureInputToolPayload,
+} from "./browser-tool.secure-input.js";
+import {
   appendNavigatedPageState,
   formatBrowserDebugLogResult,
   wrapBrowserExternalJson,
@@ -239,17 +245,57 @@ export async function executeConsoleAction(params: {
     profile,
     signal: params.signal,
   });
+  const targetId = readStringValue(result.targetId) ?? normalizeOptionalString(input.targetId);
+  const redactedResult = targetId
+    ? await redactObservedBrowserPayload(result, {
+        ...params,
+        targetId,
+      })
+    : result;
   const wrapped = wrapBrowserExternalJson({
     kind: "console",
-    payload: result,
+    payload: redactedResult,
     includeWarning: false,
   });
   return textResult(wrapped.wrappedText, {
     ...wrapped.safeDetails,
-    targetId: readStringValue(result.targetId),
-    url: readStringValue(result.url),
-    messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
+    targetId: readStringValue(redactedResult.targetId),
+    url: readStringValue(redactedResult.url),
+    messageCount: Array.isArray(redactedResult.messages)
+      ? redactedResult.messages.length
+      : undefined,
   });
+}
+
+async function redactObservedBrowserPayload<T>(
+  payload: T,
+  params: {
+    baseUrl?: string;
+    profile?: string;
+    proxyRequest: BrowserProxyRequest | null;
+    signal?: AbortSignal;
+    targetId: string;
+  },
+): Promise<T> {
+  if (!hasSecureInputRedactions(params.targetId)) {
+    return payload;
+  }
+  try {
+    const tab = await readBrowserSecureInputTabState({
+      tabId: params.targetId,
+      baseUrl: params.baseUrl,
+      profile: params.profile,
+      proxyRequest: params.proxyRequest,
+      signal: params.signal,
+    });
+    return await redactSecureInputToolPayload(payload, {
+      tab,
+      inspector: createBrowserDomFieldInspector(params),
+    });
+  } catch {
+    params.signal?.throwIfAborted();
+    return payload;
+  }
 }
 
 /** Read browser debug logs, keeping counts aligned with the bounded payload. */
@@ -272,10 +318,40 @@ export async function executeDebugLogAction(
       ...options,
       filter: normalizeOptionalString(input.filter),
     });
-    return formatBrowserDebugLogResult(kind, result, result.requests, limit);
+    const targetId = readStringValue(result.targetId) ?? options.targetId;
+    const redacted = targetId
+      ? await redactObservedBrowserPayload(result, {
+          baseUrl,
+          profile,
+          proxyRequest,
+          signal,
+          targetId,
+        })
+      : result;
+    return formatBrowserDebugLogResult(
+      kind,
+      redacted,
+      Array.isArray(redacted.requests) ? redacted.requests : [],
+      limit,
+    );
   }
   const result = await browserErrors(proxyRequest ?? baseUrl, options);
-  return formatBrowserDebugLogResult("errors", result, result.errors, limit);
+  const targetId = readStringValue(result.targetId) ?? options.targetId;
+  const redacted = targetId
+    ? await redactObservedBrowserPayload(result, {
+        baseUrl,
+        profile,
+        proxyRequest,
+        signal,
+        targetId,
+      })
+    : result;
+  return formatBrowserDebugLogResult(
+    "errors",
+    redacted,
+    Array.isArray(redacted.errors) ? redacted.errors : [],
+    limit,
+  );
 }
 
 /** Extract visible page prose with the same trust boundary as snapshots. */
@@ -298,20 +374,29 @@ export async function executeTextAction(
     profile,
     signal,
   });
+  const redactedResult = readStringValue(result.targetId)
+    ? await redactObservedBrowserPayload(result, {
+        baseUrl,
+        profile,
+        proxyRequest,
+        signal,
+        targetId: readStringValue(result.targetId)!,
+      })
+    : result;
   const wrapped = wrapBrowserExternalText({
-    value: result.text,
+    value: typeof redactedResult.text === "string" ? redactedResult.text : "",
     marker: "\n[truncated — retry with a narrower selector]",
     includeWarning: true,
     maxChars,
-    prefix: result.truncated
+    prefix: redactedResult.truncated
       ? "Page text was truncated. Retry with a narrower selector."
       : undefined,
   });
   return textResult(wrapped.text, {
-    ok: result.ok,
-    targetId: result.targetId,
-    url: result.url,
-    truncated: result.truncated || wrapped.truncated,
+    ok: redactedResult.ok,
+    targetId: redactedResult.targetId,
+    url: redactedResult.url,
+    truncated: redactedResult.truncated || wrapped.truncated,
     externalContent: { untrusted: true, source: "browser", kind: "text", wrapped: true },
   });
 }

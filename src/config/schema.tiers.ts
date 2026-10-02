@@ -56,7 +56,7 @@ agents.entries.*.tts.modelOverrides agents.entries.*.tts.persona
 agents.entries.*.tts.personas.*.providers.*.apiKey agents.entries.*.tts.provider
 agents.entries.*.tts.providers.*.apiKey
 auth.profiles.*.mode auth.profiles.*.provider
-browser.allowSystemProfileImport browser.defaultProfile browser.enabled browser.evaluateEnabled
+browser.allowSystemProfileImport browser.defaultProfile browser.enabled browser.evaluateEnabled browser.secureInputEnabled
 browser.ssrfPolicy.allowedHostnames browser.ssrfPolicy.dangerouslyAllowPrivateNetwork
 channels.*.allowFrom channels.*.contextVisibility channels.*.dmPolicy channels.*.enabled
 channels.*.groupAllowFrom channels.*.groupPolicy channels.*.requireMention

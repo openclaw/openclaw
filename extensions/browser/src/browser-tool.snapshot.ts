@@ -27,6 +27,12 @@ import {
   resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
+import {
+  createBrowserDomFieldInspector,
+  hasSecureInputRedactions,
+  readBrowserSecureInputTabState,
+  redactSecureInputSnapshotResult,
+} from "./browser-tool.secure-input.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { finalizeRoleSnapshot, findRoleSnapshotLineRef } from "./browser/pw-role-snapshot.js";
 import { neutralizeMediaDirectives } from "./browser/vision.js";
@@ -265,7 +271,30 @@ export async function executeSnapshotAction(params: {
     refsFallback = "role";
     snapshot = await readSnapshot({ ...snapshotQuery, refs: "role" });
   }
-  await params.onTabActivity?.(readStringValue(snapshot.targetId) ?? targetId);
+  const resolvedTargetId = readStringValue(snapshot.targetId) ?? targetId;
+  if (resolvedTargetId && hasSecureInputRedactions(resolvedTargetId)) {
+    try {
+      const tab = await readBrowserSecureInputTabState({
+        tabId: resolvedTargetId,
+        baseUrl,
+        profile,
+        proxyRequest,
+        signal: params.signal,
+      });
+      snapshot = await redactSecureInputSnapshotResult(snapshot, {
+        tab,
+        inspector: createBrowserDomFieldInspector({
+          baseUrl,
+          profile,
+          proxyRequest,
+          signal: params.signal,
+        }),
+      });
+    } catch {
+      params.signal?.throwIfAborted();
+    }
+  }
+  await params.onTabActivity?.(resolvedTargetId);
   const identity = { format: snapshot.format, targetId: snapshot.targetId, url: snapshot.url };
   const dialogState = {
     ...(snapshot.blockedByDialog ? { blockedByDialog: true } : {}),
