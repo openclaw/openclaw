@@ -150,18 +150,14 @@ function send(requesterKey: string, targetKey: string, timeoutSeconds = 1) {
     timeoutSeconds,
   });
 }
-function expectCoordination(
-  result: Awaited<ReturnType<typeof send>>,
-  child: boolean,
-  requesterChild: boolean,
-) {
+function expectCoordination(result: Awaited<ReturnType<typeof send>>, requesterChild: boolean) {
   expect.soft(result.details).toMatchObject({
     status: "ok",
     reply: "Requested result",
-    delivery: { status: child ? "skipped" : "pending" },
+    delivery: { status: "skipped" },
   });
   const agentCalls = calls.filter((call) => call.method === "agent");
-  expect.soft(agentCalls).toHaveLength(child ? 1 : 6);
+  expect.soft(agentCalls).toHaveLength(1);
   expect
     .soft(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole)
     .toBe(requesterChild ? "subagent" : undefined);
@@ -247,9 +243,9 @@ describe("sessions_send child coordination", () => {
       const targetKey = direction === "target" ? alternateKey : peerKey;
       const result = await send(requesterKey, targetKey);
       await settleSessionWork();
-      const agentCalls = expectCoordination(result, child, direction === "requester" && child);
+      const agentCalls = expectCoordination(result, direction === "requester" && child);
       if (child) {
-        expect(result.details).toMatchObject({ delivery: { mode: "announce" } });
+        expect(result.details).toMatchObject({ delivery: { status: "skipped" } });
         expect(agentParams(agentCalls[0] ?? {}).extraSystemPrompt).toBeUndefined();
         expect(finalAnnounce).not.toHaveBeenCalled();
         expect(calls.some((call) => call.method === "send")).toBe(false);
@@ -339,7 +335,7 @@ describe("sessions_send child coordination", () => {
       await writeEntry(reusedKey, currentEntry);
       const result = await send(requesterKey, targetKey);
       await settleSessionWork();
-      expectCoordination(result, expectedChild, direction === "requester" && expectedChild);
+      expectCoordination(result, direction === "requester" && expectedChild);
     },
   );
 
@@ -365,7 +361,7 @@ describe("sessions_send child coordination", () => {
       const result = await send(requesterKey, targetKey, timeoutSeconds);
       expect(result.details).toMatchObject({
         status: "accepted",
-        delivery: { status: "skipped", mode: "announce" },
+        delivery: { status: "skipped" },
       });
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       const agentCalls = calls.filter((call) => call.method === "agent");
