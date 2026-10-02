@@ -36,6 +36,7 @@ import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
 import { prepareTalkAgentConsultTranscript } from "../agent-consult-transcript.js";
 import { buildTalkRealtimeConfig } from "../session-config.js";
 import { preparedTalkSessionProjection as projection } from "../test-helpers.js";
+import { defineBrowserOperatorAuthorityTests } from "./client-create-authority.test-support.js";
 import { forgetLegacyVoiceBinding } from "./client-legacy-voice-bindings.js";
 import { talkConfigAccentCases } from "./config-accent.test-support.js";
 import {
@@ -54,6 +55,7 @@ import {
   expectRespondOk,
   mockCallArg,
 } from "./responses.test-support.js";
+import { defineRelayOperatorAuthorityHandlerTests } from "./session-create-authority.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn<() => OpenClawConfig>(),
@@ -320,8 +322,9 @@ async function callTalkHandler(
     config = {},
     context = { getRuntimeConfig: () => config },
     client = { connId: "conn-1" },
+    hasCurrentClientAuthority,
     id = "1",
-  }: TalkHandlerCallOptions,
+  }: TalkHandlerCallOptions & Pick<GatewayRequestHandlerOptions, "hasCurrentClientAuthority">,
 ) {
   const admission =
     method === "talk.client.create" ||
@@ -348,6 +351,7 @@ async function callTalkHandler(
     isWebchatConnect: () => false,
     respond,
     context: context as never,
+    hasCurrentClientAuthority,
     // Row creation is mocked here; talk-target.test covers the real post-ensure fence.
     ...(admission?.authorization
       ? {
@@ -1921,6 +1925,7 @@ describe("talk.session unified handlers", () => {
   });
 
   definePreparedCallSessionTests({ callTalkHandler, mocks });
+  defineRelayOperatorAuthorityHandlerTests({ callTalkHandler, mocks });
 
   it("creates and drives a realtime gateway-relay session through the unified API", async () => {
     const provider = {
@@ -3363,6 +3368,13 @@ describe("talk.client.create handler", () => {
     );
   });
 
+  defineBrowserOperatorAuthorityTests({
+    callTalkHandler,
+    createBrowserProvider,
+    createBrowserSessionMock,
+    mocks,
+  });
+
   it("builds realtime launch defaults from talk.realtime", () => {
     expect(
       buildTalkRealtimeConfig({
@@ -3624,35 +3636,6 @@ describe("talk.client.create handler", () => {
       ...browserSession,
       voiceSessionId: "voice-gateway",
       clientControl: { owner: "gateway" },
-    });
-  });
-
-  it("fails a requested Gateway-owned session without provider/auth support", async () => {
-    const createBrowserSession = vi.fn();
-    mocks.resolveConfiguredRealtimeVoiceProvider.mockReturnValue({
-      provider: createBrowserProvider(createBrowserSession),
-      providerConfig: { model: "gpt-realtime-2.1" },
-      capabilities: {
-        transports: ["webrtc"],
-        inputAudioFormats: [],
-        outputAudioFormats: [],
-        supportsToolCalls: true,
-      },
-    });
-    const respond = vi.fn();
-
-    await callTalkHandler("talk.client.create", {
-      params: { sessionKey: "main", capabilities: ["gateway-control-v1"] },
-      respond,
-      config: { talk: { realtime: { provider: "openai" } } } as OpenClawConfig,
-    });
-
-    expect(createBrowserSession).not.toHaveBeenCalled();
-    expect(mocks.createTalkClientGatewayControlOwner).not.toHaveBeenCalled();
-    expectRespondError(respond, {
-      code: ErrorCodes.UNAVAILABLE,
-      message:
-        'Realtime provider "openai" does not support gateway-control-v1 with its configured authentication',
     });
   });
 

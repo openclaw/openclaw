@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import type { BoundedSerialQueue } from "../../../shared/bounded-serial-queue.js";
@@ -309,6 +310,7 @@ export type RelaySession = {
   confirmationReadiness: ReturnType<typeof createClientVoiceConfirmationReadiness>;
   voiceSessionClose?: Promise<void>;
   closing?: { reason: "completed" | "error"; completion?: Promise<void> };
+  releaseOperatorAuthority?: () => void;
   failSession: (message: string) => void;
   noteClientAudioAdmitted?: () => void;
 };
@@ -318,6 +320,7 @@ export type CreateTalkRealtimeRelaySessionParams = {
   connId: string;
   cfg?: OpenClawConfig;
   consultAuthority?: TalkAgentConsultAuthority;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   provider: RealtimeVoiceProviderPlugin;
   providerConfig: RealtimeVoiceProviderConfig;
   controlSource: "delegation" | "transcript";

@@ -155,6 +155,7 @@ export function createTalkRealtimeRelaySession(
     sessionTarget: params.sessionTarget,
     ownerConnId: params.connId,
     authority: params.consultAuthority,
+    operatorAuthority: params.operatorAuthority,
     getVoiceSessionId: () => relaySessionId,
     initialItems: params.initialItems ?? [],
     runIdPrefix: "talk-realtime-relay-consult",
@@ -671,11 +672,11 @@ export function createTalkRealtimeRelaySession(
     noteClientAudioAdmitted: openingGreeting.noteClientAudioAdmitted,
   };
   relayRef.current = relay;
-  adoptTalkRealtimeRelaySession(relay, {
-    ...voiceSelection,
-    voiceChangeId: params.voiceChangeId,
-    providerReady: ready,
-  });
+  adoptTalkRealtimeRelaySession(
+    relay,
+    { ...voiceSelection, voiceChangeId: params.voiceChangeId, providerReady: ready },
+    params.operatorAuthority,
+  );
   bridge.connect().catch((error: unknown) => {
     const active = relaySessions.get(relaySessionId);
     if (active !== relay) {

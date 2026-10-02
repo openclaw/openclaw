@@ -21,6 +21,7 @@ import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-s
 import { projectInternalRealtimeVoicePublicConfig } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
 import { resolveSandboxedSessionCreation } from "../../operator-role-policy.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../../operator-scopes.js";
 import { resolveOperatorSessionCreation } from "../../server-methods/session-creation-provenance.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
@@ -154,6 +155,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       const mode = normalizeTalkSessionMode(params);
       const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
       const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
+      let operatorCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
 
       if (transport === "webrtc" || transport === "provider-websocket") {
         respondInvalidRequest(
@@ -372,11 +374,18 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               resolution.provider.voices ??
               []),
           ];
+          operatorCapture = await captureGatewayOperatorRunAuthority({
+            client,
+            context,
+            hasCurrentClientAuthority,
+          });
+          assertEnsuredTargetCurrent();
           const session = createTalkRealtimeRelaySession({
             context,
             connId,
             cfg: runtimeConfig,
             consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+            operatorAuthority: operatorCapture?.authority,
             provider: resolution.provider,
             providerConfig: relayLaunch.providerConfig,
             controlSource,
@@ -477,6 +486,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         );
       } catch (err) {
         respondUnavailable(respond, err);
+      } finally {
+        operatorCapture?.release();
       }
     },
   ),

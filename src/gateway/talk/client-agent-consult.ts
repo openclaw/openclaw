@@ -1,4 +1,7 @@
-import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type {
+  AdmittedRunOperatorAuthority,
+  OperationalRunInstanceRef,
+} from "../../agents/admitted-run-context.js";
 import type { EmbeddedRunCompletionRegistration } from "../../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../../agents/embedded-agent-runner/runs.js";
 import { registerRequesterFinalAttachment } from "../../agents/subagents/requester-final-attachment.js";
@@ -6,10 +9,12 @@ import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import { normalizeTalkSection } from "../../config/talk.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
@@ -67,6 +72,7 @@ type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAt
 
 function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   rawSourceRef?: string;
   assertCurrent?: () => void;
   getAdditionalSystemPrompt?: () => string | undefined;
@@ -74,9 +80,15 @@ function createTalkClientAgentRuntime(params: {
 }) {
   const agentRuntime = createPluginRuntime().agent;
   const runEmbeddedAgent: typeof agentRuntime.runEmbeddedAgent = async (runParams) => {
-    runParams.abortSignal?.throwIfAborted();
+    const abortSignal = params.operatorAuthority?.signal
+      ? AbortSignal.any([
+          params.operatorAuthority.signal,
+          ...(runParams.abortSignal ? [runParams.abortSignal] : []),
+        ])
+      : runParams.abortSignal;
+    abortSignal?.throwIfAborted();
     const execution = await loadTalkAgentExecution();
-    runParams.abortSignal?.throwIfAborted();
+    abortSignal?.throwIfAborted();
     const { agentId, sessionId, sessionKey, storePath } = runParams.sessionTarget ?? {};
     if (!agentId || !sessionId || !sessionKey || !storePath) {
       throw new Error("Talk consult requires its prepared transcript target");
@@ -86,6 +98,7 @@ function createTalkClientAgentRuntime(params: {
     params.bindOperationalRunInstance?.(operationalRunInstance);
     const preparedRunAdmission = execution.prepareAgentRunAdmission({
       cfg: params.config,
+      operatorAuthority: params.operatorAuthority,
       operationalRunInstance,
       facts: {
         runId: runParams.runId,
@@ -107,14 +120,15 @@ function createTalkClientAgentRuntime(params: {
     };
     // Abort owns authority revocation independently of core completion; the
     // post-registration check closes the prepare-to-listener race.
-    runParams.abortSignal?.addEventListener("abort", close, { once: true });
+    abortSignal?.addEventListener("abort", close, { once: true });
     try {
-      runParams.abortSignal?.throwIfAborted();
+      abortSignal?.throwIfAborted();
       // Provider-owned work can outlive or replace its audio transport. Unlike
       // chat-backed Talk, it has no independent Chat terminal delivery; hiding
       // its final transcript would lose the answer when no spoken replacement arrives.
       return await execution.runEmbeddedAgent({
         ...runParams,
+        abortSignal,
         extraSystemPrompt: [runParams.extraSystemPrompt, params.getAdditionalSystemPrompt?.()]
           .filter(Boolean)
           .join("\n\n"),
@@ -141,8 +155,19 @@ function createTalkClientAgentRuntime(params: {
         }),
       });
     } finally {
-      runParams.abortSignal?.removeEventListener("abort", close);
-      close();
+      try {
+        // Normal settlement joins accepted writes. Cancellation closes their
+        // authority immediately and must not wait for a stalled persistence job.
+        if (!abortSignal?.aborted) {
+          await racePromiseWithAbortSignal(
+            drainAgentRunTerminalWrites(operationalRunInstance),
+            abortSignal,
+          );
+        }
+      } finally {
+        abortSignal?.removeEventListener("abort", close);
+        close();
+      }
     }
   };
   Object.defineProperty(agentRuntime, "runEmbeddedAgent", {
@@ -197,6 +222,7 @@ export function createTalkClientAgentConsultRunner(params: {
   sessionTarget: PreparedTalkSessionTarget;
   ownerConnId?: string;
   authority?: TalkAgentConsultAuthority;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   getVoiceSessionId: () => string | undefined;
   initialItems: Array<{ role: "user" | "assistant"; text: string }>;
   runIdPrefix?: string;
@@ -210,6 +236,7 @@ export function createTalkClientAgentConsultRunner(params: {
   const getAgentRuntime = () =>
     (agentRuntime ??= createTalkClientAgentRuntime({
       config: params.config,
+      operatorAuthority: params.operatorAuthority,
       ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
     }));
   type PromptOwner = {
@@ -236,6 +263,7 @@ export function createTalkClientAgentConsultRunner(params: {
   ) =>
     createTalkClientAgentRuntime({
       config: params.config,
+      operatorAuthority: params.operatorAuthority,
       ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
       assertCurrent,
       getAdditionalSystemPrompt,
@@ -294,6 +322,7 @@ export function createTalkClientAgentConsultRunner(params: {
       : assertCurrent || source === "native-delegation" || confirmationGrant
         ? createTalkClientAgentRuntime({
             config: params.config,
+            operatorAuthority: params.operatorAuthority,
             ...(params.ownerConnId ? { rawSourceRef: params.ownerConnId } : {}),
             assertCurrent,
             getAdditionalSystemPrompt,

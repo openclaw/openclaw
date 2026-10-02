@@ -229,6 +229,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/client-authority.test.ts",
   "src/gateway/talk/handlers/client-native-actions.test.ts",
   "src/gateway/talk/relay/index.test.ts",
+  "src/gateway/talk/relay/operator-authority.regression.test.ts",
   "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.cron-capture.test.ts",
   "src/gateway/tools-invoke-authorization.test.ts",
