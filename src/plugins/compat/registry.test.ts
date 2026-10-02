@@ -149,7 +149,7 @@ describe("plugin compatibility registry", () => {
     }
   });
 
-  it("tracks the deprecation-marking families through the approved window", () => {
+  it("keeps elapsed annotation windows pending their reader migrations", () => {
     const records = new Map(listPluginCompatRecords().map((record) => [record.code, record]));
 
     expect(deprecationMarkingCodes.map((code) => records.get(code)?.code)).toEqual(
@@ -157,13 +157,19 @@ describe("plugin compatibility registry", () => {
     );
     for (const code of deprecationMarkingCodes) {
       expect(records.get(code)).toMatchObject({
-        status: "deprecated",
+        status: "removal-pending",
         deprecated: "2026-07-25",
         warningStarts: "2026-07-25",
         removeAfter: "2026-10-01",
       });
+      expect(records.get(code)?.replacement, code).toMatch(/retain (?:each field )?until/u);
       expect(records.get(code)?.surfaces, code).toHaveLength(deprecationMarkingSurfaceCounts[code]);
     }
+    expect(records.get("media-legacy-projection")).toMatchObject({
+      status: "removal-pending",
+      removeAfter: "2026-10-01",
+      replacement: expect.stringContaining("clean published-plugin artifact sweep"),
+    });
     expect(records.get("plugin-sdk-broad-runtime-barrels")?.surfaces).toEqual(
       expect.arrayContaining([
         "openclaw/plugin-sdk/agent-runtime",
