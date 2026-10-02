@@ -179,6 +179,75 @@ describe("runExecProcess cursor tracking", () => {
   });
 });
 
+describe("runExecProcess exit-notify run correlation", () => {
+  it("persisted run id shows up in the structured exit event for later correlation", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async () => ({
+      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
+      runId: "supervisor-run",
+      startedAtMs: Date.now(),
+      pid: 123,
+      wait: async () => createRunExit({ exitCode: 7 }),
+      cancel: vi.fn(),
+    }));
+    const scopeKey = "agent:main:exec-run-correlation";
+    const run = await runExecProcess({
+      command: "test-command",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: true,
+      sessionKey: scopeKey,
+      runId: "run-155329-correlation",
+      timeoutSec: null,
+    });
+    markBackgrounded(run.session);
+    await run.promise;
+    await run.promise;
+    expect(run.session.runId).toBe("run-155329-correlation");
+    const [firstCall] = enqueueSystemEventWithReceiptMock.mock.calls;
+    expect(firstCall).toBeDefined();
+    const [eventText] = firstCall ?? [];
+    const text = typeof eventText === "string" ? eventText : String(eventText);
+    expect(text).toMatch(
+      /Exec (completed|failed) \([a-z0-9-]{1,8}, code 7, run run-155329-correlation\)/,
+    );
+  });
+
+  it("escapes percent signs and parens in run ids so the wire stays parseable", async () => {
+    supervisorMock.spawn.mockImplementationOnce(async () => ({
+      activity: { resultSettled: true, lastOutputAtMs: Date.now() },
+      runId: "supervisor-run",
+      startedAtMs: Date.now(),
+      pid: 123,
+      wait: async () => createRunExit({ exitCode: 7 }),
+      cancel: vi.fn(),
+    }));
+    const run = await runExecProcess({
+      command: "test-command",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: true,
+      sessionKey: "agent:main:exec-run-correlation-escape",
+      runId: "request%29-and-100%25-done)",
+      timeoutSec: null,
+    });
+    markBackgrounded(run.session);
+    await run.promise;
+    await run.promise;
+    const [firstCall] = enqueueSystemEventWithReceiptMock.mock.calls;
+    const [eventText] = firstCall ?? [];
+    const text = typeof eventText === "string" ? eventText : String(eventText);
+    expect(text).toContain("run request%2529-and-100%2525-done%29)");
+  });
+});
+
 describe("sandbox exec preparation failures", () => {
   it("rechecks the admitting repair authority after deferred supervisor work", async () => {
     let current = true;

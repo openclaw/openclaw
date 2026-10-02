@@ -306,9 +306,16 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   ) {
     return;
   }
+  // Own-run correlation: persisting the run id on the session keeps terminal events
+  // attributable even when the child dies under a cgroup SIGKILL before any exit
+  // handler ran (#155329). `%` is escaped first (%25), then `)` (%29), so the
+  // reader's single-pass decode round-trips ids containing either character.
+  const runSegment = session.runId
+    ? `, run ${session.runId.replaceAll("%", "%25").replaceAll(")", "%29")}`
+    : "";
   const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}${runSegment}) :: ${output}`
+    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}${runSegment})`;
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
@@ -569,6 +576,8 @@ export async function runExecProcess({
   scopeKey?: string;
   sessionKey?: string;
   agentId?: string;
+  /** Owning agent-run id, persisted on the session so exit events keep run correlation. */
+  runId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
@@ -607,6 +616,7 @@ export async function runExecProcess({
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    runId: opts.runId,
     cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
     agentId: opts.agentId,
     eventRouting: opts.eventRouting,

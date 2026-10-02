@@ -597,6 +597,7 @@ export function createExecTool(
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
+          runId: defaults?.runId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
           timeoutSec: effectiveTimeout,
