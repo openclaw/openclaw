@@ -366,10 +366,8 @@ function resolveEndpoints(
   const normalized = endpoints
     ? requireUniqueEndpointIds(endpoints.map(normalizeConfiguredEndpoint))
     : [{ id: "local", label: "local Codex app-server" }];
-  const resolved: ResolvedSupervisionEndpoint[] = [];
-  for (const endpoint of normalized) {
-    resolved.push({
-      ...endpoint,
+  return normalized.map((endpoint) =>
+    Object.assign({}, endpoint, {
       connectionKey: supervisionEndpointConnectionKey({
         endpoint,
         pluginConfig,
@@ -378,9 +376,8 @@ function resolveEndpoints(
         resolveAuthProfileId,
         resolveRuntimeOptions,
       }),
-    });
-  }
-  return resolved;
+    }),
+  );
 }
 
 function resolveEndpointStartOptions(params: {
