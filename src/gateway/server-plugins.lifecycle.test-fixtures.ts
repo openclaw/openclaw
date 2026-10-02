@@ -6,6 +6,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { PluginReadinessCriterionRegistration } from "../plugins/registry-types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginRegistrationMode } from "../plugins/types.js";
 
@@ -55,6 +56,7 @@ export type InstanceBindingProbeCoordinator = {
   onServiceStop?: () => void;
   serviceStopCompletion: ReturnType<typeof createDeferred<void>>;
   serviceStopFailure?: "rejection" | "timeout";
+  readinessCheck?: PluginReadinessCriterionRegistration["criterion"]["check"];
   channelProof?: ChannelBindingProof;
   channelIds?: readonly string[];
   channelStops?: Array<Pick<ChannelBindingMonitor, "channelId" | "runtimeId" | "abortSignal">>;
@@ -213,6 +215,14 @@ export async function writeInstanceBindingProbePlugin(
             return coordinator.serviceStopCompletion.promise;
           }
         },
+      });
+    }
+    const readinessCheck = coordinator.readinessCheck;
+    if (readinessCheck) {
+      api.registerReadinessCriterion({
+        id: "backend",
+        description: "Synthetic backend availability.",
+        check: readinessCheck,
       });
     }
     api.registerGatewayMethod("${INSTANCE_BINDING_PROBE_METHOD}", ({ context, respond }) => {

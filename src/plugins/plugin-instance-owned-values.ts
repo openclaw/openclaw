@@ -4,6 +4,27 @@ type OwnedValueState<TInstance extends object> = {
   original?: object;
 };
 
+export function visitPluginValueTree(value: unknown, visitor: (value: object) => void): void {
+  const seen = new Set<object>();
+  const walk = (candidate: unknown) => {
+    if (
+      !candidate ||
+      (typeof candidate !== "object" && typeof candidate !== "function") ||
+      seen.has(candidate)
+    ) {
+      return;
+    }
+    seen.add(candidate);
+    visitor(candidate);
+    for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
+      if ("value" in descriptor) {
+        walk(descriptor.value);
+      }
+    }
+  };
+  walk(value);
+}
+
 // oxlint-disable-next-line typescript/no-extraneous-class -- Derived classes need a returning base constructor to stamp private fields on an existing object.
 export class PluginHostObject {
   constructor(value: object) {

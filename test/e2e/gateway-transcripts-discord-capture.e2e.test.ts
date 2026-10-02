@@ -15,6 +15,7 @@ import type {
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { buildMockOpenAiResponsesProvider } from "../../src/gateway/test-openai-responses-model.js";
 import type { OpenClawPluginApi } from "../../src/plugins/types.js";
+import { closeSkillsWatchers } from "../../src/skills/runtime/refresh.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../src/test-utils/env.js";
 import { withIsolatedTestHome } from "../../test/test-env.js";
@@ -87,7 +88,6 @@ function sendResponse(response: ServerResponse, item: Record<string, unknown>) {
 describe("Gateway admitted Discord transcript capture", () => {
   afterEach(async () => {
     // Minimal Gateway startup omits cleanup for watchers created by real agent turns.
-    const { closeSkillsWatchers } = await import("../../src/skills/runtime/refresh.js");
     await closeSkillsWatchers(true);
   });
 
@@ -919,6 +919,7 @@ describe("Gateway admitted Discord transcript capture", () => {
               await gateway.server.close({ reason: "synthetic transcript capture cleanup" });
             }
           }
+          await closeSkillsWatchers(true);
         } finally {
           providerServer.closeAllConnections();
           await new Promise<void>((resolve) => {

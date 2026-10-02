@@ -1128,6 +1128,7 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-value-views.ts
 src/plugins/plugin-instance.ts
+src/plugins/plugin-interruptible-calls.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts

@@ -33,6 +33,7 @@ import type {
   OpenClawPluginCommandDefinition,
   OpenClawPluginNodeHostCommand,
   OpenClawPluginNodeInvokePolicy,
+  OpenClawPluginReadinessCriterion,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -337,6 +338,45 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     );
   };
 
+  const registerReadinessCriterion = (
+    record: PluginRecord,
+    criterion: OpenClawPluginReadinessCriterion,
+    pluginConfig?: Record<string, unknown>,
+  ) => {
+    const localId = criterion.id.trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(localId) || record.id.length > 64) {
+      reportRegistrationError(
+        record,
+        `readiness criterion and plugin ids must be 1-64 lowercase letters, numbers, dots, dashes, or underscores: ${criterion.id}`,
+      );
+      return;
+    }
+    const id = `plugin.${record.id}.${localId}`;
+    const existing = registry.readinessCriteria.find((entry) => entry.id === id);
+    if (existing) {
+      reportRegistrationError(record, `readiness criterion already registered: ${id}`);
+      return;
+    }
+    const instance = getPluginInstance(record);
+    const check = criterion.check;
+    registry.readinessCriteria.push({
+      id,
+      pluginId: record.id,
+      pluginName: record.name,
+      criterion: {
+        ...criterion,
+        id: localId,
+        check: instance
+          ? (context) =>
+              instance.runInterruptible(context.signal, (signal) => check({ ...context, signal }))
+          : check,
+      },
+      pluginConfig,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+  };
+
   const resolveServiceRegistrationId = (
     record: PluginRecord,
     service: { id: string },
@@ -463,6 +503,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     registerNodeInvokePolicy,
     registerGatewayAccessPolicy,
     registerSecurityAuditCollector,
+    registerReadinessCriterion,
     registerService,
     registerGatewayDiscoveryService,
     registerCommand,

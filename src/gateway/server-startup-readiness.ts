@@ -6,10 +6,25 @@ type GatewayReadinessLog = {
   getReadiness: ReadinessChecker;
 };
 
-export function logGatewayReady(params: GatewayReadinessLog, message = "gateway ready"): void {
-  if (params.getReadiness().ready) {
+function logReadyResult(
+  params: GatewayReadinessLog,
+  result: Awaited<ReturnType<ReadinessChecker>>,
+  message: string,
+): void {
+  if (result.ready) {
     params.log.info(message);
   }
+}
+
+export function logGatewayReady(
+  params: GatewayReadinessLog,
+  message = "gateway ready",
+): void | Promise<void> {
+  const readiness = params.getReadiness();
+  if (readiness instanceof Promise) {
+    return readiness.then((result) => logReadyResult(params, result, message));
+  }
+  logReadyResult(params, readiness, message);
 }
 
 export function logGatewaySidecarsReady(
@@ -18,11 +33,11 @@ export function logGatewaySidecarsReady(
     loadedPluginCount: number;
     postReadySidecarCount: number;
   },
-): void {
+): void | Promise<void> {
   params.startupTrace?.detail("sidecars.ready", [
     ["loadedPluginCount", params.loadedPluginCount],
     ["postReadySidecarCount", params.postReadySidecarCount],
   ]);
   params.startupTrace?.mark("sidecars.ready");
-  logGatewayReady(params);
+  return logGatewayReady(params);
 }

@@ -340,6 +340,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
     return {
       pluginRegistry: currentPluginRegistry,
       gatewayMethods: params.baseMethods,
+      resolvedConfig: params.cfg,
     };
   }
   const loaded = prepareGatewayPluginLoad({
@@ -401,3 +402,10 @@ export async function loadGatewayStartupPluginRuntime(params: {
     throw error;
   }
 }
+
+export type GatewayStartupPluginRuntime = {
+  pluginRegistry: PluginRegistry;
+  gatewayMethods: string[];
+  resolvedConfig?: OpenClawConfig;
+  retireGatewayRuntimeBindings?: () => void;
+};

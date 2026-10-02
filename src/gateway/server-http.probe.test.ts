@@ -1,3 +1,5 @@
+// Server HTTP probe tests cover readiness, health, disabled compat routes, and
+// auth handling through the in-memory HTTP harness.
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import os from "node:os";
@@ -488,6 +490,50 @@ describe("gateway probe endpoints", () => {
 
         expect(res.statusCode).toBe(200);
         expect(JSON.parse(getBody())).toEqual({ ready: true, failing: [], uptimeMs: 45_000 });
+      },
+    });
+  });
+
+  it("returns detailed canonical conditions for local /ready requests", async () => {
+    const getReadiness: ReadinessChecker = async () => ({
+      ready: true,
+      failing: [],
+      uptimeMs: 45_000,
+      conditions: [
+        {
+          type: "ConfigLoaded",
+          status: "True",
+          requirement: "required",
+          reason: "ConfigLoaded",
+          message: "Runtime configuration loaded.",
+        },
+      ],
+      failures: [],
+    });
+
+    await withGatewayServer({
+      prefix: "probe-hosting-ready",
+      resolvedAuth: AUTH_NONE,
+      overrides: { getReadiness },
+      run: async (server) => {
+        const { res, getBody } = await sendRequest(server, { path: "/ready" });
+
+        expect(res.statusCode).toBe(200);
+        expect(JSON.parse(getBody())).toEqual({
+          ready: true,
+          failing: [],
+          uptimeMs: 45_000,
+          conditions: [
+            {
+              type: "ConfigLoaded",
+              status: "True",
+              requirement: "required",
+              reason: "ConfigLoaded",
+              message: "Runtime configuration loaded.",
+            },
+          ],
+          failures: [],
+        });
       },
     });
   });

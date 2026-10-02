@@ -2,17 +2,25 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelId } from "../../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import { buildRuntimeReadiness, type ReadinessCondition } from "../../readiness/conditions.js";
+import { createGatewayReadinessIdentity } from "../../readiness/subjects.js";
 import { createAgentDatabaseInspectionRefusal } from "../../state/agent-database-admission.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-runtime-generation.js";
-import { createReadinessChecker } from "./readiness.js";
+import { createReadinessChecker, evaluateConfiguredGatewayReadiness } from "./readiness.js";
+
+type ReadinessResult = Awaited<ReturnType<ReturnType<typeof createReadinessChecker>>>;
 
 /**
  * Readiness checker tests for startup grace, channel health, and stale sockets.
  */
 const FIVE_MIN_MS = 5 * 60_000;
 const THIRTY_ONE_MIN_MS = 31 * 60_000;
+
+function testReadinessIdentity() {
+  return createGatewayReadinessIdentity({ createGatewayInstanceId: () => "gateway-test" });
+}
 
 function snapshotWith(
   accounts: Record<string, Partial<ChannelAccountSnapshot>>,
@@ -141,21 +149,167 @@ function readySnapshot(
   uptimeMs = FIVE_MIN_MS,
   extra: Record<string, unknown> = {},
 ): Record<string, unknown> {
-  return { ready: true, failing: [], uptimeMs, ...extra };
+  const eventLoop = extra.eventLoop as { degraded: boolean; reasons: string[] } | undefined;
+  return {
+    ready: true,
+    failing: [],
+    uptimeMs,
+    conditions: coreConditions({
+      eventLoop,
+      suppressed: extra.suppressed as string[] | undefined,
+    }),
+    ...extra,
+  };
 }
 
-function failingSnapshot(failing: string[], uptimeMs = FIVE_MIN_MS): Record<string, unknown> {
-  return { ready: false, failing, uptimeMs };
+function failingSnapshot(
+  failing: string[],
+  uptimeMs = FIVE_MIN_MS,
+  startupPendingReason?: string,
+): ReadinessResult {
+  const draining = failing.includes("gateway-draining");
+  const startupPending = !draining && failing.includes("startup-sidecars");
+  return {
+    ready: false,
+    failing,
+    uptimeMs,
+    conditions: coreConditions({
+      startupPending,
+      startupPendingReason,
+      draining,
+      channelFailing: startupPending || draining ? undefined : failing,
+    }),
+  };
+}
+
+function gateFailureSnapshot(
+  failing: string[],
+  condition: ReadinessCondition,
+  uptimeMs = FIVE_MIN_MS,
+): ReadinessResult {
+  const conditions = coreConditions().flatMap((entry) =>
+    entry.type === "ChannelRuntimeReady"
+      ? [
+          condition,
+          {
+            ...entry,
+            status: "Unknown" as const,
+            reason: "ChannelRuntimeNotChecked",
+            message: "Channel runtime health was not evaluated on this readiness pass.",
+          },
+        ]
+      : [entry],
+  );
+  return { ready: false, failing, uptimeMs, conditions };
+}
+
+function coreConditions(
+  params: {
+    startupPending?: boolean;
+    startupPendingReason?: string;
+    draining?: boolean;
+    channelFailing?: string[];
+    suppressed?: string[];
+    eventLoop?: { degraded: boolean; reasons: string[] };
+  } = {},
+): ReadinessCondition[] {
+  const channelChecked =
+    params.channelFailing !== undefined || (!params.startupPending && !params.draining);
+  const channelFailing = params.channelFailing ?? [];
+  const eventLoop = params.eventLoop;
+  const conditions: ReadinessCondition[] = [
+    {
+      type: "GatewayStartupComplete",
+      status: params.startupPending ? "False" : "True",
+      requirement: "required",
+      reason: params.startupPending ? "GatewayStartupPending" : "GatewayStartupComplete",
+      message: params.startupPending
+        ? `Gateway startup dependencies are still pending${params.startupPendingReason ? `: ${params.startupPendingReason}` : ""}.`
+        : "Gateway startup dependencies are complete.",
+    },
+    {
+      type: "GatewayAcceptingWork",
+      status: params.draining ? "False" : "True",
+      requirement: "required",
+      reason: params.draining ? "GatewayDraining" : "GatewayAcceptingWork",
+      message: params.draining
+        ? "Gateway is draining and is not accepting new work."
+        : "Gateway is accepting new work.",
+    },
+    {
+      type: "ChannelRuntimeReady",
+      status: !channelChecked ? "Unknown" : channelFailing.length > 0 ? "False" : "True",
+      requirement: "required",
+      reason: !channelChecked
+        ? "ChannelRuntimeNotChecked"
+        : channelFailing.length > 0
+          ? "ChannelRuntimeUnavailable"
+          : "ChannelRuntimeReady",
+      message: !channelChecked
+        ? "Channel runtime health was not evaluated on this readiness pass."
+        : channelFailing.length > 0
+          ? `Selected channels are not ready: ${channelFailing.join(", ")}.`
+          : "Selected channel runtimes are ready.",
+    },
+  ];
+  if (params.suppressed?.length) {
+    conditions.push({
+      type: "ChannelRuntimeSuppressed",
+      status: "False",
+      requirement: "advisory",
+      reason: "ChannelRuntimeSuppressed",
+      message: `Channel runtime failures are suppressed: ${params.suppressed.join(", ")}.`,
+    });
+  }
+  conditions.push({
+    type: "EventLoopHealthy",
+    status: !eventLoop ? "Unknown" : eventLoop.degraded ? "False" : "True",
+    requirement: "advisory",
+    reason: !eventLoop
+      ? "EventLoopStatusUnavailable"
+      : eventLoop.degraded
+        ? "EventLoopDegraded"
+        : "EventLoopHealthy",
+    message: !eventLoop
+      ? "Event-loop health is not available yet."
+      : eventLoop.degraded
+        ? `Event-loop health is degraded: ${eventLoop.reasons.join(", ")}.`
+        : "Event-loop health is within its healthy thresholds.",
+  });
+  return conditions;
 }
 
 describe("createReadinessChecker", () => {
+  it("reports ready when all managed channels are healthy", () => {
+    withReadinessClock(() => {
+      const startedAt = Date.now() - FIVE_MIN_MS;
+      const manager = createHealthyDiscordManager(startedAt, Date.now() - 1_000);
+
+      const readiness = createReadinessChecker({ channelManager: manager, startedAt });
+      expect(readiness()).toEqual(readySnapshot());
+    });
+  });
+
+  it("keeps readiness red while startup sidecars are pending", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        getStartupPending: () => true,
+      });
+      expect(readiness()).toEqual(
+        failingSnapshot(["startup-sidecars"], FIVE_MIN_MS, "startup-sidecars"),
+      );
+    });
+  });
+
   it("reports the current startup pending reason", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({
         getStartupPending: () => true,
         getStartupPendingReason: () => "startup-sidecars",
       });
-      expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
+      expect(readiness()).toEqual(
+        failingSnapshot(["startup-sidecars"], FIVE_MIN_MS, "startup-sidecars"),
+      );
     });
   });
 
@@ -166,7 +320,9 @@ describe("createReadinessChecker", () => {
         getStartupPending: () => startupPending,
         cacheTtlMs: 1_000,
       });
-      expect(readiness()).toEqual(failingSnapshot(["startup-sidecars"]));
+      expect(readiness()).toEqual(
+        failingSnapshot(["startup-sidecars"], FIVE_MIN_MS, "startup-sidecars"),
+      );
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
 
       startupPending = false;
@@ -203,7 +359,13 @@ describe("createReadinessChecker", () => {
 
       stateDatabase.failure = new Error("newer shared-state schema");
       expect(readiness()).toEqual({
-        ...failingSnapshot(["state-database"]),
+        ...gateFailureSnapshot(["state-database"], {
+          type: "StateDatabaseReady",
+          status: "False",
+          requirement: "required",
+          reason: "StateDatabaseUnavailable",
+          message: "The Gateway state database is unavailable.",
+        }),
         stateDatabase: { reason: "newer shared-state schema" },
       });
       expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
@@ -237,7 +399,13 @@ describe("createReadinessChecker", () => {
         reason: "Waiting for admitted work before restoring the previous plugin runtime.",
       };
       expect(readiness()).toEqual({
-        ...failingSnapshot(["plugin-reload"]),
+        ...gateFailureSnapshot(["plugin-reload"], {
+          type: "PluginReloadComplete",
+          status: "False",
+          requirement: "required",
+          reason: "PluginReloadInProgress",
+          message: "Gateway plugin runtime replacement is still in progress.",
+        }),
         pluginReload,
       });
       pluginReload = {
@@ -246,7 +414,13 @@ describe("createReadinessChecker", () => {
         reason: "Plugin recovery failed; inspect discord and restart the Gateway.",
       };
       expect(readiness()).toEqual({
-        ...failingSnapshot(["plugin-reload"]),
+        ...gateFailureSnapshot(["plugin-reload"], {
+          type: "PluginReloadComplete",
+          status: "False",
+          requirement: "required",
+          reason: "PluginReloadFailed",
+          message: "Gateway plugin runtime replacement did not complete successfully.",
+        }),
         pluginReload,
       });
 
@@ -276,7 +450,13 @@ describe("createReadinessChecker", () => {
 
         refused = true;
         expect(readiness()).toEqual({
-          ...failingSnapshot(["agent-database:main"]),
+          ...gateFailureSnapshot(["agent-database:main"], {
+            type: "AgentDatabasesReady",
+            status: "False",
+            requirement: "required",
+            reason: "AgentDatabaseAdmissionRefused",
+            message: "One or more agent databases did not pass admission.",
+          }),
           agentDatabases: [refusal],
         });
 
@@ -615,5 +795,214 @@ describe("createReadinessChecker", () => {
         }),
       );
     });
+  });
+});
+
+describe("canonical configured Gateway readiness", () => {
+  it("keeps database and plugin admission gates required after canonical composition", async () => {
+    const refusal = createAgentDatabaseInspectionRefusal({
+      agentId: "main",
+      paths: ["/isolated/agents/main/openclaw-agent.sqlite"],
+      reason: "Session identities require migration before this agent can run.",
+    });
+    const scenarios = [
+      {
+        type: "StateDatabaseReady",
+        reason: "StateDatabaseUnavailable",
+        deps: { getStateDatabaseFailure: () => new Error("newer shared-state schema") },
+      },
+      {
+        type: "AgentDatabasesReady",
+        reason: "AgentDatabaseAdmissionRefused",
+        deps: { getAgentDatabaseAdmissionRefusals: () => [refusal] },
+      },
+      {
+        type: "PluginReloadComplete",
+        reason: "PluginReloadInProgress",
+        deps: {
+          getPluginReloadStatus: () => ({
+            phase: "reloading" as const,
+            pluginIds: ["discord"],
+          }),
+        },
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const result = await evaluateConfiguredGatewayReadiness({
+        config: { gateway: { readiness: {} } },
+        identity: testReadinessIdentity(),
+        evaluateGateway: createReadinessChecker({
+          channelManager: createManager(snapshotWith({})),
+          startedAt: Date.now() - FIVE_MIN_MS,
+          ...scenario.deps,
+        }),
+        evaluateRuntime: async () =>
+          buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
+      });
+
+      expect(result.ready).toBe(false);
+      expect(result.failures).toContain(scenario.reason);
+      expect(result.conditions).toContainEqual(
+        expect.objectContaining({
+          type: scenario.type,
+          status: "False",
+          requirement: "required",
+          reason: scenario.reason,
+        }),
+      );
+    }
+  });
+
+  it("normalizes core failures and advisories while preserving legacy fields", async () => {
+    const gateway = failingSnapshot(["discord"]);
+    const runtime = buildRuntimeReadiness({
+      configLoaded: true,
+      gateway: "responding",
+      plugins: {
+        errors: [{ id: "broken", activated: true, error: "load failed" }],
+      },
+    });
+
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => gateway,
+      evaluateRuntime: async () => runtime,
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failing).toEqual(["discord"]);
+    expect(result.failures).toEqual(["ChannelRuntimeUnavailable"]);
+    expect(result.advisories).toEqual(["EventLoopStatusUnavailable", "PluginLoadFailures"]);
+    expect(result.conditions?.map((condition) => condition.type)).toEqual([
+      "GatewayStartupComplete",
+      "GatewayAcceptingWork",
+      "ChannelRuntimeReady",
+      "EventLoopHealthy",
+      "ConfigLoaded",
+      "GatewayResponding",
+      "PluginsLoaded",
+    ]);
+  });
+  it("redacts unexpected extended evaluation failures", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () => {
+        throw new Error("secret backend path");
+      },
+    });
+
+    expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
+    expect(JSON.stringify(result)).not.toContain("secret backend path");
+  });
+
+  it("fails closed when merged conditions collide on subject and type", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () =>
+        buildRuntimeReadiness({
+          configLoaded: true,
+          gateway: "responding",
+          additionalConditions: [
+            {
+              type: "GatewayStartupComplete",
+              subjectRef: "openclaw/gateway/current",
+              status: "True",
+              requirement: "required",
+              reason: "DuplicateStartupCondition",
+              message: "Duplicate startup condition.",
+            },
+          ],
+        }),
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
+    expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
+  });
+
+  it("fails closed without rejecting when the core Gateway checker throws", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => {
+        throw new Error("unexpected core failure");
+      },
+      evaluateRuntime: async () =>
+        buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
+    });
+
+    expect(result).toMatchObject({
+      ready: false,
+      uptimeMs: 0,
+      failing: ["ReadinessEvaluationFailed"],
+      failures: ["ReadinessEvaluationFailed"],
+    });
+    expect(result.conditions?.[0]?.type).toBe("ReadinessEvaluationComplete");
+    expect(JSON.stringify(result)).not.toContain("unexpected core failure");
+  });
+});
+
+describe("evaluateConfiguredGatewayReadiness", () => {
+  it("projects the legacy Gateway checker into a canonical result when unconfigured", async () => {
+    const gateway = readySnapshot() as ReadinessResult;
+    const evaluateGateway = vi.fn(() => gateway);
+    const evaluateRuntime = vi.fn(async () => {
+      throw new Error("extended evaluator should not run");
+    });
+
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {},
+      identity: testReadinessIdentity(),
+      evaluateGateway,
+      evaluateRuntime,
+    });
+
+    expect(result.ready).toBe(gateway.ready);
+    expect(result.contractVersion).toBe(1);
+    expect(result.identity.producerRef).toBe("openclaw/gateway/current");
+    expect(result.failing).toEqual(gateway.failing);
+    expect(evaluateGateway).toHaveBeenCalledTimes(1);
+    expect(evaluateRuntime).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when the unconfigured legacy checker throws", async () => {
+    const evaluateRuntime = vi.fn(async () =>
+      buildRuntimeReadiness({ configLoaded: true, gateway: "responding" }),
+    );
+
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: {},
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => {
+        throw new Error("legacy checker failed");
+      },
+      evaluateRuntime,
+    });
+    expect(result).toMatchObject({
+      contractVersion: 1,
+      ready: false,
+      failures: ["ReadinessEvaluationFailed"],
+    });
+    expect(evaluateRuntime).not.toHaveBeenCalled();
+  });
+
+  it("opts into fail-closed canonical evaluation when the section is present", async () => {
+    const result = await evaluateConfiguredGatewayReadiness({
+      config: { gateway: { readiness: {} } },
+      identity: testReadinessIdentity(),
+      evaluateGateway: () => readySnapshot() as ReadinessResult,
+      evaluateRuntime: async () => {
+        throw new Error("runtime evaluation failed");
+      },
+    });
+
+    expect(result.ready).toBe(false);
+    expect(result.failures).toEqual(["ReadinessEvaluationFailed"]);
   });
 });

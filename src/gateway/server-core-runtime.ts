@@ -2,6 +2,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { getRuntimeConfig } from "../config/io.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { adoptPluginHttpRouteHandoffs } from "../plugins/http-registry.js";
 import { isGatewayWorkAdmissionClosed } from "../process/gateway-work-admission.js";
@@ -440,7 +441,11 @@ export async function startGatewayCoreRuntime(input: {
       isCoreCanvasHostEnabled(getRuntimeConfig()),
     );
   const prepareAttachedPluginRuntime = async (
-    loaded: { pluginRegistry: typeof pluginRuntime.registry; gatewayMethods: string[] },
+    loaded: {
+      pluginRegistry: typeof pluginRuntime.registry;
+      gatewayMethods: string[];
+      resolvedConfig: OpenClawConfig;
+    },
     trackActivationCleanup: (completion: Promise<void>) => void,
   ) => {
     const { activatePluginRegistry } = await import("../plugins/loader-shared.js");
@@ -464,6 +469,10 @@ export async function startGatewayCoreRuntime(input: {
           trackActivationCleanup,
         );
         pluginRuntime.publish(loaded.pluginRegistry);
+        pluginRuntime.readinessSnapshot = {
+          config: loaded.resolvedConfig,
+          registry: loaded.pluginRegistry,
+        };
         pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
         for (const key of attachedPluginGatewayHandlerKeys) {
           delete attachedGatewayExtraHandlers[key];

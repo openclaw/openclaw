@@ -129,6 +129,8 @@ export type GatewayOperatorRolesConfig = Omit<
   default?: string;
 };
 
+export type GatewayReadinessConfig = NonNullable<GatewayConfigInput["readiness"]>;
+
 export type GatewayConfig = Omit<
   GatewayConfigInput,
   "controlUi" | "nodes" | "roles" | "reload" | "auth" | "tailscale"

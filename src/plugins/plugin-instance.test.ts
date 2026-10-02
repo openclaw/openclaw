@@ -93,6 +93,27 @@ describe("managed plugin instances", () => {
     }
   });
 
+  it("quiesces interruptible calls without overlapping abort-ignoring work", async () => {
+    const instance = new PluginInstance("readiness");
+    const deferred = createDeferredCore<string>();
+    let signal: AbortSignal | undefined;
+    const pending = instance.runInterruptible(new AbortController().signal, async (current) => {
+      signal = current;
+      return await deferred.promise;
+    });
+    void pending.catch(() => {});
+
+    expect(instance.quiesce()).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    await expect(instance.drain()).resolves.toEqual({ errors: [] });
+    instance.resume();
+    expect(instance.run(() => "replacement")).toBe("replacement");
+
+    deferred.resolve("stale success");
+    await expect(pending).rejects.toBeInstanceOf(PluginInstanceUnavailableError);
+    await expect(instance.dispose()).resolves.toEqual({ errors: [] });
+  });
+
   it("optionally drains retained consumers before resources stop while preserving default drain", async () => {
     const instance = new PluginInstance("consumer-drain");
     const consumer = instance.retainConsumer();

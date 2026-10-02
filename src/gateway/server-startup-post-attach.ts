@@ -48,6 +48,7 @@ import {
   formatGatewayStartupOutcomes,
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
+import type { GatewayStartupPluginRuntime } from "./server-startup-plugins.js";
 import { logGatewayReady, logGatewaySidecarsReady } from "./server-startup-readiness.js";
 import {
   refreshLatestUpdateRestartSentinelIfPresent,
@@ -644,17 +645,9 @@ export async function startGatewayPostAttachRuntime(
     };
     logChannels: { info: (msg: string) => void; error: (msg: string) => void };
     unlockStartupMethods: () => void;
-    loadStartupPlugins?: () => Awaitable<{
-      pluginRegistry: PluginRegistry;
-      gatewayMethods: string[];
-      retireGatewayRuntimeBindings?: () => void;
-    }>;
+    loadStartupPlugins?: () => Awaitable<GatewayStartupPluginRuntime>;
     onStartupPluginsLoading?: () => void;
-    onStartupPluginsLoaded?: (result: {
-      pluginRegistry: PluginRegistry;
-      gatewayMethods: string[];
-      retireGatewayRuntimeBindings?: () => void;
-    }) => Awaitable<boolean>;
+    onStartupPluginsLoaded?: (result: GatewayStartupPluginRuntime) => Awaitable<boolean>;
     pluginRuntimeClaim?: GatewayPluginRuntimeClaim;
     getCurrentPluginRegistry?: () => PluginRegistry;
     getCurrentPluginServices?: () => PluginServicesHandle | null;
@@ -856,7 +849,10 @@ export async function startGatewayPostAttachRuntime(
             }
             params.unlockStartupMethods();
             params.onSidecarsReady?.();
-            logGatewayReady(params, "candidate gateway ready; autonomous sidecars suppressed");
+            await logGatewayReady(
+              params,
+              "candidate gateway ready; autonomous sidecars suppressed",
+            );
             return pluginRegistry;
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
@@ -1015,7 +1011,7 @@ export async function startGatewayPostAttachRuntime(
           if (params.isClosing?.()) {
             return pluginRegistry;
           }
-          logGatewaySidecarsReady({
+          await logGatewaySidecarsReady({
             log: params.log,
             getReadiness: params.getReadiness,
             startupTrace: params.startupTrace,

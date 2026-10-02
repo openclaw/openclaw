@@ -1,9 +1,10 @@
 ---
-summary: "Hooks, HTTP routes, Gateway methods, services, and the webhook and SQLite helpers"
+summary: "Hooks, HTTP routes, Gateway methods, services, readiness, and infrastructure helpers"
 title: "Plugin SDK infrastructure registration"
 sidebarTitle: "Infrastructure registration"
 read_when:
   - You are registering a Gateway HTTP route, RPC method, or background service
+  - You are exposing a plugin health observation through Gateway readiness
   - You are reading a webhook body or admitting a SQLite write from a plugin
   - You need per-requester MCP transports for a static server name
 ---
@@ -37,8 +38,73 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
+| `api.registerReadinessCriterion(criterion)`       | Operator-selectable plugin readiness observation                       |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+### Readiness criteria
+
+`api.registerReadinessCriterion(...)` publishes a bounded observation that an
+operator can include in the Gateway's canonical readiness result. Registration
+does not make the criterion required by default. A plugin-local id such as
+`backend` is exposed as `plugin.<plugin-id>.backend`; local ids and plugin ids
+must be 1-64 lowercase letters, numbers, dots, dashes, or underscores.
+
+```typescript
+api.registerReadinessCriterion({
+  id: "backend",
+  description: "Primary storage backend availability",
+  async check({ signal, subjects }) {
+    const subjectRef = subjects.declare({ kind: "backend", key: "primary" });
+    const healthy = await inspectBackend({ signal });
+    return {
+      subjectRef,
+      status: healthy ? "True" : "False",
+      reason: healthy ? "BackendAvailable" : "BackendUnavailable",
+      message: healthy ? "Primary storage is available." : "Primary storage is unavailable.",
+    };
+  },
+});
+```
+
+Select the fully qualified id in `gateway.readiness`. Required criteria must
+return `True` before `/readyz` reports ready; advisory criteria appear in the
+result without blocking readiness. A selector may appear in only one list, and
+an unregistered, invalid, timed-out, or failed required criterion fails closed.
+
+```json5
+{
+  gateway: {
+    readiness: {
+      requiredCriteria: ["plugin.storage.backend"],
+      advisoryCriteria: ["openclaw.workspace-writable"],
+    },
+  },
+}
+```
+
+The host calls a selected criterion with the active config, its plugin config,
+an `AbortSignal`, and a subject collector. Checks have a one-second deadline;
+completed observations are cached for five seconds. Config or plugin-registry
+replacement aborts active checks and invalidates their cache. Cancellation is
+cooperative: if a retired check ignores its signal, a replacement with the same
+fully qualified id remains `Unknown` and does not run until the retired promise
+settles. Plugins must stop owned work promptly when the signal aborts.
+
+Each result returns `True`, `False`, or `Unknown`, a reason token, and a message.
+Reason tokens must start with a letter and contain at most 128 ASCII letters,
+digits, dots, dashes, or underscores. Messages must be nonempty, contain no NUL,
+and fit in 512 UTF-8 bytes; both fields are redacted before publication. An
+optional `observedAtMs` must be a nonnegative safe integer.
+
+`subjects.declare(...)` creates plugin-owned subject references. A check may
+declare up to 64 subjects and reference up to 16 related subjects. Subject kind
+and key parts use the same lowercase 1-64-character alphabet as criterion ids.
+Opaque identity id and generation values are hashed before publication. Parent
+references must name a subject from the same plugin or a documented core
+subject, and every returned subject reference must have been declared by that
+check or be a documented core subject. Invalid output is published as
+`Unknown / CriterionInvalidResult` without exposing the rejected value.
 
 ### File-watch capacity errors
 

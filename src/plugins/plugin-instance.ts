@@ -9,7 +9,7 @@ import {
   PluginInstanceUnavailableError,
 } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation as invocation } from "./plugin-instance-invocation.js";
-import { PluginCallToken } from "./plugin-instance-owned-values.js";
+import { PluginCallToken, visitPluginValueTree } from "./plugin-instance-owned-values.js";
 import {
   pluginInstanceState,
   pluginInvocationContext,
@@ -25,6 +25,7 @@ import type {
   PluginInstanceLifecycle,
   PluginModuleLoaderRecovery,
 } from "./plugin-instance.types.js";
+import { PluginInterruptibleCalls } from "./plugin-interruptible-calls.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
@@ -47,6 +48,7 @@ export class PluginInstance {
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
   private replacementReserved = false;
+  private readonly interruptibleCalls = new PluginInterruptibleCalls();
   private readonly retainedWork = new Set<object>();
   private readonly calls = new Map<object, { registry?: PluginRegistry; cleanup: boolean }>();
   private forcedRetirement = false;
@@ -167,24 +169,7 @@ export class PluginInstance {
 
   /** Associates an identity-sensitive public value without replacing it with a view. */
   adopt<T>(value: T): T {
-    const seen = new Set<object>();
-    const visit = (candidate: unknown) => {
-      if (
-        !candidate ||
-        (typeof candidate !== "object" && typeof candidate !== "function") ||
-        seen.has(candidate)
-      ) {
-        return;
-      }
-      seen.add(candidate);
-      valueInstances.set(candidate, this);
-      for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(candidate))) {
-        if ("value" in descriptor) {
-          visit(descriptor.value);
-        }
-      }
-    };
-    visit(value);
+    visitPluginValueTree(value, (candidate) => valueInstances.set(candidate, this));
     return value;
   }
 
@@ -197,6 +182,18 @@ export class PluginInstance {
   /** Detached host consumption retains its completion independently of its admitting caller. */
   runConsumer<T>(consume: () => T): T {
     return this.activeCall() ? this.invoke(consume) : this.run(consume);
+  }
+
+  /** Quiescence revokes admission while physical plugin work remains observable to its owner. */
+  runInterruptible<T>(signal: AbortSignal, run: (signal: AbortSignal) => T): T {
+    if (!this.accepting || this.owner?.revoked) {
+      throw new PluginInstanceUnavailableError(this.pluginId);
+    }
+    return this.interruptibleCalls.run(signal, run, {
+      lifecycleSignal: this.controller.signal,
+      lease: () => this.lease(),
+      invoke: (operation, lease) => this.invoke(operation, lease),
+    });
   }
 
   get hasRetainedConsumers(): boolean {
@@ -529,6 +526,9 @@ export class PluginInstance {
   quiesce(): boolean {
     const accepting = this.accepting;
     this.accepting = false;
+    if (accepting) {
+      this.interruptibleCalls.quiesce(new PluginInstanceUnavailableError(this.pluginId));
+    }
     return accepting;
   }
 

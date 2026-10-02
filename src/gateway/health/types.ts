@@ -37,6 +37,8 @@ export type HealthSummary = ProtocolHealth & {
   ok: true;
   ts: number;
   durationMs: number;
+  readiness?: import("../../readiness/conditions.js").CanonicalReadinessResult;
+  eventLoop?: import("../server/event-loop-health.js").GatewayEventLoopHealth;
   plugins?: PluginHealthSummary;
   channels: Record<string, ChannelHealthSummary>;
   channelOrder: string[];

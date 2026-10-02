@@ -52,11 +52,11 @@ export function registerGatewayStartupReadinessTests(params: {
   });
 }
 
-export function expectCoreAgentDatabaseReadiness(
+export async function expectCoreAgentDatabaseReadiness(
   getReadiness: ReadinessChecker,
   state: OpenClawTestState,
-): void {
-  expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+): Promise<void> {
+  expect(await getReadiness()).toMatchObject({ ready: true, failing: [] });
   try {
     for (const agentId of ["worker", "main", "openclaw", "crestodian"]) {
       const refusal = createAgentDatabaseInspectionRefusal({
@@ -66,9 +66,9 @@ export function expectCoreAgentDatabaseReadiness(
       });
       recordAgentDatabaseAdmissions([refusal], { source: "startup", env: state.env });
       const log = { info: vi.fn() };
-      logGatewayReady({ getReadiness, log });
+      await logGatewayReady({ getReadiness, log });
       expect(log.info).toHaveBeenCalledTimes(agentId === "worker" ? 1 : 0);
-      expect(getReadiness()).toMatchObject(
+      expect(await getReadiness()).toMatchObject(
         agentId === "worker"
           ? { ready: true, failing: [] }
           : {
@@ -81,5 +81,5 @@ export function expectCoreAgentDatabaseReadiness(
   } finally {
     recordAgentDatabaseAdmissions([], { source: "startup", env: state.env });
   }
-  expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+  expect(await getReadiness()).toMatchObject({ ready: true, failing: [] });
 }

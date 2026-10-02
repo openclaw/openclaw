@@ -20,6 +20,7 @@ export interface PluginInstanceHandle extends PluginInvocationInstance, PluginIn
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
+  runInterruptible<T>(signal: AbortSignal, run: (signal: AbortSignal) => T): T;
   adopt<T>(value: T): T;
   retainWork(): () => void;
   readonly retainedWorkCount: number;

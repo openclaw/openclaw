@@ -60,6 +60,7 @@ type GatewayRequestContextRuntime = Pick<
   | "loadGatewayModelCatalogSnapshot"
   | "readPreparedGatewayModelCatalog"
   | "readPreparedGatewayModelCatalogBatch"
+  | "getReadiness"
   | "getRuntimeSnapshot"
   | "broadcast"
   | "publishPresence"
@@ -324,6 +325,7 @@ export function createGatewayRequestContext(
       ? { readChatStartupProjection: params.chatMetadataLifecycle.readStartup }
       : {}),
     getHealthCache,
+    getReadiness: runtime.getReadiness,
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,

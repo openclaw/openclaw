@@ -179,6 +179,10 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.skills.update");
   });
 
+  it("advertises canonical readiness", () => {
+    expect(listGatewayMethods()).toContain("ready");
+  });
+
   it("advertises unified approval lookup, history, and resolution", () => {
     expect(listGatewayMethods()).toContain("approval.get");
     expect(listGatewayMethods()).toContain("approval.history");
@@ -254,6 +258,7 @@ describe("listGatewayMethods", () => {
       "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
+      "ready",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -329,6 +334,7 @@ describe("listGatewayMethods", () => {
       "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
+      "ready",
     ]);
   });
 
@@ -532,6 +538,7 @@ describe("listGatewayMethods", () => {
       "backup.status",
       "storage.locations.list",
       "storage.locations.probe",
+      "ready",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));

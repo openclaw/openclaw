@@ -278,7 +278,7 @@ describe("createGatewayKernel", () => {
         );
         const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
         expect(getStartup()).toMatchObject({ ok: true, status: "started" });
-        expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
+        expect(await getReadiness()).toMatchObject({ ready: true, failing: [] });
         const reader = {
           connect: {
             minProtocol: 1,
@@ -342,7 +342,8 @@ describe("createGatewayKernel", () => {
           : kernel.closeOnStartupFailure();
 
         expect(getStartup()).toMatchObject({ ok: false, status: "draining" });
-        expect(getReadiness()).toMatchObject({ ready: false, failing: ["gateway-draining"] });
+        const drainingReadiness = await getReadiness();
+        expect(drainingReadiness).toMatchObject({ ready: false, failing: ["gateway-draining"] });
         expect(kernel.gatewayRequestContext.mentionInbox?.list(reader)).toMatchObject({
           ok: false,
           error: { code: "UNAVAILABLE" },
@@ -617,10 +618,8 @@ describe("createGatewayKernel", () => {
       };
 
       const getReadiness = kernel.createHttpTransportOptions().getReadiness;
-      expect(getReadiness()).toMatchObject({
-        ready: false,
-        failing: ["startup-sidecars"],
-      });
+      const startupReadiness = await getReadiness();
+      expect(startupReadiness).toMatchObject({ ready: false, failing: ["startup-sidecars"] });
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
       ).rejects.toThrow("chat.send unavailable during gateway startup");
@@ -633,7 +632,7 @@ describe("createGatewayKernel", () => {
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
 
-      expectCoreAgentDatabaseReadiness(getReadiness, state);
+      await expectCoreAgentDatabaseReadiness(getReadiness, state);
       await expect(
         dispatchGatewayRequestInProcess("chat.send", chatParams, dispatchOptions),
       ).resolves.toEqual({ runId, status: "ok" });

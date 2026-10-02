@@ -83,6 +83,15 @@ function validateGatewayPublicOrigin(value: string): boolean {
   return url.protocol === "https:" || GATEWAY_HTTP_LOOPBACK_HOSTS.has(url.hostname);
 }
 
+const ReadinessCriterionIdSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(160)
+  .regex(/^(?:openclaw|plugin)\.[a-z0-9][a-z0-9._-]*$/, {
+    message: "criterion must be a namespaced openclaw.* or plugin.* identifier",
+  });
+
 export const GatewayConfigSchema = z
   .strictObject({
     /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
@@ -372,6 +381,23 @@ export const GatewayConfigSchema = z
         deny: z.array(z.string()).optional(),
         /** Tools to explicitly allow (removes from default deny list). */
         allow: z.array(z.string()).optional(),
+      })
+      .optional(),
+    readiness: z
+      .strictObject({
+        requiredCriteria: z.array(ReadinessCriterionIdSchema).max(64).optional(),
+        advisoryCriteria: z.array(ReadinessCriterionIdSchema).max(64).optional(),
+      })
+      .superRefine((value, ctx) => {
+        const required = new Set(value.requiredCriteria ?? []);
+        const duplicate = (value.advisoryCriteria ?? []).find((id) => required.has(id));
+        if (duplicate) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["advisoryCriteria"],
+            message: "criterion cannot be both required and advisory: " + duplicate,
+          });
+        }
       })
       .optional(),
     tailscale: z
