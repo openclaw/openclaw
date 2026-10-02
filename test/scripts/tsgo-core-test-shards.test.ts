@@ -65,6 +65,9 @@ describe("tsgo core test shards", () => {
     }
     for (const [file, owner] of [
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
+      ["src/agents/subagents/spawn/acp-spawn-target.test.ts", "agents-sessions"],
+      ["src/agents/session-maintenance/run.test.ts", "agents-sessions"],
+      ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
       ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],

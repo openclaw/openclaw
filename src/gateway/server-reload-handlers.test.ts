@@ -105,8 +105,7 @@ import {
   waitForReloadState,
 } from "./config-reload.test-support.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
-import { applyHookMappings } from "./hooks-mapping.js";
-import { commitHooksConfigReload } from "./hooks.js";
+import { applyHookMappings, commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { createChannelManager } from "./server-channels.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -2926,7 +2925,7 @@ describe("gateway hot reload commit policy", () => {
         transform: { modulePath: transformPath },
       },
     ];
-    commitHooksConfigReload();
+    commitHookTransformMappingReload();
     const applyActiveTransform = () =>
       applyHookMappings(activeMappings, {
         payload: {},

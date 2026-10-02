@@ -4,7 +4,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureSessionGoalOperationsSchema } from "../../state/openclaw-agent-goal-operations-schema.js";
 import {
   applySessionGoalOperation,
-  lookupSessionGoalOperation,
+  readSessionGoalOperationInDatabase,
   readSessionGoalOperationReceipt,
   writeSessionGoalOperationReceipt,
 } from "./goals-operations.js";
@@ -133,23 +133,23 @@ export async function appendExpectedSessionTranscriptTurn(
         ? () => {
             options.sessionTurnMutation?.assertCurrent?.();
             const current = withOpenClawAgentDatabaseReadOnly(
-              (database) => readWithCanonicalSessionAdmission(database, () => readEntry(database)),
+              (database) =>
+                readWithCanonicalSessionAdmission(database, () => {
+                  restoreEntry = readEntry(database);
+                  return (
+                    resolveExpectedEntry(restoreEntry) ||
+                    (restoreEntry?.entry.sessionId === options.expectedSessionId &&
+                      options.sessionTurnMutation &&
+                      readSessionGoalOperationInDatabase(database, {
+                        sessionKey: resolved.sessionKey,
+                        expectedSessionId: options.expectedSessionId,
+                        operation: options.sessionTurnMutation.operation,
+                      }))
+                  );
+                }),
               toDatabaseOptions(resolved),
             );
-            restoreEntry = current.found ? current.value : undefined;
-            if (resolveExpectedEntry(restoreEntry)) {
-              return;
-            }
-            if (
-              restoreEntry?.entry.sessionId === options.expectedSessionId &&
-              options.sessionTurnMutation &&
-              lookupSessionGoalOperation({
-                ...scope,
-                sessionKey: resolved.sessionKey,
-                expectedSessionId: options.expectedSessionId,
-                operation: options.sessionTurnMutation.operation,
-              })
-            ) {
+            if (current.found ? current.value : resolveExpectedEntry(undefined)) {
               return;
             }
             throw rebound;

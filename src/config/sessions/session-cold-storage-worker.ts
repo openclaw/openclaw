@@ -7,6 +7,7 @@ import { requireDirectorySync, syncDirectorySync } from "../../infra/directory-d
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
@@ -31,6 +32,7 @@ import {
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import {
   readSessionColdTranscript,
   type SessionColdArchive,
@@ -80,6 +82,7 @@ export type SessionColdMutationResult = {
   archivedTranscripts: number;
   externalizedTranscripts: number;
   restored: boolean;
+  sessionKey?: string;
 };
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
@@ -576,6 +579,13 @@ export function mutateSessionColdTranscriptInWorker(
           db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),
         );
         result.restored = true;
+        result.sessionKey = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_windows")
+            .select("session_key")
+            .where("session_id", "=", session_id),
+        )?.session_key;
       }
       onCommit(database);
       return result;
@@ -583,4 +593,20 @@ export function mutateSessionColdTranscriptInWorker(
     plan.databaseOptions,
     { operationLabel: "session cold storage" },
   );
+}
+
+export function readSessionColdStorageInventoryInWorker(options: OpenClawAgentDatabaseOptions) {
+  const counts = withOpenClawAgentDatabaseReadOnly(readSessionColdStorageInventory, options);
+  return counts.found ? counts.value : readSessionColdStorageInventory();
+}
+
+export function readSessionColdMetadataInWorker(
+  options: OpenClawAgentDatabaseOptions,
+  sessionId: string,
+) {
+  const result = withOpenClawAgentDatabaseReadOnly(
+    (database) => readSessionColdTranscript(database.db, sessionId),
+    options,
+  );
+  return result.found ? result.value : undefined;
 }

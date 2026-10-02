@@ -13,73 +13,104 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("keeps the runner event loop responsive while verifying a completed generation", async ({
-  signal,
-}) => {
-  const directory = tempDirs.make("vitest-worker-verification-");
-  fs.mkdirSync(path.join(directory, "dist"));
-  const manifest: VitestWorkerManifest = {
-    identity: "verification-fixture",
-    inputs: {},
-    outputs: {},
-    durationMs: 0,
-  };
-  const source = "export const value = 1;\n";
-  const hash = hashVitestWorkerArtifact(source);
-  for (let index = 0; index < 64; index++) {
-    const input = path.join(directory, `input-${index}.ts`);
-    const output = `output-${index}.js`;
-    fs.writeFileSync(input, source);
-    fs.writeFileSync(path.join(directory, "dist", output), source);
-    manifest.inputs[input] = hash;
-    manifest.outputs[output] = hash;
-  }
-
-  const held = path.join(directory, "input-0.ts");
-  const started = createDeferred();
-  const release = createDeferred();
-  const readFile = fs.promises.readFile.bind(fs.promises);
-  const reader = vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
-    if (args[0] === held) {
-      started.resolve();
-      await release.promise;
+it.for(["filesystem", "microtask"] as const)(
+  "keeps the runner event loop responsive while verifying a completed generation (%s reads)",
+  async (completion, { signal }) => {
+    const directory = tempDirs.make("vitest-worker-verification-");
+    fs.mkdirSync(path.join(directory, "dist"));
+    const manifest: VitestWorkerManifest = {
+      identity: "verification-fixture",
+      inputs: {},
+      outputs: {},
+      durationMs: 0,
+    };
+    const source = "export const value = 1;\n";
+    const hash = hashVitestWorkerArtifact(source);
+    const files = new Set<string>();
+    for (let index = 0; index < 64; index++) {
+      const input = path.join(directory, `input-${index}.ts`);
+      const output = `output-${index}.js`;
+      const outputPath = path.join(directory, "dist", output);
+      fs.writeFileSync(input, source);
+      fs.writeFileSync(outputPath, source);
+      manifest.inputs[input] = hash;
+      manifest.outputs[output] = hash;
+      files.add(input);
+      files.add(outputPath);
     }
-    return readFile(...args);
-  });
-  let completed = false;
-  // Supply the manifest so an asynchronous manifest read alone cannot satisfy
-  // the assertion: the source/artifact traversal itself must yield to I/O.
-  let verification: Promise<void> | undefined;
-  try {
-    verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
-      completed = true;
+
+    const held = path.join(directory, "input-0.ts");
+    const started = createDeferred();
+    const release = createDeferred();
+    const observedReads: string[] = [];
+    const readFile = fs.readFile.bind(fs);
+    const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+      const [filename, callback] = args;
+      if (completion === "filesystem") {
+        if (filename === held) {
+          started.resolve();
+          void release.promise.then(() => readFile(...args));
+          return;
+        }
+        return readFile(...args);
+      }
+      if (typeof filename !== "string" || !files.has(filename)) {
+        return readFile(...args);
+      }
+      observedReads.push(filename);
+      queueMicrotask(() => callback(null, Buffer.from(source)));
     });
-    await withinTest(
-      awaitGateBeforeSettlement(started.promise, verification, "verification bypassed async reads"),
-      signal,
-    );
-    await nextTurn();
-    expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
-  } finally {
-    release.resolve();
+    let completed = false;
+    // Supply the manifest so an asynchronous manifest read alone cannot satisfy
+    // the assertion: the source/artifact traversal itself must yield to I/O.
+    let verification: Promise<void> | undefined;
     try {
-      await verification;
+      verification = Promise.resolve(verifyVitestWorkerArtifacts(directory, manifest)).then(() => {
+        completed = true;
+      });
+      if (completion === "filesystem") {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            started.promise,
+            verification,
+            "verification bypassed async reads",
+          ),
+          signal,
+        );
+      }
+      await nextTurn();
+      expect(completed, "verification blocked the runner until every file was hashed").toBe(false);
     } finally {
-      reader.mockRestore();
+      release.resolve();
+      try {
+        await verification;
+      } finally {
+        reader.mockRestore();
+      }
     }
-  }
-});
+    if (completion === "microtask") {
+      expect(observedReads.toSorted()).toEqual([...files].toSorted());
+    }
+  },
+);
 
-it.for(["inputs", "outputs"] as const)(
-  "drains active %s reads before failed verification releases the generation",
-  async (group, { signal }) => {
+it.for([
+  { group: "inputs", damage: "changed" },
+  { group: "outputs", damage: "changed" },
+  { group: "inputs", damage: "missing" },
+  { group: "outputs", damage: "missing" },
+] as const)(
+  "drains active $group reads before $damage verification releases the generation",
+  async ({ group, damage }, { signal }) => {
     const owner = createVitestWorkerRun();
     const directory = owner.descriptor.directory;
     const files = group === "inputs" ? directory : path.join(directory, "dist");
     fs.mkdirSync(files, { recursive: true });
     const bad = path.join(files, "changed.js");
     const held = path.join(files, "held.js");
-    fs.writeFileSync(bad, "changed");
+    if (damage === "changed") {
+      fs.writeFileSync(bad, "changed");
+    }
     fs.writeFileSync(held, "expected");
     const hash = hashVitestWorkerArtifact("expected");
     const manifest: VitestWorkerManifest = {
@@ -98,17 +129,21 @@ it.for(["inputs", "outputs"] as const)(
     const started = createDeferred();
     const failedRead = createDeferred();
     const release = createDeferred();
-    const readFile = fs.promises.readFile.bind(fs.promises);
-    const reader = vi.spyOn(fs.promises, "readFile").mockImplementation(async (...args) => {
-      if (args[0] === held) {
+    const readFile = fs.readFile.bind(fs);
+    const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+      const [filename, callback] = args;
+      if (filename === held) {
         started.resolve();
-        await release.promise;
+        void release.promise.then(() => readFile(...args));
+        return;
       }
-      const bytes = await readFile(...args);
-      if (args[0] === bad) {
+      if (filename !== bad) {
+        return readFile(...args);
+      }
+      readFile(filename, (error, bytes) => {
+        callback(error, bytes);
         failedRead.resolve();
-      }
-      return bytes;
+      });
     });
     let completed = false;
     let failure: unknown;
@@ -141,7 +176,11 @@ it.for(["inputs", "outputs"] as const)(
       group === "inputs"
         ? "Source changed during compiled subprocess invocation"
         : "Compiled subprocess artifact changed";
-    expect(failure).toMatchObject({ message: expect.stringContaining(diagnostic) });
+    if (damage === "missing") {
+      expect(failure).toMatchObject({ code: "ENOENT" });
+    } else {
+      expect(failure).toMatchObject({ message: expect.stringContaining(diagnostic) });
+    }
     expect(fs.existsSync(directory)).toBe(false);
   },
 );

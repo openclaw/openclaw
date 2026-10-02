@@ -161,10 +161,22 @@ export function resolveSessionStoreIdentity(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  preserveQualifiedAddress?: boolean;
 }): { agentId: string; canonicalKey: string } {
   const raw = normalizeOptionalString(params.sessionKey) ?? "";
   const requestedAgentId = normalizeOptionalString(params.agentId);
   const parsed = parseAgentSessionKey(raw);
+  if (params.preserveQualifiedAddress && parsed) {
+    const canonicalKey = normalizeSessionKeyPreservingOpaquePeerIds(raw);
+    return {
+      agentId: resolveSessionAgentId({
+        config: params.cfg,
+        sessionKey: canonicalKey,
+        agentId: requestedAgentId,
+      }),
+      canonicalKey,
+    };
+  }
   const sessionKey = parsed
     ? resolveParsedSessionStoreKey(params.cfg, raw, parsed, { storeAgentId: requestedAgentId })
         .sessionKey

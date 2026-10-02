@@ -4,7 +4,11 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../../agents/cli-execution-auth.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
-import { clearCliSessionInStore, settleCliSessionResult } from "../../agents/cli-session-store.js";
+import {
+  buildCliSessionForkRunParams,
+  clearCliSessionInStore,
+  settleCliSessionResult,
+} from "../../agents/cli-session-store.js";
 import { shouldClearFailedCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
 import { withAdmittedCliCandidate } from "../../agents/embedded-agent-runner/run-entry-cli.js";
@@ -171,7 +175,13 @@ export async function runCliFallbackCandidate(
         getSessionEntry: () => turn.getActiveSessionEntry(),
         classifyResult: params.classifyResult,
       },
-      async ({ sessionEntry, cliSessionBinding, assertSettlementCurrent, settleResult }) => {
+      async ({
+        sessionEntry: initialSessionEntry,
+        cliSessionBinding,
+        assertSettlementCurrent,
+        settleResult,
+      }) => {
+        let sessionEntry = initialSessionEntry;
         // The CLI owner must see explicit pins before provider scoping can discard them.
         const authProfileId = allowCliAuthProfileForwarding
           ? resolveCliExecutionAuthProfileId({
@@ -186,6 +196,27 @@ export async function runCliFallbackCandidate(
               config: params.runtimeConfig,
             }).authProfileId;
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
+        // A forked child carries the parent's binding with a one-shot fork marker;
+        // honor it here or the child resumes inside the parent's native thread.
+        const forkCliSessionOnResume = cliSessionBinding?.forkNextResume === true;
+        const forkRunParams =
+          cliSessionBinding?.sessionId && sessionKey && turn.activeSessionStore && turn.storePath
+            ? buildCliSessionForkRunParams(
+                {
+                  agentId: turn.followupRun.run.agentId,
+                  provider: params.cliExecutionProvider,
+                  expectedCliSessionId: cliSessionBinding.sessionId,
+                  sessionKey,
+                  sessionStore: turn.activeSessionStore,
+                  storePath: turn.storePath,
+                  assertCommitAllowed: assertSettlementCurrent,
+                  abortSignal: params.runAbortSignal,
+                },
+                (entry) => {
+                  sessionEntry = entry;
+                },
+              )
+            : undefined;
         const mediaTaskIdsBefore = getGeneratedMediaTaskIdsForSessionKey(
           turn.sessionKey,
           turn.followupRun.run.agentId,
@@ -409,6 +440,8 @@ export async function runCliFallbackCandidate(
             ownerNumbers: turn.followupRun.run.ownerNumbers,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
+            forkCliSessionOnResume,
+            ...forkRunParams,
             authProfileId,
             bootstrapContextMode: turn.opts?.bootstrapContextMode,
             bootstrapContextRunKind: params.bootstrapContextRunKind,

@@ -1,16 +1,19 @@
 import { setTimeout as delay } from "node:timers/promises";
-import { APIConnectionError, APIError, APIUserAbortError } from "openai";
+import { APIUserAbortError } from "openai";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   AgentsApiClient,
-  AgentsApiError,
   isAgentsApiTerminalTurn,
   type AgentsApiEvent,
   type AgentsApiFunctionCall,
   type AgentsApiItem,
 } from "./agentsapi-client.js";
+import {
+  AgentsApiError,
+  isAgentsApiOptionalHistoryReadFailure,
+  isAgentsApiTransportDisconnect,
+} from "./agentsapi-errors.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -709,26 +712,4 @@ export function createAgentsApiSession(options: {
       closed = true;
     },
   };
-}
-
-function isAgentsApiTransportDisconnect(error: unknown): boolean {
-  if (!(error instanceof Error) || error instanceof AgentsApiError) {
-    return false;
-  }
-  const code = asOptionalRecord(error)?.code;
-  if (
-    (typeof code === "string" &&
-      ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "UND_ERR_SOCKET"].includes(code)) ||
-    (error instanceof TypeError && ["terminated", "fetch failed"].includes(error.message))
-  ) {
-    return true;
-  }
-  return error.cause instanceof Error && isAgentsApiTransportDisconnect(error.cause);
-}
-
-function isAgentsApiOptionalHistoryReadFailure(error: unknown): boolean {
-  return (
-    error instanceof APIConnectionError ||
-    (error instanceof APIError && (error.status === 429 || (error.status ?? 0) >= 500))
-  );
 }

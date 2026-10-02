@@ -40,6 +40,7 @@ import { log } from "../logger.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
@@ -202,6 +203,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
+      attempt,
+      input.sessionAgentId,
+    ),
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,

@@ -108,6 +108,13 @@ export class PluginInvocationScope {
     }
   }
 
+  /** Open retained consumers are drained by a reload that reserved their instance. */
+  get holdsPendingReplacement(): boolean {
+    return (
+      !this.closed && [...this.consumers.keys()].some((instance) => instance.replacementPending)
+    );
+  }
+
   lookup(instance: PluginInstanceHandle): PluginInvocationBinding | undefined {
     const binding = this.bindings.get(instance);
     if (binding) {

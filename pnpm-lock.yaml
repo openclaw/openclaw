@@ -169,7 +169,7 @@ overrides:
   chevrotain>lodash-es: 4.18.1
   '@chevrotain/cst-dts-gen>lodash-es': 4.18.1
   '@chevrotain/gast>lodash-es': 4.18.1
-  '@agentclientprotocol/codex-acp@1.12.0>@openai/codex': 0.158.0
+  '@agentclientprotocol/codex-acp@1.12.0>@openai/codex': 0.159.1
   '@codemirror/commands@6.11.1>@codemirror/view': 6.43.13
   '@codemirror/view@6.43.13>@codemirror/state': 6.7.6
   '@anthropic-ai/sdk': 0.127.0
@@ -520,8 +520,8 @@ importers:
         specifier: 2.5.0
         version: 2.5.0
       jscpd:
-        specifier: 5.3.0
-        version: 5.3.0
+        specifier: 5.3.2
+        version: 5.3.2
       jsdom:
         specifier: 30.1.1
         version: 30.1.1(@noble/hashes@2.4.0)
@@ -934,8 +934,8 @@ importers:
   extensions/codex:
     dependencies:
       '@openai/codex':
-        specifier: 0.158.0
-        version: 0.158.0
+        specifier: 0.159.1
+        version: 0.159.1
       '@openclaw/fs-safe':
         specifier: 0.22.0
         version: 0.22.0
@@ -4578,43 +4578,43 @@ packages:
     resolution: {integrity: sha512-3zcN5Q3yEmeyxXBzqB6fXPQFzYa2ROsGFSr69W0ArXIAGJqxl/aFECOVPD2kbkYPm0U/EHxFKgclK3UA9WQg5A==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@openai/codex@0.158.0':
-    resolution: {integrity: sha512-GBhcKpQmVLsCtEP5mUf6WFye6QQgTKotwsXrYPM0GFmEsoOSahik6hkf2FHabX9kZBl0Y0/PQowLu7uYMKT8dg==}
+  '@openai/codex@0.159.1':
+    resolution: {integrity: sha512-tCAmvOk40hcmVDefwV4Jae/i5eAMrl7qUCRYUq1uYiQGZoIIVSCa/b3Fs+0uXG46p4jaG2DzqhG/RIunvnOa1g==}
     engines: {node: '>=16'}
     hasBin: true
 
-  '@openai/codex@0.158.0-darwin-arm64':
-    resolution: {integrity: sha512-0OKSjlWY1j4Ld1fT87QttNw3Y2SthcXi4GcrWSHjleZg1n86eG3+shJl4Pv+siUmsBJhWlNmm6rRO4Yv8ZyQLg==}
+  '@openai/codex@0.159.1-darwin-arm64':
+    resolution: {integrity: sha512-asbXtXQerzPO8CL3t/5++Whj00k+NkbE4ngT56pCwx2/5JJVCI0glEjCECGK8rA0v4zb94EAZonxAcfOd+/1MA==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [darwin]
 
-  '@openai/codex@0.158.0-darwin-x64':
-    resolution: {integrity: sha512-FrX1o3APrL7F6QkO8z08Rq8lJitH2sNI7pkebA02eYA103hDs3fyy9d32zeLLQJUeAhmZA4pV9xJR4m7cVyNpQ==}
+  '@openai/codex@0.159.1-darwin-x64':
+    resolution: {integrity: sha512-aCcslg6PejQSE/FhEFNk5JMQuiUYYTwWK2W/kAIZ18qSHFV0UHqqmSnHDSPOx1xClUGc9RhtAB6y9TO99hHk2Q==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [darwin]
 
-  '@openai/codex@0.158.0-linux-arm64':
-    resolution: {integrity: sha512-T9AgGcoU7HNsxJ4prT/R9YvztyEmz9kWP/VlT2cbCop4PVwiqfG9YMJtLo4j2ScewvSaTl4sQFwla+fwGpoRZg==}
+  '@openai/codex@0.159.1-linux-arm64':
+    resolution: {integrity: sha512-SUuxUCTWkvmzrCPIpRHMlivwSsL2STeUv6Dqm/TkUwYFfaqAQqZ8uIq8+d3SnYJsXiz1bkoiIdy8CSuptfEBfQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [linux]
 
-  '@openai/codex@0.158.0-linux-x64':
-    resolution: {integrity: sha512-mY12GZPM8TuOWVGxCyNV2NSA8t1uIupm9Nhu9VeQVEvvxBKN08U8bLH+vn7oISUHZPC8bwhROIbo/ZUxqV6XMg==}
+  '@openai/codex@0.159.1-linux-x64':
+    resolution: {integrity: sha512-NmXTe4LDsShovyGYH5Q5AP2S5kRtY6wEWkAMGm28pYGQsjUd1MMSPBK7obnepYgaqX774jDF0w8jpDPmOLSx3w==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [linux]
 
-  '@openai/codex@0.158.0-win32-arm64':
-    resolution: {integrity: sha512-Jw1u0q0+5PG97jPkINxE3UCFtsYBN8Af+IjjM0zlCO675Sv5lNsXU2K9aIaXwVeQIKw8q2lbPAR4SEkq2rSOoA==}
+  '@openai/codex@0.159.1-win32-arm64':
+    resolution: {integrity: sha512-6CY7Vkp+2aSkRFIlLBsifbU/jf1s58k9C6FVsW2pk/EpQHT5fPpUWVZqVDxiIlp7EXnCz8eRdSmFNVNuILMfyQ==}
     engines: {node: '>=16'}
     cpu: [arm64]
     os: [win32]
 
-  '@openai/codex@0.158.0-win32-x64':
-    resolution: {integrity: sha512-IaUmY11Zdqa/Zok6kE0Z5375pXtClKRbS8P1Gh2C73Aq65CaGn9N8gT6BXGC3+XD6yamAIiEQW5xM842UCCGow==}
+  '@openai/codex@0.159.1-win32-x64':
+    resolution: {integrity: sha512-BUNLYw3oqwnpdV9pWKPccJ7WlbYG36SGPyGBzbnayvEl6D4RwucN7GOl+Qe05WRXI5is+kveieX1pg5uyBSIrg==}
     engines: {node: '>=16'}
     cpu: [x64]
     os: [win32]
@@ -7931,52 +7931,52 @@ packages:
     resolution: {integrity: sha512-SFNOvSJ+Dgf/9An904Yx+CgSlIPCkIpao4qo51lpee25TIRejdH3rhR4EZMGoNx3/TP3O+wzWuiTFl4sqbltzA==}
     hasBin: true
 
-  jscpd-darwin-arm64@5.3.0:
-    resolution: {integrity: sha512-kH4O+vgWtWbaE42+KejOmDZW9nB4WqsbX+NxAQPwVxZg1TQTM2bhDhYdQo+MHpN+vf4HpQ+dOCsARBn2ri+ing==}
+  jscpd-darwin-arm64@5.3.2:
+    resolution: {integrity: sha512-dlNh+revPs3X1yTRNAYqZD9u7eqiR9I+KoNvEk9JzSwzOuaUQrgwpP5EZQB0NKuF0oZZZeKrk05OTsNorVpqmQ==}
     cpu: [arm64]
     os: [darwin]
 
-  jscpd-darwin-x64@5.3.0:
-    resolution: {integrity: sha512-IMobUmmZcrxKbziuni93ljtIMtAyPY4lFPNcopgTOFwO3vlHeYZV1r0sY8eP0APvW5BSFW2nBA/WG5+EezYpYw==}
+  jscpd-darwin-x64@5.3.2:
+    resolution: {integrity: sha512-JUt9dhLw2k1WNLqbFcqbDf8ErR6mp9ucKn+chRBsBRdx7MNbdEXmV5UuHRBO8d9h7Cw1eSpfpBPMTCXOS4aaeA==}
     cpu: [x64]
     os: [darwin]
 
-  jscpd-linux-arm64-gnu@5.3.0:
-    resolution: {integrity: sha512-VdN3g485lHqGxysAuij0KkDh4HSczUOJ8d8rXdCBSYBBqIrSMkVtfy7iug7GUhGkLZ7qukTkgvZs0P7mEMH8Yw==}
+  jscpd-linux-arm64-gnu@5.3.2:
+    resolution: {integrity: sha512-4+Z/fW7nqruf47AXRXPe8nTeExPm93Gt4A/6B4Wsi6b0G8Ei/tYDxB4jAwUBXnOGVwxrr/IDJlgSEvHLbzX+MQ==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  jscpd-linux-arm64-musl@5.3.0:
-    resolution: {integrity: sha512-96JQfVFcSBjoUwqFeEQQ4c2wHHT4kE+LqZtEayc6ko3Ouu1nLJvCnBA5DSOU0HuIvGAVq8A2CmkWJ6I1XCCt/A==}
+  jscpd-linux-arm64-musl@5.3.2:
+    resolution: {integrity: sha512-+OsVA0iLfDNUIzJArAaJnGyOHxsflpbpkGh/mWs2nZV7vPd1g5Y9SWO+vj83f6BdaO9VNbUbaQAY4dBYadfHIA==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  jscpd-linux-x64-gnu@5.3.0:
-    resolution: {integrity: sha512-teMMfXFE1iAJ2rgqxRUOxX6U7glr//8WKZhEH0sRIN6QwstjKmzKlEPEf1UU2rH7JyYlsIGAYcjrWzmJ7wDLcA==}
+  jscpd-linux-x64-gnu@5.3.2:
+    resolution: {integrity: sha512-DsNsbCCc5mMOGZdhzgPETsp9RAaKk03cdx1K9wx9RShePnF+AXstYYSiW7M/qjZqvBMlSpO60BXpJvNUQljJJg==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  jscpd-linux-x64-musl@5.3.0:
-    resolution: {integrity: sha512-mVsivu/awa17BwOZbnkGo/H8P1IedckXswuT5ZwYXkgpVD//ken4HjjcUO8+fwxu3cRbk0qycdLfP/B1VAtAMA==}
+  jscpd-linux-x64-musl@5.3.2:
+    resolution: {integrity: sha512-9D+Jg4MXTHoY5FiK6Fh3FeAr1MsqNS98X5zMUH6PNXu9PKsT0g3Rez2vdYOnoKOE4n8o1XAs8eyU0pm3+HYwog==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  jscpd-windows-arm64-msvc@5.3.0:
-    resolution: {integrity: sha512-uzkJo9bY2Er91MFyovQUYOAq06bjoO9E36v7qAhzh0yzhYaQNVchmKrP3qEFjA+5K2DL9jeJCD6JL9q4ZiQyGg==}
+  jscpd-windows-arm64-msvc@5.3.2:
+    resolution: {integrity: sha512-qPqZEMHUOjc5tKVU7PElyIhI1J0xyAuQ44S2SwLvKS5qw1NATGTaGhp8MuJkrvTmNcNZmLF0Me6Cv6zj6DVlWA==}
     cpu: [arm64]
     os: [win32]
 
-  jscpd-windows-x64-msvc@5.3.0:
-    resolution: {integrity: sha512-E9FBk7BzAC6EffvFuV5ggDhXFJW1F6odrdgLe9RaMW9IWjhgHhmliJgse0ehmaqQu9HGNVwx+Cq238U4Cfe5Iw==}
+  jscpd-windows-x64-msvc@5.3.2:
+    resolution: {integrity: sha512-WfO1k0/NXA+2HjLaWUkheQv6bEkYrI4WKa/Cf429+dnpdiYB6S8KpJyd6/xGJd+XJ9nKhE0mIFuk3+VdXtaFMQ==}
     cpu: [x64]
     os: [win32]
 
-  jscpd@5.3.0:
-    resolution: {integrity: sha512-EiGK3H6ZF8jbyiIU1c+iPkgWskcXVoSozfobYIbySK1KPlo+UYmVqSVpKUiLnfoNDOTy9vqACSmiS+JA7xPsQg==}
+  jscpd@5.3.2:
+    resolution: {integrity: sha512-siYdg3TBNwizWFaYPgr1vwuSs+NWeKJjLAbd00Nkmr2y8TSZRSW0cOGKtqSLgOv7QXDbC/XECnCrZEm5v6RMkg==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -10334,7 +10334,7 @@ snapshots:
   '@agentclientprotocol/codex-acp@1.12.0':
     dependencies:
       '@agentclientprotocol/sdk': 1.4.0(zod@4.6.5)
-      '@openai/codex': 0.158.0
+      '@openai/codex': 0.159.1
       diff: 9.0.0
       open: 11.0.4
       vscode-jsonrpc: 9.0.2
@@ -12280,31 +12280,31 @@ snapshots:
 
   '@npmcli/redact@5.0.0': {}
 
-  '@openai/codex@0.158.0':
+  '@openai/codex@0.159.1':
     optionalDependencies:
-      '@openai/codex-darwin-arm64': '@openai/codex@0.158.0-darwin-arm64'
-      '@openai/codex-darwin-x64': '@openai/codex@0.158.0-darwin-x64'
-      '@openai/codex-linux-arm64': '@openai/codex@0.158.0-linux-arm64'
-      '@openai/codex-linux-x64': '@openai/codex@0.158.0-linux-x64'
-      '@openai/codex-win32-arm64': '@openai/codex@0.158.0-win32-arm64'
-      '@openai/codex-win32-x64': '@openai/codex@0.158.0-win32-x64'
+      '@openai/codex-darwin-arm64': '@openai/codex@0.159.1-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.159.1-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.159.1-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.159.1-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.159.1-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.159.1-win32-x64'
 
-  '@openai/codex@0.158.0-darwin-arm64':
+  '@openai/codex@0.159.1-darwin-arm64':
     optional: true
 
-  '@openai/codex@0.158.0-darwin-x64':
+  '@openai/codex@0.159.1-darwin-x64':
     optional: true
 
-  '@openai/codex@0.158.0-linux-arm64':
+  '@openai/codex@0.159.1-linux-arm64':
     optional: true
 
-  '@openai/codex@0.158.0-linux-x64':
+  '@openai/codex@0.159.1-linux-x64':
     optional: true
 
-  '@openai/codex@0.158.0-win32-arm64':
+  '@openai/codex@0.159.1-win32-arm64':
     optional: true
 
-  '@openai/codex@0.158.0-win32-x64':
+  '@openai/codex@0.159.1-win32-x64':
     optional: true
 
   '@openclaw/crabline@0.1.27':
@@ -15650,40 +15650,40 @@ snapshots:
     dependencies:
       argparse: 2.0.1
 
-  jscpd-darwin-arm64@5.3.0:
+  jscpd-darwin-arm64@5.3.2:
     optional: true
 
-  jscpd-darwin-x64@5.3.0:
+  jscpd-darwin-x64@5.3.2:
     optional: true
 
-  jscpd-linux-arm64-gnu@5.3.0:
+  jscpd-linux-arm64-gnu@5.3.2:
     optional: true
 
-  jscpd-linux-arm64-musl@5.3.0:
+  jscpd-linux-arm64-musl@5.3.2:
     optional: true
 
-  jscpd-linux-x64-gnu@5.3.0:
+  jscpd-linux-x64-gnu@5.3.2:
     optional: true
 
-  jscpd-linux-x64-musl@5.3.0:
+  jscpd-linux-x64-musl@5.3.2:
     optional: true
 
-  jscpd-windows-arm64-msvc@5.3.0:
+  jscpd-windows-arm64-msvc@5.3.2:
     optional: true
 
-  jscpd-windows-x64-msvc@5.3.0:
+  jscpd-windows-x64-msvc@5.3.2:
     optional: true
 
-  jscpd@5.3.0:
+  jscpd@5.3.2:
     optionalDependencies:
-      jscpd-darwin-arm64: 5.3.0
-      jscpd-darwin-x64: 5.3.0
-      jscpd-linux-arm64-gnu: 5.3.0
-      jscpd-linux-arm64-musl: 5.3.0
-      jscpd-linux-x64-gnu: 5.3.0
-      jscpd-linux-x64-musl: 5.3.0
-      jscpd-windows-arm64-msvc: 5.3.0
-      jscpd-windows-x64-msvc: 5.3.0
+      jscpd-darwin-arm64: 5.3.2
+      jscpd-darwin-x64: 5.3.2
+      jscpd-linux-arm64-gnu: 5.3.2
+      jscpd-linux-arm64-musl: 5.3.2
+      jscpd-linux-x64-gnu: 5.3.2
+      jscpd-linux-x64-musl: 5.3.2
+      jscpd-windows-arm64-msvc: 5.3.2
+      jscpd-windows-x64-msvc: 5.3.2
 
   jsdom@30.1.1(@noble/hashes@2.4.0):
     dependencies:

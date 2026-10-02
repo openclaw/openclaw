@@ -7,7 +7,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { lookupSessionGoalOperation } from "./goals-operations.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -119,7 +119,11 @@ describe("first transcript turn initialization", () => {
     expect(turn.messages[0]?.message).toMatchObject({ content: operation.objective });
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
     expect(
-      lookupSessionGoalOperation({ ...scope(), expectedSessionId: sessionId, operation }),
+      readSessionGoalOperationInDatabase(database(), {
+        ...scope(),
+        expectedSessionId: sessionId,
+        operation,
+      }),
     ).toEqual(turn.sessionTurnMutationResult?.result);
 
     await closeOpenClawAgentDatabasesAsync();

@@ -30,9 +30,9 @@ untouched so Doctor can report and persist the repair.
 
 ## Retention policy
 
-Doctor uses a six-month migration retention window. The current retirement cutoff
-is `v2026.3.1`: retain a transform whenever any release from that version onward
-can still write its input format. A supported release that preserves a legacy
+OpenClaw supports migrations from formats written by shipped releases on or after
+July 1, 2026. Retain a transform whenever a release in that window can still write
+its input format. A supported release that preserves a legacy
 format when rewriting existing data also counts as a writer. A format last
 written before the cutoff may be retired only with a clear refusal naming an
 intermediate release to upgrade through before retrying. Retirement must never
@@ -488,7 +488,7 @@ against the current SQLite owners before the import can rename profiles.
     For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters and legacy default markers already honored by the runtime need no owner repair and produce no missing-owner advice. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
-      Migration retention follows the six-month
+      Migration retention follows the July 2026 cutoff in the
       [retention policy](/gateway/doctor/config-migrations#retention-policy), based
       on which supported releases can still write the format. For a retired
       format, follow Doctor's intermediate-upgrade instructions before retrying.

@@ -154,9 +154,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   const spin = allowSpinner ? createProgressSpinner({ output: stream }, 7) : null;
   const renderLine = allowLine
     ? () => {
-        if (!started) {
-          return;
-        }
         const suffix = indeterminate ? "" : ` ${percent}%`;
         clearActiveProgressLine();
         stream.write(`${theme.accent(label)}${suffix}`);
@@ -168,9 +165,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
         let lastAt = 0;
         const throttleMs = 250;
         return () => {
-          if (!started) {
-            return;
-          }
           const suffix = indeterminate ? "" : ` ${percent}%`;
           const nextLine = `${label}${suffix}`;
           const now = Date.now();
@@ -202,9 +196,6 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
   };
 
   const start = () => {
-    if (started) {
-      return;
-    }
     started = true;
     spin?.start(label);
     applyState();
