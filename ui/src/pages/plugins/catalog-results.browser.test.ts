@@ -43,41 +43,45 @@ afterEach(() => {
   styles.remove();
 });
 
+function catalogProps(): PluginCatalogResultsProps {
+  return {
+    connected: true,
+    loading: false,
+    result: { items: [entry] },
+    error: null,
+    remoteError: null,
+    categories: [],
+    categoriesLoading: false,
+    categoriesError: null,
+    onRetryCategories: vi.fn(),
+    featured: [],
+    featuredLoading: false,
+    trending: [],
+    trendingLoading: false,
+    loadingMore: false,
+    loadMoreError: null,
+    intent: "all",
+    category: null,
+    query: "memory",
+    iconUrls: {},
+    pluginIconUrls: {},
+    canInstall: true,
+    entryHref: () => "/plugins/long-title",
+    onIntentChange: vi.fn(),
+    onCategoryChange: vi.fn(),
+    onQueryChange: vi.fn(),
+    onOpenEntry: vi.fn(),
+    onInstall: vi.fn(),
+    onLoadMore: vi.fn(),
+    onRetry: vi.fn(),
+  };
+}
+
 it.each([263, 362])(
   "keeps long identity text clear of the action within a %ipx card",
   async (width) => {
     const onInstall = vi.fn();
-    const props: PluginCatalogResultsProps = {
-      connected: true,
-      loading: false,
-      result: { items: [entry] },
-      error: null,
-      remoteError: null,
-      categories: [],
-      categoriesLoading: false,
-      categoriesError: null,
-      onRetryCategories: vi.fn(),
-      featured: [],
-      featuredLoading: false,
-      trending: [],
-      trendingLoading: false,
-      loadingMore: false,
-      loadMoreError: null,
-      intent: "all",
-      category: null,
-      query: "memory",
-      iconUrls: {},
-      pluginIconUrls: {},
-      canInstall: true,
-      entryHref: () => "/plugins/long-title",
-      onIntentChange: vi.fn(),
-      onCategoryChange: vi.fn(),
-      onQueryChange: vi.fn(),
-      onOpenEntry: vi.fn(),
-      onInstall,
-      onLoadMore: vi.fn(),
-      onRetry: vi.fn(),
-    };
+    const props = { ...catalogProps(), onInstall };
     const progress = {
       startedAt: Date.now(),
       activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
@@ -185,4 +189,36 @@ it("renders the official icon background as opaque white", async () => {
   expect(tile.classList.contains("plugins-tile--white")).toBe(true);
   expect(getComputedStyle(tile).backgroundColor).toBe("rgb(255, 255, 255)");
   expect(getComputedStyle(image).padding).toBe("4px");
+});
+
+it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
+  render(renderPluginCatalogResults({ ...catalogProps(), loading: true }), container);
+  const errors: string[] = [];
+  const onError = (event: ErrorEvent) => errors.push(event.message);
+  window.addEventListener("error", onError);
+  try {
+    for (const [width, height] of [
+      [1847, 1344],
+      [390, 844],
+      [768, 1024],
+      [1366, 768],
+    ]) {
+      await page.viewport(width, height);
+      await expect
+        .poll(() => {
+          const grid = container.querySelector<HTMLElement>(".plugin-catalog-grid--skeleton")!;
+          const cards = [...grid.children].map((card) => card.getBoundingClientRect());
+          const row = cards[0].height + Number.parseFloat(getComputedStyle(grid).rowGap);
+          const bottom = cards.at(-1)!.bottom;
+          return bottom >= height && bottom < height + row && cards[0].height < 200;
+        })
+        .toBe(true);
+    }
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+    expect(errors).toEqual([]);
+  } finally {
+    window.removeEventListener("error", onError);
+  }
 });

@@ -290,6 +290,13 @@
   min-width: 0;
 }
 
+.plugin-catalog-section--expandable {
+  /* Overview shelves show at most two rows at every breakpoint. Remember their
+     height so offscreen cards skip layout without collapsing the scrollbar. */
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 280px;
+}
+
 .plugin-catalog-section__header {
   display: flex;
   align-items: center;
@@ -442,8 +449,7 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 7) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 7) {
     display: none;
   }
 }
@@ -453,8 +459,7 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 5) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 5) {
     display: none;
   }
 }
@@ -470,8 +475,7 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3),
-  .plugin-catalog-grid--skeleton .plugin-catalog-card:nth-child(n + 3) {
+  .plugin-catalog-section--expandable .plugin-catalog-card:nth-child(n + 3) {
     display: none;
   }
 }
