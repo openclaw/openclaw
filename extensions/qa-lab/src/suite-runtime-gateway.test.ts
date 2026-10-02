@@ -75,6 +75,9 @@ describe("qa suite gateway helpers", () => {
       code: "transport_ready_timeout",
       cause: readinessError,
     });
+    if (!(failure instanceof QaSuiteInfraError)) {
+      throw failure;
+    }
     expect(failure.message).toContain(readinessError.message);
 
     const typedError = new QaSuiteInfraError("gateway_ready_timeout", "gateway stayed down");
