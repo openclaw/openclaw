@@ -27,6 +27,7 @@ import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-
 import { trimTextPreservingCode } from "../../../shared/text/text-projection.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import {
+  classifyAssistantFailoverReason,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
   normalizeTextForComparison,
@@ -200,7 +201,23 @@ export function buildEmbeddedRunPayloads(params: {
         isError: true,
         ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
       };
-      replyItems.push(setReplyPayloadMetadata(errorPayload, { terminalProviderError: true }));
+      replyItems.push(
+        setReplyPayloadMetadata(errorPayload, {
+          terminalProviderError: true,
+          ...(assistantForPayload &&
+          (rawErrorMessage ||
+            assistantForPayload.errorCode ||
+            assistantForPayload.errorType ||
+            assistantForPayload.errorBody)
+            ? {
+                providerFailure: {
+                  reason: classifyAssistantFailoverReason(assistantForPayload, errorContext),
+                  rawError: rawErrorMessage,
+                },
+              }
+            : {}),
+        }),
+      );
     }
     const reasoningText =
       suppressAssistantArtifacts || runAborted || lastAssistantNeedsErrorSurface

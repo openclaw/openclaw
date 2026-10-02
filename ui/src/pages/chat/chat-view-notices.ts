@@ -11,7 +11,6 @@ import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
-import { clampText } from "../../lib/format.ts";
 import { renderWorkspaceConflictNotice } from "./components/chat-workspace-conflict.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 import type { ProviderPolicyNotice } from "./tool-stream-contract.ts";
@@ -118,15 +117,9 @@ function renderErrorNotice(
   action: TemplateResult | typeof nothing = nothing,
   displayError = formatWebUiIconErrorText(error),
   tone: "danger" | "warn" = "danger",
+  summary = t("chat.errorRequestSummary"),
 ) {
-  const lines = displayError
-    .trim()
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/\s+/gu, " ").trim());
-  const [firstLine = ""] = lines;
-  const summary = clampText(firstLine);
-  const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Keep the bounded summary readable without opening the technical details.
+  const hasDetails = displayError.trim() !== summary;
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--${tone} chat-error"
@@ -195,7 +188,7 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   return html`
     ${props.providerReviewNotice ?? nothing}
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger") : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh, undefined, contention ? "warn" : "danger", t(contention ? "chat.errorBusySummary" : props.runError.kind === "auth_refresh" ? "chat.errorSignInSummary" : "chat.errorReplySummary")) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,
@@ -271,5 +264,15 @@ function renderPlacementStartupError(
           ${t(checking ? "chat.queue.checkDelivery" : "common.retry")}
         </button>`
       : nothing;
-  return renderErrorNotice(error, action, displayError);
+  return renderErrorNotice(
+    error,
+    action,
+    displayError,
+    "danger",
+    checking
+      ? t("chat.queue.checkDeliveryHelp")
+      : status.discardAndReload
+        ? displayError
+        : t("chat.errorStartSummary"),
+  );
 }

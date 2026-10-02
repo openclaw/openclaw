@@ -192,6 +192,23 @@ function pushPrefixed(out: string[], value: string): void {
 }
 
 export function formatCliFailureLines(options: FormatCliFailureOptions): string[] {
+  if (
+    isGatewayTransportError(options.error) &&
+    !shouldShowDebugDetails(options.argv, options.env)
+  ) {
+    const error = options.error;
+    return [
+      error.kind === "timeout"
+        ? "OpenClaw took too long to respond."
+        : error.requestDispatched
+          ? "Lost the connection to OpenClaw."
+          : "Couldn't connect to OpenClaw.",
+      ...(error.requestDispatched
+        ? ["Your request may have completed. Check its result before trying again."]
+        : []),
+      `Check the Control UI or run \`${formatCliCommand("openclaw gateway status", options.env)}\` in your terminal.`,
+    ];
+  }
   if (isExpectedCliError(options.error)) {
     const output = resolveExpectedCliOutput(options.error);
     return output.humanOutputWritten ? [] : output.humanOutput.trimEnd().split("\n");
@@ -200,6 +217,30 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
   // Default output stays terse; causes and stack traces require explicit debug intent.
   const env = options.env ?? process.env;
   const showDebugDetails = shouldShowDebugDetails(options.argv, env);
+  const stateBusy = collectNestedErrorCandidates(options.error).some(
+    (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
+  );
+  if (!showDebugDetails) {
+    if (
+      options.error instanceof UpdateSchemaRefusalError ||
+      (options.error instanceof Error &&
+        (options.error.name === "DoctorUnreadableStateDatabaseError" ||
+          options.error.name === "OpenClawDatabaseSchemaPreflightError"))
+    ) {
+      // Doctor cannot repair these refusals; their producers own the required recovery steps.
+      const lines = ["[openclaw] OpenClaw needs a manual recovery step."];
+      pushPrefixed(lines, formatCliOperatorError(options.error, { argv: options.argv, env }));
+      return lines;
+    }
+    return [
+      `[openclaw] ${options.title}`,
+      stateBusy
+        ? "[openclaw] Another OpenClaw process is using your data. Wait for it to finish before trying again."
+        : options.includeDoctorHint === false
+          ? `[openclaw] For details, open Settings → Logs in the Control UI or run \`${formatCliCommand("openclaw logs --follow", env)}\`.`
+          : `[openclaw] For help, run \`${formatCliCommand("openclaw doctor", env)}\`.`,
+    ];
+  }
   const lines = [
     `[openclaw] ${options.title}`,
     `[openclaw] Reason: ${formatCliOperatorError(options.error, {
@@ -208,20 +249,11 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     })}`,
   ];
 
-  if (showDebugDetails) {
-    lines.push("[openclaw] Stack:");
-    pushPrefixed(lines, formatUncaughtError(options.error));
-  } else {
-    lines.push("[openclaw] Debug: set OPENCLAW_DEBUG=1 to include the stack trace.");
-  }
+  lines.push("[openclaw] Stack:");
+  pushPrefixed(lines, formatUncaughtError(options.error));
 
   // Doctor needs the same state owner; inspect wrappers without loading the SQLite runtime.
-  if (
-    options.includeDoctorHint !== false &&
-    !collectNestedErrorCandidates(options.error).some(
-      (error) => error instanceof Error && error.name === "GatewayStateOwnerContentionError",
-    )
-  ) {
+  if (options.includeDoctorHint !== false && !stateBusy) {
     lines.push(`[openclaw] Try: ${formatCliCommand("openclaw doctor", env)}`);
   }
   lines.push(`[openclaw] Help: ${formatCliCommand("openclaw --help", env)}`);
