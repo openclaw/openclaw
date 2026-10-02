@@ -1188,14 +1188,14 @@ describe("createTelegramBot", () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
     const commitError = new Error("durable dispatch commit failed");
     const commitSpy = vi
       .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
       .mockRejectedValueOnce(commitError);
-    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.turnAdoptionLifecycle;
-      queuedLifecycle?.onDeferred?.();
+      opts?.turnAdoptionLifecycle?.onDeferred?.();
+      queuedLifecycleReady.resolve(opts?.turnAdoptionLifecycle);
       return undefined;
     });
 
@@ -1212,9 +1212,8 @@ describe("createTelegramBot", () => {
       });
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-      await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
-      });
+      const queuedLifecycle = await queuedLifecycleReady.promise;
+      expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
 
       await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(commitError);
       await flushTelegramTestMicrotasks();
@@ -1238,6 +1237,7 @@ describe("createTelegramBot", () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queuedTurnReady = createDeferred<void>();
     const commitStarted = createDeferred<void>();
     const commitGate = createDeferred<void>();
     const commitSpy = vi
@@ -1263,6 +1263,7 @@ describe("createTelegramBot", () => {
         modelTurnRan = true;
         queuedLifecycle?.onSettled?.();
       };
+      queuedTurnReady.resolve();
       return undefined;
     });
 
@@ -1271,9 +1272,8 @@ describe("createTelegramBot", () => {
       const [firstParticipant, secondParticipant] = await createBufferedReplayPair(225);
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-      await vi.waitFor(() => {
-        expect(runQueuedTurn).toEqual(expect.any(Function));
-      });
+      await queuedTurnReady.promise;
+      expect(runQueuedTurn).toEqual(expect.any(Function));
 
       const queuedTurn = runQueuedTurn?.();
       await commitStarted.promise;
@@ -1310,13 +1310,13 @@ describe("createTelegramBot", () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
     const commitSpy = vi.spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay");
-    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     let queuedAbortSignal: AbortSignal | undefined;
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.turnAdoptionLifecycle;
       queuedAbortSignal = opts?.abortSignal;
-      queuedLifecycle?.onDeferred?.();
+      opts?.turnAdoptionLifecycle?.onDeferred?.();
+      queuedLifecycleReady.resolve(opts?.turnAdoptionLifecycle);
       return undefined;
     });
 
@@ -1325,9 +1325,8 @@ describe("createTelegramBot", () => {
       const [firstParticipant, secondParticipant] = await createBufferedReplayPair(223);
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-      await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
-      });
+      const queuedLifecycle = await queuedLifecycleReady.promise;
+      expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
 
       const timeoutError = new Error("spooled replay timed out before admission");
       firstParticipant.settle({ kind: "failed-retryable", error: timeoutError });
