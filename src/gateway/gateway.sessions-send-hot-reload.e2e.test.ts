@@ -26,7 +26,7 @@ const TARGET_REPLY = "TARGET_REPLY_AFTER_RELOAD";
 const DISPATCH_COMPLETE = "SENDER_DISPATCH_COMPLETE";
 
 type ModelCall = {
-  kind: "dispatch" | "dispatch-complete" | "target" | "reply" | "announce";
+  kind: "dispatch" | "dispatch-complete" | "target" | "reply";
   model: string;
   raw: string;
 };
@@ -174,12 +174,9 @@ async function startProvider() {
       };
       const rawModel = body.model;
       const modelId = typeof rawModel === "string" ? rawModel : "";
-      if (raw.includes("Agent-to-agent announce step:")) {
-        calls.push({ kind: "announce", model: modelId, raw });
-        textResponse(response, "ANNOUNCE_SKIP");
-      } else if (raw.includes(TARGET_REPLY) && raw.includes("Agent-to-agent reply step:")) {
+      if (raw.includes(TARGET_REPLY)) {
         calls.push({ kind: "reply", model: modelId, raw });
-        textResponse(response, "REPLY_SKIP");
+        textResponse(response, "Requester received the target result.");
       } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
         calls.push({ kind: "dispatch-complete", model: modelId, raw });
         const result = readTargetToolResult(raw);
