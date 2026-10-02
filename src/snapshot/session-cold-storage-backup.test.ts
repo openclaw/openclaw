@@ -97,7 +97,7 @@ async function createColdFixture() {
   expect(
     await runSessionColdStorageMaintenance({
       config: {
-        agents: { list: [{ id: "main", agentDir: path.dirname(sourcePath) }] },
+        agents: { entries: { main: { agentDir: path.dirname(sourcePath) } } },
         session: {
           store: sourcePath,
           maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
