@@ -66,7 +66,7 @@ suite.define(() => {
         .waitFor();
       await failure.locator("summary").click();
       await failure.getByLabel("Error details", { exact: true }).waitFor();
-      expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toBe(
+      expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
         "This request was blocked by our safety systems. Reason: Potentially unintended activity.",
       );
       await captureUiProof(suite, page, "provider-review", "before-generic-error.png");

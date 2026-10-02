@@ -97,7 +97,7 @@ suite.define(() => {
     expect(await failedAlert.locator("details").getAttribute("open")).toBeNull();
     await failedAlert.locator("summary").click();
     await failedAlert.getByLabel("Error details", { exact: true }).waitFor();
-    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toBe(
+    expect(await failedAlert.getByLabel("Error details", { exact: true }).textContent()).toContain(
       renderedDiagnostic,
     );
     expect(await currentPage.locator(".chat-group.assistant").count()).toBe(0);

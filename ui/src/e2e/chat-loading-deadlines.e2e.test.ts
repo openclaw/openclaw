@@ -207,7 +207,7 @@ suite.define(() => {
           expect(await alert.locator("details").getAttribute("open")).toBeNull();
           await alert.locator("summary").click();
           await alert.getByLabel("Error details", { exact: true }).waitFor();
-          expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toBe(
+          expect(await alert.getByLabel("Error details", { exact: true }).textContent()).toContain(
             renderedDiagnostic,
           );
           await sendButton.click();

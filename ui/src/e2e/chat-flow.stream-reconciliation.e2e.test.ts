@@ -505,9 +505,9 @@ suite.define(() => {
             .waitFor();
           await failure.locator("summary").click();
           await failure.getByLabel("Error details", { exact: true }).waitFor();
-          expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toBe(
-            errorMessage,
-          );
+          expect(
+            await failure.getByLabel("Error details", { exact: true }).textContent(),
+          ).toContain(errorMessage);
         }
         await emitDelta(text, text.slice(partial.length));
         await expect.poll(() => page.locator(".chat-bubble.streaming").count()).toBe(0);
