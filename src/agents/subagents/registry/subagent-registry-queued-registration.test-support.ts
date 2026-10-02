@@ -97,6 +97,7 @@ export function createQueuedRegistrationFixture(mocks: {
     notifyContextEngineSubagentEnded: async () => {},
     completeCleanupBookkeeping: vi.fn(async () => {}),
     completeSubagentRun: async () => {},
+    reportSubagentWaitExpiry: async () => {},
   } satisfies SubagentManagerOptions;
   const manager = createSubagentRunManager(options);
   const commitControl = <T>(operation: () => Promise<T>): Promise<T> => {

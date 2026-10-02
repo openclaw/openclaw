@@ -44,7 +44,7 @@ vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 vi.mock("../../../plugins/hook-runner-global.js", { spy: true });
 
 it.each(["end", "error"] as const)(
-  "keeps a timeout successor running when its exact predecessor owner publishes its first %s terminal",
+  "keeps a terminal-timeout successor running when its exact predecessor owner publishes its first %s terminal",
   async (phase) => {
     fixture.announce.mockResolvedValue("delivered");
     const oldWait = createDeferred<AgentWaitResult>();
@@ -203,7 +203,9 @@ it.each(["end", "error"] as const)(
       ).toEqual({ ok: true, result: { ackedSeq: 2 } });
       const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1_001);
       try {
-        oldWait.resolve({ status: "timeout" });
+        // This fixture requires an actual completed timeout before replacement.
+        // A bare parent-wait expiry now leaves the predecessor nonterminal.
+        oldWait.resolve({ status: "timeout", endedAt: Date.now() });
         await previousSettled.promise;
         expect(previous.execution.outcome?.status).toBe("timeout");
         expect(terminalEvents).toEqual([]);
