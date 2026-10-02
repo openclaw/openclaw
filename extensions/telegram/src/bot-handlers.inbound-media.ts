@@ -547,9 +547,12 @@ export function createTelegramInboundMedia({
       }
       clearTimeout(entry.timer);
       if (hold && performance.now() < entry.holdDeadlineMs) {
-        entry.timer = setTimeout(() => {
-          void settleMediaGroup(key, entry);
-        }, timeoutMs);
+        entry.timer = setTimeout(
+          () => {
+            void settleMediaGroup(key, entry);
+          },
+          Math.min(timeoutMs, Math.max(0, entry.holdDeadlineMs - performance.now())),
+        );
       } else {
         flush();
       }

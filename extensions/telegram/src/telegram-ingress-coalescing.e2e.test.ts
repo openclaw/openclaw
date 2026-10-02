@@ -588,7 +588,10 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("flushes an album at its hold deadline while the backlog read is pending", async () => {
+  it.each([
+    { readState: "pending", holdBeforeDeadline: false },
+    { readState: "holding just before the deadline", holdBeforeDeadline: true },
+  ])("flushes the album at its deadline with a $readState backlog read", async (testCase) => {
     const queue = openTelegramIngressQueue({ stateDir });
     const openQueue = vi.spyOn(ingressSpool, "openTelegramIngressQueue").mockReturnValue(queue);
     const { monitor } = await createMonitor();
@@ -635,6 +638,10 @@ describe("Telegram durable ingress coalescing", () => {
       await readStarted.promise;
 
       await vi.advanceTimersByTimeAsync(19_959);
+      if (testCase.holdBeforeDeadline) {
+        releaseRead.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
       expect(downstreamTurns).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
       const turn = await dispatched;
