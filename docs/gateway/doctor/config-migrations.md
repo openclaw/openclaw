@@ -50,6 +50,8 @@ Doctor refuses these retired inputs:
 - `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
   `agentRuntime`, `systemPromptOverride`, and `sandbox.perSession`.
 - Agent and surface `silentReplyRewrite` and `silentReply.direct`.
+- Agent `model.timeoutMs` and `subagents.model.timeoutMs`, including defaults.
+  Timeouts on tool-model selectors remain supported.
 - `memorySearch.store.path`, including its agent and `memory.search` forms.
 - `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
   `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
