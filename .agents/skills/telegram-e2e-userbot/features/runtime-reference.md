@@ -105,8 +105,10 @@ A scenario send can select an existing forum topic:
 ```
 
 A scenario send can also carry a photo (`photo`, absolute path; `text` becomes
-the optional caption) or reply to the newest message this scenario sent
-(`replyToPrevious: true`), for reply-context and caption-command proof:
+the optional caption), a media album (`photos`, 2–10 absolute paths sent in one
+`sendMessageAlbum` call; `text` captions the first item), or reply to the newest
+message this scenario sent (`replyToPrevious: true`, the last album member after
+an album), for reply-context and caption-command proof:
 
 ```json
 {
@@ -175,7 +177,9 @@ Prepare `qa-mock` with `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build` before leasing.
 The built lane starts both the provider and Gateway from that checkout's
 `dist/entry.js`; `--source-gateway` selects the development launcher for both.
 A leased run must not rebuild a dirty source checkout while waiting for provider
-readiness.
+readiness. Gateway startup gets 45 s built and 300 s from source; on a heavily
+loaded host, raise it with `--gateway-ready-timeout-ms` instead of retrying the
+lease.
 
 The named tool-progress shell fixture emits command-style `exec` arguments.
 Use `E2E_ROOT_CONFIG_PATCH='{"tools":{"codeMode":false}}'` for that fixture, or
