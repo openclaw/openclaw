@@ -11,15 +11,14 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrWrapperSources, createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const repoRoot = process.cwd();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
 
 function runGatesBash(script: string, options: { env?: NodeJS.ProcessEnv } = {}) {
-  const env = { ...process.env, ...options.env };
-  delete env.OPENCLAW_PR_GATES_REMOTE;
+  const env = createIndependentPrFixtureEnv();
   delete env.OPENCLAW_TESTBOX;
   return spawnSync(
     "bash",

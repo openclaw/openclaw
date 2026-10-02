@@ -4,6 +4,7 @@ import { createNestedToolActivity } from "../../../src/sessions/nested-tool-acti
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { clickToolDisclosure } from "./chat-tool-disclosures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -132,7 +133,7 @@ suite.define(() => {
         expect(await failure.isVisible()).toBe(true);
         expect(await work.textContent()).not.toContain("gh: command not found");
         expect(await work.textContent()).not.toContain("Sign in to GitHub");
-        await summary.click();
+        await clickToolDisclosure(summary);
         const activityBody = work.locator(".chat-activity-group__body");
         await page.screenshot({ path: path.join(artifactDir, "02-operation-list.png") });
         expect(await activityBody.locator(".chat-tool-row").count()).toBe(1);
@@ -141,12 +142,12 @@ suite.define(() => {
         });
         await wrapper.waitFor();
         expect(await wrapper.textContent()).toContain("1 failed");
-        await wrapper.click();
+        await clickToolDisclosure(wrapper);
         const children = activityBody.locator(".chat-tool-children");
         const login = children.locator(".chat-tool-msg-summary", { hasText: "GitHub sign-in" });
         await login.waitFor();
         expect(await activityBody.getByText("gh: command not found").count()).toBe(0);
-        await login.click();
+        await clickToolDisclosure(login);
         await activityBody.getByText(command, { exact: true }).first().waitFor();
         expect(
           await activityBody
@@ -156,7 +157,7 @@ suite.define(() => {
         await activityBody.locator(".chat-tool-wrapper-details > summary").click();
         await activityBody.getByText(wrapperCode, { exact: false }).first().waitFor();
         await page.screenshot({ path: path.join(artifactDir, "02-expanded.png") });
-        await summary.click();
+        await clickToolDisclosure(summary);
         expect(await summary.getAttribute("aria-expanded")).toBe("false");
         await page.reload();
         await gateway.waitForRequest("chat.startup");

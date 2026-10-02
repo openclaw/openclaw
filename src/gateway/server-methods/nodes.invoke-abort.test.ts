@@ -127,6 +127,31 @@ function createNodeInvokeStreamClient(
 }
 
 describe("node.invoke caller cancellation", () => {
+  it("keeps a started response when expiry and cancellation win promise settlement", async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const controller = new AbortController();
+    try {
+      const { invocation, respond } = startNodeInvoke({
+        invoke: vi.fn().mockResolvedValue({ ok: true, payload: { delivered: true } }),
+        signal: controller.signal,
+      });
+      respond.mockImplementation(() => {
+        now = 10_001;
+        controller.abort();
+      });
+      await invocation;
+      expect(controller.signal.aborted).toBe(true);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({ payload: { delivered: true } }),
+        undefined,
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("carries trusted plugin duplex hooks through the canonical paired dispatch", async () => {
     let runtimeCurrent = true;
     const stream = {

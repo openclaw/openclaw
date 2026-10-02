@@ -33,11 +33,24 @@ async function importWithIndexArchive(store: TestStore) {
 }
 
 describe("runDoctorSessionSqlite", () => {
-  it.each([false, true])(
-    "restores archived artifacts after the replacement SQLite file is removed (allAgents=%s)",
-    async (allAgents) => {
+  it.each([
+    { allAgents: false, format: "JSON" },
+    { allAgents: true, format: "JSON5" },
+  ])(
+    "restores archived $format artifacts after the replacement SQLite file is removed (allAgents=$allAgents)",
+    async ({ allAgents, format }) => {
       const store = createLegacyStore();
+      if (format === "JSON5") {
+        const index = fs.readFileSync(store.storePath, "utf8");
+        fs.writeFileSync(
+          store.storePath,
+          `// Retained operator index\n${index.replace(/\n\}$/u, ",\n}")}\n`,
+        );
+      }
+      const originalIndex = fs.readFileSync(store.storePath);
       const importReport = await importLegacyStore(store);
+      expect(importReport.totals.importedEntries).toBe(1);
+      expect(fs.existsSync(store.storePath)).toBe(false);
       const sqlitePath = importReport.targets[0]?.sqlitePath;
       if (!sqlitePath) {
         throw new Error("expected imported SQLite path");
@@ -56,9 +69,12 @@ describe("runDoctorSessionSqlite", () => {
 
       expect(restore.totals.issues).toBe(0);
       expect(restore.targets[0]?.restore?.restoredFiles).toEqual(
-        expect.arrayContaining(canonicalTestPaths([store.transcriptPath, store.trajectoryPath])),
+        expect.arrayContaining(
+          canonicalTestPaths([store.storePath, store.transcriptPath, store.trajectoryPath]),
+        ),
       );
       expect(fs.existsSync(store.transcriptPath)).toBe(true);
+      expect(fs.readFileSync(store.storePath)).toEqual(originalIndex);
     },
   );
 

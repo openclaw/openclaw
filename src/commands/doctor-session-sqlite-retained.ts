@@ -20,12 +20,12 @@ import {
   hasDeferredPluginSessionImport,
   prepareSessionSourceVerification,
   readDeferredPluginSessionImport,
-  readDeferredPluginSessionImportReceipt,
   rebuildDeferredPluginSessionSourceIndex,
   resolveVerifiedSessionSource,
   type DeferredPluginSessionImport,
   type SessionImportSource,
 } from "../infra/deferred-plugin-session-sources.js";
+import { readDeferredPluginSessionImportReceipt } from "../infra/deferred-plugin-session-verification.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   moveMigrationArtifact,
@@ -244,7 +244,9 @@ function appendRetainedIndexComparison(
 ): void {
   try {
     const parsingIssues: DoctorSessionSqliteIssue[] = [];
-    const records = readLegacySessionRecords(params.target, parsingIssues).filter(
+    const records = readLegacySessionRecords(params.target, parsingIssues, {
+      env: params.env,
+    }).filter(
       ({ sessionKey }) =>
         !shouldFilterLegacySessionRecordsByTarget(params.target) ||
         isLegacySessionRecordOwnedByTarget(params.cfg, params.target, sessionKey),

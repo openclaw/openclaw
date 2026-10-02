@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const validator = join(process.cwd(), "scripts/pr-lib/review-transition-state.mjs");
@@ -48,6 +49,7 @@ function validate(root: string, target: string) {
   const result = spawnSync(process.execPath, [validator, source, target], {
     cwd: root,
     encoding: "utf8",
+    env: createIndependentPrFixtureEnv(),
   });
   expect(readFileSync(join(root, ".git/index"))).toEqual(before);
   return result;

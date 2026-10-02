@@ -73,13 +73,15 @@ function observePairingWork(release?: () => void | Promise<void>) {
       ...(await Promise.allSettled(
         approval.mock.results.flatMap((result) => (result.type === "return" ? [result.value] : [])),
       )),
-      ...(await Promise.allSettled(
-        rootWork.mock.results.flatMap((result, index) =>
-          result.type === "return" && rootWork.mock.calls[index]?.[1] === "ws:preauth"
-            ? [result.value]
-            : [],
-        ),
-      )),
+    );
+    // Connection owners handle their request outcomes; this fixture only joins
+    // those roots so post-connect work cannot escape the pairing-state reset.
+    await Promise.allSettled(
+      rootWork.mock.results.flatMap((result, index) =>
+        result.type === "return" && rootWork.mock.calls[index]?.[1] === "ws:preauth"
+          ? [result.value]
+          : [],
+      ),
     );
     const errors = outcomes.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],

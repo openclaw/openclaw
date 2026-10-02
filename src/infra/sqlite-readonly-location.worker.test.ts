@@ -35,7 +35,7 @@ async function expectWorkerFailure(
   message: string,
   contention = false,
   options?: {
-    mode: "sync" | "async" | "staging-create" | "staging-create-legacy";
+    mode: "sync" | "sync-versioned" | "async" | "staging-create" | "staging-create-legacy";
     allocationRefused: boolean;
   },
 ): Promise<void> {
@@ -52,7 +52,7 @@ async function expectWorkerFailure(
     createToken.mockImplementationOnce(() => {
       throw error;
     });
-  } else if (mode === "sync") {
+  } else if (mode === "sync" || mode === "sync-versioned") {
     prepareCopy.mockImplementationOnce(() => {
       throw error;
     });
@@ -92,7 +92,38 @@ async function expectWorkerFailure(
 
 describe("SQLite read-only worker diagnostics", () => {
   it.each([
+    { location: "private.sqlite", contentVersion: "invalid" },
+    { location: "private.sqlite", contentVersion: "a".repeat(64), extra: true },
+    { location: "private.sqlite" },
+  ])("rejects malformed versioned snapshot metadata: %j", async (snapshot) => {
+    const { readSqliteReadOnlyWorkerValue } = await import("./sqlite-readonly-worker-protocol.js");
+    expect(() =>
+      readSqliteReadOnlyWorkerValue(
+        { stdout: JSON.stringify({ ok: true, snapshot }), stderr: "" },
+        "sync-versioned",
+      ),
+    ).toThrow("invalid result");
+  });
+
+  it("keeps a versioned snapshot result bound to its requested operation", async () => {
+    const { readSqliteReadOnlyWorkerValue } = await import("./sqlite-readonly-worker-protocol.js");
+    expect(() =>
+      readSqliteReadOnlyWorkerValue(
+        {
+          stdout: JSON.stringify({
+            ok: true,
+            snapshot: { location: "private.sqlite", contentVersion: "a".repeat(64) },
+          }),
+          stderr: "",
+        },
+        "sync",
+      ),
+    ).toThrow("different operation");
+  });
+
+  it.each([
     { mode: "sync", errcode: 5 },
+    { mode: "sync-versioned", errcode: 5 },
     { mode: "staging-create-legacy", errcode: 6 },
   ] as const)(
     "preserves pre-creation contention $errcode in $mode replies",

@@ -1,4 +1,5 @@
 import { prepareDevicePairingBinding } from "./device-pairing-binding.js";
+import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import type { DevicePairingBinding } from "./device-pairing-read.types.js";
 import {
@@ -40,8 +41,12 @@ export async function captureNodePairingState(
 export async function resolveCurrentPairedDeviceNodeBinding(
   nodeId: string,
 ): Promise<PairedDeviceNodeBinding | undefined> {
-  await getPairedDevice(nodeId);
-  return getPublishedPairedDeviceBinding(nodeId.trim()) ?? undefined;
+  // Authority acquisition joins pending writes; independent inspection reads
+  // may finish while an observation still fences the final-effect publication.
+  return withDevicePairingLock(async () => {
+    await getPairedDevice(nodeId);
+    return getPublishedPairedDeviceBinding(nodeId.trim()) ?? undefined;
+  });
 }
 
 export function isPairedDeviceNodeBindingCurrent(
@@ -94,7 +99,6 @@ export async function captureAuthenticatedNodePairingState(params: {
 export async function isNodePairingGenerationCurrent(
   generation: NodePairingGeneration,
 ): Promise<boolean> {
-  await getPairedDevice(generation.nodeId);
-  const current = getPublishedPairedDeviceBinding(generation.nodeId);
+  const current = await resolveCurrentPairedDeviceNodeBinding(generation.nodeId);
   return current?.generation === generation.key;
 }

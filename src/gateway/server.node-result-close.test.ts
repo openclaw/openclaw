@@ -12,6 +12,7 @@ import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../infra/node-runner-inventory.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
+import { NodeRegistry } from "./node-registry.js";
 import { respondToNodeShutdown } from "./node-shutdown.test-support.js";
 import { GatewayNodeLifecycleDispatchTracker } from "./server/ws-connection/node-lifecycle-dispatch.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
@@ -23,26 +24,11 @@ import { DEVICE_WORKER_PROVIDER_ID } from "./worker-environments/device-provider
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createWorkerEnvironmentStore } from "./worker-environments/store.js";
 
-const pairingRead = vi.hoisted(() => ({
+const pairingRead = {
   blocked: null as Promise<void> | null,
   onBlocked: null as (() => void) | null,
   release: null as (() => void) | null,
-}));
-
-vi.mock("../infra/device-pairing-node-state.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/device-pairing-node-state.js")>();
-  return {
-    ...actual,
-    resolveCurrentPairedDeviceNodeBinding: async (nodeId: string) => {
-      const current = await actual.resolveCurrentPairedDeviceNodeBinding(nodeId);
-      if (pairingRead.blocked) {
-        pairingRead.onBlocked?.();
-        await pairingRead.blocked;
-      }
-      return current;
-    },
-  };
-});
+};
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -271,6 +257,20 @@ test.each([
     const pairingReadStarted = new Promise<void>((resolve) => {
       pairingRead.onBlocked = resolve;
     });
+    // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original with its registry receiver.
+    const checkCurrentPairing = NodeRegistry.prototype.isConnectionCurrentPairingState;
+    vi.spyOn(NodeRegistry.prototype, "isConnectionCurrentPairingState").mockImplementation(
+      async function (this: NodeRegistry, connId) {
+        const current = await checkCurrentPairing.call(this, connId);
+        // Pause the admitted caller after its read releases pairing authority,
+        // so removal can commit while the terminal frame still waits to dispatch.
+        if (pairingRead.blocked) {
+          pairingRead.onBlocked?.();
+          await pairingRead.blocked;
+        }
+        return current;
+      },
+    );
     const drainSpy = vi.spyOn(GatewayNodeLifecycleDispatchTracker.prototype, "drain");
     const resultAck = node
       .request(

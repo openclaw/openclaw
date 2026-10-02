@@ -178,6 +178,7 @@ it(
             ...options,
             startOptions: {
               ...startOptions,
+              managedCommandOrder: "package-only",
               transport: "stdio",
               args: startOptions.args ?? ["app-server"],
               cwd: native.cwd,

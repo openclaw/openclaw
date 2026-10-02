@@ -138,8 +138,8 @@ it("restores within the native deadline when each fresh private snapshot costs t
   let elapsed = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsed);
   const prepare = snapshots.prepareSqliteReadOnlyLocationSync;
-  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation((pathname) => {
-    const prepared = prepare(pathname);
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync").mockImplementation((...args) => {
+    const prepared = prepare(...args);
     // Deterministic slow-storage cost; the actual database read is not replaced.
     elapsed += 2_000;
     return prepared;

@@ -79,6 +79,7 @@ function fixtureDocument(themeMode: "dark" | "light"): string {
 
 type WrapSample = {
   readonly columnWidth: number;
+  readonly naturalWidth: number;
   readonly fragments: number;
   readonly labelFragments: number;
   readonly overflows: boolean;
@@ -110,6 +111,7 @@ async function probeWrap(
         for (const id of ids) {
           const column = resolve(`#column-${id}`);
           const link = resolve(`#${id}`);
+          const naturalWidth = link.getBoundingClientRect().width;
           const collected: WrapSample[] = [];
           for (let columnWidth = 200; columnWidth <= 900; columnWidth += 4) {
             column.style.width = `${columnWidth}px`;
@@ -128,6 +130,7 @@ async function probeWrap(
             labelRange.selectNodeContents(link);
             collected.push({
               columnWidth,
+              naturalWidth,
               fragments: link.getClientRects().length,
               labelFragments: labelRange.getClientRects().length,
               overflows: column.scrollWidth > column.clientWidth,
@@ -187,7 +190,7 @@ describeGitHubLinkPresentation("chat GitHub link presentation", () => {
               (sample) =>
                 sample.fragments !== 1 ||
                 sample.overflows ||
-                (id !== "repository-ref" && sample.labelFragments !== 1),
+                (sample.naturalWidth <= sample.columnWidth && sample.labelFragments !== 1),
             ),
           ).toEqual([]);
         }

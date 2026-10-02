@@ -1,5 +1,15 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import {
+  chmodSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   collectNpmPackInventory,
@@ -23,15 +33,31 @@ function createPackageFixture(): { packageRoot: string; root: string } {
 function fakeNpmEnvironment(
   root: string,
   body: string,
+  manifestVersion?: string,
 ): {
   runnerParams: { execPath: string; platform: NodeJS.Platform };
   sourceEnv: NodeJS.ProcessEnv;
 } {
   const binDir = join(root, "bin");
   mkdirSync(binDir);
-  const scriptPath = join(binDir, "fake-npm.mjs");
+  const execPath = join(binDir, process.platform === "win32" ? "node.exe" : "node");
+  const scriptPath = manifestVersion
+    ? join(binDir, "node_modules", "npm", "bin", "npm-cli.js")
+    : join(binDir, "fake-npm.mjs");
+  mkdirSync(dirname(scriptPath), { recursive: true });
   writeFileSync(scriptPath, body);
-  if (process.platform === "win32") {
+  if (manifestVersion) {
+    if (process.platform === "win32") {
+      copyFileSync(process.execPath, execPath, constants.COPYFILE_FICLONE);
+    } else {
+      // Preserve the active runtime's relative shared-library lookup.
+      symlinkSync(process.execPath, execPath);
+    }
+    writeFileSync(
+      join(dirname(scriptPath), "..", "package.json"),
+      JSON.stringify({ name: "npm", version: manifestVersion, type: "module" }),
+    );
+  } else if (process.platform === "win32") {
     writeFileSync(
       join(binDir, "npm.cmd"),
       `@echo off\r\n"${process.execPath}" "${scriptPath}" %*\r\n`,
@@ -43,7 +69,7 @@ function fakeNpmEnvironment(
   }
   return {
     runnerParams: {
-      execPath: join(binDir, process.platform === "win32" ? "node.exe" : "node"),
+      execPath,
       platform: process.platform,
     },
     sourceEnv: {
@@ -54,66 +80,78 @@ function fakeNpmEnvironment(
 }
 
 describe("npm pack inventory", () => {
-  it("packs the package root from an isolated npm sandbox", () => {
-    const { packageRoot, root } = createPackageFixture();
-    const capturePath = join(root, "capture.json");
-    const npm = fakeNpmEnvironment(
-      root,
-      [
-        "import fs from 'node:fs';",
-        "fs.appendFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({",
-        "  args: process.argv.slice(2),",
-        "  cwd: process.cwd(),",
-        "  home: process.env.HOME,",
-        "  npmConfigKeys: Object.keys(process.env).filter((key) => /^npm_config_/i.test(key)).sort(),",
-        "}) + '\\n');",
-        "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
-        "process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }]));",
-      ].join("\n"),
-    );
-    npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
-    npm.sourceEnv.npm_config_registry = "https://example.invalid";
-    npm.sourceEnv.NPM_CONFIG_SCRIPT_SHELL = "forbidden-shell";
+  it.each(["manifest", "executable"] as const)(
+    "packs the package root from an isolated npm sandbox using its %s version",
+    (versionSource) => {
+      const { packageRoot, root } = createPackageFixture();
+      const capturePath = join(root, "capture.json");
+      const npm = fakeNpmEnvironment(
+        root,
+        [
+          "import fs from 'node:fs';",
+          "fs.appendFileSync(process.env.OPENCLAW_TEST_CAPTURE, JSON.stringify({",
+          "  args: process.argv.slice(2),",
+          "  cwd: process.cwd(),",
+          "  home: process.env.HOME,",
+          "  npmConfigKeys: Object.keys(process.env).filter((key) => /^npm_config_/i.test(key)).sort(),",
+          "}) + '\\n');",
+          versionSource === "manifest"
+            ? "if (process.argv.includes('--version')) { throw new Error('npm version subprocess unavailable'); }"
+            : "if (process.argv.includes('--version')) { process.stdout.write('11.12.1\\n'); process.exit(0); }",
+          "process.stdout.write(JSON.stringify([{ files: [{ path: 'package.json' }] }]));",
+        ].join("\n"),
+        versionSource === "manifest" ? "11.12.1" : undefined,
+      );
+      npm.sourceEnv.OPENCLAW_TEST_CAPTURE = capturePath;
+      npm.sourceEnv.npm_config_registry = "https://example.invalid";
+      npm.sourceEnv.NPM_CONFIG_SCRIPT_SHELL = "forbidden-shell";
 
-    const result = collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 2_000 });
-    const captures = readFileSync(capturePath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line)) as Array<{
-      args: string[];
-      cwd: string;
-      home: string;
-      npmConfigKeys: string[];
-    }>;
+      const result = collectNpmPackInventory(packageRoot, { ...npm, timeoutMs: 2_000 });
+      const captures = readFileSync(capturePath, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line)) as Array<{
+        args: string[];
+        cwd: string;
+        home: string;
+        npmConfigKeys: string[];
+      }>;
 
-    expect(result).toMatchObject({ files: ["package.json"], npmVersion: "11.12.1" });
-    expect(captures).toHaveLength(2);
-    const [versionCapture, packCapture] = captures;
-    if (!versionCapture || !packCapture) {
-      throw new Error("Expected npm version and pack captures.");
-    }
-    expect(packCapture.cwd).toBe(versionCapture.cwd);
-    expect(packCapture.cwd).not.toBe(packageRoot);
-    expect(versionCapture.args).toEqual([`--prefix=${versionCapture.cwd}`, "--version"]);
-    expect(packCapture.args.slice(0, 3)).toEqual([
-      `--prefix=${versionCapture.cwd}`,
-      "pack",
-      packageRoot,
-    ]);
-    expect(packCapture.home).not.toBe(process.env.HOME);
-    expect(packCapture.npmConfigKeys).not.toContain("npm_config_registry");
-    expect(packCapture.npmConfigKeys).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
-    expect(packCapture.args).toEqual(
-      expect.arrayContaining([
+      expect(result).toMatchObject({ files: ["package.json"], npmVersion: "11.12.1" });
+      expect(captures).toHaveLength(versionSource === "manifest" ? 1 : 2);
+      const packCapture = captures.at(-1);
+      if (!packCapture) {
+        throw new Error("Expected npm pack capture.");
+      }
+      if (versionSource === "executable") {
+        const versionCapture = captures[0];
+        if (!versionCapture) {
+          throw new Error("Expected npm version capture.");
+        }
+        expect(packCapture.cwd).toBe(versionCapture.cwd);
+        expect(versionCapture.args).toEqual([`--prefix=${versionCapture.cwd}`, "--version"]);
+      }
+      expect(packCapture.cwd).not.toBe(packageRoot);
+      expect(packCapture.args.slice(0, 3)).toEqual([
+        `--prefix=${packCapture.cwd}`,
         "pack",
-        "--dry-run",
-        "--json",
-        "--ignore-scripts",
-        "--offline",
-        "--workspaces=false",
-      ]),
-    );
-  });
+        packageRoot,
+      ]);
+      expect(packCapture.home).not.toBe(process.env.HOME);
+      expect(packCapture.npmConfigKeys).not.toContain("npm_config_registry");
+      expect(packCapture.npmConfigKeys).not.toContain("NPM_CONFIG_SCRIPT_SHELL");
+      expect(packCapture.args).toEqual(
+        expect.arrayContaining([
+          "pack",
+          "--dry-run",
+          "--json",
+          "--ignore-scripts",
+          "--offline",
+          "--workspaces=false",
+        ]),
+      );
+    },
+  );
 
   it("reports missing and extra paths in normalized sorted order", () => {
     expect(

@@ -281,34 +281,45 @@ it("sums serial size-aware schema inspection budgets without giant fixtures", ()
   ).toBe(MAX_TIMER_TIMEOUT_MS);
 });
 
-it("includes WAL, SHM, and rollback-journal sidecars in inspection size", () => {
-  const source = path.join(tempDirs.make("openclaw-snapshot-size-"), "source.sqlite");
-  fs.writeFileSync(source, "");
-  fs.writeFileSync(`${source}-wal`, "");
-  fs.writeFileSync(`${source}-shm`, "");
-  fs.writeFileSync(`${source}-journal`, "");
-  fs.truncateSync(source, 64 * 1024 * 1024);
-  fs.truncateSync(`${source}-wal`, 3_489_660_928);
-  fs.truncateSync(`${source}-shm`, 32 * 1024 * 1024);
-  fs.truncateSync(`${source}-journal`, 4 * 1024);
+it.each(["sync", "sync-versioned"] as const)(
+  "includes sidecars in the %s inspection budget",
+  (mode) => {
+    const source = path.join(tempDirs.make("openclaw-snapshot-size-"), "source.sqlite");
+    fs.writeFileSync(source, "");
+    fs.writeFileSync(`${source}-wal`, "");
+    fs.writeFileSync(`${source}-shm`, "");
+    fs.writeFileSync(`${source}-journal`, "");
+    fs.truncateSync(source, 64 * 1024 * 1024);
+    fs.truncateSync(`${source}-wal`, 3_489_660_928);
+    fs.truncateSync(`${source}-shm`, 32 * 1024 * 1024);
+    fs.truncateSync(`${source}-journal`, 4 * 1024);
 
-  const stagingRoot = tempDirs.make("openclaw-snapshot-size-staging-");
-  // Isolate deadline selection from copying these deliberately sparse sidecars.
-  vi.mocked(spawnSync).mockReturnValueOnce({
-    pid: 1,
-    output: [null, '{"ok":true,"location":"private.sqlite"}', ""],
-    stdout: '{"ok":true,"location":"private.sqlite"}',
-    stderr: "",
-    status: 0,
-    signal: null,
-  });
-  expect(runSqliteReadOnlyWorkerSync(source, stagingRoot)).toBe("private.sqlite");
-  expect(vi.mocked(spawnSync).mock.calls[0]?.[2]).toMatchObject({
-    timeout: 4_581_000,
-    killSignal: "SIGKILL",
-  });
-  expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync");
-});
+    const stagingRoot = tempDirs.make("openclaw-snapshot-size-staging-");
+    // Isolate deadline selection from copying these deliberately sparse sidecars.
+    const snapshot = { location: "private.sqlite", contentVersion: "a".repeat(64) };
+    const stdout = JSON.stringify(
+      mode === "sync" ? { ok: true, location: snapshot.location } : { ok: true, snapshot },
+    );
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      pid: 1,
+      output: [null, stdout, ""],
+      stdout,
+      stderr: "",
+      status: 0,
+      signal: null,
+    });
+    const result =
+      mode === "sync"
+        ? runSqliteReadOnlyWorkerSync(source, stagingRoot, mode)
+        : runSqliteReadOnlyWorkerSync(source, stagingRoot, mode);
+    expect(result).toEqual(mode === "sync" ? "private.sqlite" : snapshot);
+    expect(vi.mocked(spawnSync).mock.calls[0]?.[2]).toMatchObject({
+      timeout: mode === "sync" ? 4_581_000 : 9_162_000,
+      killSignal: "SIGKILL",
+    });
+    expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain(mode);
+  },
+);
 
 it("uses online backup instead of raw WAL copying for live inspection", async () => {
   const source = createDatabase(0);

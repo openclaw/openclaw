@@ -69,6 +69,7 @@ export function resolveSessionArtifactDirectory(storePath: string): string {
 type SessionFilePathOptions = {
   agentId?: string;
   sessionsDir?: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 const MULTI_STORE_PATH_SENTINEL = "(multiple)";
@@ -110,7 +111,7 @@ function resolveSessionsDir(opts?: SessionFilePathOptions): string {
   if (sessionsDir) {
     return path.resolve(sessionsDir);
   }
-  return resolveSessionTranscriptsDirForAgent(opts?.agentId ?? "");
+  return resolveSessionTranscriptsDirForAgent(opts?.agentId ?? "", opts?.env);
 }
 
 function resolvePathFromAgentSessionsDir(
@@ -223,7 +224,7 @@ function resolveStructuralSessionFallbackPath(
 function resolvePathWithinSessionsDir(
   sessionsDir: string,
   candidate: string,
-  opts?: { agentId?: string },
+  opts?: { agentId?: string; env?: NodeJS.ProcessEnv },
 ): string {
   const trimmed = candidate.trim();
   if (!trimmed) {
@@ -249,7 +250,7 @@ function resolvePathWithinSessionsDir(
         }
       }
       return resolvePathFromAgentSessionsDir(
-        resolveSessionTranscriptsDirForAgent(normalizedAgentId),
+        resolveSessionTranscriptsDirForAgent(normalizedAgentId, opts?.env),
         realTrimmed,
       );
     };
@@ -332,7 +333,7 @@ export function resolveSessionFilePathCore(
       return candidate;
     }
     try {
-      return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+      return resolvePathWithinSessionsDir(sessionsDir, candidate, opts);
     } catch {
       // Keep handlers alive when persisted metadata is stale/corrupt.
     }

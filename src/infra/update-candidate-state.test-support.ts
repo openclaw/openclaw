@@ -7,10 +7,10 @@ import { runCommandBuffered } from "../process/exec.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
-  type snapshotUpdateCandidateState,
   UpdateCandidateSnapshotInventorySchema,
   UpdateCandidateStateSnapshotSchema,
 } from "./update-candidate-state.js";
+import type { snapshotUpdateCandidateState } from "./update-candidate-state.snapshot.js";
 
 type SnapshotInput = Omit<
   Parameters<typeof snapshotUpdateCandidateState>[0],

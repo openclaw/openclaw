@@ -1,9 +1,13 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, onTestFinished, vi, type Mock } from "vitest";
 import type { WebSocket } from "ws";
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../../../agents/admitted-run-context.js";
+import { generateStoredDeviceIdentity } from "../../../infra/device-identity-store.js";
+import { publicKeyRawBase64UrlFromPem, signDevicePayload } from "../../../infra/device-identity.js";
+import type { PairedDevice } from "../../../infra/device-pairing.types.js";
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
@@ -12,6 +16,7 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import { buildDeviceAuthPayload } from "../../device-auth.js";
 import type { HealthSummary } from "../../health/types.js";
 import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import { getGatewayLocalUserIngress } from "../../local-user-ingress.js";
@@ -101,6 +106,7 @@ export function connectTrustedProxyUser(
   clientOverrides: Record<string, unknown> = {},
   scopes: string[] = [],
   handoffAuthenticatedReceive?: () => void,
+  device?: ConnectParams["device"],
 ) {
   loadConfigMock.mockImplementation(() => ({
     gateway: {
@@ -157,6 +163,7 @@ export function connectTrustedProxyUser(
     role: "operator",
     scopes,
     caps: [],
+    ...(device ? { device } : {}),
   });
   return harness;
 }
@@ -175,6 +182,48 @@ export function useGatewayTestConfig<T>(mock: Mock<() => T>, implementation: () 
     }
   });
   mock.mockImplementation(implementation);
+}
+
+export function createPairedGatewayConnectDevice(
+  connId: string,
+  client: Pick<ConnectParams["client"], "id" | "mode">,
+  scopes: string[] = [],
+) {
+  const identity = generateStoredDeviceIdentity();
+  const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+  const signedAt = Date.now();
+  const nonce = `nonce-${connId}`;
+  const device: NonNullable<ConnectParams["device"]> = {
+    id: identity.deviceId,
+    publicKey,
+    signedAt,
+    nonce,
+    signature: signDevicePayload(
+      identity.privateKeyPem,
+      buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: client.id,
+        clientMode: client.mode,
+        role: "operator",
+        scopes,
+        signedAtMs: signedAt,
+        nonce,
+      }),
+    ),
+  };
+  const pairing: PairedDevice = {
+    deviceId: identity.deviceId,
+    publicKey,
+    platform: "test",
+    role: "operator",
+    scopes,
+    createdAtMs: 1,
+    approvedAtMs: 1,
+    tokens: {
+      operator: { token: "synthetic-paired-token", role: "operator", scopes, createdAtMs: 1 },
+    },
+  };
+  return { device, pairing };
 }
 
 export function createHealthSummary(): HealthSummary {

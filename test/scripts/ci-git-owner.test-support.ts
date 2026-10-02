@@ -17,6 +17,7 @@ import {
   renderGitTestClock,
   withCiCheckoutFixture,
 } from "./ci-checkout.test-support.js";
+import { censusPreload } from "./ci-windows-process-census.test-support.js";
 import {
   prepareGeneratedPublisherFixture,
   type GeneratedPublisherOptions,
@@ -546,6 +547,22 @@ trap 'performance_owner_boundary "$BASH_COMMAND"' DEBUG
 ${run}`;
       }
       writeFileSync(path.join(root, "checkout.sh"), run);
+      if (options.cancelDuringBackoff) {
+        return censusPreload(
+          root,
+          String.raw`
+if (process.argv[2] === "supervise") {
+  // Cancellation must not depend on directory notifications.
+  const watch = fs.watch;
+  fs.watch = (target, ...args) => target === root || target === path.join(root, "pids")
+    ? { close() {}, on() { return this; } }
+    : watch(target, ...args);
+}
+syncFixtureBuiltinExports();
+`,
+        );
+      }
+      return undefined;
     },
     (report, result, stderr, root) => {
       const workspace = path.join(root, "workspace");

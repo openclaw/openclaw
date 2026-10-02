@@ -10,6 +10,8 @@ import {
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { ChatPage } from "./chat-page.ts";
+import { routeDraft } from "./route-draft.ts";
+import type { SessionChatRouteData } from "./route-loader.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
 
@@ -61,7 +63,24 @@ export function createChatPageNavigationContext() {
   return { chatAttachmentHandoff, context, navigate, replace, setAgent, patch };
 }
 
+export function getRouteDraftForActivePane(page: ChatPage): string | undefined {
+  const state = page as unknown as {
+    data: SessionChatRouteData;
+    consumedDraftData: SessionChatRouteData | null;
+  };
+  return routeDraft(state.data, state.consumedDraftData);
+}
+
 export function setNavigationContext(page: ChatPage) {
+  if (!customElements.get("openclaw-chat-pane")) {
+    // Page-owner tests replace the stateful pane, including its update acknowledgement.
+    customElements.define(
+      "openclaw-chat-pane",
+      class extends HTMLElement {
+        updateComplete: Promise<unknown> = Promise.resolve(true);
+      },
+    );
+  }
   const navigation = createChatPageNavigationContext();
   (page as unknown as { context: ApplicationContext }).context = navigation.context;
   return navigation;

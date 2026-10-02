@@ -66,9 +66,10 @@ export function appendActiveSqliteTranscriptFileIssues(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
   retainedPaths?: ReadonlySet<string>,
+  env?: NodeJS.ProcessEnv,
 ): void {
   try {
-    for (const { sessionKey, transcriptPath } of readActiveSqliteTranscriptFiles(target)) {
+    for (const { sessionKey, transcriptPath } of readActiveSqliteTranscriptFiles(target, env)) {
       if (!retainedPaths?.has(canonicalMigrationFilePath(transcriptPath))) {
         report.issues.push({
           code: "active_sqlite_transcript_jsonl",
@@ -85,15 +86,22 @@ export function appendActiveSqliteTranscriptFileIssues(
   }
 }
 
-export function readActiveSqliteTranscriptFiles(target: SessionStoreTarget) {
+export function readActiveSqliteTranscriptFiles(
+  target: SessionStoreTarget,
+  env?: NodeJS.ProcessEnv,
+) {
   const sources: Array<{ sessionKey: string; sessionId: string; transcriptPath: string }> = [];
   const result = scanReadOnlySqliteActiveTranscriptFiles(
     target,
     (sessionKey, sessionId, sessionFile) => {
-      const transcriptPath = resolveActiveSqliteTranscriptFile(target, {
-        ...(sessionFile ? { sessionFile } : {}),
-        sessionId,
-      });
+      const transcriptPath = resolveActiveSqliteTranscriptFile(
+        target,
+        {
+          ...(sessionFile ? { sessionFile } : {}),
+          sessionId,
+        },
+        env,
+      );
       if (transcriptPath) {
         sources.push({ sessionKey, sessionId, transcriptPath });
       }
@@ -150,12 +158,14 @@ export async function compactSqliteDatabase(
 function resolveActiveSqliteTranscriptFile(
   target: SessionStoreTarget,
   entry: { sessionFile?: string; sessionId: string },
+  env?: NodeJS.ProcessEnv,
 ): string | undefined {
   let transcriptPath: string;
   try {
     transcriptPath = resolveSessionFilePathCore(entry.sessionId, entry, {
       agentId: target.agentId,
       sessionsDir: path.dirname(target.storePath),
+      env,
     });
   } catch {
     return undefined;

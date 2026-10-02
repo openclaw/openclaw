@@ -8,10 +8,8 @@ import {
   type ConnectParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  captureNodePairingGeneration,
-  isNodePairingGenerationCurrent,
-} from "../../infra/device-pairing-node-state.js";
+import { withDevicePairingLock } from "../../infra/device-pairing-lock.js";
+import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
   acknowledgePendingNodeActions,
@@ -78,7 +76,7 @@ export function toPendingParamsJSON(params: unknown): string | undefined {
 
 async function withPendingNodeActions(
   options: GatewayRequestHandlerOptions,
-  operation: (nodeId: string, pairingGeneration: string) => () => unknown,
+  operation: (nodeId: string, pairingGeneration: string) => unknown,
 ): Promise<void> {
   const { respond, client, context } = options;
   const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id;
@@ -87,24 +85,22 @@ async function withPendingNodeActions(
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
     return;
   }
-  await respondUnavailableOnThrow(respond, async () => {
-    const generation = await captureNodePairingGeneration(trimmedNodeId);
-    if (!generation) {
-      respondPairingChanged(respond);
-      return;
-    }
-    const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
-    if (!session || session.connId !== client?.connId) {
-      respondPairingChanged(respond);
-      return;
-    }
-    const readResult = operation(trimmedNodeId, generation.key);
-    if (!(await isNodePairingGenerationCurrent(generation))) {
-      respondPairingChanged(respond);
-      return;
-    }
-    respond(true, readResult(), undefined);
-  });
+  await respondUnavailableOnThrow(respond, () =>
+    withDevicePairingLock(async () => {
+      const generation = await captureNodePairingGeneration(trimmedNodeId);
+      if (!generation) {
+        respondPairingChanged(respond);
+        return;
+      }
+      const session = context.nodeRegistry.getForPairingGeneration(trimmedNodeId, generation.key);
+      if (!session || session.connId !== client?.connId) {
+        respondPairingChanged(respond);
+        return;
+      }
+      // This admission owns the exact session, queue mutation and synchronous response start.
+      respond(true, operation(trimmedNodeId, generation.key), undefined);
+    }),
+  );
 }
 
 export const nodePendingActionHandlers: GatewayRequestHandlers = {
@@ -120,7 +116,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
         client,
         cfg: context.getRuntimeConfig(),
       });
-      return () => ({
+      return {
         nodeId,
         actions: pending.map((entry) => ({
           id: entry.id,
@@ -128,7 +124,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
           paramsJSON: entry.paramsJSON ?? null,
           enqueuedAtMs: entry.enqueuedAtMs,
         })),
-      });
+      };
     });
   },
   "node.pending.ack": async (options) => {
@@ -144,7 +140,7 @@ export const nodePendingActionHandlers: GatewayRequestHandlers = {
         ids: ackIds,
         ttlMs: nodeInvokePolicy.pendingActionTtlMs,
       });
-      return () => ({ nodeId, ackedIds: ackIds, remainingCount: remaining.length });
+      return { nodeId, ackedIds: ackIds, remainingCount: remaining.length };
     });
   },
 };

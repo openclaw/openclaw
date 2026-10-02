@@ -94,7 +94,7 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             sqlitePath: target.sqlitePath,
             env: params.env,
           }) ||
-          readActiveSqliteTranscriptFiles(target).length > 0 ||
+          readActiveSqliteTranscriptFiles(target, params.env).length > 0 ||
           params.historicalArchiveStores?.has(target.storePath)
         ) {
           retainedReports.push(await params.validateTarget(target));

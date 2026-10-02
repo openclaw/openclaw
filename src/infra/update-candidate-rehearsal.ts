@@ -49,6 +49,8 @@ function isolatedConfig(
   port: number,
   sourceEnv: NodeJS.ProcessEnv,
   pluginPaths: Record<string, string>,
+  sessionStatePaths: Record<string, string>,
+  sessionStore?: string,
 ): OpenClawConfig {
   const copied = structuredClone(config);
   const projectPluginPath = (value: string) => {
@@ -84,11 +86,12 @@ function isolatedConfig(
           workspace: path.join(workspace, id),
           cwd: path.join(workspace, id),
           agentDir: agent.agentDir
-            ? resolveUpdateCandidateStatePath(
+            ? (sessionStatePaths[resolveUserPath(agent.agentDir, sourceEnv)] ??
+              resolveUpdateCandidateStatePath(
                 sourceRoot,
                 stateDir,
                 resolveUserPath(agent.agentDir, sourceEnv),
-              )
+              ))
             : path.join(stateDir, "agents", id, "agent"),
           heartbeat: { every: "0m" },
         },
@@ -99,7 +102,11 @@ function isolatedConfig(
   // Copy effective config, never its include graph or ambient shell overrides.
   delete copied.env;
   delete copied.diagnostics;
-  delete copied.session?.store;
+  if (sessionStore) {
+    copied.session = { ...copied.session, store: sessionStore };
+  } else {
+    delete copied.session?.store;
+  }
   copied.logging = { ...copied.logging, file: path.join(stateDir, "canary.log") };
   copied.gateway = {
     ...copied.gateway,
@@ -197,6 +204,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
     stateDir: tempDir,
     pluginPaths,
     pluginCodeLinks,
+    sessionStore,
+    sessionStatePaths,
     snapshotCapacity,
     snapshotDiagnostics,
     snapshotWarnings,
@@ -207,6 +216,12 @@ export async function prepareUpdateCandidateRehearsal(params: {
     workerEnv,
   });
   const env = workerEnv(tempDir);
+  for (const key of ["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"] as const) {
+    const source = sourceEnv[key];
+    if (source?.trim()) {
+      env[key] = sessionStatePaths[resolveUserPath(source, sourceEnv)] ?? env[key];
+    }
+  }
   const configPath = path.join(tempDir, "openclaw.json");
   const workspaceDir = path.join(tempDir, "workspace");
   const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: tempDir });
@@ -238,6 +253,8 @@ export async function prepareUpdateCandidateRehearsal(params: {
         port,
         sourceEnv,
         pluginPaths,
+        sessionStatePaths,
+        sessionStore,
       ),
     );
     params.signal?.throwIfAborted();

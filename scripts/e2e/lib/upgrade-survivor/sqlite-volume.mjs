@@ -175,6 +175,8 @@ function assertVolumeSessionStores(stores, fixtures, context) {
       `${context} session row changed: ${fixture.index}`,
     );
     assert(entry?.label === fixture.label, `${context} session label changed: ${fixture.index}`);
+    assert(entry?.modelProvider === "openai", `volume model provider changed: ${fixture.index}`);
+    assert(entry?.model === "gpt-5.5", `volume model changed: ${fixture.index}`);
     assert(
       fixture.metadataOnly === !Object.hasOwn(entry, "sessionFile"),
       `${context} session transcript ownership changed: ${fixture.index}`,

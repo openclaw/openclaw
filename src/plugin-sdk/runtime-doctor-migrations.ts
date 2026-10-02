@@ -69,6 +69,7 @@ export {
 } from "../plugins/doctor-state-migration-fs.js";
 export { backupLegacyStateSource } from "../infra/state-migrations.source-backup.js";
 export { resolveLegacyMigrationSourcePath } from "../infra/state-migrations.source-path.js";
+export { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 export type { ChannelIngressLegacyEntry } from "../channels/message/ingress-queue.migration.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";

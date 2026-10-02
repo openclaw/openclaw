@@ -4,10 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
-import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
+import * as processAncestry from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
@@ -70,6 +69,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   native.resident.mockReset();
   mockDoctorServicePlatform("linux");
+  // Synthetic service platforms cannot inspect the host's native process ancestry.
+  vi.spyOn(processAncestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([process.pid, process.ppid, 1]),
+    complete: true,
+  });
   vi.spyOn(process, "geteuid").mockReturnValue(0);
   vi.spyOn(os, "homedir").mockImplementation(() => native.directory);
   vi.spyOn(os, "userInfo").mockImplementation(() => ({
@@ -88,7 +92,7 @@ afterEach(() => {
 async function repair(scenario: Scenario) {
   const home = tempDirs.make("openclaw-doctor-native-");
   native.directory = home;
-  const port = await getFreePort();
+  const port = 19305; // The synthetic transport never binds or connects to this port.
   const fixtureUnit = path.join(home, unitName);
   await fsp.writeFile(fixtureUnit, "[Service]\nUser=root\n");
   const access = fsp.access;
@@ -102,7 +106,7 @@ async function repair(scenario: Scenario) {
   );
   let running = true;
   // The synthetic Gateway must not be this test process or one of its ancestors.
-  const ancestors = getSelfAndAncestorPidsSync();
+  const { pids: ancestors } = processAncestry.inspectSelfAndAncestorPidsSync();
   let pid = 12345;
   while (ancestors.has(pid)) {
     pid += 1;

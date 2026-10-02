@@ -4,8 +4,8 @@ import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateCandidateStateInventoryInProcess,
   readUpdateStateSchemaVersionsInProcess,
-  snapshotUpdateCandidateState,
 } from "./update-candidate-state.js";
+import { snapshotUpdateCandidateState } from "./update-candidate-state.snapshot.js";
 
 // Internal one-shot subprocess: a hard process deadline can interrupt SQLite
 // integrity checks and backup/VACUUM, which expose no AbortSignal contract.

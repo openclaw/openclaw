@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
@@ -26,8 +27,13 @@ import {
   resolveSqliteDatabaseFilePaths,
 } from "../infra/sqlite-files.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
+import {
+  createRetainedAgentDatabaseMatcher,
+  createRetainedAgentDatabaseMatcherFromSnapshot,
+} from "../state/agent-deletion-discovery.js";
+import type { AgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.types.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
+import { reconcileSessionSqliteMigrationPublications } from "./doctor-session-sqlite-restore.js";
 import type {
   DoctorSessionSqliteMode,
   DoctorSessionSqliteOptions,
@@ -149,13 +155,23 @@ export function resolveDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
   store?: string;
+  prepared?: {
+    snapshot: AgentDatabaseDeletionSnapshot | undefined;
+    physicalPaths: Map<SessionStoreTarget, string>;
+  };
 }): { targets: SessionStoreTarget[]; knownTargets?: SessionStoreTarget[] } {
+  const readOptions = {
+    env: params.env,
+    registeredDatabases: params.prepared
+      ? (params.prepared.snapshot?.registeredAgentDatabases ?? [])
+      : undefined,
+  };
   if (params.store) {
     return {
       targets: resolveSessionStoreTargets(
         params.cfg,
         { store: params.store, agent: params.agent, allAgents: params.allAgents },
-        { env: params.env },
+        readOptions,
       ),
     };
   }
@@ -166,9 +182,7 @@ export function resolveDoctorSessionSqliteTargets(params: {
     params.mode === "recover" ||
     (discoversHistory && params.agent)
   ) {
-    const candidates = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
-      env: params.env,
-    });
+    const candidates = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, readOptions);
     if (!params.agent) {
       return { targets: candidates, knownTargets: candidates };
     }
@@ -180,26 +194,36 @@ export function resolveDoctorSessionSqliteTargets(params: {
   }
   if (params.agent) {
     return {
-      targets: resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, { env: params.env }),
+      targets: resolveAgentSessionStoreTargetsSync(params.cfg, params.agent, readOptions),
     };
   }
   if (params.allAgents) {
     // Discovery must admit validated directories even before either registry exists.
     const candidates = discoversHistory
-      ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, { env: params.env })
-      : resolveAllAgentSessionStoreTargetsSync(params.cfg, { env: params.env });
+      ? resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, readOptions)
+      : resolveAllAgentSessionStoreTargetsSync(params.cfg, readOptions);
     const targets = candidates.map((target) => ({
       target,
-      sqlitePath: resolveTargetSqlitePath(target, params.env),
+      sqlitePath: params.prepared
+        ? resolveSqliteTargetFromSessionStorePath(target.storePath, {
+            ...readOptions,
+            agentId: target.agentId,
+          }).path
+        : resolveTargetSqlitePath(target, params.env),
     }));
-    const isRetained = createRetainedAgentDatabaseMatcher(
-      params.env,
-      () => resolveConfiguredAgentDatabaseTargets(params.cfg, { env: params.env }),
-      {
-        kind: "legacy-database",
-        readDatabasePaths: () => targets.map(({ sqlitePath }) => sqlitePath),
-      },
-    );
+    const configured = () => resolveConfiguredAgentDatabaseTargets(params.cfg, readOptions);
+    const namespace = {
+      kind: "legacy-database" as const,
+      readDatabasePaths: () => targets.map(({ sqlitePath }) => sqlitePath),
+    };
+    const isRetained = params.prepared
+      ? createRetainedAgentDatabaseMatcherFromSnapshot(
+          params.env,
+          configured,
+          params.prepared.snapshot,
+          namespace,
+        )
+      : createRetainedAgentDatabaseMatcher(params.env, configured, namespace);
     return {
       targets: targets
         .filter(({ target, sqlitePath }) => {
@@ -210,11 +234,14 @@ export function resolveDoctorSessionSqliteTargets(params: {
             return !disposition || (disposition === "unavailable" && !orphanedSidecars);
           });
         })
-        .map(({ target }) => target),
+        .map(({ target, sqlitePath }) => {
+          params.prepared?.physicalPaths.set(target, sqlitePath);
+          return target;
+        }),
       knownTargets: targets.map(({ target }) => target),
     };
   }
-  return { targets: resolveSessionStoreTargets(params.cfg, {}, { env: params.env }) };
+  return { targets: resolveSessionStoreTargets(params.cfg, {}, readOptions) };
 }
 
 export function filterLegacySessionStoreTargets(
@@ -236,4 +263,24 @@ export function filterLegacySessionStoreTargets(
         (fs.existsSync(path.dirname(target.storePath)) &&
           fs.readdirSync(path.dirname(target.storePath)).some((file) => file.endsWith(".jsonl")))),
   );
+}
+
+/** Called only under the public maintenance lock, before its strict alias recheck. */
+export async function reconcileDoctorSessionSqlitePublication(
+  options: DoctorSessionSqliteOptions,
+  sourcePath: string,
+): Promise<void> {
+  const env = options.env ?? process.env;
+  const cfg = resolveDoctorSessionSqliteConfig(options);
+  const { targets } = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
+  assertDoctorSqliteMaintenancePathsNotAliased(
+    `session SQLite ${options.mode}`,
+    resolveDoctorSessionSqliteMaintenancePaths(targets),
+    resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
+  );
+  await reconcileSessionSqliteMigrationPublications({
+    env,
+    sourcePath,
+    trustedTargets: targets.map(createMigrationTargetInput),
+  });
 }

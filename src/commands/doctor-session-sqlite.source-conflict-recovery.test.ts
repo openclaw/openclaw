@@ -15,6 +15,7 @@ import {
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { readDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
+import { preservesRecordedIndexValue } from "../infra/deferred-plugin-session-verification.js";
 import * as directoryDurability from "../infra/directory-durability.js";
 import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
 import { createPluginDoctorStateMigrationContext } from "../infra/state-migrations.plugin-doctor-context.js";
@@ -105,7 +106,7 @@ describe("retained plugin session source recovery", () => {
     });
   });
 
-  it("reports existing rows and re-verifies a changed valid index without replaying stale metadata", async () => {
+  it("reports existing rows and re-verifies a JSON5-decorated index without replaying stale metadata", async () => {
     await withOpenClawTestState({ label: "retained-source-reverify" }, async (state) => {
       const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
         state,
@@ -113,7 +114,20 @@ describe("retained plugin session source recovery", () => {
         "codex",
       );
       const options = { cfg, env: state.env, allAgents: true };
-      await runDoctorSessionSqlite({ ...options, mode: "import" });
+      const imported = await runDoctorSessionSqlite({ ...options, mode: "import" });
+      const originalReceipt = expectDefined(
+        readDeferredPluginSessionImport({
+          cfg,
+          env: state.env,
+          target: { agentId: "main", storePath },
+          sqlitePath: expectDefined(imported.targets[0]?.sqlitePath, "imported SQLite path"),
+        }),
+        "original import receipt",
+      );
+      const originalIndex = expectDefined(
+        originalReceipt.sources.find((source) => source.path === storePath),
+        "original index identity",
+      );
       await upsertSessionEntryCore(
         { ...scope, sessionKey: "agent:main:kept" },
         { label: "current" },
@@ -122,8 +136,13 @@ describe("retained plugin session source recovery", () => {
         { ...scope, sessionKey: "agent:main:created-after-import" },
         { sessionId: "new-canonical", updatedAt: 30, label: "current" },
       );
-      fs.appendFileSync(storePath, "\r\n");
+      fs.appendFileSync(
+        storePath,
+        "\r\n// Operator note; recorded session values are unchanged.\r\n",
+      );
       const changedBytes = fs.readFileSync(storePath);
+      expect(changedBytes.length).toBeGreaterThan(originalIndex.identity.size);
+      expect(preservesRecordedIndexValue(changedBytes, originalIndex.identity)).toBe(true);
 
       const restored = await runDoctorSessionSqlite({ ...options, mode: "restore" });
       const inspected = await runDoctorSessionSqlite({ ...options, mode: "inspect" });

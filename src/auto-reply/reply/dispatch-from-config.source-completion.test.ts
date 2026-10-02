@@ -6,6 +6,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import * as directives from "../../tts/directives.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -27,7 +28,14 @@ beforeEach(() => {
   setNoAbort();
 });
 afterEach(() => vi.restoreAllMocks());
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 
 const fencedFirst = "```ts\nconst x = \n```";
 const fencedSecond = "```ts\n1;\n```";
@@ -85,6 +93,7 @@ it.each<{
     suffixCalls: 1,
   },
 ])("dispatchReplyFromConfig settles $name after producer filtering", async (scenario) => {
+  const storePath = path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json");
   const actualSessions = scenario.prepared
     ? await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
         "../../config/sessions/session-accessor.js",
@@ -92,7 +101,7 @@ it.each<{
     : undefined;
   const preparedScope = actualSessions
     ? {
-        storePath: path.join(tempDirs.make("openclaw-source-completion-"), "sessions.json"),
+        storePath,
         sessionKey: "agent:main:discord:direct:source-completion",
       }
     : undefined;
@@ -194,7 +203,7 @@ it.each<{
               intentId: "source-intent",
               sessionId: "session-1",
               sessionKey: "agent:main:main",
-              storePath: "/tmp/mock-sessions.json",
+              storePath,
             },
           });
         }

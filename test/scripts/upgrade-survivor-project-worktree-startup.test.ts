@@ -208,8 +208,12 @@ fi
       source.indexOf("validate_worker_cell()"),
     );
     const scenario = source.slice(
-      source.indexOf('if [ "$WORKER_CELL" = "1" ]; then\n  phase worker-baseline-identity'),
+      source.indexOf('if [ "$WORKER_CELL" = "1" ]; then\n'),
       source.indexOf('\nif [ "$SCENARIO" = "workshop-doctor-recovery" ]; then\n  phase '),
+    );
+    const baseline = source.slice(
+      source.indexOf("phase install-baseline install_baseline\n"),
+      source.indexOf('if [ "$SCENARIO" = "backup-schedule" ]; then\n'),
     );
     const result = spawnSync(
       "/bin/bash",
@@ -219,6 +223,8 @@ fi
 source scripts/lib/openclaw-e2e-instance.sh
 SCENARIO=projects-startup-migration
 WORKER_CELL=1
+CANDIDATE_KIND=tarball
+export OPENCLAW_DOCKER_E2E_SELECTED_SHA=unit-candidate
 COMMAND_TIMEOUT=5s
 ARTIFACT_ROOT="$1/artifacts"
 RUNTIME_ROOT="$1/runtime"
@@ -231,6 +237,7 @@ export OPENCLAW_UPDATE_POST_CORE_CONVERGENCE=unit-marker
 export OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE=unit-marker
 export OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR=unit-marker
 baseline_spec=unit-baseline
+baseline_version=2026.9.4
 candidate_version=unit-candidate
 package_root() { printf '%s\\n' "$RUNTIME_ROOT/unit-package"; }
 openclaw_test_state_create() {
@@ -291,6 +298,7 @@ phase() {
   esac
 }
 ${helpers}
+${baseline}
 ${scenario}
 `,
         "project-worktree-doctor-order",

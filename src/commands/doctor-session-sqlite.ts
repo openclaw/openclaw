@@ -96,7 +96,6 @@ import {
   resolveDoctorSessionSqliteConfig,
   resolveDoctorSessionSqliteMaintenancePaths,
   resolveDoctorSessionSqliteMaintenanceRoots,
-  resolveDoctorSessionSqliteTargets,
 } from "./doctor-session-sqlite-targets.js";
 import {
   createDoctorSessionSqliteTargetReport,
@@ -421,7 +420,7 @@ export async function runDoctorSessionSqlite(
       publishArchive,
     );
     for (const { target, report } of archiveTargets) {
-      appendActiveSqliteTranscriptFileIssues(target, report, deferredSourcePaths);
+      appendActiveSqliteTranscriptFileIssues(target, report, deferredSourcePaths, env);
     }
     // Findings belong to every inspected target, including historical-only targets with no moves.
     for (const report of reports) {
@@ -673,26 +672,6 @@ export async function settleRetainedDoctorSessionSources(
   }
 }
 
-/** Called only under the public maintenance lock, before its strict alias recheck. */
-export async function reconcileDoctorSessionSqlitePublication(
-  options: DoctorSessionSqliteOptions,
-  sourcePath: string,
-): Promise<void> {
-  const env = options.env ?? process.env;
-  const cfg = resolveDoctorSessionSqliteConfig(options);
-  const { targets } = resolveDoctorSessionSqliteTargets({ ...options, cfg, env });
-  assertDoctorSqliteMaintenancePathsNotAliased(
-    `session SQLite ${options.mode}`,
-    resolveDoctorSessionSqliteMaintenancePaths(targets),
-    resolveDoctorSessionSqliteMaintenanceRoots(targets, env),
-  );
-  await reconcileSessionSqliteMigrationPublications({
-    env,
-    sourcePath,
-    trustedTargets: targets.map(createMigrationTargetInput),
-  });
-}
-
 async function inspectOrMigrateTarget(params: {
   configuredAgentIds: ReadonlySet<string>;
   verifyMissingIndex: ReturnType<typeof createMissingSessionIndexVerifier>;
@@ -732,6 +711,7 @@ async function inspectOrMigrateTarget(params: {
       ? []
       : readLegacySessionRecords(params.target, issues, {
           allowMissingStore: true,
+          env: params.env,
           ...(retainedIndexPath ? { sourcePath: retainedIndexPath } : {}),
           verifiedSourcePaths: retainedImport
             ? new Set(retainedImport.sources.map((source) => source.path))
@@ -751,6 +731,7 @@ async function inspectOrMigrateTarget(params: {
       params.target,
       retainedImport ? [] : (archiveSources?.stores ?? []),
       issues,
+      params.env,
     );
     const snapshot = readOnlySqliteValidationSnapshot(params.target);
     if (snapshot.ok && ownershipRecords) {
@@ -876,7 +857,12 @@ async function inspectOrMigrateTarget(params: {
   if (isSqliteStore || params.mode === "inspect" || params.mode === "compact") {
     appendSqliteDbStats(params.target, report);
     if (params.mode !== "compact") {
-      appendActiveSqliteTranscriptFileIssues(params.target, report, retainedSourcePaths);
+      appendActiveSqliteTranscriptFileIssues(
+        params.target,
+        report,
+        retainedSourcePaths,
+        params.env,
+      );
     }
     return report;
   }
@@ -1075,7 +1061,7 @@ async function inspectOrMigrateTarget(params: {
   }
   report.sqliteEntries = readSqliteEntryCount(params.target);
   if (params.mode !== "import") {
-    appendActiveSqliteTranscriptFileIssues(params.target, report, retainedSourcePaths);
+    appendActiveSqliteTranscriptFileIssues(params.target, report, retainedSourcePaths, params.env);
   }
   updateMigrationManifestTarget(
     params.activeRun,

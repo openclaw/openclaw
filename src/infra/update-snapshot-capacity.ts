@@ -3,6 +3,24 @@ import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity-schema.j
 
 export type { UpdateSnapshotCapacity } from "./update-snapshot-capacity-schema.js";
 
+export function requiredUpdateSnapshotBytes(size: {
+  bytes: number;
+  largest: number;
+  pluginBytes: number | null;
+  legacySessionBytes?: number;
+}): number {
+  const legacy = size.legacySessionBytes ?? 0;
+  // Include retained file inputs and their prospective SQLite working set.
+  // This is placement headroom; Doctor may still refuse private-copy growth.
+  return (
+    (size.bytes + legacy) * 2 +
+    Math.max(size.largest, legacy) * 3 +
+    (size.pluginBytes ?? 0) +
+    legacy +
+    64 * 1024 * 1024
+  );
+}
+
 export function formatUpdateSnapshotCapacity(capacity: UpdateSnapshotCapacity): string {
   const formatBytes = (value: number) =>
     formatByteSize(value, {
@@ -11,7 +29,7 @@ export function formatUpdateSnapshotCapacity(capacity: UpdateSnapshotCapacity): 
       separator: " ",
       fractionDigits: (amount, unit) => (unit === "giga" && amount < 10 ? 1 : 0),
     });
-  const measured = `${formatBytes(capacity.sqliteBytes)} SQLite and ${capacity.pluginBytes === null ? "plugin files not yet inspected" : `${formatBytes(capacity.pluginBytes)} plugin files`}`;
+  const measured = `${formatBytes(capacity.sqliteBytes)} SQLite, ${formatBytes(capacity.legacySessionBytes ?? 0)} legacy session inputs, and ${capacity.pluginBytes === null ? "plugin files not yet inspected" : `${formatBytes(capacity.pluginBytes)} plugin files`}`;
   const checked = capacity.candidates
     .map(
       ({ directory, availableBytes, allocationError }) =>

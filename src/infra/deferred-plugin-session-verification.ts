@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
@@ -11,6 +12,9 @@ import {
   type LegacySessionStoreTarget,
 } from "../config/sessions/legacy-store-inspection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { recoverEmptyRetainedTranscript } from "./deferred-plugin-session-empty.js";
 import {
@@ -23,6 +27,25 @@ import {
   readOnlySqliteValidationSnapshot,
 } from "./session-sqlite-migration-readers.js";
 import { verifyCanonicalSessionTranscriptSources } from "./session-sqlite-transcript-verification.js";
+import {
+  readLegacyMigrationReceiptFromDatabase,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
+
+export const DEFERRED_SESSION_IMPORT_KIND = "deferred-plugin-session-import";
+
+/** Exact store, logical owner and physical database bind completed-import authority. */
+export function resolveDeferredPluginSessionImportSourceKey(target: {
+  agentId: string;
+  storePath: string;
+  sqlitePath: string;
+}): string {
+  return resolveLegacyMigrationSourceKey(
+    DEFERRED_SESSION_IMPORT_KIND,
+    target.storePath,
+    `${target.agentId}\0${path.resolve(target.sqlitePath)}`,
+  );
+}
 
 /** A replaced database cannot inherit completed-import authority from an old inode. */
 export async function verifyDeferredSessionDatabase(params: {
@@ -54,8 +77,12 @@ export async function verifyDeferredSessionDatabase(params: {
           ({ entry, sessionKey }) => ({
             entry,
             sessionKey,
-            transcriptPath: resolveLegacyTranscriptPaths(target, entry, verifiedSourcePaths)
-              .transcriptPath,
+            transcriptPath: resolveLegacyTranscriptPaths(
+              target,
+              entry,
+              verifiedSourcePaths,
+              params.env,
+            ).transcriptPath,
           }),
         )
       : []
@@ -134,7 +161,7 @@ export function preservesRecordedIndexValue(
   bytes: Buffer,
   identity: MigrationArtifactIdentity,
 ): boolean {
-  const value: unknown = JSON.parse(bytes.toString("utf8"));
+  const value: unknown = parseJsonWithJson5Fallback(bytes.toString("utf8"));
   const pretty = JSON.stringify(value, null, 2);
   const candidates = [
     bytes.subarray(0, identity.size),
@@ -147,7 +174,7 @@ export function preservesRecordedIndexValue(
     (original) =>
       original.length === identity.size &&
       sha256Hex(original) === identity.sha256 &&
-      isDeepStrictEqual(JSON.parse(original.toString("utf8")), value),
+      isDeepStrictEqual(parseJsonWithJson5Fallback(original.toString("utf8")), value),
   );
 }
 
@@ -166,4 +193,25 @@ export function sameSourceContent(
   right: MigrationArtifactIdentity,
 ) {
   return left.sha256 === right.sha256 && left.size === right.size;
+}
+
+export function readDeferredPluginSessionImportReceipt(params: {
+  target: LegacySessionStoreTarget;
+  sqlitePath: string;
+  env: NodeJS.ProcessEnv;
+  database?: DatabaseSync;
+}) {
+  const target = { ...params.target, sqlitePath: params.sqlitePath };
+  const read = (db: DatabaseSync) => {
+    const receipt = tableExists(db, "migration_sources")
+      ? readLegacyMigrationReceiptFromDatabase(
+          db,
+          resolveDeferredPluginSessionImportSourceKey(target),
+        )
+      : undefined;
+    return receipt?.removedSource ? undefined : receipt;
+  };
+  return params.database
+    ? read(params.database)
+    : withExistingOpenClawStateDatabaseReadOnly(({ db }) => read(db), { env: params.env });
 }

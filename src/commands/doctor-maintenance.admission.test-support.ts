@@ -183,6 +183,16 @@ export function setupDoctorAdmissionFixture() {
       database,
       family,
       admission: admitted.assertCurrent,
+      inspectionCount: () =>
+        spawns.reduce(
+          (total, spy) =>
+            total +
+            spy.mock.calls.filter(
+              (call) =>
+                Array.isArray(call[1]) && call[1].includes("--openclaw-sqlite-readonly-child"),
+            ).length,
+          0,
+        ),
       assertIsolation,
       createStateDir: () => directories.make("doctor-admission-replacement-"),
     };

@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { startControlUiServerWithClient } from "./server.auth.control-ui.fixtures.test-support.js";
 import {
   connectReq,
@@ -93,13 +93,17 @@ export function registerControlUiDeviceTokenSuite(): void {
             deviceIdentityPath,
           });
           scenario.assert(res);
+          if (res.ok) {
+            await vi.waitFor(async () => {
+              const paired = await getPairedDevice(identity.deviceId);
+              expect(paired?.lastSeenReason).toBe("connect");
+              expect(typeof paired?.lastSeenAtMs).toBe("number");
+            });
+          }
         } finally {
           ws2.close();
         }
       }
-      const paired = await getPairedDevice(identity.deviceId);
-      expect(paired?.lastSeenReason).toBe("connect");
-      expect(typeof paired?.lastSeenAtMs).toBe("number");
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);

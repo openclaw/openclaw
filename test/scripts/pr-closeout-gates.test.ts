@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const repoRoot = process.cwd();
 const tempDirs = createTempDirTracker();
@@ -163,7 +164,7 @@ prepare_gates 42
       cwd: repo,
       encoding: "utf8",
       env: {
-        ...process.env,
+        ...createIndependentPrFixtureEnv(),
         PATH: `${bin}:${process.env.PATH}`,
         SCRIPTS: join(repoRoot, "scripts"),
         MAIN_SHA: mainSha,

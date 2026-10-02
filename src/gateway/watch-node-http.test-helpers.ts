@@ -4,6 +4,7 @@ import {
   type ClientRequest,
   type ServerResponse,
 } from "node:http";
+import path from "node:path";
 import { expect, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,
@@ -11,6 +12,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -18,10 +20,36 @@ import {
 } from "../infra/device-identity.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { getPairedDevice, resolveNodePairingState } from "../infra/device-pairing.js";
+import {
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  type DeviceBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createWatchNodeHttpRuntime } from "./watch-node-http.js";
+
+export async function startWatchNodeHttpFixture(
+  baseDir: string,
+  cleanups: Array<() => Promise<void>>,
+  options?: Parameters<typeof startWatchNodeHttpRuntime>[2] & {
+    bootstrapProfile?: DeviceBootstrapProfile;
+  },
+) {
+  const identity = loadOrCreateDeviceIdentity({
+    path: path.join(baseDir, "watch-identity.sqlite"),
+  });
+  const issued = await issueDevicePairSetupBootstrapToken({
+    baseDir,
+    profile: options?.bootstrapProfile ?? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  });
+  return {
+    baseDir,
+    identity,
+    issued,
+    ...(await startWatchNodeHttpRuntime(baseDir, cleanups, options)),
+  };
+}
 
 export async function startWatchNodeHttpRuntime(
   baseDir: string,

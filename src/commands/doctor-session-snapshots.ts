@@ -14,6 +14,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { decodeXml } from "../shared/xml.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 
 const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
 
@@ -317,7 +318,7 @@ function resolveSessionStorePaths(params: {
 }
 
 function loadSessionStoreForSnapshotScan(storePath: string): Record<string, SessionEntry> {
-  const parsed = JSON.parse(fs.readFileSync(storePath, "utf-8")) as unknown;
+  const parsed = parseJsonWithJson5Fallback(fs.readFileSync(storePath, "utf-8"));
   if (!isRecord(parsed)) {
     return {};
   }

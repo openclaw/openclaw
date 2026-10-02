@@ -29,18 +29,13 @@ import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunStep } from "./update-run-record.js";
 import {
+  requiredUpdateSnapshotBytes,
   UpdateSnapshotCapacityError,
   type UpdateSnapshotCapacity,
 } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type SnapshotSize = { bytes: number; largest: number; pluginBytes: number | null };
-
-function requiredSnapshotBytes(size: SnapshotSize): number {
-  // Keep the completed generation and Doctor backup, plus the largest raw,
-  // compacting and publication copies. Metadata needs room on an empty state too.
-  return size.bytes * 2 + size.largest * 3 + (size.pluginBytes ?? 0) + 64 * 1024 * 1024;
-}
+type SnapshotSize = Parameters<typeof requiredUpdateSnapshotBytes>[0];
 
 function measureSnapshotCapacity(
   stateDir: string,
@@ -88,11 +83,12 @@ function measureSnapshotCapacity(
       }
       return candidate;
     });
-  const requiredBytes = requiredSnapshotBytes(size);
+  const requiredBytes = requiredUpdateSnapshotBytes(size);
   return {
     reason: "snapshot-capacity-insufficient",
     sqliteBytes: size.bytes,
     pluginBytes: size.pluginBytes,
+    legacySessionBytes: size.legacySessionBytes,
     requiredBytes,
     candidates,
     selection: null,
@@ -137,7 +133,7 @@ export async function assessInitialUpdateSnapshotCapacity(
           candidate.availableBytes !== null && candidate.availableBytes < capacity.requiredBytes,
       );
     const diagnostics = [
-      "Snapshot size estimate: plugin copies and registered external databases are measured after staging.",
+      "Snapshot size estimate: plugin copies, legacy session inputs, and registered external databases are measured after staging.",
       `Initial snapshot needs ${formatDiskSpaceBytes(capacity.requiredBytes)} for ${formatDiskSpaceBytes(capacity.sqliteBytes)} of known SQLite files and temporary working space.`,
       ...capacity.candidates.map(
         (candidate) =>
@@ -243,6 +239,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
 }): Promise<{
   stateDir: string;
   pluginPaths: Record<string, string>;
+  sessionStore?: string;
+  sessionStatePaths: Record<string, string>;
   pluginCodeLinks: UpdateCandidatePluginCodeLink[];
   snapshotCapacity: UpdateSnapshotCapacity;
   snapshotDiagnostics: string[];
@@ -336,7 +334,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     const outcome = await withUpdateCandidateIoBudget(
       {
         directory,
-        bytes: capacity.sqliteBytes + (capacity.pluginBytes ?? 0),
+        bytes:
+          capacity.sqliteBytes + (capacity.pluginBytes ?? 0) + (capacity.legacySessionBytes ?? 0),
         timeoutMs: params.timeoutMs,
         signal: params.signal,
         operation: "snapshot",
@@ -361,6 +360,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             input: JSON.stringify({
               ...request,
               streamProgress: true,
+              sessionProjection: true,
               stateDir: params.stateDir,
               config: params.config,
               targetStateDir: directory,
@@ -449,6 +449,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         [...inventory.databases.values()].map(({ spellings }) => spellings[0]),
       )),
       pluginBytes: inventory.pluginBytes,
+      legacySessionBytes: inventory.legacySessionBytes,
     };
     capacity = measureSnapshotCapacity(params.stateDir, size, params.env, capacity);
     params.signal?.throwIfAborted();
@@ -456,16 +457,19 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     directory = await allocateSnapshotRoot(capacity, { root: selectedRoot.directory, directory });
     selectedRoot = capacity.selection!;
     const pluginPlanPath = path.join(inventoryDirectory, inventory.pluginPlan);
-    const { pluginPaths, pluginCodeLinks } = UpdateCandidateStateSnapshotSchema.parse(
-      await run({
-        mode: "snapshot",
-        pluginPlanPath,
-        databaseInventory: [...inventory.databases.keys()],
-      }),
-    );
+    const { pluginPaths, pluginCodeLinks, sessionStore, sessionStatePaths } =
+      UpdateCandidateStateSnapshotSchema.parse(
+        await run({
+          mode: "snapshot",
+          pluginPlanPath,
+          databaseInventory: [...inventory.databases.keys()],
+        }),
+      );
     return {
       stateDir: directory,
       pluginPaths,
+      sessionStore,
+      sessionStatePaths,
       pluginCodeLinks: pluginCodeLinks
         ? await readUpdateCandidatePluginCodeLinks(pluginPlanPath, pluginCodeLinks)
         : [],

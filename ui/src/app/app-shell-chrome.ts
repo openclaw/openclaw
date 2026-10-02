@@ -42,6 +42,7 @@ import {
   type DebugOverlayMode,
 } from "../pages/debug/debug-overlay-frame.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
+import { ShellNavigationFocusOwner } from "./app-shell-navigation-focus.ts";
 import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
@@ -106,8 +107,12 @@ export class ShellChromeOwner {
   private readonly palette: ShellCommandPaletteOwner;
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
+  private readonly navigationFocus: ShellNavigationFocusOwner;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
+    this.navigationFocus = new ShellNavigationFocusOwner(host, (target) =>
+      this.restoreFocusTo(target),
+    );
     this.palette = new ShellCommandPaletteOwner(host, {
       request: (element, event, replay) => this.requestLazyElement(element, event, replay),
       clear: (event) => this.clearPendingLazyAction(event),
@@ -172,6 +177,7 @@ export class ShellChromeOwner {
   }
 
   disconnect(): void {
+    this.navigationFocus.cancel();
     this.commandPaletteLoading.clear();
     const listenerOwner = this.listeners;
     this.listeners?.abort();
@@ -185,6 +191,7 @@ export class ShellChromeOwner {
   }
 
   readonly toggleNavigationSurface = (trigger?: HTMLElement): void => {
+    this.navigationFocus.cancel();
     const host = this.host;
     const context = host.context;
     // Desktop settings takeover has no app nav; its mobile drawer still owns navigation.
@@ -239,6 +246,7 @@ export class ShellChromeOwner {
     );
 
   readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
+    this.navigationFocus.cancel();
     const host = this.host;
     // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
     const restoreFocus = host.navDrawerOpen && options.restoreFocus;
@@ -320,6 +328,9 @@ export class ShellChromeOwner {
   readonly handleWindowResize = (): void => {
     const host = this.host;
     const mobileNavLayout = isMobileNavLayout();
+    if (!mobileNavLayout || host.navDrawerOpen) {
+      this.navigationFocus.cancel();
+    }
     // Dismiss the old surface before moving the shared sidebar between breakpoints.
     const dismissedSidebarMenus =
       mobileNavLayout && !host.navDrawerOpen && this.dismissSidebarTransientMenus();
@@ -332,13 +343,10 @@ export class ShellChromeOwner {
       host.desktopNavigationExpanded = host.context?.navigation.snapshot.navCollapsed ?? false;
     }
     host.requestUpdate();
-    void host.updateComplete.then(() => {
-      if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
-        requestAnimationFrame(() => {
-          this.restoreFocusTo(visibleNavDrawerToggle(host));
-        });
-      }
-    });
+    // Later same-mode resize events find no menu; the first dismissal still owns its handoff.
+    if (dismissedSidebarMenus) {
+      void this.navigationFocus.restore();
+    }
   };
 
   readonly handleUnhandledFileDrag = (event: DragEvent): void => {
@@ -719,6 +727,7 @@ export class ShellChromeOwner {
   }
 
   abandonPendingLazyActionForContext(): void {
+    this.navigationFocus.cancel();
     this.commandPaletteLoading.clear();
     this.panels.reset();
     this.pendingLazyAction = null;

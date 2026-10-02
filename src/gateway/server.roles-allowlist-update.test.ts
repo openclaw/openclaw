@@ -272,6 +272,7 @@ async function findConnectedNodeByDisplayName(displayName: string) {
       commands?: string[];
     }>;
   }>(ws, "node.list", {});
+  expect(listRes.ok, JSON.stringify(listRes.error)).toBe(true);
   return (listRes.payload?.nodes ?? []).find(
     (node) => node.connected && node.displayName === displayName,
   );

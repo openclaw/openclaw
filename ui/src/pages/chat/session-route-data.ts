@@ -22,6 +22,7 @@ export type ChatRouteData =
       shortId?: string;
       routeLoadingSkeleton?: true;
       sessionResolutionFromCache?: true;
+      prepareNavigationHandoff?: () => void;
       canonicalLocation?: RouteLocation;
       canonicalLocationReady?: Promise<RouteLocation | null>;
       canonicalLocationSource?: RouteLocation;

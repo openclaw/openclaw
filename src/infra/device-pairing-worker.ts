@@ -141,7 +141,10 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     context.admission.assertCurrent();
     options.assertCurrent?.();
     const publication = captureDevicePairingPublication(context.admission);
-    const mutation = publication.beginMutation();
+    const mutation = publication.beginMutation(
+      captured.type !== "devicePairing.updateMetadata" &&
+        captured.type !== "devicePairing.updatePresence",
+    );
     let admission: SqliteWorkerOperationAdmission | undefined;
     let published = false;
     let publishEnvironment: ReturnType<typeof reserveWorkerEnvironmentNativePublication>;

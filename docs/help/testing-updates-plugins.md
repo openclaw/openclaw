@@ -215,7 +215,12 @@ commit before the update and compare the installed application payload with the
 frozen tarball afterward, before candidate probes. This distinguishes different
 builds with the same version string. npm still owns dependency reification;
 manual tarball runs without a selected source SHA retain their existing contract.
-These generic scenarios do not require a worker-cell baseline identity artifact.
+Source-pinned tarball runs capture the admitted baseline version's package identity
+immediately after installation, before Doctor or scenario setup can change it.
+The capture verifies the published tarball's registry integrity and compares
+`package.json`, `openclaw.mjs`, and the complete `dist` inventory with the installed
+baseline. Candidate admission requires that receipt and a different source commit;
+the installed candidate is checked against the same declared runtime payload scope.
 After the update, missing or unreadable tarballs and installed payloads fail with
 the corresponding candidate identity diagnostic before any candidate probes run.
 

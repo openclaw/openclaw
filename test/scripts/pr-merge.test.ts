@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
@@ -261,9 +262,7 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
     cwd: sourceRepo,
     encoding: "utf8",
     env: {
-      ...parentEnv,
-      // This fixture sources candidate code, not the supervising wrapper snapshot.
-      OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: undefined,
+      ...createIndependentPrFixtureEnv(parentEnv),
       OPENCLAW_GH_BIN: join(root, "gh"),
       PATH: `${root}:${process.env.PATH}`,
       ...(scenario.configuredTrailer
@@ -340,6 +339,7 @@ describePosix("native squash attribution", () => {
       {
         ...process.env,
         OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-merge-snapshot-"),
+        OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
         OPENCLAW_GH_BIN: join(tempDirs.make("unrelated-gh-selector-"), "must-not-run"),
       },
     );

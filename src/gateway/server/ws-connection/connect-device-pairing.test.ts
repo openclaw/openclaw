@@ -851,13 +851,15 @@ describe("gateway connect pairing exemptions", () => {
         });
         expect(pairedConnect.ok, JSON.stringify(pairedConnect)).toBe(true);
 
-        const paired = await getPairedDevice(loaded.identity.deviceId);
-        expect(paired?.approvedScopes).toEqual(approvedScopes);
-        expect(paired?.tokens?.operator).toMatchObject({
-          token: tokenBefore?.token,
-          scopes: approvedScopes,
+        await vi.waitFor(async () => {
+          const paired = await getPairedDevice(loaded.identity.deviceId);
+          expect(paired?.approvedScopes).toEqual(approvedScopes);
+          expect(paired?.tokens?.operator).toMatchObject({
+            token: tokenBefore?.token,
+            scopes: approvedScopes,
+          });
+          expect(paired?.lastSeenReason).toBe("connect");
         });
-        expect(paired?.lastSeenReason).toBe("connect");
       } finally {
         pairedWs?.close();
         started.ws.close();

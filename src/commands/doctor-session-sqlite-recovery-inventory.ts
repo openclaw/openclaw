@@ -85,6 +85,7 @@ export function resolveRecoveryArtifact(
 export function collectRecoveryInventory(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  readUpdateRuns?: () => ReturnType<typeof listUpdateRuns>;
 }): RecoveryInventory {
   const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
   const root = path.dirname(stateDir);
@@ -178,7 +179,7 @@ export function collectRecoveryInventory(params: {
     try {
       laterUpdateStartedAt = Math.max(
         0,
-        ...listUpdateRuns({ limit: 100 }, { env: params.env })
+        ...(params.readUpdateRuns?.() ?? listUpdateRuns({ limit: 100 }, { env: params.env }))
           .filter((run) => run.status === "succeeded" && run.finishedAtMs !== null)
           .map((run) => run.createdAtMs),
       );

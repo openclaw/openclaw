@@ -5,6 +5,7 @@ import {
   missingScopeErrorShape,
   validateNodeInvokeParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import {
   isAdminOnlyNodeInvokeCommand,
@@ -45,6 +46,7 @@ import {
   isNodePairingWorkCurrent,
   resolveDispatchableNodeSession,
   respondPairingChanged,
+  withCurrentNodePairingWork,
 } from "./nodes.shared.js";
 import { wakeNodeForReconnect } from "./nodes.wake-reconnect.js";
 import { maybeSendNodeWakeNudge, maybeWakeNodeWithApns } from "./nodes.wake.js";
@@ -194,22 +196,59 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       const invocationLifecycle = signal ? AbortSignal.any([wakeLifecycle, signal]) : wakeLifecycle;
       let releaseApprovalHandoff: (() => void) | undefined;
       try {
-        const continuePairingWork = async (): Promise<boolean> => {
-          const pairingCurrent = await awaitWithinDeadline(
-            () => isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle }),
-            invokeDeadlineAtMs,
-            () => performance.now(),
-          );
-          if (pairingCurrent === ABSOLUTE_DEADLINE_EXPIRED) {
-            respondIfInvokeExpired();
-            return false;
+        const startWithCurrentPairing = async <T>(start: () => T) => {
+          let started: { value: T } | undefined;
+          if (!signal?.aborted) {
+            try {
+              await racePromiseWithAbortSignal(
+                awaitWithinDeadline(
+                  () =>
+                    withCurrentNodePairingWork(
+                      { nodeId, generation, lifecycle: wakeLifecycle },
+                      () => {
+                        if (
+                          signal?.aborted ||
+                          (invokeDeadlineAtMs !== undefined &&
+                            resolveRemainingInvokeTimeoutMs() === 0)
+                        ) {
+                          return;
+                        }
+                        started = { value: start() };
+                      },
+                    ),
+                  invokeDeadlineAtMs,
+                  () => performance.now(),
+                ),
+                signal,
+              );
+            } catch (error) {
+              if (!signal?.aborted) {
+                throw error;
+              }
+            }
           }
-          if (pairingCurrent) {
-            return true;
+          // A started effect wins over an expiry observed after its completion;
+          // a queued callback rechecks the deadline and cannot start afterward.
+          if (started) {
+            return started;
           }
-          respondPairingChanged(respond);
-          return false;
+          if (respondIfInvokeExpired()) {
+            return undefined;
+          }
+          if (signal?.aborted) {
+            respondUnavailableOnNodeInvokeErrorWithProvenance(
+              respond,
+              { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } },
+              { nodeCommandDispatched },
+            );
+          } else {
+            respondPairingChanged(respond);
+          }
+          return undefined;
         };
+
+        const continuePairingWork = async () =>
+          Boolean(await startWithCurrentPairing(() => true)) && !respondIfInvokeExpired();
 
         if (respondIfInvokeExpired()) {
           return;
@@ -275,26 +314,28 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             if (!(await continuePairingWork())) {
               return;
             }
-            context.logGateway.info(
-              `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
-                `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
-                `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
-            );
-            context.logGateway.warn(
-              `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
-                `reason=not_connected totalMs=${totalDurationMs}`,
-            );
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: {
-                  code: "NOT_CONNECTED",
-                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
-                  nodeCommandDispatched: false,
-                },
-              }),
-            );
+            await startWithCurrentPairing(() => {
+              context.logGateway.info(
+                `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
+                  `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
+                  `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
+              );
+              context.logGateway.warn(
+                `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
+                  `reason=not_connected totalMs=${totalDurationMs}`,
+              );
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
+                  details: {
+                    code: "NOT_CONNECTED",
+                    nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
+                    nodeCommandDispatched: false,
+                  },
+                }),
+              );
+            });
             return;
           }
 
@@ -429,48 +470,50 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           respondIfInvokeExpired();
           return;
         }
-        if (!(await continuePairingWork())) {
-          return;
-        }
         if (policyResult) {
           // Plugin policies can satisfy an invocation without crossing the raw
           // node command channel; still emit mirrored Talk events for UI state.
-          if (!policyResult.ok) {
-            const errorCode = policyResult.unavailable
-              ? ErrorCodes.UNAVAILABLE
-              : ErrorCodes.INVALID_REQUEST;
-            respond(
-              false,
-              undefined,
-              errorShape(errorCode, policyResult.message, {
-                details: {
-                  ...policyResult.details,
-                  ...(policyResult.code ? { code: policyResult.code } : {}),
-                },
-              }),
-            );
-            return;
-          }
-          const payload = policyResult.payloadJSON
-            ? parseGatewayPayload(policyResult.payloadJSON)
-            : policyResult.payload;
-          emitTalkPttNodeEvent({
-            context,
-            nodeId,
-            command,
-            payload,
-          });
-          respond(
-            true,
-            {
-              ok: true,
+          await startWithCurrentPairing(() => {
+            if (!policyResult.ok) {
+              const errorCode = policyResult.unavailable
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST;
+              respond(
+                false,
+                undefined,
+                errorShape(errorCode, policyResult.message, {
+                  details: {
+                    ...policyResult.details,
+                    ...(policyResult.code ? { code: policyResult.code } : {}),
+                  },
+                }),
+              );
+              return;
+            }
+            const payload = policyResult.payloadJSON
+              ? parseGatewayPayload(policyResult.payloadJSON)
+              : policyResult.payload;
+            emitTalkPttNodeEvent({
+              context,
               nodeId,
               command,
-              payload: policyResult.payload,
-              payloadJSON: policyResult.payloadJSON ?? null,
-            },
-            undefined,
-          );
+              payload,
+            });
+            respond(
+              true,
+              {
+                ok: true,
+                nodeId,
+                command,
+                payload: policyResult.payload,
+                payloadJSON: policyResult.payloadJSON ?? null,
+              },
+              undefined,
+            );
+          });
+          return;
+        }
+        if (!(await continuePairingWork())) {
           return;
         }
         const dispatchSession = resolveDispatchableNodeSession(
@@ -490,9 +533,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         if (!authorizeNodeCommand(dispatchSession, context.getRuntimeConfig())) {
           return;
         }
-        const dispatchTimeoutMs = resolveRemainingInvokeTimeoutMs();
-        if (invokeDeadlineAtMs !== undefined && dispatchTimeoutMs === 0) {
-          respondIfInvokeExpired();
+        if (respondIfInvokeExpired()) {
           return;
         }
         // Policy, pairing, and approval checks above may await. Revalidate the
@@ -521,7 +562,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           expectedPairingGeneration: generation.key,
           command,
           params: forwardedParams.params,
-          timeoutMs: dispatchTimeoutMs,
+          timeoutMs: resolveRemainingInvokeTimeoutMs(),
           deadlineAtMs: invokeDeadlineAtMs,
           signal: invocationLifecycle,
           idempotencyKey: p.idempotencyKey,
@@ -543,9 +584,6 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             nodeInvokeStream?.onDispatchReady(invokeId);
           },
         });
-        if (!(await continuePairingWork())) {
-          return;
-        }
         if (!res.ok) {
           if (
             shouldQueueAsPendingForegroundAction({
@@ -561,30 +599,72 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             // Foreground-only iOS commands become pullable pending actions instead
             // of failing permanently while the device is locked/backgrounded.
             const paramsJSON = toPendingParamsJSON(forwardedParams.params);
-            const queued = enqueuePendingNodeAction({
-              nodeId,
-              pairingGeneration: generation.key,
-              command,
-              paramsJSON,
-              idempotencyKey: p.idempotencyKey,
-              ttlMs: nodeInvokePolicy.pendingActionTtlMs,
-              maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
-            });
-            const wake = await awaitWithinDeadline(
-              () =>
-                maybeWakeNodeWithApns(nodeId, {
-                  cfg,
-                  lifecycle: wakeLifecycle,
-                  generation,
-                }),
-              invokeDeadlineAtMs,
-              () => performance.now(),
+            const admitted = await startWithCurrentPairing(() =>
+              enqueuePendingNodeAction({
+                nodeId,
+                pairingGeneration: generation.key,
+                command,
+                paramsJSON,
+                idempotencyKey: p.idempotencyKey,
+                ttlMs: nodeInvokePolicy.pendingActionTtlMs,
+                maxPerNode: nodeInvokePolicy.pendingActionMaxPerNode,
+              }),
             );
-            if (wake === ABSOLUTE_DEADLINE_EXPIRED || !(await continuePairingWork())) {
+            if (!admitted) {
+              return;
+            }
+            const queued = admitted.value;
+            let published = false;
+            try {
+              const wake = await awaitWithinDeadline(
+                () =>
+                  maybeWakeNodeWithApns(nodeId, {
+                    cfg,
+                    lifecycle: wakeLifecycle,
+                    generation,
+                  }),
+                invokeDeadlineAtMs,
+                () => performance.now(),
+              );
               if (wake === ABSOLUTE_DEADLINE_EXPIRED) {
                 respondIfInvokeExpired();
+                return;
               }
-              if (queued.created) {
+              published = Boolean(
+                await startWithCurrentPairing(() => {
+                  context.logGateway.info(
+                    `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
+                      `queuedId=${queued.action.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
+                  );
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(
+                      ErrorCodes.UNAVAILABLE,
+                      "node command queued until iOS returns to foreground",
+                      {
+                        retryable: true,
+                        details: {
+                          code: "QUEUED_UNTIL_FOREGROUND",
+                          queuedActionId: queued.action.id,
+                          nodeId,
+                          command,
+                          wake: {
+                            path: wake.path,
+                            available: wake.available,
+                            throttled: wake.throttled,
+                            apnsStatus: wake.apnsStatus,
+                            apnsReason: wake.apnsReason,
+                          },
+                          nodeError: res.error ?? null,
+                        },
+                      },
+                    ),
+                  );
+                }),
+              );
+            } finally {
+              if (!published && queued.created) {
                 removePendingNodeAction({
                   nodeId,
                   pairingGeneration: generation.key,
@@ -592,62 +672,36 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                   ttlMs: nodeInvokePolicy.pendingActionTtlMs,
                 });
               }
-              return;
             }
-            context.logGateway.info(
-              `node pending queued node=${nodeId} req=${req.id} command=${command} ` +
-                `queuedId=${queued.action.id} wakePath=${wake.path} wakeAvailable=${wake.available}`,
-            );
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.UNAVAILABLE,
-                "node command queued until iOS returns to foreground",
-                {
-                  retryable: true,
-                  details: {
-                    code: "QUEUED_UNTIL_FOREGROUND",
-                    queuedActionId: queued.action.id,
-                    nodeId,
-                    command,
-                    wake: {
-                      path: wake.path,
-                      available: wake.available,
-                      throttled: wake.throttled,
-                      apnsStatus: wake.apnsStatus,
-                      apnsReason: wake.apnsReason,
-                    },
-                    nodeError: res.error ?? null,
-                  },
-                },
-              ),
-            );
             return;
           }
-          respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
-            nodeCommandDispatched,
-          });
+          await startWithCurrentPairing(() =>
+            respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
+              nodeCommandDispatched,
+            }),
+          );
           return;
         }
-        const payload = res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload;
-        emitTalkPttNodeEvent({
-          context,
-          nodeId,
-          command,
-          payload,
-        });
-        respond(
-          true,
-          {
-            ok: true,
+        await startWithCurrentPairing(() => {
+          const payload = res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload;
+          emitTalkPttNodeEvent({
+            context,
             nodeId,
             command,
             payload,
-            payloadJSON: res.payloadJSON ?? null,
-          },
-          undefined,
-        );
+          });
+          respond(
+            true,
+            {
+              ok: true,
+              nodeId,
+              command,
+              payload,
+              payloadJSON: res.payloadJSON ?? null,
+            },
+            undefined,
+          );
+        });
       } finally {
         releaseApprovalHandoff?.();
         releaseNodeWakeLifecycle(nodeId, wakeLifecycle);

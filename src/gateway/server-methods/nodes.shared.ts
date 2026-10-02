@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { withDevicePairingLock } from "../../infra/device-pairing-lock.js";
 import {
   isNodePairingGenerationCurrent,
   type NodePairingGeneration,
@@ -32,6 +33,17 @@ export async function isNodePairingWorkCurrent(params: {
   // Pairing mutation owners invalidate the lifecycle after persistence. Check
   // it again because the keyed generation lookup may yield before side effects.
   return isNodeWakeLifecycleCurrent(params.nodeId, params.lifecycle, params.generation.key);
+}
+
+/** Begin the effect while its current pairing and exact wake claim share one admission. */
+export async function withCurrentNodePairingWork<T>(
+  params: { nodeId: string; generation: NodePairingGeneration; lifecycle: NodeWakeLifecycle },
+  start: () => T | Promise<T>,
+): Promise<T | undefined> {
+  const begun = await withDevicePairingLock(async () => ({
+    value: (await isNodePairingWorkCurrent(params)) ? start() : undefined,
+  }));
+  return begun.value;
 }
 
 export async function isNodePushAttemptCurrent(params: {

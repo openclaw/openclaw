@@ -4,10 +4,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import {
-  readUpdateCandidateStateInventoryInProcess,
-  snapshotUpdateCandidateState,
-} from "./update-candidate-state.js";
+import { readUpdateCandidateStateInventoryInProcess } from "./update-candidate-state.js";
+import { snapshotUpdateCandidateState } from "./update-candidate-state.snapshot.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 

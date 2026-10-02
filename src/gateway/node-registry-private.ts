@@ -1,10 +1,6 @@
-import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
-  isPrivateNodeInvokeCommand,
   NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
   NODE_WORKER_PRIVATE_COMMANDS,
   NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
@@ -18,16 +14,11 @@ import {
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
 } from "../infra/node-runner-inventory.js";
-import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
 import { sameWorkerProtocolFeatures } from "../worker/worker-build-identity.js";
-import { buildNodeInvokeRequest, serializeNodeEvent } from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
-import type { NodeInvokeStreamController, PendingInvoke } from "./node-registry.invoke-stream.js";
-import {
-  normalizeSystemRunInvokeParams,
-  resolvePendingSystemRunEvent,
-} from "./node-registry.system-run.js";
+import type { PendingInvoke } from "./node-registry.invoke-stream.js";
+import { invokeNodeRegistryCore, type NodeRegistryInvokeState } from "./node-registry.invoke.js";
 import {
   createNodeRunnerStatePublisher,
   waitForNodeRunnerAvailability,
@@ -43,18 +34,11 @@ import {
   type NodeWorkerBundleStatusObservation,
   type NodeWorkerSupervisorNodeProof,
 } from "./node-runner-inventory-runtime.js";
-import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 
 export type {
   NodeRunnerStateChange,
   NodeWorkerSupervisorNodeProof,
 } from "./node-runner-inventory-runtime.js";
-
-type PairingBoundNodeSession = NodeRunnerRegistrySession & { pairingIdentity: string };
-type PairingLeaseResolution =
-  | { status: "current"; session: PairingBoundNodeSession }
-  | { status: "stale"; presenceInvalidated: boolean }
-  | { status: "unavailable" };
 
 type NodeWorkerPrivateCommand = (typeof NODE_WORKER_PRIVATE_COMMANDS)[number];
 
@@ -88,29 +72,10 @@ export type NodeWorkerSupervisorTransport = {
   }): Promise<NodeInvokeResult>;
 };
 
-type NodeRegistryPrivateContext = {
-  getNode: (nodeId: string) => PairingBoundNodeSession | undefined;
-  isCommandAllowed: (nodeId: string, command: string) => boolean;
+type NodeRegistryPrivateContext = NodeRegistryInvokeState["context"] & {
   listCurrentConnected: () => Promise<NodeRunnerRegistrySession[]>;
   getCurrentConnected: (nodeId: string) => Promise<NodeRunnerRegistrySession | undefined>;
-  hasCurrentPairingStateResolver: boolean;
-  resolvePairingLease: (node: PairingBoundNodeSession) => Promise<PairingLeaseResolution>;
-  pendingInvokes: Map<string, PendingInvoke>;
-  invokeStreams: NodeInvokeStreamController;
-  sendEventToSession: (node: NodeRunnerRegistrySession, event: string, payload: unknown) => boolean;
-  rememberAuthorizedSystemRunEvent: (event: {
-    nodeId: string;
-    connId: string;
-    runId: string;
-    sessionKey?: string;
-    timeoutMs?: number | null;
-  }) => void;
   publishActiveNodeContext: () => void;
-};
-
-type GenerationBoundPendingInvoke = {
-  expectedGeneration: string;
-  controller: AbortController;
 };
 
 type NodeRunnerInventoryUpdateResult = {
@@ -122,7 +87,7 @@ type NodeRegistryPrivateState = {
   runnerInventoryByConn: Map<string, NodeRunnerInventoryRecord>;
   bundleStatusByConn: Map<string, NodeWorkerBundleStatusObservation>;
   runnerState: NodeRunnerStatePublisher;
-  generationBoundInvokes: WeakMap<PendingInvoke, GenerationBoundPendingInvoke>;
+  generationBoundInvokes: NodeRegistryInvokeState["generationBoundInvokes"];
   workerSupervisorTransport: NodeWorkerSupervisorTransport;
 };
 
@@ -195,222 +160,6 @@ function updateWorkerRunnerInventory(
     state.runnerState.reconcile(node.nodeId, true);
   }
   return { changed };
-}
-
-async function invokeNodeRegistryCore(
-  state: NodeRegistryPrivateState,
-  params: NodeInvokeParams,
-  allowPrivateCommand: boolean,
-  isCompletionAuthorized?: () => boolean,
-): Promise<NodeInvokeResult> {
-  let timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000, 0);
-  // Explicit budgets include pairing and serialization; omitted budgets retain
-  // the post-dispatch default, and zero keeps long-lived invokes unbounded.
-  const deadlineAtMs =
-    params.deadlineAtMs ??
-    (Number.isFinite(params.timeoutMs) && timeoutMs > 0
-      ? performance.now() + timeoutMs
-      : undefined);
-  if (isPrivateNodeInvokeCommand(params.command) && !allowPrivateCommand) {
-    return {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "private node command is not invocable" },
-    };
-  }
-  if (params.signal?.aborted) {
-    return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
-  }
-  let node = state.context.getNode(params.nodeId);
-  if (!node) {
-    return { ok: false, error: { code: "NOT_CONNECTED", message: "node not connected" } };
-  }
-  if (node.client.invalidated === true) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-    };
-  }
-  const expectedPairingGeneration = params.expectedPairingGeneration ?? node.pairingGeneration;
-  if (state.context.hasCurrentPairingStateResolver && !expectedPairingGeneration) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing generation unavailable" },
-    };
-  }
-  if (expectedPairingGeneration && node.pairingGeneration !== expectedPairingGeneration) {
-    return {
-      ok: false,
-      error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-    };
-  }
-  if (params.expectedConnId && node.connId !== params.expectedConnId) {
-    return {
-      ok: false,
-      error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
-    };
-  }
-  if (expectedPairingGeneration && state.context.hasCurrentPairingStateResolver) {
-    const pairingNode = node;
-    let resolution: PairingLeaseResolution | typeof ABSOLUTE_DEADLINE_EXPIRED;
-    try {
-      resolution = await awaitWithinDeadline(
-        () =>
-          racePromiseWithAbortSignal(state.context.resolvePairingLease(pairingNode), params.signal),
-        deadlineAtMs,
-        () => performance.now(),
-      );
-    } catch (error) {
-      if (params.signal?.aborted) {
-        return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
-      }
-      throw error;
-    }
-    if (resolution === ABSOLUTE_DEADLINE_EXPIRED) {
-      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
-    }
-    if (resolution.status === "unavailable") {
-      return {
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "node pairing state unavailable before dispatch" },
-      };
-    }
-    if (resolution.status !== "current") {
-      return {
-        ok: false,
-        error: { code: "PAIRING_CHANGED", message: "node pairing changed before dispatch" },
-      };
-    }
-    node = resolution.session;
-    if (params.expectedConnId && node.connId !== params.expectedConnId) {
-      return {
-        ok: false,
-        error: { code: "ROUTE_CHANGED", message: "node connection changed before dispatch" },
-      };
-    }
-  }
-  const requestId = randomUUID();
-  const invokeParams = normalizeSystemRunInvokeParams({
-    command: params.command,
-    params: params.params,
-  });
-  const payload = buildNodeInvokeRequest({
-    id: requestId,
-    nodeId: params.nodeId,
-    command: params.command,
-    params: "params" in params ? invokeParams : undefined,
-    timeoutMs,
-    idempotencyKey: params.idempotencyKey,
-    sessionKey: params.sessionKey,
-  });
-  if (
-    params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND &&
-    Buffer.byteLength(serializeNodeEvent("node.invoke.request", payload), "utf8") >
-      MAX_PAYLOAD_BYTES
-  ) {
-    return {
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: "worker launch exceeds the node payload limit" },
-    };
-  }
-  const systemRunEvent = resolvePendingSystemRunEvent({
-    command: params.command,
-    params: invokeParams,
-  });
-  // Serialization can consume the budget or close caller-owned authority.
-  // Revalidate both before arming pending state and handing off to transport.
-  if (params.signal?.aborted) {
-    return { ok: false, error: { code: "ABORTED", message: "node invoke cancelled" } };
-  }
-  if (params.isDispatchAuthorized?.() === false) {
-    return {
-      ok: false,
-      error: {
-        code: "APPROVAL_AUTHORITY_CLOSED",
-        message: "runtime authority closed before node dispatch",
-      },
-    };
-  }
-  if (!state.context.isCommandAllowed(params.nodeId, params.command)) {
-    return {
-      ok: false,
-      error: { code: "POLICY_CHANGED", message: "node command is no longer allowed" },
-    };
-  }
-  if (deadlineAtMs !== undefined) {
-    timeoutMs = Math.max(0, deadlineAtMs - performance.now());
-    if (timeoutMs === 0) {
-      return { ok: false, error: { code: "TIMEOUT", message: "node invoke timed out" } };
-    }
-    // Keep the precise monotonic budget for Gateway timers, but satisfy the integer
-    // node-event contract without turning a sub-millisecond budget into "unbounded".
-    payload.timeoutMs = Math.ceil(timeoutMs);
-  }
-  const result = new Promise<NodeInvokeResult>((resolve, reject) => {
-    const pending: PendingInvoke = {
-      nodeId: params.nodeId,
-      connId: node.connId,
-      command: params.command,
-      systemRunEvent,
-      resolve,
-      reject,
-      nextProgressSeq: 0,
-      progressChunks: new Map(),
-      nextInputSeq: 0,
-      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
-      // Lifecycle cleanup retains its exact owner through reply settlement.
-      ...(isCompletionAuthorized ? { isCompletionAuthorized } : {}),
-    };
-    const generationController = params.expectedPairingGeneration
-      ? new AbortController()
-      : undefined;
-    if (params.expectedPairingGeneration && generationController) {
-      state.generationBoundInvokes.set(pending, {
-        expectedGeneration: params.expectedPairingGeneration,
-        controller: generationController,
-      });
-    }
-    const signal = generationController
-      ? params.signal
-        ? AbortSignal.any([params.signal, generationController.signal])
-        : generationController.signal
-      : params.signal;
-    const idleTimeoutMs = resolveTimerTimeoutMs(params.idleTimeoutMs, 0, 0);
-    state.context.invokeStreams.armPending({
-      requestId,
-      pending,
-      timeoutMs,
-      deadlineAtMs,
-      idleTimeoutMs,
-      ...(signal ? { signal } : {}),
-    });
-  });
-  const pendingAtDispatch = state.context.pendingInvokes.get(requestId);
-  if (!pendingAtDispatch) {
-    return await result;
-  }
-  const dispatchDeadlineAtMs = pendingAtDispatch.deadlineAtMs;
-  const ok = state.context.sendEventToSession(node, "node.invoke.request", payload);
-  if (!ok) {
-    const pending = state.context.pendingInvokes.get(requestId);
-    if (pending) {
-      state.context.invokeStreams.clearTimers(pending);
-      state.context.pendingInvokes.delete(requestId);
-      pending.resolve({
-        ok: false,
-        error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
-      });
-    }
-    return await result;
-  }
-  if (systemRunEvent) {
-    state.context.rememberAuthorizedSystemRunEvent({
-      nodeId: params.nodeId,
-      connId: node.connId,
-      ...systemRunEvent,
-    });
-  }
-  params.onDispatchReady?.(requestId, dispatchDeadlineAtMs);
-  return await result;
 }
 
 export function registerNodeRegistryPrivateRuntime(

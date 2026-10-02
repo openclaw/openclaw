@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import { parseJsonWithJson5Fallback } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type LegacySessionIndexEntry = {
@@ -26,7 +27,7 @@ export async function readLegacySessionIndex(
   }
   let raw: unknown;
   try {
-    raw = JSON.parse(contents);
+    raw = parseJsonWithJson5Fallback(contents);
   } catch {
     return { failure: `session index ${storePath} could not be read (invalid JSON)` };
   }

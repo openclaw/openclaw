@@ -48,8 +48,55 @@ function pendingMatches(sessionKey: string, data: SessionChatRouteData): boolean
 
 export class RouteDraftComposerFocus {
   private timer: number | undefined;
+  private pendingDraft:
+    | {
+        pane: HTMLElement;
+        completion: Promise<unknown>;
+        href: string;
+        accept: () => void;
+      }
+    | undefined;
+  private readonly observedDraftUpdates = new WeakSet<Promise<unknown>>();
 
   constructor(private readonly host: HTMLElement) {}
+
+  clearPendingDraft(): void {
+    this.pendingDraft = undefined;
+  }
+
+  afterPaneUpdate(
+    pane: HTMLElement & { readonly updateComplete: Promise<unknown> },
+    accept: () => void,
+  ): void {
+    const completion = pane.updateComplete;
+    this.pendingDraft = { pane, completion, href: window.location.href, accept };
+    if (this.observedDraftUpdates.has(completion)) {
+      return;
+    }
+    // A hidden or frame-paced pane can retain this update across many parent
+    // renders. Observe it once and retain only the latest route's acknowledgement.
+    this.observedDraftUpdates.add(completion);
+    void completion.then(
+      () => {
+        this.observedDraftUpdates.delete(completion);
+        const pending = this.pendingDraft;
+        if (pending?.completion !== completion) {
+          return;
+        }
+        this.pendingDraft = undefined;
+        if (pending.pane.isConnected && window.location.href === pending.href) {
+          pending.accept();
+        }
+      },
+      (error: unknown) => {
+        this.observedDraftUpdates.delete(completion);
+        if (this.pendingDraft?.completion === completion) {
+          this.pendingDraft = undefined;
+          console.error("[openclaw] Route draft recipient update failed", error);
+        }
+      },
+    );
+  }
 
   rendered(
     data: SessionChatRouteData | undefined,

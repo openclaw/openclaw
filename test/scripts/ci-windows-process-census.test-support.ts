@@ -599,7 +599,12 @@ if (mode === "supervise") {
         expect(events.indexOf(receipt)).toBeLessThan(supervisorExit);
       }
       expect(completedReport, "expired cleanup must not publish a completed report").toBe(false);
-      expect(failure).toMatchObject({ code: "ENOENT", path: path.join(directory, "report.json") });
+      expect(failure).toMatchObject({
+        message: expect.stringContaining(
+          'Checkout supervisor closed {"code":1,"signal":null} without a readable cleanup report.',
+        ),
+        cause: { code: "ENOENT", path: path.join(directory, "report.json") },
+      });
       expect(events[supervisorExit]).toMatchObject({ code: 1, reportExists: false });
       expect(existsSync(directory), "failed cleanup must retain its namespace").toBe(true);
       expect(existsSync(path.join(directory, "report.json"))).toBe(false);

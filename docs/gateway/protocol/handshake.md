@@ -96,6 +96,13 @@ Gateway responds with `hello-ok`:
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+
+Authentication, pairing grants, and required profile authority finish before
+`hello-ok`. Existing paired-device display and last-seen metadata refresh afterward,
+so a slow observation write does not delay an authorized connection. Deferred
+refreshes cannot update a replaced pairing or overwrite a newer observation, and
+they stop when the connection loses authority.
+
 `controlUiUrl` optionally advertises the Gateway's configured public Control UI
 origin and base path for shareable links, independent of the client's tunnel or
 development-server address. It is omitted when `gateway.publicOrigin` is unset

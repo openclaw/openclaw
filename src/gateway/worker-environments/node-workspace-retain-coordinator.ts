@@ -393,12 +393,15 @@ export function createNodeWorkspaceRetainCoordinator(
           return;
         }
         try {
-          const nodes = await currentTransport.listCurrentNodes();
+          // A targeted reconnect must not borrow pairing reads for unrelated nodes.
+          const nodes = nodeId
+            ? [await currentTransport.getCurrentNode(nodeId)].filter((node) => node !== undefined)
+            : await currentTransport.listCurrentNodes();
           if (stopped || transport !== currentTransport) {
             continue;
           }
           if (nodeId) {
-            const node = nodes.find((candidate) => candidate.nodeId === nodeId);
+            const node = nodes[0];
             if (node && currentTransport.isCurrent(node)) {
               await publishSnapshot(currentTransport, node);
             }

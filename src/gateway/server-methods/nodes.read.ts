@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -11,7 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updatePairedNodeSessionHost } from "../../infra/device-pairing-node-facts.js";
 import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
 import { listNodePairing, projectNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { withCurrentDevicePairingSnapshot } from "../../infra/device-pairing-worker.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatNodeRunnerInventoryIssue,
@@ -69,41 +70,50 @@ async function listNodesForClient(params: {
   context: GatewayRequestContext;
   nodeId?: string;
 }): Promise<{ nodes: NodeListNode[]; connectedNodes: NodeSession[] }> {
-  const devicePairing = await listDevicePairing();
-  const nodePairing = projectNodePairing(devicePairing.paired);
-  const connectedNodes = params.context.nodeRegistry.listConnectedForPairingStates(
-    projectPairedDeviceNodeBindings(devicePairing.paired),
-  );
-  const runtimeState = collectNodeCatalogRuntimeState(params.context.nodeRegistry, connectedNodes);
-  const catalog = createKnownNodeCatalog({
-    pairedDevices: devicePairing.paired,
-    pairedNodes: nodePairing.paired,
-    pendingNodes: nodePairing.pending,
-    connectedNodes,
-    ...runtimeState,
-  });
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
     params.context.logGateway.warn(
       `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
     );
     return null;
   });
-  const catalogNodes = params.nodeId
-    ? [getKnownNode(catalog, params.nodeId)].filter((node) => node !== null)
-    : listKnownNodes(catalog);
-  const nodes = catalogNodes.map((node) =>
-    node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
+  return expectDefined(
+    await withCurrentDevicePairingSnapshot(undefined, (paired) => ({
+      start: () => {
+        const nodePairing = projectNodePairing(paired);
+        const connectedNodes = params.context.nodeRegistry.listConnectedForPairingStates(
+          projectPairedDeviceNodeBindings(paired),
+        );
+        const runtimeState = collectNodeCatalogRuntimeState(
+          params.context.nodeRegistry,
+          connectedNodes,
+        );
+        const catalog = createKnownNodeCatalog({
+          pairedDevices: paired,
+          pairedNodes: nodePairing.paired,
+          pendingNodes: nodePairing.pending,
+          connectedNodes,
+          ...runtimeState,
+        });
+        const catalogNodes = params.nodeId
+          ? [getKnownNode(catalog, params.nodeId)].filter((node) => node !== null)
+          : listKnownNodes(catalog);
+        const nodes = catalogNodes.map((node) =>
+          node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
+        );
+        if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
+          return { nodes, connectedNodes };
+        }
+        const ownDeviceId = normalizeOptionalString(params.client?.connect?.device?.id);
+        return {
+          nodes: nodes
+            .map((node) => safeNodeReadProjection(node, ownDeviceId))
+            .filter((node) => node !== null),
+          connectedNodes,
+        };
+      },
+    })),
+    "node catalog snapshot",
   );
-  if (nodeInvokePolicy.canReadPendingNodePairing(params.client)) {
-    return { nodes, connectedNodes };
-  }
-  const ownDeviceId = normalizeOptionalString(params.client?.connect?.device?.id);
-  return {
-    nodes: nodes
-      .map((node) => safeNodeReadProjection(node, ownDeviceId))
-      .filter((node) => node !== null),
-    connectedNodes,
-  };
 }
 
 function normalizePluginSurfaceRefreshParams(

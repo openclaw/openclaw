@@ -16,20 +16,21 @@ import { nodeReadHandlers } from "./nodes.read.js";
 import { createWorkerSupervisorNodeClient } from "./nodes.runner-inventory.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
-const { listDevicePairingMock, listNodePairingMock, recordHostStatsMock, resolveLocalNodeIdMock } =
+const { pairingSnapshot, listNodePairingMock, recordHostStatsMock, resolveLocalNodeIdMock } =
   vi.hoisted(() => ({
-    listDevicePairingMock: vi.fn(),
+    pairingSnapshot: { paired: [] as PairedDevice[] },
     listNodePairingMock: vi.fn(),
     recordHostStatsMock: vi.fn(),
     resolveLocalNodeIdMock: vi.fn(),
   }));
 
-vi.mock("../../infra/device-pairing.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/device-pairing.js")>(
-    "../../infra/device-pairing.js",
-  );
-  return { ...actual, listDevicePairing: listDevicePairingMock };
-});
+vi.mock("../../infra/device-pairing-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/device-pairing-worker.js")>()),
+  withCurrentDevicePairingSnapshot: async <T>(
+    _baseDir: string | undefined,
+    prepare: (paired: readonly PairedDevice[]) => { start: () => T | Promise<T> } | undefined,
+  ) => prepare(pairingSnapshot.paired)?.start(),
+}));
 
 vi.mock("../../node-host/local-id.js", () => ({
   resolveLocalNodeId: resolveLocalNodeIdMock,
@@ -110,7 +111,7 @@ describe("node read projections", () => {
       pairedNode.nodeSurface!.lastHostStats = structuredClone(hostStats);
       return true;
     });
-    listDevicePairingMock.mockResolvedValue({ pending: [], paired: [pairedNode] });
+    pairingSnapshot.paired = [pairedNode];
     resolveLocalNodeIdMock.mockResolvedValue(undefined);
     const sendStats = () =>
       invoke(
@@ -199,7 +200,7 @@ describe("node read projections", () => {
         declaration: { protocolFeatures: ["node-worker-supervisor-v1"] },
       }),
     ).toEqual({ changed: true });
-    listDevicePairingMock.mockResolvedValue({ pending: [], paired: pairedNodes });
+    pairingSnapshot.paired = pairedNodes;
     resolveLocalNodeIdMock.mockResolvedValue(localNodeId);
 
     async function request(method: "node.list" | "node.describe", params: Record<string, unknown>) {

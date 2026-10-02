@@ -8,6 +8,7 @@ import {
   resetThreadLifecycleTestFixtures,
 } from "./thread-lifecycle.test-fixtures.js";
 import { buildTurnStartParams } from "./turn-params.js";
+import { createCodexUserInputTestParams } from "./user-input-bridge.test-support.js";
 
 afterEach(() => {
   resetThreadLifecycleTestFixtures();
@@ -327,7 +328,8 @@ describe("buildTurnStartParams native supervised settings", () => {
   it.each([undefined, "Permission change. Continue with updated permissions."])(
     "does not overwrite native supervised turn settings (notice: %s)",
     (notice) => {
-      const params = createParams("/tmp/session.jsonl", "/repo");
+      const params = createCodexUserInputTestParams();
+      params.prompt = "Keep this request unchanged.";
       params.provider = "anthropic";
       params.thinkLevel = "off";
       const compat: ModelCompatConfig = { supportedReasoningEfforts: ["none", "high"] };
@@ -358,6 +360,7 @@ describe("buildTurnStartParams native supervised settings", () => {
       expect(request).not.toHaveProperty("effort");
       expect(request).not.toHaveProperty("collaborationMode");
       expect(request).not.toHaveProperty("personality");
+      expect(request.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
       expect(request.additionalContext).toEqual({
         openclaw_active_computer: {
           kind: "application",

@@ -5,12 +5,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const baselineVersion = "2026.9.4";
-const baselineCommit = "3a9d69db306cd7f081e06254cb89c4bcc14a7107";
-const baselineUrl = "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.4.tgz";
-const baselineIntegrity =
-  "sha512-lTQpEEe1Xm3u2PCHaPEr+vP8paGk1vLdHuzdItsNToaLI6hAqRVvgJYg+GxukJhETJp4tPy/S1Gftl4KuB8n7A==";
-
 function hash(bytes, algorithm = "sha256", encoding = "hex") {
   return createHash(algorithm).update(bytes).digest(encoding);
 }
@@ -48,7 +42,6 @@ export function readWorkerCellPackageIdentity(packageRoot) {
   assert.equal(manifest.name, "openclaw");
   const buildInfo = readJson(path.join(packageRoot, "dist/build-info.json"));
   assert.equal(buildInfo.version, manifest.version);
-  assert.match(buildInfo.commit, /^[a-f0-9]{40}$/u);
   return { version: manifest.version, buildInfo, files };
 }
 
@@ -129,24 +122,15 @@ export async function resolveWorkerCellFunctionBinding(
   return matches[0];
 }
 
-function inspectTarball(tarball, runtimeRoot) {
-  const bytes = fs.readFileSync(tarball);
+function inspectTarball(bytes, runtimeRoot) {
   const sha256 = hash(bytes);
   const integrity = `sha512-${hash(bytes, "sha512", "base64")}`;
   const scratch = fs.mkdtempSync(path.join(runtimeRoot, "package-identity-"));
   try {
     execFileSync(
       "tar",
-      [
-        "-xzf",
-        tarball,
-        "-C",
-        scratch,
-        "package/package.json",
-        "package/openclaw.mjs",
-        "package/dist",
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
+      ["-xzf", "-", "-C", scratch, "package/package.json", "package/openclaw.mjs", "package/dist"],
+      { input: bytes, stdio: ["pipe", "pipe", "pipe"] },
     );
     return { sha256, integrity, ...readWorkerCellPackageIdentity(path.join(scratch, "package")) };
   } finally {
@@ -155,34 +139,33 @@ function inspectTarball(tarball, runtimeRoot) {
 }
 
 async function main() {
-  const [mode, packageRoot, candidateTarball, baselineIdentityPath] = process.argv.slice(2);
+  const [mode, packageRoot, argument] = process.argv.slice(2);
   const artifacts = process.env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT;
   const runtimeRoot = process.env.OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT;
   assert(artifacts && runtimeRoot && packageRoot, "Missing isolated worker-cell paths");
   if (mode === "baseline") {
-    const installedVersion = readJson(path.join(packageRoot, "package.json")).version;
-    const currentCronBaseline =
-      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "cron-owner-doctor" &&
-      installedVersion === "2026.9.7";
-    const published = currentCronBaseline
-      ? {
-          version: "2026.9.7",
-          url: "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.7.tgz",
-          integrity:
-            "sha512-/8N2LnfTFQPvnZizi8qKSFfnLQaPvSG3Cb4xo1YV7b4JhYiUc43ZNRpXJ01bWghLK0Ezk3HVeo/DGHcIRQwRWA==",
-        }
-      : { version: baselineVersion, url: baselineUrl, integrity: baselineIntegrity };
-    const response = await fetch(published.url);
+    // Installation already resolved tags and admitted the requested version.
+    // Pin that version here before scenario setup can change published bytes.
+    const version = argument;
+    assert(version, "Missing admitted baseline version");
+    assert.equal(readJson(path.join(packageRoot, "package.json")).version, version);
+    const metadataResponse = await fetch(
+      `https://registry.npmjs.org/openclaw/${encodeURIComponent(version)}`,
+    );
+    assert(metadataResponse.ok, `Published baseline metadata failed: ${metadataResponse.status}`);
+    const published = await metadataResponse.json();
+    assert.equal(published.name, "openclaw");
+    assert.equal(published.version, version);
+    const response = await fetch(published.dist.tarball);
     assert(response.ok, `Published baseline download failed: ${response.status}`);
     const bytes = Buffer.from(await response.arrayBuffer());
-    assert.equal(`sha512-${hash(bytes, "sha512", "base64")}`, published.integrity);
-    const tarball = path.join(runtimeRoot, "published-driver.tgz");
-    fs.writeFileSync(tarball, bytes, { flag: "wx" });
-    const expected = inspectTarball(tarball, runtimeRoot);
-    assert.equal(expected.version, published.version);
-    if (!currentCronBaseline) {
-      assert.equal(expected.buildInfo.commit, baselineCommit);
-    }
+    assert.equal(
+      `sha512-${hash(bytes, "sha512", "base64")}`,
+      published.dist.integrity,
+      "Published baseline integrity mismatch",
+    );
+    const expected = inspectTarball(bytes, runtimeRoot);
+    assert.equal(expected.version, version);
     const actual = readWorkerCellPackageIdentity(packageRoot);
     assertWorkerCellPackageIdentity(actual, {
       version: expected.version,
@@ -190,30 +173,29 @@ async function main() {
       files: expected.files,
     });
     writeJson(path.join(artifacts, "baseline-package-identity.json"), {
-      url: published.url,
+      url: published.dist.tarball,
       cli: fs.realpathSync(path.join(packageRoot, "openclaw.mjs")),
       ...expected,
     });
   } else if (mode === "candidate") {
+    const candidateTarball = argument;
     assert(candidateTarball, "Missing frozen candidate tarball");
-    const expected = inspectTarball(candidateTarball, runtimeRoot);
+    const expected = inspectTarball(fs.readFileSync(candidateTarball), runtimeRoot);
+    assert.match(expected.buildInfo.commit, /^[a-f0-9]{40}$/u);
     assert.equal(
       expected.buildInfo.commit,
       process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
       "Candidate build commit must equal the selected source SHA",
     );
-    // Only audited baseline flows produce this receipt; generic survivor flows
-    // verify the selected source and installed payload without a baseline audit.
-    if (baselineIdentityPath) {
-      const baseline = readJson(baselineIdentityPath);
-      assert.notEqual(
-        expected.buildInfo.commit,
-        baseline.buildInfo.commit,
-        "Candidate still contains published bytes",
-      );
-    }
+    const baseline = readJson(path.join(artifacts, "baseline-package-identity.json"));
+    assert.notEqual(
+      expected.buildInfo.commit,
+      baseline.buildInfo.commit,
+      "Candidate still contains published bytes",
+    );
     writeJson(path.join(artifacts, "candidate-package-identity.json"), expected);
   } else if (mode === "installed") {
+    const candidateTarball = argument;
     const expected = readJson(path.join(artifacts, "candidate-package-identity.json"));
     let tarballBytes;
     try {

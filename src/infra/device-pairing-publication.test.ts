@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -22,7 +22,9 @@ import {
   listDevicePairing,
   listDevicePairingReadOnly,
   removePairedDevice,
+  updatePairedDeviceMetadata,
 } from "./device-pairing.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -139,11 +141,79 @@ test("keeps inspection snapshot bytes without republishing revoked node authorit
   );
 });
 
-test.each(["worker commit", "external commit"] as const)(
-  "does not restore revoked node authority from a read delayed past a newer %s",
+test.each(["metadata observation", "pairing removal"] as const)(
+  "keeps an admitted generation observation before a queued %s while final effects stay fenced",
+  async (change) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, async () => {
+      const generation = await captureNodePairingGeneration("node");
+      expect(generation).not.toBeNull();
+      const readReady = createDeferredCore();
+      const releaseRead = createDeferredCore();
+      const writerReady = createDeferredCore();
+      const releaseWriter = createDeferredCore();
+      const executeRead = stateReads.executeExistingOpenClawStateRead;
+      const reader = vi
+        .spyOn(stateReads, "executeExistingOpenClawStateRead")
+        .mockImplementationOnce(async (...args) => {
+          const result = await executeRead(...args);
+          readReady.resolve();
+          await releaseRead.promise;
+          return result;
+        });
+      const runOperation = stateWorker.runOpenClawStateWorkerOperation;
+      const writer = vi
+        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+        .mockImplementationOnce(async (...args) => {
+          writerReady.resolve();
+          await releaseWriter.promise;
+          return runOperation(...args);
+        });
+      const checked = isNodePairingGenerationCurrent(generation!).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      let mutation: Promise<unknown> | undefined;
+      const cleanup = async () => {
+        releaseRead.resolve();
+        releaseWriter.resolve();
+        await Promise.allSettled([checked, mutation]);
+        reader.mockRestore();
+        writer.mockRestore();
+      };
+      onTestFinished(cleanup);
+      try {
+        await readReady.promise;
+        mutation =
+          change === "metadata observation"
+            ? updatePairedDeviceMetadata("node", { displayName: "Still connected" }, baseDir)
+            : removePairedDevice("node", baseDir);
+        releaseRead.resolve();
+        await writerReady.promise;
+        // The read was admitted first; a later write still fences synchronous effect authority.
+        expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
+          "Device pairing authority requires a current worker publication",
+        );
+        expect(await checked).toEqual({ value: true });
+      } finally {
+        await cleanup();
+      }
+      await expect(isNodePairingGenerationCurrent(generation!)).resolves.toBe(
+        change === "metadata observation",
+      );
+      if (change === "metadata observation") {
+        expect((await getPairedDevice("node", baseDir))?.displayName).toBe("Still connected");
+      }
+    });
+  },
+);
+
+test.each(["worker commit", "external commit", "observation commit"] as const)(
+  "does not republish a pairing read delayed past a newer %s",
   async (commit) => {
     await listDevicePairing(baseDir);
-    expect(getPublishedPairedDeviceBinding("node", baseDir)).not.toBeNull();
+    const before = await getPairedDevice("node", baseDir);
+    const previousBinding = getPublishedPairedDeviceBinding("node", baseDir);
+    expect(previousBinding).not.toBeNull();
     const releaseRead = createDeferredCore();
     const releaseMutation = createDeferredCore();
     const mutationQueued = createDeferredCore();
@@ -173,7 +243,11 @@ test.each(["worker commit", "external commit"] as const)(
     try {
       await withDevicePairingLock(async () => {
         const mutation =
-          commit === "worker commit" ? removePairedDevice("node", baseDir) : undefined;
+          commit === "worker commit"
+            ? removePairedDevice("node", baseDir)
+            : commit === "observation commit"
+              ? updatePairedDeviceMetadata("node", { displayName: "Reconnected node" }, baseDir)
+              : undefined;
         if (mutation) {
           await Promise.race([mutationQueued.promise, mutation]);
         }
@@ -198,14 +272,24 @@ test.each(["worker commit", "external commit"] as const)(
             }
             expect(await getPairedDevice("node", baseDir)).toBeNull();
           }
-          expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
+          const expected = await getPairedDevice("node", baseDir);
+          if (commit === "observation commit") {
+            expect(expected?.displayName).toBe("Reconnected node");
+          } else {
+            expect(expected).toBeNull();
+          }
+          const expectedBinding = commit === "observation commit" ? previousBinding : null;
+          expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(expectedBinding);
           releaseRead.resolve();
           const settled = await delayed;
-          // An obsolete read may refuse or reread; it must never return the old authority.
-          if ("device" in settled) {
-            expect(settled.device).toBeNull();
+          // Observation-only commits preserve the admitted snapshot. Authority
+          // changes may refuse or reread, but never return superseded grants.
+          if (commit === "observation commit") {
+            expect(settled).toEqual({ device: before });
+          } else if ("device" in settled) {
+            expect(settled.device).toEqual(expected);
           }
-          expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
+          expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(expectedBinding);
         } finally {
           releaseRead.resolve();
           releaseMutation.resolve();
@@ -215,6 +299,119 @@ test.each(["worker commit", "external commit"] as const)(
     } finally {
       read.mockRestore();
       writer.mockRestore();
+    }
+  },
+);
+
+test.each([false, true])(
+  "preserves a read published ahead of its receipt (foreign revocation=%s)",
+  async (foreign) => {
+    const node = (await getPairedDevice("node", baseDir))!;
+    persistDevicePairingStoreState(
+      {
+        pendingById: {},
+        pairedByDeviceId: {
+          node,
+          peer: {
+            ...node,
+            deviceId: "peer",
+            publicKey: "synthetic-peer-key",
+            tokens: { node: { ...node.tokens!.node!, token: "synthetic-peer-token" } },
+          },
+        },
+      },
+      baseDir,
+      "paired",
+    );
+    await listDevicePairing(baseDir);
+    const nodeBefore = getPublishedPairedDeviceBinding("node", baseDir);
+    const peerBefore = getPublishedPairedDeviceBinding("peer", baseDir);
+    expect(nodeBefore).not.toBeNull();
+    expect(peerBefore).not.toBeNull();
+    const committed = createDeferredCore();
+    const release = createDeferredCore();
+    let revealReceipt = false;
+    const restoreReceipts: Array<() => void> = [];
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const receipt = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) => {
+        const admission = createAdmission(admit, attachment);
+        const getter = Object.getOwnPropertyDescriptor(admission, "committed")!.get!.bind(
+          admission,
+        );
+        const heldReceipt = vi.spyOn(admission, "committed", "get").mockImplementation(() => {
+          const facts = getter();
+          return revealReceipt ? facts : undefined;
+        });
+        restoreReceipts.push(() => heldReceipt.mockRestore());
+        return admission;
+      });
+    const runOperation = stateWorker.runOpenClawStateWorkerOperation;
+    const held = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((context, operation, options) =>
+        runOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                committed.resolve();
+                await release.promise;
+                return result;
+              },
+            }),
+          options,
+        ),
+      );
+    const mutation = updatePairedDeviceMetadata(
+      "node",
+      { displayName: "Committed observation" },
+      baseDir,
+    );
+    onTestFinished(async () => {
+      revealReceipt = true;
+      release.resolve();
+      await Promise.allSettled([mutation]);
+      held.mockRestore();
+      receipt.mockRestore();
+      for (const restore of restoreReceipts) {
+        restore();
+      }
+    });
+    await Promise.race([committed.promise, mutation]);
+    const after = await listDevicePairing(baseDir);
+    expect(after.paired.find((row) => row.deviceId === "node")?.displayName).toBe(
+      "Committed observation",
+    );
+    if (foreign) {
+      const other = new DatabaseSync(database.path);
+      try {
+        other
+          .prepare("UPDATE device_pairing_paired SET tokens_json = ? WHERE device_id = ?")
+          .run(JSON.stringify({ node: { ...node.tokens!.node!, revokedAtMs: 2 } }), "node");
+      } finally {
+        other.close();
+      }
+      const fresh = await listDevicePairing(baseDir);
+      expect(fresh.paired.find((row) => row.deviceId === "node")?.tokens?.node?.revokedAtMs).toBe(
+        2,
+      );
+    }
+    revealReceipt = true;
+    release.resolve();
+    await mutation;
+    if (!foreign) {
+      expect(getPublishedPairedDeviceBinding("peer", baseDir)).toEqual(peerBefore);
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(nodeBefore);
+      expect(getPublishedPairedDeviceBinding("absent", baseDir)).toBeNull();
+    } else {
+      expect(() => getPublishedPairedDeviceBinding("node", baseDir)).toThrow(
+        "requires a current worker publication",
+      );
+      await listDevicePairing(baseDir);
+      expect(getPublishedPairedDeviceBinding("node", baseDir)).toBeNull();
     }
   },
 );

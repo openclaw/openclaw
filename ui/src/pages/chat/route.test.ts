@@ -228,6 +228,7 @@ describe("loadChatRoute", () => {
     expect(redirected).toEqual({
       kind: "session",
       routeLoadingSkeleton: true,
+      prepareNavigationHandoff: expect.any(Function),
       sessionKey,
       agentId: "main",
       draft: "ship",
@@ -254,6 +255,7 @@ describe("loadChatRoute", () => {
     ).resolves.toEqual({
       kind: "session",
       sessionKey,
+      prepareNavigationHandoff: expect.any(Function),
       agentId: "main",
       draft: "ship",
       face: "chat",
@@ -300,6 +302,7 @@ describe("loadChatRoute", () => {
       kind: "session",
       sessionKey: target.key,
       routeLoadingSkeleton: true,
+      prepareNavigationHandoff: expect.any(Function),
       agentId: "main",
       draft: undefined,
       face: "chat",
@@ -369,6 +372,7 @@ describe("loadChatRoute", () => {
         kind: "session",
         sessionKey: expectedRow?.key,
         routeLoadingSkeleton: true,
+        prepareNavigationHandoff: expect.any(Function),
         agentId: candidate.agentId,
         draft: "ship",
         focusComposer: true,

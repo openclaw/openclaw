@@ -13,14 +13,18 @@ import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test
 const fixture = setupDoctorAdmissionFixture();
 
 it("refuses committed WAL updates while preserving all live source artifacts", () => {
-  const { env, admission, family, assertIsolation } = fixture(true);
+  const { env, admission, family, assertIsolation, inspectionCount } = fixture(true);
   const before = family();
+  const cachedInspections = inspectionCount();
   admission();
+  expect(inspectionCount() - cachedInspections).toBe(1);
   expect(family()).toEqual(before);
   const competing = createUpdateRun({ trigger: "cli" }, { env });
   const committed = family();
+  const changedInspections = inspectionCount();
   try {
     expect(() => admission()).toThrow(competing.runId);
+    expect(inspectionCount() - changedInspections).toBe(2);
     expect(family()).toEqual(committed);
   } finally {
     assertIsolation();

@@ -1,8 +1,8 @@
 import { getBoundDeviceBootstrapProfile } from "../../../infra/device-bootstrap.js";
+import type { PairedDeviceMetadataPatch } from "../../../infra/device-pairing-core.types.js";
 import {
   getPairedDevice,
   listEffectivePairedDeviceRoles,
-  updatePairedDeviceMetadata,
   type PairedDevice,
 } from "../../../infra/device-pairing.js";
 import { resolveBootstrapProfileScopesForRole } from "../../../shared/device-bootstrap-profile.js";
@@ -36,7 +36,11 @@ export async function authorizeExistingGatewayDevice(params: {
   };
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   requirePairing: (reason: PairingReason, paired: PairedDevice) => Promise<boolean>;
-}): Promise<{ ok: boolean; handoffBootstrapProfile: DeviceBootstrapProfile | null }> {
+}): Promise<{
+  ok: boolean;
+  handoffBootstrapProfile: DeviceBootstrapProfile | null;
+  metadata?: Partial<PairedDeviceMetadataPatch>;
+}> {
   const { context, state, paired, devicePublicKey, clientAccessMetadata, requirePairing } = params;
   const { connectParams, hasBrowserOriginHeader, reportedClientIp } = context;
   const { connId, logGateway } = context.handler;
@@ -164,13 +168,14 @@ export async function authorizeExistingGatewayDevice(params: {
   // Metadata pinning is approval-bound. Reconnects can update access metadata
   // and same-family mobile OS version labels, but real platform/device-family
   // changes must stay on the approved pairing record.
-  if (device) {
-    await updatePairedDeviceMetadata(device.id, {
+  return {
+    ok: true,
+    handoffBootstrapProfile,
+    metadata: {
       ...clientAccessMetadata,
       ...(metadataPinning.refreshPairedPlatform
         ? { platform: metadataPinning.refreshPairedPlatform }
         : {}),
-    });
-  }
-  return { ok: true, handoffBootstrapProfile };
+    },
+  };
 }

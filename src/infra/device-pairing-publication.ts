@@ -15,9 +15,10 @@ type Publication = {
   identity: string;
   canonicalPath: string;
   epoch: number;
+  authorityEpoch: number;
   revision?: string;
   blocked: boolean;
-  mutation?: object;
+  mutation?: { blocksReads: boolean };
   complete: boolean;
   rows: Map<string, DevicePairingBinding | null>;
   pending: Set<() => void>;
@@ -72,6 +73,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       identity: identity.key,
       canonicalPath: identity.canonicalPath,
       epoch: 0,
+      authorityEpoch: 0,
       blocked: false,
       complete: false,
       rows: new Map(),
@@ -82,15 +84,32 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
   publications.set(identity.canonicalPath, publication);
   publications.set(identity.key, publication);
   const captured = publication;
-  const epoch = captured.epoch;
+  // Observation-only reads may retain their snapshot without rewinding authority.
+  // Only admission/current revisions are known; other content hashes are unordered.
+  const { epoch, authorityEpoch, revision: readRevision } = captured;
+  const admittedBehindFence = captured.blocked || Boolean(captured.mutation?.blocksReads);
   const install = (rows: readonly DevicePairingBindingFact[]) => {
     for (const row of rows) {
       captured.rows.set(row.deviceId, row.binding ? { ...row.binding } : null);
     }
   };
+  const blocksReads = () => {
+    for (const service of captured.pending) {
+      service();
+    }
+    return Boolean(captured.mutation?.blocksReads);
+  };
+  const isCurrent = () =>
+    !blocksReads() && publications.get(path) === captured && captured.epoch === epoch;
   return {
-    isCurrent: () =>
-      publications.get(path) === captured && captured.epoch === epoch && !captured.mutation,
+    isCurrent,
+    canUseSnapshot: (revision: string) =>
+      !blocksReads() &&
+      !captured.blocked &&
+      !admittedBehindFence &&
+      publications.get(path) === captured &&
+      captured.authorityEpoch === authorityEpoch &&
+      (revision === readRevision || revision === captured.revision),
     completeRevision: () =>
       !captured.blocked && captured.complete ? captured.revision : undefined,
     fail() {
@@ -103,7 +122,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       rows: readonly DevicePairingBindingFact[] | undefined,
       complete = false,
     ) {
-      if (publications.get(path) !== captured || captured.epoch !== epoch || captured.mutation) {
+      if (!isCurrent()) {
         return false;
       }
       if (!rows) {
@@ -115,6 +134,7 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       }
       if (captured.revision !== revision) {
         captured.epoch++;
+        captured.authorityEpoch++;
       }
       if (complete || captured.revision !== revision) {
         captured.rows.clear();
@@ -126,30 +146,57 @@ export function captureDevicePairingPublication(admission: OpenClawStateDatabase
       captured.blocked = false;
       return true;
     },
-    beginMutation() {
-      captured.epoch++;
-      captured.blocked = true;
-      const mutation = {};
+    beginMutation(changesAuthority: boolean) {
+      const startingRevision = captured.revision;
+      const mutation = {
+        blocksReads: changesAuthority || captured.blocked || Boolean(captured.mutation),
+      };
+      // Observation writes permit independent reads, but not final node effects.
+      // Unknown predecessors and authorizing mutations must also fence readers.
+      if (mutation.blocksReads) {
+        captured.epoch++;
+        captured.authorityEpoch++;
+        captured.blocked = true;
+      }
       captured.mutation = mutation;
       return {
         publish(receipt: DevicePairingCommitReceipt) {
           if (publications.get(path) !== captured || captured.mutation !== mutation) {
             return;
           }
-          if (receipt.beforeRevision !== captured.revision) {
+          const unorderedRead =
+            captured.revision !== startingRevision &&
+            captured.revision !== receipt.beforeRevision &&
+            captured.revision !== receipt.revision;
+          if (
+            receipt.beforeRevision !== captured.revision &&
+            receipt.revision !== captured.revision
+          ) {
+            captured.authorityEpoch++;
             captured.complete = false;
             captured.rows.clear();
           }
-          install(receipt.changed);
-          captured.revision = receipt.revision;
-          captured.blocked = false;
+          // A read can observe COMMIT before its receipt arrives. Other read-ahead
+          // revisions are unordered content hashes; reread instead of rewinding authority.
+          if (!unorderedRead) {
+            install(receipt.changed);
+            captured.revision = receipt.revision;
+          }
+          captured.blocked = unorderedRead;
           captured.mutation = undefined;
           // A reader admitted during this transaction cannot republish its older snapshot.
           captured.epoch++;
         },
         finish(settled: boolean) {
-          if (settled && captured.mutation === mutation) {
-            captured.mutation = undefined;
+          if (captured.mutation === mutation) {
+            if (settled) {
+              captured.mutation = undefined;
+            } else {
+              mutation.blocksReads = true;
+            }
+            // Without a receipt, even a completed rollback cannot refresh cached authority.
+            captured.blocked = true;
+            captured.authorityEpoch++;
             captured.epoch++;
           }
         },
@@ -177,6 +224,7 @@ export function getPublishedPairedDeviceBinding(
   if (
     !publication ||
     publication.blocked ||
+    publication.mutation ||
     (!publication.complete && !publication.rows.has(deviceId))
   ) {
     throw new Error("Device pairing authority requires a current worker publication");

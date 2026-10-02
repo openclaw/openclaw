@@ -31,6 +31,7 @@ import {
   type SqliteAuthProfileReadOptions,
   type SqliteReadOnlyOperationOptions,
   type SqliteAuthProfileRows,
+  type SqliteVersionedSnapshot,
 } from "./sqlite-readonly-worker-protocol.js";
 import {
   createSqliteReadOnlyWorkerSession,
@@ -615,9 +616,25 @@ export function runOneShotSqliteInspection<T>(params: {
 export function runSqliteReadOnlyWorkerSync(
   pathname: string,
   stagingRoot: string | undefined,
-  mode: "sync" | "content-version" = "sync",
-): string {
-  const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
+  mode: "sync-versioned",
+): SqliteVersionedSnapshot;
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: string | undefined,
+  mode?: "sync" | "content-version",
+): string;
+export function runSqliteReadOnlyWorkerSync(
+  pathname: string,
+  stagingRoot: string | undefined,
+  mode: "sync" | "content-version" | "sync-versioned" = "sync",
+): string | SqliteVersionedSnapshot {
+  const budget = readSqliteInspectionBudget("read-only snapshot", pathname);
+  // Coalescing preserves the two serial operations' allowance on slow storage.
+  const timeoutMs =
+    mode === "sync-versioned"
+      ? resolveTimerTimeoutMs(budget.timeoutMs * 2, budget.timeoutMs)
+      : budget.timeoutMs;
+  const { size } = budget;
   const started = log.isEnabled("trace") ? performance.now() : undefined;
   const result = spawnSync(
     process.execPath,
@@ -640,8 +657,8 @@ export function runSqliteReadOnlyWorkerSync(
     : result.status === 0
       ? undefined
       : `exited with ${result.signal ? `signal ${result.signal}` : `code ${result.status}`}`;
-  return readSqliteReadOnlyWorkerValue(
-    { failure, stderr: result.stderr, stdout: result.stdout },
-    mode,
-  );
+  const output = { failure, stderr: result.stderr, stdout: result.stdout };
+  return mode === "sync-versioned"
+    ? readSqliteReadOnlyWorkerValue(output, mode)
+    : readSqliteReadOnlyWorkerValue(output, mode);
 }

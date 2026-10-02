@@ -13,7 +13,6 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { currentRouteLocation } from "./chat-canonical-location.ts";
-import { locationWithoutDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./session-route-data.ts";
 
 const paneRouteData = new WeakMap<
@@ -116,9 +115,17 @@ export function navigateChatPage(
     agentId: targetAgentId ?? data?.agentId,
     shortIdLength: data?.sessionKey === sessionKey ? data.shortId?.length : undefined,
   }).options;
-  const location =
-    replace && sameSession && (data.draft || data.focusComposer)
-      ? locationWithoutDraft(currentRouteLocation(), options)
-      : options;
+  let location = options;
+  if (replace && sameSession && (data.draft || data.focusComposer)) {
+    const current = currentRouteLocation();
+    const params = new URLSearchParams(current.search);
+    for (const [name, value] of new URLSearchParams(options.search)) {
+      params.set(name, value);
+    }
+    // Canonical key replacement is not acknowledgement of a route draft.
+    // Only the page that observed its recipient commit may retire the hint.
+    const search = params.toString();
+    location = { ...current, ...options, search: search ? `?${search}` : "" };
+  }
   context[replace ? "replace" : "navigate"](face, location);
 }

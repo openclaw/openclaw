@@ -18,14 +18,15 @@ import {
 } from "../config/sessions/legacy-store-inspection.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { sha256Hex } from "./crypto-digest.js";
 import type { DeferredPluginMigration } from "./deferred-plugin-migrations.js";
 import {
   databaseIdentity,
+  readDeferredPluginSessionImportReceipt,
+  DEFERRED_SESSION_IMPORT_KIND,
+  resolveDeferredPluginSessionImportSourceKey,
   preservesRecordedIndexValue,
   sameSourceContent,
   verifyDeferredSessionDatabase,
@@ -50,7 +51,6 @@ import { recordStartupMigrationWarnings } from "./state-migrations.messages.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   recordLegacyMigrationReceipt,
-  resolveLegacyMigrationSourceKey,
   type LegacyMigrationReceipt,
 } from "./state-migrations.receipts.js";
 
@@ -73,7 +73,6 @@ export type SessionSourceVerification = Map<
     resolved: Map<string, Array<{ identity: MigrationArtifactIdentity; path: string | undefined }>>;
   }
 >;
-const RECEIPT_KIND = "deferred-plugin-session-import";
 export const DeferredPluginSessionImportSchema = z.object({
   databaseIdentity: z.string(),
   pluginIds: z.array(z.string()),
@@ -151,14 +150,6 @@ export function preserveDeferredPluginSessionSource(params: {
   });
 }
 
-function sourceKey(target: SessionImportTarget): string {
-  return resolveLegacyMigrationSourceKey(
-    RECEIPT_KIND,
-    target.storePath,
-    `${target.agentId}\0${path.resolve(target.sqlitePath)}`,
-  );
-}
-
 function collectArchivedSources(
   target: SessionImportTarget,
   env: NodeJS.ProcessEnv,
@@ -216,7 +207,10 @@ export function resolveVerifiedSessionSource(
   env: NodeJS.ProcessEnv,
   verification: SessionSourceVerification = new Map(),
 ): string | undefined {
-  const targetKey = JSON.stringify([sourceKey(target), resolveSessionSqliteMigrationRunsDir(env)]);
+  const targetKey = JSON.stringify([
+    resolveDeferredPluginSessionImportSourceKey(target),
+    resolveSessionSqliteMigrationRunsDir(env),
+  ]);
   let cachedTarget = verification.get(targetKey);
   if (!cachedTarget) {
     cachedTarget = { resolved: new Map() };
@@ -324,7 +318,12 @@ function assertVerifiedSessionSources(
     ) {
       continue;
     }
-    const { transcriptCandidates } = resolveLegacyTranscriptPaths(params.target, entry);
+    const { transcriptCandidates } = resolveLegacyTranscriptPaths(
+      params.target,
+      entry,
+      undefined,
+      params.env,
+    );
     // Archival must not switch a verified local source to an older foreign fallback.
     if (
       transcriptCandidates.some(
@@ -411,21 +410,6 @@ export function hasDeferredPluginSessionImport(params: {
   env: NodeJS.ProcessEnv;
 }): boolean {
   return Boolean(readDeferredPluginSessionImportReceipt(params));
-}
-
-export function readDeferredPluginSessionImportReceipt(
-  params: Pick<SessionImportSource, "target" | "sqlitePath" | "env"> & { database?: DatabaseSync },
-) {
-  const target = { ...params.target, sqlitePath: params.sqlitePath };
-  const read = (db: DatabaseSync) => {
-    const receipt = tableExists(db, "migration_sources")
-      ? readLegacyMigrationReceiptFromDatabase(db, sourceKey(target))
-      : undefined;
-    return receipt?.removedSource ? undefined : receipt;
-  };
-  return params.database
-    ? read(params.database)
-    : withExistingOpenClawStateDatabaseReadOnly(({ db }) => read(db), { env: params.env });
 }
 
 function parseSessionImportReceipt(
@@ -659,7 +643,7 @@ export function prepareDeferredPluginSessionImportReader(params: {
       env: params.env,
     });
     const target = { ...sourceTarget, sqlitePath: sqlite.path };
-    const key = sourceKey(target);
+    const key = resolveDeferredPluginSessionImportSourceKey(target);
     const receipt = readLegacyMigrationReceiptFromDatabase(database, key);
     let prepared = verified.get(key);
     if (!prepared || !isDeepStrictEqual(prepared.receipt, receipt)) {
@@ -712,10 +696,13 @@ export function recordDeferredPluginSessionImport(
           `Session import database changed for ${path.dirname(params.target.storePath)} before its receipt was recorded. Run ${formatCliCommand("openclaw doctor --fix --non-interactive --yes", params.env)} against the same state/config to retry.`,
         );
       }
-      const key = sourceKey({ ...params.target, sqlitePath: params.sqlitePath });
+      const key = resolveDeferredPluginSessionImportSourceKey({
+        ...params.target,
+        sqlitePath: params.sqlitePath,
+      });
       recordLegacyMigrationReceipt(db, {
         sourceKey: key,
-        migrationKind: RECEIPT_KIND,
+        migrationKind: DEFERRED_SESSION_IMPORT_KIND,
         sourcePath: path.resolve(params.target.storePath),
         targetTable: "session_nodes",
         sourceSha256: index?.identity.sha256 ?? null,

@@ -1,25 +1,43 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, onTestFinished, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  isNodePairingGenerationCurrent,
+  resolveCurrentPairedDeviceNodeBinding,
+} from "./device-pairing-node-state.js";
 import { getPublishedPairedDeviceBinding } from "./device-pairing-publication.js";
 import {
   persistDevicePairingStoreState,
   readDevicePairingStoreStateFromDatabase,
   type DevicePairingStoreState,
 } from "./device-pairing-store.js";
-import { ensureDeviceToken, verifyDeviceToken } from "./device-pairing-tokens.js";
+import {
+  ensureDeviceToken,
+  revokeDeviceToken,
+  rotateDeviceToken,
+  verifyDeviceToken,
+} from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
   getPendingDevicePairing,
   listDevicePairing,
   listDevicePairingReadOnly,
+  removePairedDevice,
+  removePairedDeviceRole,
+  requestDevicePairing,
+  resolveNodePairingGeneration,
   updatePairedDeviceMetadata,
+  updatePairedDevicePresence,
 } from "./device-pairing.js";
 import * as queries from "./kysely-sync.js";
+import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
 let baseDir: string;
 let database: ReturnType<typeof openOpenClawStateDatabase>;
@@ -338,6 +356,288 @@ test("reconnect receipts ignore pending rows while invalidating foreign pairing 
   }
   expect((await getPendingDevicePairing("refreshed", baseDir))?.roles).toEqual([]);
 });
+
+test.each(["current", "replaced key", "recreated pairing", "newer observation"] as const)(
+  "binds a delayed metadata refresh to its observed pairing (%s)",
+  async (state) => {
+    const before = await getPairedDevice("paired-rich", baseDir);
+    expect(before).not.toBeNull();
+    const expectedPairing = {
+      publicKey: state === "replaced key" ? "synthetic-old-key" : before!.publicKey,
+      createdAtMs: state === "recreated pairing" ? 0 : before!.createdAtMs,
+      approvedAtMs: before!.approvedAtMs,
+    };
+    const patch = {
+      displayName: "Reconnected browser",
+      lastSeenAtMs: state === "newer observation" ? 5 : 10,
+      lastSeenReason: "connect",
+    };
+    await expect(
+      updatePairedDeviceMetadata("paired-rich", patch, baseDir, {
+        expectedPairing,
+        assertCurrent: () => {},
+      }),
+    ).resolves.toBe(state === "current");
+    expect(await getPairedDevice("paired-rich", baseDir)).toEqual(
+      state === "current" ? { ...before, ...patch } : before,
+    );
+  },
+);
+
+test("rolls back delayed metadata when its connection closes before worker commit", async () => {
+  const before = await getPairedDevice("paired-rich", baseDir);
+  expect(before).not.toBeNull();
+  let connected = true;
+  let commitRequested = false;
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const closing = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
+          commitRequested = true;
+          connected = false;
+        }
+        admit(request, grant);
+      }, attachment),
+    );
+  try {
+    await expect(
+      updatePairedDeviceMetadata(
+        "paired-rich",
+        { displayName: "Closed browser", lastSeenAtMs: 10, lastSeenReason: "connect" },
+        baseDir,
+        {
+          expectedPairing: before!,
+          assertCurrent: () => {
+            if (!connected) {
+              throw new Error("Synthetic connection retired");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("Synthetic connection retired");
+    expect(commitRequested).toBe(true);
+    expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+      "requires a current worker publication",
+    );
+    expect(await getPairedDevice("paired-rich", baseDir)).toEqual(before);
+  } finally {
+    closing.mockRestore();
+  }
+});
+
+test.each(
+  ["node", "operator"].flatMap((role) =>
+    ["current", "role removed", "token revoked", "token rotated"].map((change) => ({
+      role,
+      change,
+    })),
+  ),
+)("binds delayed metadata to the current $role grant ($change)", async ({ role, change }) => {
+  const before = await getPairedDevice("paired-rich", baseDir);
+  const grant = before?.tokens?.[role];
+  if (!before || !grant) {
+    throw new Error("Expected the fixture's approved role token");
+  }
+  const expectedPairing = { ...before, grant: { role, token: grant.token } };
+  const authority = { deviceId: before.deviceId, role, baseDir, callerScopes: ["operator.read"] };
+  if (change === "role removed") {
+    await removePairedDeviceRole(authority);
+  } else if (change === "token revoked") {
+    await revokeDeviceToken(authority);
+  } else if (change === "token rotated") {
+    await rotateDeviceToken(authority);
+  }
+  const current = await getPairedDevice(before.deviceId, baseDir);
+  expect(current).toMatchObject({
+    publicKey: before.publicKey,
+    createdAtMs: before.createdAtMs,
+    approvedAtMs: before.approvedAtMs,
+  });
+  const patch = { displayName: "Delayed observation", lastSeenAtMs: 10, lastSeenReason: "connect" };
+  await expect(
+    updatePairedDeviceMetadata(before.deviceId, patch, baseDir, {
+      expectedPairing,
+      assertCurrent: () => {},
+    }),
+  ).resolves.toBe(change === "current");
+  expect(await getPairedDevice(before.deviceId, baseDir)).toEqual(
+    change === "current" ? { ...current, ...patch } : current,
+  );
+});
+
+test("does not overwrite a same-key platform reapproval with delayed metadata", async () => {
+  const before = await getPairedDevice("paired-rich", baseDir);
+  if (!before) {
+    throw new Error("Expected the fixture's paired device");
+  }
+  const requested = await requestDevicePairing(
+    {
+      deviceId: before.deviceId,
+      publicKey: before.publicKey,
+      platform: "freebsd",
+      role: "operator",
+      scopes: ["operator.read"],
+    },
+    baseDir,
+  );
+  const approved = await approveDevicePairing(
+    requested.request.requestId,
+    { callerScopes: ["operator.read"] },
+    baseDir,
+  );
+  if (approved?.status !== "approved") {
+    throw new Error("Expected the same-key platform reapproval");
+  }
+  expect(approved.device).toMatchObject({
+    publicKey: before.publicKey,
+    createdAtMs: before.createdAtMs,
+    platform: "freebsd",
+  });
+  expect(approved.device.approvedAtMs).not.toBe(before.approvedAtMs);
+  await expect(
+    updatePairedDeviceMetadata(
+      before.deviceId,
+      { platform: "linux", lastSeenAtMs: 10, lastSeenReason: "connect" },
+      baseDir,
+      { expectedPairing: before, assertCurrent: () => {} },
+    ),
+  ).resolves.toBe(false);
+  expect(await getPairedDevice(before.deviceId, baseDir)).toEqual(approved.device);
+});
+
+test.each([
+  "metadata",
+  "presence",
+  "removal",
+  "committed metadata",
+  "intermediate metadata",
+] as const)(
+  "keeps committed pairing reads available only during non-auth %s work",
+  async (kind) => {
+    const before = await getPairedDevice("paired-rich", baseDir);
+    const previousBinding = getPublishedPairedDeviceBinding("paired-rich", baseDir);
+    const generation = resolveNodePairingGeneration(before);
+    if (!before || !generation) {
+      throw new Error("Expected the fixture's paired node");
+    }
+    const writerStarted = createDeferred();
+    const releaseWriter = createDeferred();
+    const writerCommitted = createDeferred();
+    const releaseReply = createDeferred();
+    const readCompleted = createDeferred();
+    const releaseRead = createDeferred();
+    const runOperation = stateWorker.runOpenClawStateWorkerOperation;
+    const heldWriter = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementation((context, operation, options) =>
+        runOperation(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                writerStarted.resolve();
+                await releaseWriter.promise;
+                const result = await scope.execute(command, executeOptions);
+                writerCommitted.resolve();
+                if (kind === "committed metadata") {
+                  await releaseReply.promise;
+                }
+                return result;
+              },
+            }),
+          options,
+        ),
+      );
+    const executeRead = stateReads.executeExistingOpenClawStateRead;
+    let capturedRead = false;
+    const observedRead = vi
+      .spyOn(stateReads, "executeExistingOpenClawStateRead")
+      .mockImplementation(async (...args) => {
+        const capture = args[1].type === "devicePairing.lookup" && !capturedRead;
+        if (capture) {
+          capturedRead = true;
+          if (kind === "intermediate metadata") {
+            await writerCommitted.promise;
+          }
+        }
+        const result = await executeRead(...args);
+        if (capture) {
+          readCompleted.resolve();
+          if (kind === "committed metadata" || kind === "intermediate metadata") {
+            await releaseRead.promise;
+          }
+        }
+        return result;
+      });
+    const patch = { lastSeenAtMs: 10, lastSeenReason: "connect" };
+    const mutation =
+      kind === "metadata" || kind === "committed metadata" || kind === "intermediate metadata"
+        ? updatePairedDeviceMetadata("paired-rich", patch, baseDir)
+        : kind === "presence"
+          ? updatePairedDevicePresence("paired-rich", patch, generation, baseDir)
+          : removePairedDevice("paired-rich", baseDir);
+    const reader = writerStarted.promise.then(() => getPairedDevice("paired-rich", baseDir));
+    const authority = writerStarted.promise.then(() =>
+      withEnvAsync({ OPENCLAW_STATE_DIR: baseDir }, () =>
+        Promise.allSettled([
+          resolveCurrentPairedDeviceNodeBinding("paired-rich"),
+          isNodePairingGenerationCurrent(generation),
+        ]),
+      ),
+    );
+    onTestFinished(async () => {
+      releaseWriter.resolve();
+      releaseReply.resolve();
+      releaseRead.resolve();
+      await Promise.allSettled([mutation, reader, authority]);
+      observedRead.mockRestore();
+      heldWriter.mockRestore();
+    });
+    await writerStarted.promise;
+    if (kind === "intermediate metadata") {
+      releaseWriter.resolve();
+    }
+    await readCompleted.promise;
+    if (kind === "removal") {
+      expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+        "requires a current worker publication",
+      );
+      releaseWriter.resolve();
+      expect(await reader).toBeNull();
+    } else if (kind === "committed metadata") {
+      releaseWriter.resolve();
+      await writerCommitted.promise;
+      releaseRead.resolve();
+      // The read completed before this observation committed. Consuming its
+      // snapshot must preserve newer authority without waiting for the delayed reply.
+      expect(await reader).toEqual(before);
+      releaseReply.resolve();
+    } else if (kind === "intermediate metadata") {
+      await mutation;
+      await authority;
+      const latest = { ...patch, lastSeenAtMs: 20 };
+      await updatePairedDeviceMetadata("paired-rich", latest, baseDir);
+      releaseRead.resolve();
+      expect(await reader).toEqual({ ...before, ...latest });
+    } else {
+      expect(() => getPublishedPairedDeviceBinding("paired-rich", baseDir)).toThrow(
+        "requires a current worker publication",
+      );
+      expect(await reader).toEqual(before);
+      releaseWriter.resolve();
+    }
+    await mutation;
+    expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(
+      kind === "removal" ? null : previousBinding,
+    );
+    expect(await authority).toEqual([
+      { status: "fulfilled", value: kind === "removal" ? undefined : previousBinding },
+      { status: "fulfilled", value: kind !== "removal" },
+    ]);
+  },
+);
 
 test.each(["reply lost", "policy revoked", "callback throws"] as const)(
   "retires narrowed bootstrap grants only after native settlement (%s)",

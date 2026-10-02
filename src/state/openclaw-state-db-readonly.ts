@@ -550,11 +550,12 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
+  onContentVersion?: (version: string | undefined) => void,
 ): T | undefined {
   const pathname = resolveReadOnlyPath(options);
   return stateSnapshotReads.exit(() => {
     // Maintenance admission belongs to a fresh private reader, never a cached writer.
-    if (!openStateSchemaReadAdmission) {
+    if (!openStateSchemaReadAdmission && !onContentVersion) {
       const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname, true);
       if (reused.reused) {
         return reused.value;
@@ -567,12 +568,23 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
       pathname,
       options.env ?? process.env,
     );
-    return withOpenClawStateReadOnlyLocation(
+    const prepared = prepareSqliteReadOnlyLocationSync(pathname, onContentVersion !== undefined);
+    const value = withOpenClawStateReadOnlyLocation(
       operation,
       pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
+      prepared,
       openStateSchemaReadAdmission,
     );
+    if (onContentVersion) {
+      onContentVersion(
+        readAdmittedStateContentVersion(
+          pathname,
+          options.env ?? process.env,
+          () => prepared.contentVersion,
+        ),
+      );
+    }
+    return value;
   });
 }
 

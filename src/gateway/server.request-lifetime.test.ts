@@ -104,12 +104,13 @@ describe("public Gateway close request lifetime", () => {
         });
         await gateway.server.startupSettled;
         ws = await gateway.openWs();
-        // An ephemeral CLI avoids admitting history prewarming alongside the waiter.
+        // A device-less local backend admits no history or pairing work alongside the waiter.
         await connectOk(ws, {
           scopes: ["operator.admin"],
+          device: null,
           client: {
-            id: GATEWAY_CLIENT_IDS.CLI,
-            mode: GATEWAY_CLIENT_MODES.CLI,
+            id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
+            mode: GATEWAY_CLIENT_MODES.BACKEND,
             version: "1.0.0",
             platform: "test",
           },

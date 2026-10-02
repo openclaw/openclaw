@@ -63,8 +63,11 @@ vi.mock("./ports-lsof.js", () => ({
 
 vi.mock("../config/paths.js", () => ({
   resolveGatewayPort: (...args: unknown[]) => resolveGatewayPortMock(...args),
-  resolveStateDir: (env: NodeJS.ProcessEnv = process.env) =>
-    env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state",
+}));
+
+// Process fixtures must not consult an ambient Gateway lease.
+vi.mock("./gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease: vi.fn(),
 }));
 
 const { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =

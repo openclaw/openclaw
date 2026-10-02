@@ -1,3 +1,4 @@
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE } from "../../infra/node-commands.js";
 import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -42,22 +43,24 @@ export class WorkerTunnelOwnerDisconnectedError extends Error {
   }
 }
 
-export class WorkerRunnerUnavailableError extends Error {
+export class WorkerRunnerUnavailableError extends AgentHarnessPreflightError {
   readonly code = "runner-offline";
 
   constructor() {
-    super(
-      "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
-    );
+    const message =
+      "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.";
+    super(message, { userMessage: message });
     this.name = "WorkerRunnerUnavailableError";
   }
 }
 
-export class WorkerRunnerCapacityError extends Error {
+export class WorkerRunnerCapacityError extends AgentHarnessPreflightError {
   readonly code = NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE;
 
   constructor() {
-    super("device worker capacity remained full");
+    super("device worker capacity remained full", {
+      userMessage: "The device runner is at capacity. Wait for another turn to finish, then retry.",
+    });
     this.name = "WorkerRunnerCapacityError";
   }
 }

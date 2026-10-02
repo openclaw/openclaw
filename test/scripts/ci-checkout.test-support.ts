@@ -257,7 +257,16 @@ export async function withCiCheckoutFixture<T>(
       }
       void closed.then(resolve);
     });
-    report = reportSchema.parse(JSON.parse(readFileSync(path.join(root, "report.json"), "utf8")));
+    let contents: string;
+    try {
+      contents = readFileSync(path.join(root, "report.json"), "utf8");
+    } catch (cause) {
+      throw new Error(
+        `Checkout supervisor closed ${JSON.stringify(completed)} without a readable cleanup report.\n${stderr}`,
+        { cause },
+      );
+    }
+    report = reportSchema.parse(JSON.parse(contents));
     return await inspect(report, completed, stderr, root);
   } finally {
     signal.removeEventListener("abort", onAbort);

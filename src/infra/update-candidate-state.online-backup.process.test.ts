@@ -111,8 +111,10 @@ it.for(["inventory", "snapshot", "discover", "versions"] as const)(
           INSERT INTO payload VALUES (zeroblob(4194304));
         `);
           if (file === shared) {
-            db.exec("CREATE TABLE agent_databases (path TEXT);");
-            db.prepare("INSERT INTO agent_databases VALUES (?)").run(
+            db.exec(
+              "CREATE TABLE agent_databases (agent_id TEXT, path TEXT, PRIMARY KEY(agent_id, path));",
+            );
+            db.prepare("INSERT INTO agent_databases VALUES ('main', ?)").run(
               path.relative(stateDir, agent),
             );
           }

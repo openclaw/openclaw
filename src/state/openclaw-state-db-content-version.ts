@@ -8,6 +8,7 @@ import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 export function readAdmittedStateContentVersion(
   pathname: string,
   env: NodeJS.ProcessEnv,
+  observe = readSqliteSourceContentVersionSync,
 ): string | undefined {
   const assertCurrent = () => {
     getOpenClawDatabaseMaintenanceScope()?.assertReadAdmission();
@@ -17,7 +18,7 @@ export function readAdmittedStateContentVersion(
   if (existingPathOrUndefined(pathname) === undefined) {
     return undefined;
   }
-  const version = readSqliteSourceContentVersionSync(pathname);
+  const version = observe(pathname);
   assertCurrent();
   return version === undefined
     ? undefined

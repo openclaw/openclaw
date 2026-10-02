@@ -1745,6 +1745,11 @@ posixIt.for(["fetch", "ls-remote", "push"])(
         : "",
     );
     expect(report.authHeaderPresent).toBe(false);
+    if (operation === "push") {
+      expect(report.pushes[0]?.args).toEqual(report.pushes[1]?.args);
+      expect(report.publication?.generatedA).toBe("desired-a");
+      expect(report.output).toContain("retrying once under the same lease");
+    }
   },
 );
 
@@ -1819,22 +1824,6 @@ posixIt.for([0, 2, 23, 125, 143, "hang", "cleanup-failure", "cancel"] as const)(
       }
     }
   },
-);
-
-posixIt(
-  "generated publisher retries one timed-out push under the unchanged lease",
-  async ({ signal }) => {
-    const report = await publisherRun(signal, {
-      gitFault: { match: "^push ", occurrence: 1, code: "hang" },
-    });
-    expect(report.code, report.output).toBe(0);
-    expect(report.pushes).toHaveLength(2);
-    expect(report.pushes[0]?.args).toEqual(report.pushes[1]?.args);
-    expect(report.publication?.generatedA).toBe("desired-a");
-    expect(report.githubSummary).toContain("Generated pull request:");
-    expect(report.output).toContain("retrying once under the same lease");
-  },
-  55_000,
 );
 
 posixIt.for(

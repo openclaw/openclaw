@@ -14,7 +14,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import { stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
+import { currentRouteLocation, stillOwnsCanonicalLocation } from "./chat-canonical-location.ts";
 import { ChatPageCloseFocus } from "./chat-page-close-focus.ts";
 import { ChatPageDropIndicator } from "./chat-page-drop-indicator.ts";
 import {
@@ -191,6 +191,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
   }
 
   override disconnectedCallback() {
+    this.draftFocus.clearPendingDraft();
     this.closeFocus.clear();
     this.snapshotStore.disconnect();
     this.retainedSessions.disconnect();
@@ -212,6 +213,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     }
     this.wasConversationPresented = this.conversationPresented;
     if (!this.conversationPresented || this.pendingCreate) {
+      this.draftFocus.clearPendingDraft();
       this.closeFocus.clear();
       this.viewerPresence.dispose();
       return;
@@ -237,6 +239,7 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
     );
     const routeChanged = this.data !== this.processedRouteData;
     if (data && (routeChanged || changedProperties.has("presented"))) {
+      this.draftFocus.clearPendingDraft();
       // Hidden native windows defer routing work; showing must consume the latest data.
       this.processedRouteData = this.data;
       this.routeHref = window.location.href;
@@ -269,20 +272,23 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.syncRouteBindings();
       this.retainedSessions.settleRoute();
     }
-    if (data && routeHandoffRendered) {
-      queueMicrotask(() => {
+    const draftPane = data && routeHandoffRendered ? this.routeDraftPane(data) : undefined;
+    if (draftPane) {
+      this.draftFocus.afterPaneUpdate(draftPane, () => {
         if (
-          this.isConnected &&
-          this.presented &&
           this.paneData === data &&
-          this.consumedDraftData !== data
+          this.consumedDraftData !== data &&
+          this.routeDraftPane(data) === draftPane
         ) {
           this.draftFocus.beforeDraftCleanup(data);
           this.consumedDraftData = data;
-          this.updateRoute(data.sessionKey, true, data.face ?? "chat");
+          data.prepareNavigationHandoff?.();
+          this.context.replace(data.face ?? "chat", locationWithoutDraft(currentRouteLocation()));
           this.requestUpdate();
         }
       });
+    } else {
+      this.draftFocus.clearPendingDraft();
     }
     const singlePane = this.singleBoundPane;
     const singleColumn = this.layout?.columns[0];
@@ -296,6 +302,19 @@ export class ChatPage extends OpenClawLightDomElement implements SessionSplitHos
       this.classicPaneId = singlePane.id;
       this.persistLayout(undefined);
     }
+  }
+
+  private routeDraftPane(data: SessionChatRouteData) {
+    if (
+      !this.isConnected ||
+      !this.conversationPresented ||
+      this.pendingCreate ||
+      this.mcpAppUnmountGate.retiring ||
+      window.location.href !== this.routeHref
+    ) {
+      return undefined;
+    }
+    return this.retainedSessions.findActiveBoundPane(data.sessionKey);
   }
 
   private readonly handleViewportChange = (event: MediaQueryListEvent) => {

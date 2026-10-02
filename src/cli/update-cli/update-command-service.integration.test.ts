@@ -135,6 +135,18 @@ vi.mock("../../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../gateway/call.js")>()),
   callGateway: mocks.call,
 }));
+vi.mock("../../gateway/local-http-probe.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/local-http-probe.js")>();
+  return {
+    ...actual,
+    createConfiguredGatewayLocalProbe: (
+      config: Parameters<typeof actual.createConfiguredGatewayLocalProbe>[0],
+    ) => ({
+      ...actual.createConfiguredGatewayLocalProbe(config),
+      requestHttp: async () => null,
+    }),
+  };
+});
 
 vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),

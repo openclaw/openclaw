@@ -42,7 +42,10 @@ const generation = { nodeId, key: "generation-1" };
 const item = { id: "pending-1", type: "location.request", priority: "high" };
 let lifecycle: AbortController;
 
-function makeContext(getSession: () => { connId: string } | undefined = () => undefined) {
+function makeContext(
+  getSession: (nodeId: string, generation: string) => { connId: string } | undefined = () =>
+    undefined,
+) {
   return {
     nodeRegistry: { get: vi.fn(), getForPairingGeneration: vi.fn(getSession) },
     logGateway: { info: vi.fn(), warn: vi.fn() },
@@ -135,16 +138,24 @@ describe("node.pending handlers", () => {
   });
 
   it("rejects a changed pairing before draining its pending work", async () => {
-    mocks.isNodePairingGenerationCurrent.mockResolvedValue(false);
-    expectPairingChanged(await drain());
+    const replacement = { nodeId, key: "generation-2" };
+    mocks.captureNodePairingGeneration.mockResolvedValue(replacement);
+    const context = makeContext((_nodeId, key) =>
+      key === generation.key ? { connId: "conn-1" } : undefined,
+    );
+    expectPairingChanged(await drain(context));
+    expect(context.nodeRegistry.getForPairingGeneration).toHaveBeenCalledWith(
+      nodeId,
+      replacement.key,
+    );
     expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();
   });
 
   it("rejects a same-generation reconnect before destructively draining", async () => {
     let connId = "conn-1";
-    mocks.isNodePairingGenerationCurrent.mockImplementation(async () => {
+    mocks.captureNodePairingGeneration.mockImplementation(async () => {
       connId = "replacement";
-      return true;
+      return generation;
     });
     expectPairingChanged(await drain(makeContext(() => ({ connId }))));
     expect(mocks.drainNodePendingWork).not.toHaveBeenCalled();

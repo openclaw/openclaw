@@ -808,6 +808,7 @@ describe("node workspace retain coordinator", () => {
     const held = createDeferredCore();
     const second = { ...node, nodeId: "node-2", connId: "connection-2" };
     let nodes: NodeWorkerSupervisorNodeProof[] = [node];
+    let holdPeerInventory = false;
     const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>(async (request) => {
       if (request.node.nodeId === node.nodeId) {
         await held.promise;
@@ -819,7 +820,12 @@ describe("node workspace retain coordinator", () => {
     });
     const transport: NodeWorkerSupervisorTransport = {
       getCurrentNode: async (nodeId) => nodes.find((entry) => entry.nodeId === nodeId),
-      listCurrentNodes: async () => nodes,
+      listCurrentNodes: async () => {
+        if (holdPeerInventory) {
+          await held.promise;
+        }
+        return nodes;
+      },
       hasCurrentRunner: () => true,
       isCurrent: () => true,
       invoke,
@@ -832,14 +838,19 @@ describe("node workspace retain coordinator", () => {
     });
     coordinator.bindTransport(transport);
     const first = coordinator.start();
+    let next: Promise<void> | undefined;
     try {
       await vi.waitFor(() => expect(invoke).toHaveBeenCalledOnce());
       nodes = [node, second];
-      await coordinator.schedule(second.nodeId);
-      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ node: second }));
+      holdPeerInventory = true;
+      next = coordinator.schedule(second.nodeId);
+      await vi.waitFor(() =>
+        expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ node: second })),
+      );
+      await next;
     } finally {
       held.resolve();
-      await first;
+      await Promise.all([first, next]);
       await coordinator.stop();
     }
   });

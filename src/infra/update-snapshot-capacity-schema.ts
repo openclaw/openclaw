@@ -11,6 +11,7 @@ export const UpdateSnapshotCapacitySchema = z.object({
   ]),
   sqliteBytes: bytes,
   pluginBytes: bytes.nullable(),
+  legacySessionBytes: bytes.optional(),
   requiredBytes: bytes,
   candidates: z
     .array(

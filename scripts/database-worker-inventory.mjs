@@ -193,6 +193,8 @@ const workerModules = new Set([
   "src/infra/telemetry-store.kernel.ts", // Telemetry SQL executes through the shared-state worker runtime.
   "src/infra/update-candidate-exec-approvals.ts", // Approval projections run in the update-candidate-state worker.
   "src/infra/update-candidate-plugins.ts", // Plugin inventory and copying run in the update-candidate-state worker.
+  "src/infra/update-candidate-session-receipts.ts", // Private receipt projection is called only by update-candidate-state.worker.
+  "src/infra/update-candidate-state.snapshot.ts", // Complete snapshot orchestration is dispatched by update-candidate-state.worker.
   "src/infra/update-run-interruption-store.ts", // Interruption writes use the shared-state worker; host imports are pure.
   "src/infra/update-run-reconciliation.read.ts", // Reconciliation reads use state-read and reconciliation workers.
 

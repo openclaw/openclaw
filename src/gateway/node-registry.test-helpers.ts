@@ -93,3 +93,16 @@ export function registerNodeSession(
   const { pairingIdentity = "identity-a", ...registration } = opts;
   return registry.register(client, { ...registration, pairingIdentity });
 }
+
+export function registerSocket(
+  registry: NodeRegistry,
+  socket: TestNodeSocket,
+  sent: string[] = [],
+) {
+  return registerNodeSession(
+    registry,
+    makeClient("conn-1", "node-1", sent, {
+      socket: socket as unknown as GatewayWsClient["socket"],
+    }),
+  );
+}

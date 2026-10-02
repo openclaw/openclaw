@@ -6,6 +6,10 @@ import {
 } from "../../agents/failover/user-copy.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import {
+  WorkerRunnerCapacityError,
+  WorkerRunnerUnavailableError,
+} from "../../gateway/worker-environments/tunnel-contract.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -48,6 +52,31 @@ describe("buildEmptyInteractiveReplyPayload", () => {
 });
 
 describe("buildExternalRunFailureReply", () => {
+  it.each([
+    {
+      name: "offline runner",
+      error: new WorkerRunnerUnavailableError(),
+      text: "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
+    },
+    {
+      name: "runner at capacity",
+      error: new WorkerRunnerCapacityError(),
+      text: "The device runner is at capacity. Wait for another turn to finish, then retry.",
+    },
+  ])("preserves actionable guidance for $name without verbose diagnostics", ({ error, text }) => {
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text,
+      isGenericRunnerFailure: false,
+    });
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: error,
+        sessionCtx: { Provider: "webchat", Surface: "webchat", ChatType: "direct" },
+        resolvedVerboseLevel: "off",
+      }),
+    ).toMatchObject({ text, isError: true });
+  });
+
   it("does not expose a foreign error's userMessage property", () => {
     const error = Object.assign(new Error("private-diagnostic-canary"), {
       userMessage: "untrusted-public-canary",

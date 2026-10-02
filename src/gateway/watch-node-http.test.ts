@@ -21,6 +21,7 @@ import {
   approveDevicePairing,
 } from "../infra/device-pairing-approval.js";
 import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
+import * as devicePairingNode from "../infra/device-pairing-node.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { loadDevicePairSetupCompletionRecord } from "../infra/device-pairing-store.js";
 import { revokeDeviceToken, verifyDeviceToken } from "../infra/device-pairing-tokens.js";
@@ -30,7 +31,6 @@ import {
   NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
   PAIRING_SETUP_BOOTSTRAP_PROFILE,
   VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  type DeviceBootstrapProfile,
 } from "../shared/device-bootstrap-profile.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -43,6 +43,7 @@ import {
   makeConnectParams,
   readJson,
   startPartialJsonRequest,
+  startWatchNodeHttpFixture,
   startWatchNodeHttpRuntime,
   waitForLastConnectedMetadata,
 } from "./watch-node-http.test-helpers.js";
@@ -87,24 +88,9 @@ async function makeWatchNodeDir(prefix: string): Promise<string> {
 
 async function createWatchNodeFixture(
   prefix: string,
-  options?: Parameters<typeof startWatchNodeHttpRuntime>[2] & {
-    bootstrapProfile?: DeviceBootstrapProfile;
-  },
+  options?: Parameters<typeof startWatchNodeHttpFixture>[2],
 ) {
-  const baseDir = await makeWatchNodeDir(prefix);
-  const identity = loadOrCreateDeviceIdentity({
-    path: path.join(baseDir, "watch-identity.sqlite"),
-  });
-  const issued = await issueDevicePairSetupBootstrapToken({
-    baseDir,
-    profile: options?.bootstrapProfile ?? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
-  });
-  return {
-    baseDir,
-    identity,
-    issued,
-    ...(await startWatchNodeHttpRuntime(baseDir, cleanups, options)),
-  };
+  return startWatchNodeHttpFixture(await makeWatchNodeDir(prefix), cleanups, options);
 }
 
 describe("watch node HTTP transport", () => {
@@ -229,7 +215,9 @@ describe("watch node HTTP transport", () => {
     runtime.close();
   });
 
-  it("requires an authenticated disconnect and emits one lifecycle teardown", async () => {
+  it("requires an authenticated disconnect and emits one lifecycle teardown", async ({
+    signal,
+  }) => {
     const {
       baseDir,
       identity,
@@ -263,17 +251,22 @@ describe("watch node HTTP transport", () => {
     expect(nodeRegistry.get(identity.deviceId)).toBeDefined();
 
     await waitForLastConnectedMetadata(baseDir, identity.deviceId);
-    const pairingLockReady = createDeferred();
-    const pairingLockPending = createDeferred();
-    const pairingLock = withDevicePairingLock(async () => {
-      pairingLockReady.resolve();
-      await pairingLockPending.promise;
-    });
-    await pairingLockReady.promise;
+    const disconnectHistoryPending = createDeferred();
+    const recordDisconnection = devicePairingNode.recordPairedNodeDisconnection;
+    // Delay only history persistence; authentication still acquires pairing admission.
+    const disconnectHistory = vi
+      .spyOn(devicePairingNode, "recordPairedNodeDisconnection")
+      .mockImplementationOnce(async (params) => {
+        await disconnectHistoryPending.promise;
+        return recordDisconnection(params);
+      });
+    const releaseHistory = () => disconnectHistoryPending.resolve();
+    signal.addEventListener("abort", releaseHistory, { once: true });
     try {
       const disconnectResponse = await fetch(`${baseUrl}/disconnect`, {
         method: "POST",
         headers: { authorization: `Bearer ${sessionToken}` },
+        signal,
       });
       expect(disconnectResponse.status).toBe(200);
       await expect(readJson(disconnectResponse)).resolves.toEqual({ ok: true });
@@ -282,9 +275,15 @@ describe("watch node HTTP transport", () => {
       expect(disconnectedNodes).toEqual([
         { nodeId: identity.deviceId, reason: "watch disconnected" },
       ]);
+      expect(disconnectHistory).toHaveBeenCalledOnce();
     } finally {
-      pairingLockPending.resolve();
-      await pairingLock;
+      signal.removeEventListener("abort", releaseHistory);
+      releaseHistory();
+      try {
+        await disconnectHistory.mock.results[0]?.value;
+      } finally {
+        disconnectHistory.mockRestore();
+      }
     }
     await vi.waitFor(async () => {
       const paired = (await listNodePairing(baseDir)).paired.find(

@@ -5,18 +5,12 @@ import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 type RouteDraftHint = { draft?: string; focusComposer?: boolean };
 type RouteDraftData = { sessionKey: string; draft?: string };
 
-export function locationWithoutDraft(
-  location: RouteLocation,
-  destination: Partial<RouteLocation> = {},
-): RouteLocation {
+export function locationWithoutDraft(location: RouteLocation): RouteLocation {
   const params = new URLSearchParams(location.search);
-  for (const [name, value] of new URLSearchParams(destination.search)) {
-    params.set(name, value);
-  }
   params.delete("draft");
   params.delete(SESSION_COMPOSER_FOCUS_PARAM);
   const search = params.toString();
-  return { ...location, ...destination, search: search ? `?${search}` : "" };
+  return { ...location, search: search ? `?${search}` : "" };
 }
 
 export function draftRouteDataFromLocation(location: RouteLocation): RouteDraftHint {

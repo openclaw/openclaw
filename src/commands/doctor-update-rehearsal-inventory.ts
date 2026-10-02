@@ -45,10 +45,21 @@ function assertConfigLayout(config: unknown, stateDir: string): void {
   if (Object.entries(expected).some(([key, value]) => valueAt(config, key) !== value)) {
     refuse("configuration does not preserve the shipped isolated layout");
   }
-  for (const key of ["env", "diagnostics", "session.store", "agents.list"]) {
+  for (const key of ["env", "diagnostics", "agents.list"]) {
     if (valueAt(config, key) !== undefined) {
       refuse(`configuration retains ${key}`);
     }
+  }
+  const sessionStore = valueAt(config, "session.store");
+  if (
+    sessionStore !== undefined &&
+    (typeof sessionStore !== "string" ||
+      !path.isAbsolute(sessionStore) ||
+      sessionStore.includes("${") ||
+      sessionStore.split(/[\\/]/u).includes("..") ||
+      !within(stateDir, sessionStore))
+  ) {
+    refuse("the session store points outside its copied layout");
   }
   const port = valueAt(config, "gateway.port");
   const token = valueAt(config, "gateway.auth.token");

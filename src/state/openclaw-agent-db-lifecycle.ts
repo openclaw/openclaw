@@ -11,10 +11,12 @@ import { isPathInside } from "../infra/path-guards.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
 import {
   deferSqlitePostCommitPublication,
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
+import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import {
   registerSqliteCacheExitClose,
@@ -70,6 +72,7 @@ import {
   registerOpenClawStateDatabaseLifecycleListener,
   retainOpenClawStateDatabaseForIdle,
 } from "./openclaw-state-db-cache.js";
+import { isArtifactPreservingStateRead } from "./openclaw-state-db-readonly.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
@@ -652,7 +655,6 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
 export function inspectOpenClawAgentDatabaseOwner(
   pathname: string,
 ): OpenClawAgentDatabaseOwnerInspection {
-  let db: DatabaseSync | undefined;
   try {
     // Failed opens retain a disposal-only handle whose agentId is the request,
     // not a verified owner. Only admitted handles can answer from cache.
@@ -663,9 +665,37 @@ export function inspectOpenClawAgentDatabaseOwner(
       refreshAgentDatabaseIdleTimer(opened);
       return { status: "owned", agentId: opened.agentId };
     }
-    db = openNodeSqliteDatabase(pathname, { readOnly: true });
+  } catch {
+    return { status: "unreadable" };
+  }
+  if (!isArtifactPreservingStateRead()) {
+    return inspectAgentDatabaseOwnerAtLocation(pathname, pathname);
+  }
+  // Discovery may inspect an unregistered store. Open its private image so
+  // read-only SQLite cannot create or change sidecars in the serving family.
+  const prepared = prepareSqliteReadOnlyLocationSync(pathname);
+  return runWithSqliteCleanup(
+    {
+      release: () => {
+        if (!prepared.cleanup()) {
+          throw new Error(`SQLite owner snapshot cleanup failed: ${prepared.location}`);
+        }
+      },
+    },
+    "Agent database owner snapshot",
+    () => inspectAgentDatabaseOwnerAtLocation(prepared.location, pathname),
+  );
+}
+
+function inspectAgentDatabaseOwnerAtLocation(
+  location: string,
+  sourcePath: string,
+): OpenClawAgentDatabaseOwnerInspection {
+  let db: DatabaseSync | undefined;
+  try {
+    db = openNodeSqliteDatabase(location, { readOnly: true });
     setSqliteBusyTimeout(db, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
-    assertSupportedAgentSchemaVersion(db, pathname);
+    assertSupportedAgentSchemaVersion(db, sourcePath);
     const existing = readExistingAgentSchemaMeta(db);
     if (!existing) {
       return { status: "unowned" };

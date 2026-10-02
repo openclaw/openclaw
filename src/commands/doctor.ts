@@ -74,8 +74,9 @@ export async function doctorCommand(
     const { countBlockingSessionSqliteIssues } = await import("./doctor-session-sqlite-types.js");
     const { isDestructiveDoctorSessionSqliteMode, withDoctorSqliteMaintenanceLock } =
       await import("./doctor-sqlite-maintenance-lock.js");
-    const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
-      await import("./doctor-session-sqlite.js");
+    const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
+    const { reconcileDoctorSessionSqlitePublication } =
+      await import("./doctor-session-sqlite-targets.js");
     const { withArtifactPreservingStateReads } =
       await import("../state/openclaw-state-db-readonly.js");
     const sessionSqliteOptions = {

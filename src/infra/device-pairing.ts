@@ -6,6 +6,7 @@ import {
   readPairedCardRendererCache,
 } from "./device-pairing-card-renderer.js";
 import type {
+  PairedDeviceMetadataBinding,
   PairedDeviceMetadataPatch,
   PrunedSupersededPairedDevice,
   RequestDevicePairingResult,
@@ -182,11 +183,18 @@ export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
   baseDir?: string,
+  options?: {
+    expectedPairing: PairedDeviceMetadataBinding;
+    assertCurrent: () => void;
+  },
 ): Promise<boolean> {
   return await withDevicePairingLock(() =>
     executeDevicePairingMutation(
-      { type: "devicePairing.updateMetadata", input: { deviceId, patch } },
-      { baseDir },
+      {
+        type: "devicePairing.updateMetadata",
+        input: { deviceId, patch, expectedPairing: options?.expectedPairing },
+      },
+      { baseDir, assertCurrent: options?.assertCurrent },
     ),
   );
 }

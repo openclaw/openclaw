@@ -12,6 +12,7 @@ import {
   writeReviewArtifacts,
   type ReviewArtifactFixtureOptions,
 } from "./pr-review-artifact-fixture.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
@@ -36,7 +37,7 @@ it("runs dependency-free CLI and native lock regressions", () => {
   const result = spawnSync(
     testNodeExecPath,
     ["--test", join(process.cwd(), "test/scripts/pr-review-artifacts.node.mjs")],
-    { encoding: "utf8", timeout: 30000 },
+    { encoding: "utf8", timeout: 30000, env: createIndependentPrFixtureEnv() },
   );
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 });
@@ -81,7 +82,7 @@ function runValidation(
       reviewScript,
       fixtureRoot,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: createIndependentPrFixtureEnv() },
   );
 }
 
@@ -104,7 +105,7 @@ function runReviewShellFunction(fixtureRoot: string, invocation: string) {
       reviewScript,
       fixtureRoot,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: createIndependentPrFixtureEnv() },
   );
 }
 
@@ -216,7 +217,7 @@ function runMergeVerification(
       mergeScript,
       fixtureRoot,
     ],
-    { encoding: "utf8" },
+    { encoding: "utf8", env: createIndependentPrFixtureEnv() },
   );
 }
 

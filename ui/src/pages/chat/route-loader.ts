@@ -213,6 +213,21 @@ function ambiguousSessionRouteData(
   return { kind: "ambiguous", shortId, candidates, truncated: resolution.truncated, face };
 }
 
+function createRouteNavigationHandoff(
+  gateway: ApplicationContext["gateway"],
+  pathname: string,
+  sessionKey: string,
+  isCurrent: () => boolean,
+): () => void {
+  // Query-only replacements keep the resolved key's original connection.
+  // A later parent render must not rebind that key to a replacement client.
+  return () => {
+    if (isCurrent()) {
+      prepareSessionNavigationHandoff(gateway, pathname, sessionKey);
+    }
+  };
+}
+
 function resolvedSessionRouteData(params: {
   context: ApplicationContext;
   location: RouteLocation;
@@ -236,19 +251,21 @@ function resolvedSessionRouteData(params: {
   if (canonicalLocation === undefined) {
     return null;
   }
-  if (canonicalLocation && params.isResolutionSourceCurrent()) {
-    // A delayed response cannot transfer its key into a replacement connection.
-    prepareSessionNavigationHandoff(
-      params.context.gateway,
-      canonicalLocation.pathname,
-      params.row.key,
-    );
+  const prepareNavigationHandoff = createRouteNavigationHandoff(
+    params.context.gateway,
+    (canonicalLocation ?? params.location).pathname,
+    params.row.key,
+    params.isResolutionSourceCurrent,
+  );
+  if (canonicalLocation) {
+    prepareNavigationHandoff();
   }
   return {
     kind: "session",
     sessionKey: params.row.key,
     ...(params.row.agentId ? { agentId: params.row.agentId } : {}),
     ...sessionRouteHints(params.location),
+    prepareNavigationHandoff,
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
@@ -511,6 +528,12 @@ export async function loadChatRoute(
       ...sessionRouteHints(routeLocation),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
+      prepareNavigationHandoff: createRouteNavigationHandoff(
+        context.gateway,
+        canonicalLocation.pathname,
+        cached.sessionKey,
+        isResolutionSourceCurrent,
+      ),
       ...(canonicalLocationChanged
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
         : {}),

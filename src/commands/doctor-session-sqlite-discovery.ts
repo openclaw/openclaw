@@ -73,10 +73,9 @@ export type HistoricalArchiveSources = Map<
 >;
 
 /** Retained manifests bind archive files to their original agent, path, and bytes. */
-export function collectHistoricalArchiveSources(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}) {
+export function collectHistoricalArchiveSources(
+  params: Parameters<typeof collectRecoveryInventory>[0],
+) {
   const result: HistoricalArchiveSources = new Map();
   const inventory = collectRecoveryInventory(params);
   const claims = new Map<string, RecoveryArtifactReference[][]>();
@@ -161,6 +160,7 @@ export function readArchivedSessionOwnership(
   target: SessionStoreTarget,
   stores: readonly SessionSqliteMigrationMove[],
   issues: DoctorSessionSqliteIssue[],
+  env?: NodeJS.ProcessEnv,
 ): LegacySessionRecord[] | undefined {
   const records: LegacySessionRecord[] = [];
   let verified = true;
@@ -177,7 +177,7 @@ export function readArchivedSessionOwnership(
         );
       }
       records.push(
-        ...readLegacySessionRecords(target, ownershipIssues, { sourcePath: move.archivePath }),
+        ...readLegacySessionRecords(target, ownershipIssues, { sourcePath: move.archivePath, env }),
       );
       if (
         ownershipIssues.length ||
@@ -407,7 +407,7 @@ export function gatherLegacyArchiveCoverage(
       // Aliased or unreadable known indexes cannot establish complete reference coverage.
       assertSafeSessionSqliteMigrationDirectory(path.dirname(storePath));
       indexIdentities.set(storePath, readMigrationArtifactIdentity(storePath));
-      records = readLegacySessionRecords(target, issues);
+      records = readLegacySessionRecords(target, issues, { env });
     } catch (error) {
       if (storeTargets.length > 0) {
         throw error;
@@ -485,6 +485,7 @@ export function readLegacySessionRecords(
     allowMissingStore?: boolean;
     sourcePath?: string;
     verifiedSourcePaths?: ReadonlySet<string>;
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): LegacySessionRecord[] {
   return readLegacySessionStoreEntries(target, issues, options).entries.map(
@@ -493,6 +494,7 @@ export function readLegacySessionRecords(
         target,
         entry,
         options.verifiedSourcePaths,
+        options.env,
       );
       return {
         // Import repairs file-era fields before canonical SQLite readers can see them.

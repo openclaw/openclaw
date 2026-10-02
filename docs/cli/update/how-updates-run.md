@@ -179,6 +179,25 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+Session migration checks also receive private copies of the legacy session indexes,
+transcripts, and trajectory files selected by Doctor. Configured `session.store`
+paths point into that copy. Completed-import protection still prevents replaying
+legacy metadata over sessions that were later edited or deleted. Unsupported
+fields and malformed entries remain subject to Doctor's existing checks; snapshot
+preparation does not repair the originals. Optional archived-history recovery that
+cannot be rehearsed produces a warning. A retained import whose required sources
+or ownership cannot be represented safely still stops validation before activation
+with recovery guidance.
+
+This coverage depends on the installed updater. The published 2026.9.7 updater
+uses its own snapshot worker and removes `session.store` from the copied config,
+so a newer candidate cannot supply this coverage on that first update. Later
+updaters that select the candidate's snapshot worker can copy default legacy
+inputs, but projecting a custom store also requires the repaired installed
+updater. Preserve the originals and follow the reported Doctor guidance or the
+installation's [manual update method](/install/updating/update-methods) if that
+older driver cannot complete validation.
+
 Plugin dependency inventory skips incidental Git runtime transaction directories
 named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
 contents stay untouched; explicitly referenced dependencies still undergo normal
@@ -356,9 +375,11 @@ Hosts whose checks cannot finish within the 2026.9.4 rehearsal's five-minute win
 still need the [manual upgrade recovery path](/install/updating#alternative-re-run-the-installer).
 
 Before copying, the updater measures the shared and agent SQLite database
-families and the installed plugin payloads and dependency trees that the
-update checks need. Admission includes space for temporary copies and the new version’s
-Doctor backup. Active plugin payloads remain in the snapshot so configuration
+families, legacy session inputs, and the installed plugin payloads and dependency
+trees that the update checks need. Admission estimates space for temporary copies,
+the new version’s Doctor backup, and database growth while importing legacy inputs.
+The private migration rehearsal still has to complete within the available space.
+Active plugin payloads remain in the snapshot so configuration
 and startup validation can load them; unreferenced plugin generations are not
 copied.
 
@@ -369,9 +390,9 @@ The updater selects the first usable destination with enough measured free space
    state directory on its filesystem.
 3. The system temporary directory.
 
-The update report records the measured SQLite and plugin sizes, the total
-required space, the checked destinations and their available space, and the
-selected location and reason. If none fits, snapshot preparation refuses before
+The update report records the measured SQLite, legacy session, and plugin sizes,
+the estimated required space, the checked destinations and their available space,
+and the selected location and reason. If none fits, snapshot preparation refuses before
 copying with `snapshot-capacity-insufficient` and explains how to free space or
 set `TMPDIR`. A path that cannot be allocated is recorded and skipped; if all
 fitting paths are unusable, `snapshot-location-unavailable` names their path or

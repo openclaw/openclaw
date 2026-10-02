@@ -51,7 +51,9 @@ function runFirstHop(scenario: string, automatic: boolean) {
       install-baseline) normalize_baseline ;;
       prepare-workshop-baseline) printf 'baseline-doctor\\n' >>"$HOME/events" ;;
       capture-workshop-candidate) printf 'candidate-identity\\n' >>"$HOME/events" ;;
-      capture-workshop-published-package) printf 'published-package\\n' >>"$HOME/events" ;;
+      baseline-package-identity)
+        if [ "$SCENARIO" = workshop-doctor-recovery ]; then printf 'published-package\\n' >>"$HOME/events"; fi
+        ;;
       capture-workshop-candidate-package) printf 'candidate-package\\n' >>"$HOME/events" ;;
       assert-workshop-installed-package) printf 'installed-package\\n' >>"$HOME/events" ;;
       seed-workshop-baseline-index|seed-workshop-candidate-index) printf 'seed\\n' >>"$HOME/events" ;;
@@ -102,6 +104,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE:
         scenario === "workshop-doctor-recovery" ? "openclaw@2026.9.4" : "openclaw@2026.7.1-2",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
       BASH_ENV: prelude,
       FIXTURE_AUTOMATIC: automatic ? "1" : "0",
     },
@@ -145,8 +148,8 @@ describe.skipIf(process.platform === "win32")("survivor first-hop observation", 
       );
       expect(result.status, result.stderr).toBe(unexpectedSuccess ? 42 : 0);
       expect(events).toEqual([
-        "baseline-doctor",
         "published-package",
+        "baseline-doctor",
         "candidate-identity",
         "candidate-package",
         "seed",
@@ -178,8 +181,8 @@ describe.skipIf(process.platform === "win32")("survivor first-hop observation", 
 const workshopIndex = "idx_skill_workshop_collection_reviews_workspace_time";
 
 function workshopFixture() {
-  // Keep the complete actionable warning inside Doctor's existing 500-character IPC bound.
-  const root = tempDirs.make("ws-");
+  // Nested runner TMPDIR paths must not consume Doctor's 500-character warning bound.
+  const root = tempDirs.make("ws-", process.platform === "win32" ? undefined : "/tmp");
   const state = join(root, "state");
   const artifacts = join(root, "artifacts");
   const packageRoot = join(root, "installed");

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatCrabboxGateCheckSummary } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const dispatchScript = join(process.cwd(), "scripts/pr-lib/ci-dispatch.mjs");
@@ -158,7 +159,7 @@ function runDispatch(
     ...options.run,
   };
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...createIndependentPrFixtureEnv(),
     OPENCLAW_GH_BIN: fakeGh.realGh,
     OPENCLAW_TEST_CHANGED_HEAD_SHA: changedSha,
     OPENCLAW_TEST_CHECK_PAGES: JSON.stringify([
@@ -317,7 +318,7 @@ describePosix("scripts/pr ci-dispatch", () => {
       {
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...createIndependentPrFixtureEnv(),
           OPENCLAW_GH_BIN: fakeGh.realGh,
           OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
           PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,
@@ -350,7 +351,7 @@ describePosix("scripts/pr ci-dispatch", () => {
       {
         encoding: "utf8",
         env: {
-          ...process.env,
+          ...createIndependentPrFixtureEnv(),
           OPENCLAW_GH_BIN: fakeGh.realGh,
           OPENCLAW_TEST_GH_CALLS: fakeGh.calls,
           PATH: `${fakeGh.binDir}:${process.env.PATH ?? ""}`,

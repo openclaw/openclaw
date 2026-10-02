@@ -1,4 +1,3 @@
-// Codex tests cover doctor contract api plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -359,7 +358,7 @@ describe("codex doctor contract", () => {
     }
   });
 
-  it("imports and archives shipped binding sidecars", async () => {
+  it("imports and archives shipped binding sidecars from a JSON5 session index", async () => {
     const fixture = await createBindingMigrationFixture({
       name: "session-current",
       sessionIndex: {
@@ -383,6 +382,9 @@ describe("codex doctor contract", () => {
         },
       },
     });
+
+    await fs.appendFile(fixture.storePath, "\n// Operator-authored session index\n", "utf8");
+    const authoredIndex = await fs.readFile(fixture.storePath, "utf8");
 
     await expect(fixture.migration.detectLegacyState(fixture.params)).resolves.toMatchObject({
       preview: [expect.stringContaining("legacy sidecar")],
@@ -418,9 +420,7 @@ describe("codex doctor contract", () => {
       sessionId: "session-current",
       agentHarnessId: "codex",
     });
-    await expect(
-      fs.readFile(fixture.storePath, "utf8").then(JSON.parse),
-    ).resolves.not.toHaveProperty("agent:main:session-1.agentHarnessId");
+    await expect(fs.readFile(fixture.storePath, "utf8")).resolves.toBe(authoredIndex);
 
     await removeCodexDoctorFixture(fixture.stateDir);
   });

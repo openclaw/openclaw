@@ -3,13 +3,20 @@ import { constants as fsConstants, cpSync, mkdirSync, writeFileSync } from "node
 import { join } from "node:path";
 import { expect } from "vitest";
 import type { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const repoRoot = process.cwd();
 type PublisherTempDirs = ReturnType<typeof useAutoCleanupTempDirTracker>;
 
 function sanitizedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env };
-  delete env.OPENCLAW_PR_GATES_REMOTE;
+  const env = createIndependentPrFixtureEnv();
+  // Command configuration outranks the fixture's local signing and trust settings.
+  // Only explicit fixture overrides below may carry that configuration into children.
+  for (const key of Object.keys(env)) {
+    if (/^GIT_CONFIG_(?:PARAMETERS|COUNT|(?:KEY|VALUE)_\d+)$/u.test(key)) {
+      delete env[key];
+    }
+  }
   delete env.OPENCLAW_TESTBOX;
   delete env.OPENCLAW_TEST_PROJECTS_PARALLEL;
   delete env.OPENCLAW_VITEST_MAX_WORKERS;
@@ -81,8 +88,7 @@ function createPublisherRepo(tempDirs: PublisherTempDirs) {
   mkdirSync(repoDir);
   const { env, git } = createPublisherGit(repoDir);
   // A detached maintenance process must not mutate the seed while cases copy it.
-  env.GIT_CONFIG_PARAMETERS =
-    `${env.GIT_CONFIG_PARAMETERS ?? ""} 'maintenance.auto=false' 'gc.auto=0'`.trim();
+  env.GIT_CONFIG_PARAMETERS = "'maintenance.auto=false' 'gc.auto=0'";
   git("init", "-q", "-b", "prep");
   git("config", "user.name", "Fixture");
   git("config", "user.email", "fixture@example.invalid");

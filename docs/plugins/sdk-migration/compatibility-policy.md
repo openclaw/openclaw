@@ -221,6 +221,9 @@ Plan-based migrations can use
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve existing move, copy, preview,
 and plugin-state import behavior.
 
+For authored legacy session index bytes, `parseJsonWithJson5Fallback` from the same
+subpath accepts the existing JSON/JSON5 grammar before the migration's own shape and ownership checks.
+
 Migrations may supply a read-only `collectBackupResources` callback, including
 through `definePluginDoctorMigrationFromPlans(...)`. Return absolute paths with
 kind `sqlite`, `file`, or `directory`, including destinations that do not exist

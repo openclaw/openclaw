@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
+import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scripts = join(process.cwd(), "scripts");
@@ -20,7 +21,7 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 function fixture() {
   const root = tempDirs.make("openclaw-pr-correction-");
   const env = {
-    ...process.env,
+    ...createIndependentPrFixtureEnv(),
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_AUTHOR_NAME: "Fixture",

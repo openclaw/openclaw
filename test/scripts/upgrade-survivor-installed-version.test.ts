@@ -31,6 +31,13 @@ describe.skipIf(process.platform === "win32")(
         expectedCalls: ["npm", "--version"],
         accepted: true,
       },
+      {
+        requested: "2026.9.7",
+        installed: "2026.9.6",
+        expectedCalls: ["npm"],
+        accepted: false,
+        error: "baseline package version mismatch: expected 2026.9.7, got 2026.9.6",
+      },
     ])("admits $requested resolved to $installed before running the baseline", (fixture) => {
       const home = tempDirs.make("survivor-baseline-floor-");
       const paths = readUpgradeSurvivorPaths(home);
@@ -85,7 +92,9 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         fixture.expectedCalls,
       );
       if (!fixture.accepted) {
-        expect(result.stderr).toContain("Upgrade pre-June installs through OpenClaw 2026.9.5");
+        expect(result.stderr).toContain(
+          fixture.error ?? "Upgrade pre-June installs through OpenClaw 2026.9.5",
+        );
       }
     });
 

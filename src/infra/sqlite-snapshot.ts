@@ -43,6 +43,7 @@ import {
   withSqliteSnapshotSource,
 } from "./sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export type SqliteSnapshotValidator = (database: DatabaseSync, databaseLabel: string) => void;
 
@@ -54,6 +55,7 @@ type CreateVerifiedSqliteSnapshotOptions = {
     mode: "isolated-process";
     stagingRoot: string;
     preserveSourceArtifacts?: boolean;
+    expectedSourceIdentity?: DatabaseFileIdentity;
   };
   onProgress?: (progress: BackupProgressInfo) => void;
   /** Final caller checks around publication; failures remove only this helper's target. */
@@ -559,6 +561,12 @@ async function publishSqliteFile(
 export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
+  if (
+    options.sourceAcquisition?.expectedSourceIdentity &&
+    !options.sourceAcquisition.preserveSourceArtifacts
+  ) {
+    throw new Error("SQLite source identity requires artifact-preserving preparation");
+  }
   const sourcePath = options.sourceAcquisition
     ? await fs.realpath(options.sourcePath)
     : options.sourcePath;
@@ -577,7 +585,11 @@ export async function createVerifiedSqliteSnapshot(
   }
   if (options.sourceAcquisition) {
     const prepared = options.sourceAcquisition.preserveSourceArtifacts
-      ? await prepareSqliteReadOnlyCopyInProcess(sourcePath, options.sourceAcquisition.stagingRoot)
+      ? await prepareSqliteReadOnlyCopyInProcess(
+          sourcePath,
+          options.sourceAcquisition.stagingRoot,
+          options.sourceAcquisition.expectedSourceIdentity,
+        )
       : await prepareSqliteReadOnlyLocationInProcess(
           sourcePath,
           options.sourceAcquisition.stagingRoot,

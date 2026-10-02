@@ -23,7 +23,7 @@ import {
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
-import { setNavigationContext } from "./chat-page.test-support.ts";
+import { getRouteDraftForActivePane, setNavigationContext } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import { routeDraft } from "./route-draft.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
@@ -47,15 +47,8 @@ type RenderedPane = HTMLElement & {
   routeFace: "chat" | "dashboard";
   dashboardExpanded: boolean;
   sessionKey: string;
+  updateComplete: Promise<unknown>;
 };
-
-function getRouteDraftForActivePane(page: ChatPage): string | undefined {
-  const state = page as unknown as {
-    data: SessionChatRouteData;
-    consumedDraftData: SessionChatRouteData | null;
-  };
-  return routeDraft(state.data, state.consumedDraftData);
-}
 
 function stubMatchMedia() {
   vi.stubGlobal(
@@ -259,27 +252,41 @@ describe("chat page retained sessions", () => {
     expect(replace).not.toHaveBeenCalled();
   });
 
-  it("hands each route-provided draft to the active pane only once", async () => {
+  it("consumes a one-shot route draft only after the active pane acknowledges its update", async ({
+    onTestFinished,
+  }) => {
+    const previousHref = window.location.href;
+    onTestFinished(() => window.history.replaceState(null, "", previousHref));
+    const { navigation, page, paneFor } = await mountRetainedPage("main");
+    const pane = expectDefined(paneFor("main"), "draft recipient");
+    const accepted = createDeferred();
+    pane.updateComplete = accepted.promise;
+    onTestFinished(() => {
+      page.remove();
+      accepted.resolve();
+    });
     window.history.replaceState({}, "", "/chat/main?draft=one-shot%20draft&panel=details#pane");
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
     const firstRouteData = { sessionKey: "main", draft: "one-shot draft" };
     page.data = firstRouteData;
-    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+    await page.updateComplete;
 
-    document.body.append(page);
-    await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
+    expect(pane.draft).toBe("one-shot draft");
+    expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
+    expect(navigation.replace).not.toHaveBeenCalled();
+
+    accepted.resolve();
+    await accepted.promise;
+    await page.updateComplete;
 
     expect(getRouteDraftForActivePane(page)).toBeUndefined();
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionNavigationTarget({
-        face: "chat",
-        sessionKey: "main",
-        fallbackAgentId: "main",
-      }).options.pathname,
+    expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("chat", {
+      pathname: "/chat/main",
       search: "?panel=details",
       hash: "#pane",
     });
+    page.requestUpdate();
+    await page.updateComplete;
+    expect(navigation.replace).toHaveBeenCalledOnce();
     page.data = { ...firstRouteData };
     expect(getRouteDraftForActivePane(page)).toBe("one-shot draft");
   });

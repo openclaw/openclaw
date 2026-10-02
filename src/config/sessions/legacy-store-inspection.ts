@@ -7,6 +7,7 @@ import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-ke
 import { readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { parseJsonWithJson5Fallback } from "../../utils/parse-json-compat.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { isPrimarySessionTranscriptFileName } from "./artifacts.js";
@@ -84,7 +85,7 @@ export function readLegacySessionStoreEntries(
       }
       // Fail closed if the pinned file grows past the size validated above.
       raw = readFileDescriptorBoundedSync(fd, storeStat.size);
-      parsed = JSON.parse(raw.toString("utf-8"));
+      parsed = parseJsonWithJson5Fallback(raw.toString("utf-8"));
     } catch (err) {
       issues.push({
         code: "store_unreadable",
@@ -155,6 +156,7 @@ export function resolveLegacyTranscriptPaths(
   target: Pick<LegacySessionStoreTarget, "agentId" | "storePath">,
   entry: { sessionId: string; sessionFile?: unknown },
   verifiedSourcePaths?: ReadonlySet<string>,
+  env?: NodeJS.ProcessEnv,
 ): {
   transcriptPath?: string;
   transcriptCandidates: string[];
@@ -173,6 +175,7 @@ export function resolveLegacyTranscriptPaths(
     defaultPath = resolveSessionFilePathCore(entry.sessionId, entry, {
       agentId: target.agentId,
       sessionsDir,
+      env,
     });
   } catch (error) {
     if (!relocatedPath) {

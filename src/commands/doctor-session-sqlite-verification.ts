@@ -36,6 +36,7 @@ import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.l
 import { migrateLegacySessionCreator } from "../state/creator-namespace-migration.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { inspectOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { LegacySessionRecord } from "./doctor-session-sqlite-discovery.js";
 import type { DoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
@@ -113,7 +114,9 @@ export function verifyHistoricalMigrationArtifact(params: {
   );
   let index: unknown;
   try {
-    index = JSON.parse(readFileDescriptorBoundedSync(fd, fs.fstatSync(fd).size).toString("utf8"));
+    index = parseJsonWithJson5Fallback(
+      readFileDescriptorBoundedSync(fd, fs.fstatSync(fd).size).toString("utf8"),
+    );
   } finally {
     fs.closeSync(fd);
   }
@@ -179,7 +182,8 @@ export function verifyHistoricalMigrationArtifact(params: {
         if (move.kind !== "transcript") {
           // Historical indexes can refer to transcripts published by an earlier run.
           // Reuse the producer's path contract rather than requiring same-run moves.
-          for (const source of resolveLegacyTranscriptPaths(target, entry).transcriptDependencies) {
+          for (const source of resolveLegacyTranscriptPaths(target, entry, undefined, env)
+            .transcriptDependencies) {
             dependencies.add(canonicalMigrationFilePath(source));
           }
           continue;

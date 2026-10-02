@@ -33,6 +33,7 @@ import {
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import type { DoctorSessionSqliteRestoreReport } from "./doctor-session-sqlite-types.js";
 import { assertDoctorSqliteMaintenancePathsNotAliased } from "./doctor-sqlite-maintenance-lock.js";
 
@@ -435,7 +436,7 @@ function inspectRestoreArchive(move: SessionSqliteMigrationMove): RestoreArchive
       digest = createHash("sha256").update(content).digest("hex");
       let parsed: unknown;
       try {
-        parsed = JSON.parse(content.toString("utf-8"));
+        parsed = parseJsonWithJson5Fallback(content.toString("utf-8"));
       } catch {
         return {
           state: "invalid",

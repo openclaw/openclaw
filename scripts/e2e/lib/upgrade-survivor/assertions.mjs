@@ -1082,7 +1082,29 @@ function assertSessionMetadataMigrated(stateDir, stage) {
       !Object.hasOwn(entry ?? {}, "sessionFile"),
       `legacy session row retained retired sessionFile metadata for ${sessionId}`,
     );
+    // The serving probe may change main's model after migration; untouched
+    // sessions must retain model ownership independently of transport routing.
+    if (stage !== "post-inference" || sessionId !== LEGACY_SESSION_MAIN_ID) {
+      assert(
+        entry.modelProvider === "openai" && entry.model === "gpt-5.5",
+        `legacy session model metadata was not preserved for ${sessionId}`,
+      );
+    }
   }
+  assert(
+    group.delivery?.kind === "external" &&
+      group.delivery.route?.channel === "slack" &&
+      group.delivery.route?.target?.to === "CUPGRADE" &&
+      group.delivery.context?.channel === "slack" &&
+      group.delivery.context?.to === "CUPGRADE" &&
+      group.delivery.origin?.provider === "slack" &&
+      group.delivery.origin?.to === "CUPGRADE",
+    "legacy session transport metadata was not preserved",
+  );
+  assert(
+    !Object.hasOwn(group, "lastChannel") && !Object.hasOwn(group, "lastTo"),
+    "legacy session retained retired transport metadata",
+  );
   if (source !== "file") {
     const dbPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
     const db = new DatabaseSync(dbPath, { readOnly: true });

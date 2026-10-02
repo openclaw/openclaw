@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -300,7 +300,11 @@ export function registerControlUiMobileBootstrapSuite(): void {
           return;
         }
         expect(operatorReconnect.ok).toBe(true);
-        expect((await getPairedDevice(identity.deviceId))?.platform).toBe(operatorClient.platform);
+        await vi.waitFor(async () => {
+          expect((await getPairedDevice(identity.deviceId))?.platform).toBe(
+            operatorClient.platform,
+          );
+        });
         expect((await rpcReq(wsOperator, "health")).ok).toBe(true);
         const talkMode = await rpcReq(wsOperator, "talk.mode", {
           enabled: true,

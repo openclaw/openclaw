@@ -251,9 +251,17 @@ function prepareWorkerSnapshot(
 
 export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
-): PreparedSqliteReadOnlyLocation {
+  captureContentVersion = false,
+): PreparedSqliteReadOnlyLocation & { contentVersion?: string } {
   const stagingRoot = createSqliteSnapshotStagingDirectorySync();
   try {
+    if (captureContentVersion) {
+      const snapshot = runSqliteReadOnlyWorkerSync(pathname, stagingRoot, "sync-versioned");
+      return {
+        ...adoptPreparedLocation(snapshot.location, stagingRoot),
+        contentVersion: snapshot.contentVersion || undefined,
+      };
+    }
     return adoptPreparedLocation(runSqliteReadOnlyWorkerSync(pathname, stagingRoot), stagingRoot);
   } catch (error) {
     if (!removeTempDirectory(stagingRoot)) {

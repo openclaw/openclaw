@@ -2174,8 +2174,7 @@ NODE
 }
 
 prepare_worker_cell_package() {
-  node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC" \
-    "$ARTIFACT_ROOT/baseline-package-identity.json"
+  node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
   OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_COMMIT="$(node -e \
     'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).buildInfo.commit)' \
     "$ARTIFACT_ROOT/candidate-package-identity.json")"
@@ -2270,6 +2269,10 @@ phase validate-update-restart-mode validate_update_restart_mode
 phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
+if [ "$CANDIDATE_KIND" = "tarball" ] && [ -n "${OPENCLAW_DOCKER_E2E_SELECTED_SHA:-}" ]; then
+  phase baseline-package-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs \
+    baseline "$(package_root)" "$baseline_version"
+fi
 phase initialize-state initialize_state
 if [ "$SCENARIO" = "backup-schedule" ]; then
   if [ "$baseline_spec" != "openclaw@2026.9.7" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
@@ -2298,7 +2301,6 @@ if [ "$SCENARIO" = "backup-schedule" ]; then
   exit 0
 fi
 if [ "$SCENARIO" = "cron-owner-doctor" ]; then
-  phase cron-owner-baseline-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase configure-cron-owner-baseline node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs configure
   phase prepare-cron-owner-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     openclaw doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1
@@ -2376,7 +2378,6 @@ if [ "$SCENARIO" = "channel-owner-policy" ]; then
     echo "$SCENARIO requires published openclaw@2026.9.4, a candidate tarball, isolated manual restart, and no live provider" >&2
     exit 2
   fi
-  phase policy-baseline-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase prepare-policy-database openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive
   phase seed-channel-policy node scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs seed
   phase validate-policy-config validate_baseline_config
@@ -2399,7 +2400,6 @@ if [ "$SCENARIO" = "channel-owner-policy" ]; then
   exit 0
 fi
 if [ "$WORKER_CELL" = "1" ]; then
-  phase worker-baseline-identity node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   if [ "$SCENARIO" = "projects-doctor" ]; then
     phase seed-projects-inventory node scripts/e2e/lib/upgrade-survivor/projects-doctor.mjs seed "$(package_root)"
   elif [ "$SCENARIO" = "projects-startup-migration" ]; then
@@ -2494,10 +2494,8 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase prepare-workshop-baseline openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw doctor --fix --non-interactive
   phase resolve-workshop-candidate resolve_candidate_version
   phase capture-workshop-baseline node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs baseline "$(package_root)"
-  phase capture-workshop-published-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs baseline "$(package_root)"
   phase capture-workshop-candidate node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs candidate "$CANDIDATE_SPEC" "$candidate_version"
-  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC" \
-    "$ARTIFACT_ROOT/baseline-package-identity.json"
+  phase capture-workshop-candidate-package node scripts/e2e/lib/upgrade-survivor/worker-cell-package.mjs candidate "$(package_root)" "$CANDIDATE_SPEC"
   phase seed-physical-baseline-index node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-seed baseline
   phase assert-physical-baseline-refusal assert_workshop_published_refusal physical
   phase restore-physical-baseline-fixture node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs physical-restore

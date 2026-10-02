@@ -14,6 +14,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 export type SqliteReadOnlyWorkerMode =
   | "sync"
   | "content-version"
+  | "sync-versioned"
   | "async"
   | "consolidated"
   | "reclaim"
@@ -32,9 +33,12 @@ export function isSqliteSnapshotStagingMode(mode: unknown): boolean {
   );
 }
 
+export type SqliteVersionedSnapshot = { location: string; contentVersion: string };
+
 export type SqliteReadOnlyWorkerResult =
   | { ok: true; location: string }
   | { ok: true; contentVersion: string }
+  | { ok: true; snapshot: SqliteVersionedSnapshot }
   | { ok: true; warnings: string[] }
   | { ok: false; message: string };
 
@@ -97,6 +101,7 @@ export type SqliteReadOnlyWorkerValue =
   | string
   | string[]
   | SqliteAuthProfileRows
+  | SqliteVersionedSnapshot
   | SqliteReadOnlyOperationResult;
 export const SQLITE_READONLY_STDERR_TAIL_CHARS = 4_000;
 
@@ -113,6 +118,16 @@ export function isSqliteReadOnlyWorkerResult(value: unknown): value is SqliteRea
       "contentVersion" in value &&
       typeof value.contentVersion === "string" &&
       /^(?:[a-f0-9]{64})?$/.test(value.contentVersion)) ||
+    (value.ok === true &&
+      "snapshot" in value &&
+      value.snapshot !== null &&
+      typeof value.snapshot === "object" &&
+      Object.keys(value.snapshot).length === 2 &&
+      "location" in value.snapshot &&
+      typeof value.snapshot.location === "string" &&
+      "contentVersion" in value.snapshot &&
+      typeof value.snapshot.contentVersion === "string" &&
+      /^(?:[a-f0-9]{64})?$/.test(value.snapshot.contentVersion)) ||
     (value.ok === true &&
       "warnings" in value &&
       Array.isArray(value.warnings) &&
@@ -152,6 +167,10 @@ export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: "sync" | "async" | "consolidated" | "content-version",
 ): string;
+export function readSqliteReadOnlyWorkerValue(
+  params: SqliteReadOnlyWorkerOutput,
+  mode: "sync-versioned",
+): SqliteVersionedSnapshot;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
   mode: "reclaim",
@@ -206,6 +225,9 @@ export function readSqliteReadOnlyWorkerValue(
     "location" in result
   ) {
     return result.location;
+  }
+  if (mode === "sync-versioned" && "snapshot" in result) {
+    return result.snapshot;
   }
   if (mode === "content-version" && "contentVersion" in result) {
     return result.contentVersion;

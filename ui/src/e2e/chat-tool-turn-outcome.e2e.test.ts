@@ -16,6 +16,10 @@ beforeEach(() => {
     : undefined;
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  clickToolDisclosure,
+  expandCompletedWorkGroups,
+} from "./chat-tool-disclosures.test-support.ts";
 import { registerItemOnlyOutcomeTest } from "./chat-tool-item-outcomes.test-support.ts";
 import { canonicalParallelBatchHistory } from "./chat-tool-parallel-batch.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -62,17 +66,6 @@ async function captureFactrowProof(
   await activity.screenshot({
     path: path.join(artifactDir, `factrow-${state}-${theme}-rows.png`),
   });
-}
-
-async function expandCompletedWorkGroups(page: import("playwright").Page) {
-  const workSummaries = page.locator(".chat-work-group > .chat-activity-group__summary");
-  await workSummaries.first().waitFor();
-  for (let index = 0; index < (await workSummaries.count()); index += 1) {
-    const summary = workSummaries.nth(index);
-    if ((await summary.getAttribute("aria-expanded")) !== "true") {
-      await summary.click();
-    }
-  }
 }
 
 suite.define(() => {
@@ -343,7 +336,7 @@ suite.define(() => {
       "rgba(0, 0, 0, 0)",
     );
     if ((await activity.getAttribute("aria-expanded")) !== "true") {
-      await activity.click();
+      await clickToolDisclosure(activity);
     }
 
     const rows = page.locator(".chat-activity-group__body .chat-tool-msg-summary");
@@ -354,11 +347,11 @@ suite.define(() => {
     );
     // File rows put the workspace link inside the row, so toggle from the icon
     // edge instead of the row centre to avoid opening the linked file.
-    await rows.first().click({ position: { x: 4, y: 4 } });
+    await clickToolDisclosure(rows.first(), { position: { x: 4, y: 4 } });
     expect(await page.getByText("offset:", { exact: true }).count()).toBe(1);
     expect(await page.getByText("limit:", { exact: true }).count()).toBe(1);
     const patchRow = rows.filter({ hasText: "2 files" });
-    await patchRow.click();
+    await clickToolDisclosure(patchRow);
     await expect.poll(() => patchRow.getAttribute("aria-expanded")).toBe("true");
     await expect.poll(() => page.locator(".chat-diff__row--file .chat-diff__text").count()).toBe(2);
 

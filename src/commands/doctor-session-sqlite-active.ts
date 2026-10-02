@@ -28,7 +28,7 @@ export async function prepareActiveSqliteTranscriptSettlement(params: {
   };
   let sourcesToSettle: ReturnType<typeof readActiveSqliteTranscriptFiles>;
   try {
-    sourcesToSettle = readActiveSqliteTranscriptFiles(target);
+    sourcesToSettle = readActiveSqliteTranscriptFiles(target, params.env);
   } catch (error) {
     params.report.issues.push({
       code: "sqlite_active_transcript_scan_failed",

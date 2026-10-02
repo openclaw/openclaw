@@ -496,7 +496,7 @@ describe("runDoctorSessionSqlite", () => {
     expect(loadTranscriptEventsSync(transcriptScope)).toEqual(currentHistory);
   });
 
-  it("adopts only complete historical v1 recovery evidence", async () => {
+  it("adopts only complete historical v1 recovery evidence with a JSON5 index", async () => {
     const snapshots = {
       sessionDiffBaseline: { version: 1, sessionId: "session-1", root: "/synthetic", files: [] },
       skillsSnapshot: { prompt: "Retained skill instructions", skills: [] },
@@ -532,6 +532,15 @@ describe("runDoctorSessionSqlite", () => {
     const archivePath = manifest.targets[0]!.completedMoves.find(
       (move) => move.kind === "transcript",
     )!.archivePath;
+    const indexArchivePath = expectDefined(
+      manifest.targets[0]!.completedMoves.find((move) => move.kind === "legacy-store"),
+      "historical index archive",
+    ).archivePath;
+    const originalIndex = fs.readFileSync(indexArchivePath, "utf8");
+    // Historical manifests have no producer identity; adoption must verify these
+    // operator-authored bytes against the real canonical rows before retirement.
+    fs.writeFileSync(indexArchivePath, `// Historical operator index\n${originalIndex}\n`);
+    const indexIdentity = migrationArtifact.readMigrationArtifactIdentity(indexArchivePath);
     closeOpenClawAgentDatabasesForTest();
     manifest.manifestVersion = 1;
     for (const target of manifest.targets) {
@@ -546,6 +555,17 @@ describe("runDoctorSessionSqlite", () => {
     );
     const result = await retireRecovery(store.env, preview);
     expect(result.artifacts.find((item) => item.path === archivePath)?.outcome).toBe("removed");
+    expect(result.artifacts.find((item) => item.path === indexArchivePath)?.outcome).toBe(
+      "removed",
+    );
+    const adoptedIndex = readMigrationManifest(manifestPath).targets[0]!.plannedMoves.find(
+      (move) => move.archivePath === indexArchivePath,
+    );
+    expect(adoptedIndex?.artifact).toMatchObject({
+      identity: indexIdentity,
+      reason: "verified-historical-import",
+      disposal: { state: "disposed" },
+    });
     expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
   });
 

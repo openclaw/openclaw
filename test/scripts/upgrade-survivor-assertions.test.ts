@@ -17,7 +17,9 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../scripts/lib/upgrade-survivor-policy.mjs";
 import { readLegacySessionStoreEntries } from "../../src/config/sessions/legacy-store-inspection.js";
+import type { SessionEntry } from "../../src/config/sessions/types.js";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
+import { normalizeLegacySessionEntryDelivery } from "../../src/infra/state-migrations.legacy-session-store.js";
 import type { PluginUpdateOutcome } from "../../src/plugins/update.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -809,28 +811,11 @@ function writeMigratedSessionState(stateDir: string): undefined {
       INSERT INTO transcript_events (session_id, seq, event_json, created_at)
       VALUES (?, ?, ?, ?)
     `);
-    const migratedSessions = [
-      {
-        entry: {
-          skillsSnapshot: {
-            prompt: "legacy prompt survives as metadata",
-          },
-        },
-        sessionId: "upgrade-main-session",
-        sessionKey: "agent:main:main",
-      },
-      {
-        entry: {},
-        sessionId: "upgrade-direct-session",
-        sessionKey: "agent:main:+15551234567",
-      },
-      {
-        entry: {},
-        sessionId: "upgrade-group-session",
-        sessionKey: "agent:main:slack:channel:cupgrade",
-      },
-    ];
-    for (const { entry, sessionId, sessionKey } of migratedSessions) {
+    for (const [sessionKey, value] of Object.entries(createMigratedSessionFileStore())) {
+      const { sessionId, ...entry } = value;
+      if (typeof sessionId !== "string") {
+        throw new TypeError(`missing fixture session id for ${sessionKey}`);
+      }
       insertSession.run(sessionId, sessionKey, 1710000000000, 1710000000000);
       insertEntry.run(sessionKey, sessionId, JSON.stringify(entry), 1710000000000);
       insertTranscript.run(
@@ -847,18 +832,36 @@ function writeMigratedSessionState(stateDir: string): undefined {
 
 function createMigratedSessionFileStore(
   options: { includePrompt?: boolean } = {},
-): Record<string, Record<string, unknown>> {
-  const main: Record<string, unknown> = { sessionId: "upgrade-main-session" };
-  if (options.includePrompt !== false) {
-    main.skillsSnapshot = {
-      prompt: "legacy prompt survives as metadata",
-    };
-  }
-  return {
-    "agent:main:main": main,
-    "agent:main:+15551234567": { sessionId: "upgrade-direct-session" },
-    "agent:main:slack:channel:cupgrade": { sessionId: "upgrade-group-session" },
+): Record<string, SessionEntry> {
+  const runtimeModel = { modelProvider: "openai", model: "gpt-5.5" };
+  const entries = {
+    "agent:main:main": {
+      ...runtimeModel,
+      sessionId: "upgrade-main-session",
+      updatedAt: 1710000000000,
+      ...(options.includePrompt !== false
+        ? { skillsSnapshot: { prompt: "legacy prompt survives as metadata", skills: [] } }
+        : {}),
+    },
+    "agent:main:+15551234567": {
+      ...runtimeModel,
+      sessionId: "upgrade-direct-session",
+      updatedAt: 1710000000000,
+    },
+    "agent:main:slack:channel:cupgrade": {
+      ...runtimeModel,
+      sessionId: "upgrade-group-session",
+      updatedAt: 1710000000000,
+      lastChannel: "slack",
+      lastTo: "CUPGRADE",
+    },
   };
+  return Object.fromEntries(
+    Object.entries<SessionEntry>(entries).map(([key, entry]) => [
+      key,
+      normalizeLegacySessionEntryDelivery(entry),
+    ]),
+  );
 }
 
 function writeMigratedSessionFiles(
@@ -1888,7 +1891,7 @@ process.stdout.write(sessionDir + "\\n");
   });
 
   it.each(["base", "configured-plugin-installs", "sqlite-volume"])(
-    "seeds recent ordered session timestamps for %s",
+    "seeds canonical model metadata and recent ordered session timestamps for %s",
     (scenario) => {
       const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
       try {
@@ -1941,10 +1944,38 @@ process.stdout.write(sessionDir + "\\n");
 
         for (const row of seededRows) {
           assert(row);
+          expect(row).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+          expect(row).not.toHaveProperty("provider");
           const transcriptPath = join(sessionsDir, `${String(row.sessionId)}.jsonl`);
           expect(row.sessionFile).toBe(transcriptPath);
           expect(JSON.parse(readFileSync(transcriptPath, "utf8")).id).toBe(row.sessionId);
         }
+        expect(seededRows[2]).toMatchObject({ lastChannel: "slack", lastTo: "CUPGRADE" });
+        const normalizedRows = seededRows.map((row) => {
+          assert(
+            row &&
+              typeof row.sessionId === "string" &&
+              typeof row.sessionFile === "string" &&
+              typeof row.updatedAt === "number",
+          );
+          return normalizeLegacySessionEntryDelivery({
+            ...row,
+            sessionId: row.sessionId,
+            sessionFile: row.sessionFile,
+            updatedAt: row.updatedAt,
+          });
+        });
+        for (const row of normalizedRows) {
+          expect(row).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+          expect(row).not.toHaveProperty("lastChannel");
+          expect(row).not.toHaveProperty("lastTo");
+        }
+        expect(normalizedRows[2]?.delivery).toMatchObject({
+          kind: "external",
+          route: { channel: "slack", target: { to: "CUPGRADE" } },
+          context: { channel: "slack", to: "CUPGRADE" },
+          origin: { provider: "slack", to: "CUPGRADE" },
+        });
 
         const timestamps = seededRows.map((row) => row?.updatedAt);
         for (const timestamp of timestamps) {
@@ -2095,7 +2126,10 @@ process.stdout.write(sessionDir + "\\n");
             );
             try {
               db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-                JSON.stringify({ acp: saved }),
+                JSON.stringify({
+                  ...createMigratedSessionFileStore()["agent:main:slack:channel:cupgrade"],
+                  acp: saved,
+                }),
                 "agent:main:slack:channel:cupgrade",
               );
             } finally {
@@ -2496,6 +2530,16 @@ process.stdout.write(sessionDir + "\\n");
       error: /Retained legacy sources must have canonical SQLite sessions/,
     },
     { scenario: "base", corruption: "sqlite-row", error: /main legacy session row missing/ },
+    { scenario: "base", corruption: "model-provider", error: /model metadata was not preserved/ },
+    { scenario: "base", corruption: "model", error: /model metadata was not preserved/ },
+    { scenario: "base", corruption: "channel", error: /transport metadata was not preserved/ },
+    { scenario: "base", corruption: "target", error: /transport metadata was not preserved/ },
+    {
+      scenario: "base",
+      corruption: "legacy-transport",
+      error: /transport metadata was not preserved/,
+    },
+    { scenario: "base", corruption: "transport-alias", error: /retired transport metadata/ },
   ])(
     "seeded $scenario preserves strict source/SQLite proof ($corruption)",
     ({ scenario, corruption, error }) => {
@@ -2521,12 +2565,51 @@ process.stdout.write(sessionDir + "\\n");
                 join(stateDir, "agents", "main", "sessions", "upgrade-main-session.jsonl"),
                 "changed source",
               );
-            } else if (corruption === "sqlite-row") {
+            } else if (
+              [
+                "sqlite-row",
+                "model-provider",
+                "model",
+                "channel",
+                "target",
+                "legacy-transport",
+                "transport-alias",
+              ].includes(corruption)
+            ) {
               const db = new DatabaseSync(
                 join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
               );
               try {
-                db.exec("DELETE FROM session_nodes WHERE session_key = 'agent:main:main'");
+                if (corruption === "sqlite-row") {
+                  db.exec("DELETE FROM session_nodes WHERE session_key = 'agent:main:main'");
+                } else if (corruption === "legacy-transport" || corruption === "transport-alias") {
+                  db.prepare(
+                    "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lastChannel', 'slack', '$.lastTo', 'CUPGRADE') WHERE session_key = ?",
+                  ).run("agent:main:slack:channel:cupgrade");
+                  if (corruption === "legacy-transport") {
+                    db.prepare(
+                      "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.delivery') WHERE session_key = ?",
+                    ).run("agent:main:slack:channel:cupgrade");
+                  }
+                } else {
+                  const field =
+                    corruption === "model-provider"
+                      ? "modelProvider"
+                      : corruption === "model"
+                        ? "model"
+                        : corruption === "channel"
+                          ? "delivery.context.channel"
+                          : "delivery.route.target.to";
+                  const value =
+                    corruption === "model-provider"
+                      ? "slack"
+                      : corruption === "channel"
+                        ? "openai"
+                        : "changed";
+                  db.prepare(
+                    "UPDATE session_nodes SET entry_json = json_set(entry_json, ?, ?) WHERE session_key = ?",
+                  ).run(`$.${field}`, value, "agent:main:slack:channel:cupgrade");
+                }
               } finally {
                 db.close();
               }
@@ -2774,6 +2857,10 @@ process.stdout.write(JSON.stringify(result));
           try {
             db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
               JSON.stringify({
+                ...createMigratedSessionFileStore()["agent:main:main"],
+                ...(stage === "post-inference"
+                  ? { modelProvider: "changed-provider", model: "changed-model" }
+                  : {}),
                 skillsSnapshot: {
                   prompt:
                     mutation === "stale-prompt"
@@ -2819,6 +2906,7 @@ process.stdout.write(JSON.stringify(result));
         try {
           db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
             JSON.stringify({
+              ...createMigratedSessionFileStore()["agent:main:main"],
               sessionFile: join(stateDir, "sessions", "upgrade-main-session.jsonl"),
             }),
             "agent:main:main",

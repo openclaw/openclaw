@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { projectAgentActivityItem } from "../../../src/agents/agent-activity-presentation.js";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { clickToolDisclosure } from "./chat-tool-disclosures.test-support.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 export function registerItemOnlyOutcomeTest(
@@ -49,11 +50,11 @@ export function registerItemOnlyOutcomeTest(
           await summary.waitFor();
           await captureToolActivityProof(page, `item-outcomes-${stage}-collapsed`);
           expect.soft(await summary.textContent()).toContain("1 failed");
-          await summary.click();
+          await clickToolDisclosure(summary);
           const rows = page.locator(".chat-activity-group__body .chat-tool-msg-summary");
           await expect.poll(() => rows.count()).toBe(3);
           for (let index = 0; index < 3; index += 1) {
-            await rows.nth(index).click();
+            await clickToolDisclosure(rows.nth(index));
           }
           await page.locator(".chat-tool-msg-body").last().waitFor();
           await captureToolActivityProof(page, `item-outcomes-${stage}-expanded`);
