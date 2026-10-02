@@ -35,6 +35,7 @@ export function resolveUpdateResultNextAction(params: {
   restart?: boolean;
   serviceRunning?: boolean;
   runningVersion?: string;
+  verifiedServingVersion?: string;
   verificationFailure?: string;
   env: NodeJS.ProcessEnv;
   /** Prepared before ledger writes so formatting performs no filesystem discovery. */
@@ -106,10 +107,13 @@ export function resolveUpdateResultNextAction(params: {
       240,
     );
     const runningVersion = truncateUtf16Safe(params.runningVersion ?? "", 120);
+    const servingVersion = truncateUtf16Safe(params.verifiedServingVersion ?? "", 120);
     const state = reason
-      ? params.serviceRunning === true
-        ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
-        : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
+      ? servingVersion
+        ? `The gateway is serving ${servingVersion} and passed recovery verification, but restarting it is not verified safe (${reason}).`
+        : params.serviceRunning === true
+          ? `The gateway is running${runningVersion ? ` ${runningVersion}` : ""} but did not pass verification (${failure}).`
+          : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
       : "";
     const configRefusal = result.steps.findLast(
       (step) => step.name === "config-rollback",

@@ -37,7 +37,10 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
+import {
+  resolveUpdateRunVerifiedServingVersion,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { mutateRun } from "../../infra/update-run-write.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -619,6 +622,10 @@ export function recordUpdateResultNextAction(
       restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
       serviceRunning: verification.serviceRunning,
       runningVersion: verification.runningVersion,
+      verifiedServingVersion: resolveUpdateRunVerifiedServingVersion(
+        verification,
+        steps.findLast((step) => step.step === "gateway recovery verification"),
+      ),
       verificationFailure: failedVerification?.failureFacts?.length
         ? failedVerification.failureFacts.map(formatUpdateFailureFact).join("; ")
         : failedVerification?.detail,

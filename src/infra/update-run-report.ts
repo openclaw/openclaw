@@ -109,10 +109,31 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
     : "Current health unavailable; saved verification describes the update attempt only.";
 }
 
+type UpdateRunRecoveryObservation = Pick<
+  UpdateRunRecord["steps"][number],
+  "failureFacts" | "exitCode"
+>;
+
+/** The version a clean recovery observation proved serving; restart safety is separate. */
+export function resolveUpdateRunVerifiedServingVersion(
+  verification: UpdateRunRecord["verification"],
+  observation: UpdateRunRecoveryObservation | undefined,
+): string | undefined {
+  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
+    return undefined;
+  }
+  const { recovery } = verification;
+  return recovery?.serviceRestartSafe && recovery.service === "healthy"
+    ? recovery.version
+    : verification.versionMatch && verification.readyz && verification.settled
+      ? verification.runningVersion
+      : undefined;
+}
+
 /** Public-report callers redact identifiers before using this shared formatter. */
 export function formatUpdateRunRecovery(
   verification: UpdateRunRecord["verification"],
-  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+  observation: UpdateRunRecoveryObservation | undefined,
   reason = verification.recovery?.reason ?? "not-recorded",
 ): string | undefined {
   const { recovery } = verification;
@@ -136,13 +157,8 @@ export function formatUpdateRunRecovery(
       : "runtime files verified";
     return `${packageOutcome}; Gateway health ${recovery.service === "failed" ? "failed" : "unverified"} (${reason}). Run \`openclaw gateway status --deep\` to check the serving version and readiness.`;
   }
-  const version =
-    recovery?.serviceRestartSafe && recovery.service === "healthy"
-      ? recovery.version
-      : verification.versionMatch && verification.readyz && verification.settled
-        ? verification.runningVersion
-        : undefined;
-  if (observation.exitCode === 0 && version && !observation.failureFacts?.length) {
+  const version = resolveUpdateRunVerifiedServingVersion(verification, observation);
+  if (version) {
     const constraint =
       recovery?.serviceRestartSafe === false ? `; restart remains unsafe (${reason})` : "";
     return `${recovery?.packageRollbackVerified ? "package rollback verified; " : ""}verified serving ${bounded(version, 120)}${constraint}`;

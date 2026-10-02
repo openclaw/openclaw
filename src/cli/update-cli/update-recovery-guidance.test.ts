@@ -195,6 +195,84 @@ describe("update recovery reporting", () => {
     },
   );
 
+  it.each([
+    [
+      "verified serving",
+      0,
+      "The gateway is serving 2026.9.6 and passed recovery verification, but restarting it is not verified safe (runtime-verification-failed).",
+      "Recovery: verified serving 2026.9.6; restart remains unsafe (runtime-verification-failed).",
+    ],
+    [
+      "failed readiness",
+      1,
+      "The gateway is running 2026.9.6 but did not pass verification (Failing check readyz (readyz-unhealthy): Gateway readiness endpoint returned HTTP 503; expected HTTP 200.).",
+      "Recovery: not serving (readyz-unhealthy).",
+    ],
+  ] as const)(
+    "describes the latest recovery observation after a failed update (%s)",
+    async (_name, exitCode, state, recoveryLine) => {
+      vi.mocked(isContainerEnvironment).mockReturnValue(false);
+      const run = createRun();
+      const { env } = run;
+      vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const validation = {
+        name: "validating",
+        command: "validate candidate runtime",
+        cwd: "/fixture",
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: "Runtime inventory refused a retained backup link.",
+      };
+      await publishUpdateCommandTerminalResult(
+        { opts: { json: true, run }, coreAlreadyCurrent: false },
+        failure({
+          reason: "update-failed",
+          before: { version: "2026.9.6" },
+          after: { version: "2026.9.6" },
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+          verification: {
+            serviceRunning: true,
+            runningVersion: "2026.9.6",
+            versionMatch: true,
+            channelsReady: exitCode === 0,
+            settled: exitCode === 0,
+            readyz: exitCode === 0,
+          },
+          failedStep: validation,
+          steps: [
+            validation,
+            {
+              name: "gateway recovery verification",
+              command: "gateway verification",
+              cwd: "/fixture",
+              durationMs: 0,
+              exitCode,
+              ...(exitCode === 0
+                ? {}
+                : {
+                    failureFacts: [
+                      {
+                        check: "readyz",
+                        code: "readyz-unhealthy",
+                        message: "Gateway readiness endpoint returned HTTP 503; expected HTTP 200.",
+                      },
+                    ],
+                  }),
+            },
+          ],
+        }),
+        { rolledBack: false },
+      );
+
+      const stored = getUpdateRun(run.runId, { env });
+      expect(stored?.status).toBe("failed");
+      expect(stored?.origin.nextAction).toBe(`${state} ${hostGuidance}`);
+      const report = stored && renderUpdateRunReport(stored).markdown;
+      expect(report).toContain(recoveryLine);
+      expect(report).toContain(`${state} ${hostGuidance}`);
+    },
+  );
+
   it("retains the actionable Node runtime refusal in history", async () => {
     const reason = "node-runtime-preflight";
     vi.mocked(isContainerEnvironment).mockReturnValue(false);
