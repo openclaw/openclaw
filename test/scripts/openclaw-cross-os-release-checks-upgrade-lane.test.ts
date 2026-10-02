@@ -250,9 +250,10 @@ describe("cross-OS manual gateway lane evidence", () => {
     "canonicalizes macOS temp paths before invoking the published updater",
     async () => {
       arrangeSuccessfulLane();
-      const physicalTemp = join(logsDir, "physical-temp");
+      const createdPhysicalTemp = join(logsDir, "physical-temp");
       const aliasedTemp = join(logsDir, "aliased-temp");
-      mkdirSync(physicalTemp);
+      mkdirSync(createdPhysicalTemp);
+      const physicalTemp = realpathSync.native(createdPhysicalTemp);
       symlinkSync(physicalTemp, aliasedTemp, process.platform === "win32" ? "junction" : "dir");
       vi.mocked(tmpdir).mockReturnValue(aliasedTemp);
       vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
