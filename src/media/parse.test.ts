@@ -280,6 +280,23 @@ describe("splitMediaFromOutput", () => {
     expectParsedMediaOutputCase('MEDIA:"/tmp/first.png", the picture above', {
       mediaUrls: ["/tmp/first.png"],
     });
+    // A comma divides references only when the next reference is quoted behind it. Here the character
+    // before the comma is an apostrophe belonging to the directory name (`Students', 2024`), and `main`
+    // delivers both of these references, so the first one has to run to its real closing quote rather than
+    // end at that apostrophe and leave an unquoted fragment that welds the pair into one path.
+    expectParsedMediaOutputCase("MEDIA:'/tmp/Students', 2024/album.png' '/tmp/second.png'", {
+      mediaUrls: ["/tmp/Students', 2024/album.png", "/tmp/second.png"],
+    });
+    // With a quoted reference behind it the same comma is list punctuation, as this form's unquoted and
+    // space-separated siblings already read it.
+    expectParsedMediaOutputCase("MEDIA:'/tmp/Students', 2024/album.png', '/tmp/second.png'", {
+      mediaUrls: ["/tmp/Students', 2024/album.png", "/tmp/second.png"],
+    });
+    // One reference needs no following quote, so an apostrophe before a comma stays inside its value.
+    expectAcceptedMediaPathCase(
+      "/tmp/Students', 2024/album.png",
+      "MEDIA:'/tmp/Students', 2024/album.png'",
+    );
   });
 
   it.each([
