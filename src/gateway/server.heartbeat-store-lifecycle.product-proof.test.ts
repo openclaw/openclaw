@@ -131,7 +131,9 @@ async function startProvider() {
   };
 }
 
-describe("heartbeat notification store ownership through the Gateway", () => {
+const serialSuite = { concurrent: false } as const;
+
+describe("heartbeat notification store ownership through the Gateway", serialSuite, () => {
   it.each(["different store", "same-store replacement"] as const)(
     "handles a queued child notice after %s",
     async (transition) => {
@@ -245,7 +247,8 @@ describe("heartbeat notification store ownership through the Gateway", () => {
             },
             { expectFinal: false },
           );
-          expect((await wait(followup.runId)).status).toBe("ok");
+          const followupResult = await wait(followup.runId);
+          expect(followupResult.status, JSON.stringify(followupResult)).toBe("ok");
 
           if (transition === "different store") {
             const { hash } = await gateway.client.request<{ hash: string }>("config.get", {});
