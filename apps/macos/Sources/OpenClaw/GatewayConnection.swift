@@ -699,30 +699,22 @@ extension GatewayConnection {
     func requestDecoded<T: Decodable>(
         method: Method,
         params: [String: AnyCodable]? = nil,
-        timeoutMs: Double? = nil) async throws -> T
-    {
-        let data = try await requestRaw(method: method, params: params, timeoutMs: timeoutMs)
-        do {
-            return try self.decoder.decode(T.self, from: data)
-        } catch {
-            throw GatewayDecodingError(method: method.rawValue, message: error.localizedDescription)
-        }
-    }
-
-    func requestDecoded<T: Decodable>(
-        method: Method,
-        params: [String: AnyCodable]? = nil,
         timeoutMs: Double? = nil,
-        ifCurrentRoute route: Route) async throws -> T
+        ifCurrentRoute route: Route? = nil) async throws -> T
     {
-        let data = try await self.request(
-            method: method.rawValue,
-            params: params,
-            timeoutMs: timeoutMs,
-            ifCurrentRoute: route,
-            distinguishPreDispatchRouteChange: true)
-        guard await self.isCurrentRoute(route) else {
-            throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+        let data: Data
+        if let route {
+            data = try await self.request(
+                method: method.rawValue,
+                params: params,
+                timeoutMs: timeoutMs,
+                ifCurrentRoute: route,
+                distinguishPreDispatchRouteChange: true)
+            guard await self.isCurrentRoute(route) else {
+                throw GatewayRouteChangedAfterDispatchError(method: method.rawValue)
+            }
+        } else {
+            data = try await self.requestRaw(method: method, params: params, timeoutMs: timeoutMs)
         }
         do {
             return try self.decoder.decode(T.self, from: data)
@@ -1338,10 +1330,8 @@ extension GatewayConnection {
     }
 
     func cachedGatewayVersion() -> String? {
-        guard let snapshot = lastSnapshot else { return nil }
-        let raw = snapshot.server["version"]?.value as? String
-        let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        (self.lastSnapshot?.server["version"]?.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
     }
 
     func connectionSummary() -> (connected: Bool, gatewayVersion: String?) {
@@ -1609,7 +1599,8 @@ extension GatewayConnection {
         keys: [String],
         limit: Int? = nil,
         maxChars: Int? = nil,
-        timeoutMs: Int? = nil) async throws -> OpenClawSessionsPreviewPayload
+        timeoutMs: Int? = nil,
+        ifCurrentServerLease lease: ServerLease) async throws -> OpenClawSessionsPreviewPayload
     {
         let resolvedKeys = keys
             .map { self.canonicalizeSessionKey($0) }
@@ -1624,10 +1615,16 @@ extension GatewayConnection {
         if let maxChars {
             params["maxChars"] = AnyCodable(maxChars)
         }
-        return try await self.requestDecoded(
-            method: .sessionsPreview,
+        let data = try await self.request(
+            method: Method.sessionsPreview.rawValue,
             params: params,
-            timeoutMs: timeoutMs.map { Double($0) })
+            timeoutMs: timeoutMs.map { Double($0) },
+            ifCurrentServerLease: lease)
+        do {
+            return try self.decoder.decode(OpenClawSessionsPreviewPayload.self, from: data)
+        } catch {
+            throw GatewayDecodingError(method: Method.sessionsPreview.rawValue, message: error.localizedDescription)
+        }
     }
 
     // MARK: - Chat

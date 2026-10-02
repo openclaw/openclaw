@@ -235,14 +235,6 @@ final class PostUpdateController: NSObject, NSWindowDelegate {
         self.window?.close()
     }
 
-    func openUpdateGuide() {
-        AppActivation.shared.open(Self.updateGuideURL)
-    }
-
-    func openDiscord() {
-        AppActivation.shared.open(Self.discordURL)
-    }
-
     func windowWillClose(_ notification: Notification) {
         guard let closing = notification.object as? NSWindow, closing === window else { return }
         self.window = nil

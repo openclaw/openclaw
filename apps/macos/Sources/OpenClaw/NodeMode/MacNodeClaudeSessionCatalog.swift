@@ -1041,9 +1041,7 @@ extension MacNodeClaudeSessionCatalog {
         if let maxBytes, data.count > maxBytes {
             throw CatalogError.responseTooLarge
         }
-        guard let result = String(data: data, encoding: .utf8)
-        else { throw CatalogError.unavailable }
-        return result
+        return String(decoding: data, as: UTF8.self)
     }
 
     private static func truncateUTF8(_ value: String, maxBytes: Int) -> String {
