@@ -19,7 +19,7 @@ import type { GatewayWsBrowserOrigin } from "./server/client-identity-types.js";
 export function checkGatewayWsBrowserOrigin(origin: GatewayWsBrowserOrigin, cfg: OpenClawConfig) {
   return checkBrowserOrigin({
     ...origin,
-    allowedOrigins: resolveControlUiAllowedOrigins(cfg),
+    allowedOrigins: resolveControlUiAllowedOrigins(cfg, origin.publishedPort),
     allowHostHeaderOriginFallback:
       cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   });
@@ -44,12 +44,13 @@ type BrowserOriginPolicy = {
 export function resolveBrowserOriginPolicy(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
+  publishedPort?: number;
 }): BrowserOriginPolicy {
   return {
     requestHost: getHeader(params.req, "host"),
     origin: getHeader(params.req, "origin"),
     fetchSite: getHeader(params.req, "sec-fetch-site"),
-    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg),
+    allowedOrigins: resolveControlUiAllowedOrigins(params.cfg, params.publishedPort),
     allowHostHeaderOriginFallback:
       params.cfg?.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
   };
@@ -150,9 +151,10 @@ export function checkBrowserOrigin(params: {
 }
 
 /** Return the request Origin only when the Gateway's canonical browser policy accepts it. */
-export function resolveAcceptedBrowserOrigin(params: {
+export function resolveAcceptedBrowserOriginForGateway(params: {
   req: IncomingMessage;
   cfg?: OpenClawConfig;
+  publishedPort?: number;
 }): string | undefined {
   const policy = resolveBrowserOriginPolicy(params);
   const origin = policy.origin?.trim();

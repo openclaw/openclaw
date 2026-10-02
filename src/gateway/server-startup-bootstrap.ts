@@ -225,6 +225,7 @@ export async function prepareGatewayServerBootstrap(input: {
           log,
           runtimeBind: opts.bind,
           runtimePort: port,
+          publishedPort: opts.publishedPort,
         }),
       );
   if (controlUiSeed.seededAllowedOrigins) {
@@ -371,7 +372,7 @@ export async function prepareGatewayServerBootstrap(input: {
     if (
       !seededControlUiAllowedOrigins ||
       runtimeConfig.gateway?.controlUi?.allowedOrigins !== undefined ||
-      resolveControlUiAllowedOrigins(runtimeConfig).length > 0
+      resolveControlUiAllowedOrigins(runtimeConfig, opts.publishedPort).length > 0
     ) {
       return runtimeConfig;
     }

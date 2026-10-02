@@ -126,7 +126,7 @@ describe("config security policy before persistence", () => {
     { method: "config.patch", disableUi: false },
     { method: "config.apply", disableUi: true },
   ])(
-    "validates $method clearing LAN origins (disableUi=$disableUi)",
+    "accepts $method with an explicit LAN deny-all origin policy (disableUi=$disableUi)",
     async ({ method, disableUi }) => {
       const token = "config-security-policy-test-token";
       await state.writeText("control-ui/index.html", "<!doctype html><title>Control UI</title>");
@@ -157,7 +157,6 @@ describe("config security policy before persistence", () => {
         scopes: ["operator.admin"],
       });
       const before = await client.request<{ hash: string }>("config.get", {});
-      const beforeBytes = await fs.readFile(state.configPath, "utf8");
       const controlUi = {
         ...(disableUi ? { enabled: false } : {}),
         allowedOrigins: [],
@@ -184,22 +183,13 @@ describe("config security policy before persistence", () => {
           (value) => ({ ok: true, value }),
           (error: unknown) => ({ ok: false, error }),
         );
-      if (disableUi) {
-        expect(outcome).toMatchObject({
-          ok: true,
-          value: { sentinel: { payload: { stats: { requiresRestart: false } } } },
-        });
-        expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
-          gateway: { controlUi: { enabled: false, allowedOrigins: [] } },
-        });
-      } else {
-        expect((await fs.readFile(state.configPath, "utf8")) === beforeBytes).toBe(true);
-        expect(outcome).toMatchObject({
-          ok: false,
-          error: { message: expect.stringContaining("non-loopback Control UI requires") },
-        });
-        expect((await client.request<{ hash: string }>("config.get", {})).hash).toBe(before.hash);
-      }
+      expect(outcome).toMatchObject({
+        ok: true,
+        value: { sentinel: { payload: { stats: { requiresRestart: false } } } },
+      });
+      expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toMatchObject({
+        gateway: { controlUi: { enabled: !disableUi, allowedOrigins: [] } },
+      });
     },
   );
 });

@@ -47,7 +47,8 @@ export function runningInspection(
       FEATURE: "enabled",
       NODE_VERSION: "old-image-default",
     },
-    imageId: "sha256:old-image-id",
+    imageId: `sha256:${"a".repeat(64)}`,
+    command: ["node", "dist/index.js", "gateway", "--bind", "lan", "--port", "18789"],
     memory: "2147483648",
     cpus: "2",
     pidsLimit: 512,
@@ -104,6 +105,9 @@ export function createContainerMock(
       }),
     );
   });
+  const prepareGatewayImage = vi.fn<FleetContainerRuntime["prepareGatewayImage"]>(
+    async (_runtime, image) => image,
+  );
   const pull = vi.fn<FleetContainerRuntime["pull"]>(async () => undefined);
   const createNetwork = vi.fn<FleetContainerRuntime["createNetwork"]>(
     async (_runtime, name, labels, options) => {
@@ -140,6 +144,7 @@ export function createContainerMock(
       isDockerRootless,
       run,
       pull,
+      prepareGatewayImage,
       createNetwork,
       removeNetwork,
       start,
@@ -154,6 +159,7 @@ export function createContainerMock(
     isDockerRootless,
     run,
     pull,
+    prepareGatewayImage,
     createNetwork,
     removeNetwork,
     start,

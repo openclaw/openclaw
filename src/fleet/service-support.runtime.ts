@@ -56,14 +56,13 @@ function optionalRecord(value: unknown, label: string): Record<string, unknown> 
   return requiredRecord(value, label);
 }
 
-function readAllowedOrigins(value: unknown): string[] {
+function validateAllowedOrigins(value: unknown): void {
   if (value === undefined) {
-    return [];
+    return;
   }
   if (!Array.isArray(value) || !value.every((origin) => typeof origin === "string")) {
     throw new Error("gateway.controlUi.allowedOrigins must be an array of strings.");
   }
-  return value;
 }
 
 async function ensurePrivateDirectory(dir: string): Promise<void> {
@@ -122,13 +121,7 @@ export async function prepareCellConfig(
   const controlUi = optionalRecord(gateway.controlUi, "gateway.controlUi");
   const nextAuth: Record<string, unknown> = { ...auth, mode: "token" };
   delete nextAuth.token;
-  const origins = new Set(readAllowedOrigins(controlUi.allowedOrigins));
-  const inheritsPublicOrigin =
-    controlUi.allowedOrigins === undefined &&
-    typeof gateway.publicOrigin === "string" &&
-    gateway.publicOrigin.trim().length > 0;
-  origins.add(`http://localhost:${record.hostPort}`);
-  origins.add(`http://127.0.0.1:${record.hostPort}`);
+  validateAllowedOrigins(controlUi.allowedOrigins);
 
   const nextConfig = {
     ...rootConfig,
@@ -137,10 +130,6 @@ export async function prepareCellConfig(
       mode: "local",
       bind: "lan",
       auth: nextAuth,
-      controlUi: {
-        ...controlUi,
-        ...(inheritsPublicOrigin ? {} : { allowedOrigins: [...origins] }),
-      },
     },
   };
   await replaceFileAtomic({

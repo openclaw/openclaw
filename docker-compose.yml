@@ -72,15 +72,30 @@ services:
     init: true
     restart: unless-stopped
     command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
+      - sh
+      - -ec
+      - |
+        gateway_capability=0
+        node -e '
+        const { spawnSync } = require("node:child_process");
+        const result = spawnSync(process.execPath, ["dist/index.js", "gateway", "--help"], {
+          encoding: "utf8", timeout: 30000, killSignal: "SIGKILL", maxBuffer: 1048576,
+        });
+        if (result.status !== 0 || !/^\s*--port(?:\s|=)/m.test(result.stdout ?? "")) {
+          console.error("Could not inspect Gateway help. Check the selected image before retrying; the Gateway was not started.");
+          process.exit(1);
+        }
+        if (!/^\s*--published-port(?:\s|=)/m.test(result.stdout)) process.exit(2);
+        ' || gateway_capability=$$?
+        if [ "$$gateway_capability" -eq 2 ]; then
+          echo "Starting the selected image with its legacy Gateway command; mapped-port origin defaults require a compatible image. Saved origin policy is unchanged. Select a compatible OPENCLAW_IMAGE or build this checkout to enable mapped-port defaults." >&2
+          exec node dist/index.js gateway --bind "$$1" --port 18789
+        fi
+        if [ "$$gateway_capability" -ne 0 ]; then exit "$$gateway_capability"; fi
+        exec node dist/index.js gateway --bind "$$1" --port 18789 --published-port "$$2"
+      - openclaw-gateway
+      - "${OPENCLAW_GATEWAY_BIND:-lan}"
+      - "${OPENCLAW_GATEWAY_PORT:-18789}"
     healthcheck:
       test:
         [

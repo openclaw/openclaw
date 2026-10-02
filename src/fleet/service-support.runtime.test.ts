@@ -16,37 +16,50 @@ afterEach(() => {
 describe("fleet operation lifecycle", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it.each([{ allowedOrigins: undefined }, { allowedOrigins: [] }])(
-    "preserves public-origin inheritance only for omitted origins (%j)",
-    async ({ allowedOrigins }) => {
+  it.each([
+    { controlUi: undefined },
+    { controlUi: {} },
+    { controlUi: { allowedOrigins: [] } },
+    { controlUi: { allowedOrigins: ["https://admin.example.com"] } },
+    { controlUi: { allowedOrigins: ["http://localhost:19100", "http://127.0.0.1:19100"] } },
+  ])(
+    "preserves authored origins and omission through cell preparation and public-origin rotation (%j)",
+    async ({ controlUi }) => {
       const dataDir = tempDirs.make("fleet-origin-");
       const configPath = path.join(dataDir, "openclaw.json");
       await fs.writeFile(
         configPath,
         JSON.stringify({
           gateway: {
-            publicOrigin: "https://team.example.com",
-            controlUi: { allowedOrigins },
+            publicOrigin: "https://TEAM.example.com:443/",
+            controlUi,
           },
         }),
       );
-      await prepareCellConfig({
+      const record = {
         tenantId: "team",
         createdAtMs: 1,
         image: "openclaw:test",
-        runtime: "docker",
+        runtime: "docker" as const,
         hostPort: 19100,
         containerName: "openclaw-cell-team",
         dataDir,
-      });
+      };
+      await prepareCellConfig(record);
       const config = JSON.parse(await fs.readFile(configPath, "utf8"));
-      expect(config.gateway.publicOrigin).toBe("https://team.example.com");
-      expect(config.gateway.controlUi.allowedOrigins).toEqual(
-        allowedOrigins === undefined
-          ? undefined
-          : ["http://localhost:19100", "http://127.0.0.1:19100"],
-      );
+      expect(config.gateway.publicOrigin).toBe("https://TEAM.example.com:443/");
+      expect(config.gateway.controlUi).toEqual(controlUi);
       expect(config.gateway.auth).toEqual({ mode: "token" });
+
+      config.gateway.publicOrigin = "https://rotated.example.com";
+      await fs.writeFile(configPath, JSON.stringify(config));
+      await prepareCellConfig({ ...record, hostPort: 19200 });
+      const rotatedBytes = await fs.readFile(configPath, "utf8");
+      const rotated = JSON.parse(rotatedBytes);
+      expect(rotated.gateway.publicOrigin).toBe("https://rotated.example.com");
+      expect(rotated.gateway.controlUi).toEqual(controlUi);
+      await prepareCellConfig({ ...record, hostPort: 19200 });
+      expect(await fs.readFile(configPath, "utf8")).toBe(rotatedBytes);
     },
   );
 

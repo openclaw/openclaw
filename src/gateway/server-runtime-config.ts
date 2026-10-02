@@ -75,6 +75,7 @@ export function assertGatewayRuntimeSecurityConfig(
   > & {
     cfg: OpenClawConfig;
     port: number;
+    publishedPort?: number;
   },
 ): void {
   const { cfg, bindHost, controlUiEnabled, resolvedAuth, tailscaleMode } = params;
@@ -82,9 +83,10 @@ export function assertGatewayRuntimeSecurityConfig(
   const hasSharedSecret =
     (authMode === "token" && Boolean(resolvedAuth.token?.trim())) ||
     (authMode === "password" && Boolean(resolvedAuth.password?.trim()));
-  const controlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg)
+  const controlUiAllowedOrigins = resolveControlUiAllowedOrigins(cfg, params.publishedPort)
     .map((value) => value.trim())
     .filter(Boolean);
+  const hasAuthoredControlUiAllowedOrigins = cfg.gateway?.controlUi?.allowedOrigins !== undefined;
   const dangerouslyAllowHostHeaderOriginFallback =
     cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
@@ -113,6 +115,7 @@ export function assertGatewayRuntimeSecurityConfig(
     controlUiEnabled &&
     !isLoopbackHost(bindHost) &&
     controlUiAllowedOrigins.length === 0 &&
+    !hasAuthoredControlUiAllowedOrigins &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
     // Remote Control UI must use explicit origins unless the operator deliberately accepts
@@ -132,6 +135,7 @@ export function assertGatewayRuntimeSecurityConfig(
 export async function resolveGatewayRuntimeConfig(params: {
   cfg: OpenClawConfig;
   port: number;
+  publishedPort?: number;
   bind?: GatewayBindMode;
   host?: string;
   controlUiEnabled?: boolean;
@@ -208,7 +212,12 @@ export async function resolveGatewayRuntimeConfig(params: {
     tailscaleMode,
     hooksConfig,
   };
-  assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
+  assertGatewayRuntimeSecurityConfig({
+    ...runtimeConfig,
+    cfg: params.cfg,
+    port: params.port,
+    publishedPort: params.publishedPort,
+  });
   if (hooksConfig) {
     commitHookTransformMappingReload();
   }

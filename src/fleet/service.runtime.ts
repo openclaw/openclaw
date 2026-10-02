@@ -16,13 +16,12 @@ import {
   FLEET_OWNER_LABEL,
   FLEET_TENANT_LABEL,
   parseEnvAssignments,
-  validateCellContainerProfile,
   validateFleetImage,
   validateDiskSize,
   validateTenantId,
-  type CellContainerProfile,
   type FleetContainerRuntimeName,
 } from "./cell-profile.js";
+import { prepareFleetLaunchProfile } from "./container-launch.runtime.js";
 import {
   createFleetContainerRuntime,
   type FleetContainerInspectResult,
@@ -273,7 +272,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               hostIdentity?.uid === 0 && !containerUser
                 ? { uid: OFFICIAL_IMAGE_UID, gid: OFFICIAL_IMAGE_GID }
                 : undefined;
-            const profile: CellContainerProfile = {
+            const profile = await prepareFleetLaunchProfile(containers, {
               tenantId,
               containerName: record.containerName,
               networkName: cellNetworkName(tenantId),
@@ -292,8 +291,7 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               userEnvironmentKeys,
               ...(containerUser ? { containerUser } : {}),
               selinuxRelabel: await selinuxEnabled(),
-            };
-            validateCellContainerProfile(profile);
+            });
             await checkpoint();
             await prepareCellDirectories(record, authSecretDir, imageOwner);
             await assertCurrentReservation(env, record);
@@ -573,21 +571,22 @@ export function createFleetService(options: FleetServiceOptions = {}) {
             token,
             context: "upgrade",
           });
-          const oldProfile: CellContainerProfile = {
+          const oldProfile = await prepareFleetLaunchProfile(containers, {
             ...profileBase,
             image: inspection.imageId,
+            command: inspection.command,
             attemptId: previousAttemptId,
-          };
-          const nextProfile: CellContainerProfile = {
-            ...profileBase,
-            image,
-            attemptId: nextAttemptId,
-          };
-          validateCellContainerProfile(oldProfile);
-          validateCellContainerProfile(nextProfile);
-
+          });
           await checkpoint();
-          await containers.pull(record.runtime, image);
+          const nextProfile = await prepareFleetLaunchProfile(
+            containers,
+            {
+              ...profileBase,
+              image,
+              attemptId: nextAttemptId,
+            },
+            { pull: true },
+          );
           await checkpoint();
           assertManagedNetwork(
             record,

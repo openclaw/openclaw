@@ -170,6 +170,7 @@ function handleBudgetedGatewayWebSocketUpgrade(params: {
 
 /** Attaches WebSocket and plugin-upgrade routing to an already-created HTTP server. */
 export function attachGatewayUpgradeHandler(opts: {
+  publishedPort?: number;
   httpServer: HttpServer;
   wss: WebSocketServer;
   handlePluginUpgrade?: PluginHttpUpgradeHandler;
@@ -311,6 +312,7 @@ export function attachGatewayUpgradeHandler(opts: {
         // plugin handlers never receive unauthorized scoped capability sockets.
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
         const ok = await authorizePluginNodeCapabilityRequest({
+          publishedPort: opts.publishedPort,
           req,
           auth: resolvedAuthLocal,
           trustedProxies,
@@ -339,6 +341,7 @@ export function attachGatewayUpgradeHandler(opts: {
         ) {
           const { checkGatewayHttpRequestAuth } = await getHttpAuthUtilsModule();
           const authCheck = await checkGatewayHttpRequestAuth({
+            publishedPort: opts.publishedPort,
             req,
             auth: resolvedAuthLocal,
             trustedProxies,
@@ -371,6 +374,7 @@ export function attachGatewayUpgradeHandler(opts: {
             gatewayRequestAuth: pluginGatewayRequestAuth,
             gatewayRequestOperatorScopes: pluginGatewayRequestOperatorScopes,
             gatewayRequestClientIp: requestClientIp,
+            publishedPort: opts.publishedPort,
           })
         ) {
           return;

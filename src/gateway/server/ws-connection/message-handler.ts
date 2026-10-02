@@ -342,6 +342,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           reportedClientIpSource,
           hasBrowserOriginHeader,
           browserOrigin: resolveGatewayWsBrowserOrigin({
+            publishedPort: params.publishedPort,
             client: connectParams.client,
             requestHost,
             origin: requestOrigin,

@@ -145,6 +145,7 @@ function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistratio
 }
 
 function createPluginRouteRuntimeScope(params: {
+  publishedPort?: number;
   registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
@@ -184,6 +185,7 @@ function createPluginRouteRuntimeScope(params: {
   }
   return {
     pluginRegistry: params.registry,
+    ...(params.publishedPort !== undefined ? { publishedPort: params.publishedPort } : {}),
     ...(requestAuth?.revalidate ? { revalidate: requestAuth.revalidate } : {}),
     ...(requestAuth?.hasCurrentClientAuthority || operatorAccessAuthority
       ? { hasCurrentClientAuthority }
@@ -201,6 +203,7 @@ function createPluginRouteRuntimeScope(params: {
 }
 
 export type PluginRouteDispatchContext = {
+  publishedPort?: number;
   gatewayAuthSatisfied?: boolean;
   gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
   gatewayRequestOperatorScopes?: readonly string[];
@@ -339,6 +342,7 @@ export function createGatewayPluginRequestHandler(params: {
                 gatewayRequestAuth,
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+                publishedPort: dispatchContext?.publishedPort,
               }),
               async () =>
                 runPluginHttpRoute(registry, route, route.handler, () => route.handler(req, res)),
@@ -449,6 +453,7 @@ export function createGatewayPluginUpgradeHandler(params: {
                 gatewayRequestAuth,
                 gatewayRequestOperatorScopes,
                 gatewayRequestClientIp: dispatchContext?.gatewayRequestClientIp,
+                publishedPort: dispatchContext?.publishedPort,
               }),
               async () => {
                 const handleUpgrade = route.handleUpgrade!;

@@ -108,7 +108,7 @@ describe("GA Realtime call retirement", () => {
       );
       expect(response.res.statusCode).toBe(201);
       expect(originalConfig).not.toHaveBeenCalled();
-      expect(nextConfig).toHaveBeenCalledOnce();
+      expect(nextConfig).toHaveBeenCalledTimes(2);
       expect(originalLogger.debug).not.toHaveBeenCalled();
       expect(nextLogger.debug).toHaveBeenCalledOnce();
       expect(originalHeaders).toHaveBeenCalledOnce();

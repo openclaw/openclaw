@@ -177,6 +177,32 @@ describe("fleet container runtime", () => {
     );
   });
 
+  it("uses the shared run and create argument owner for Docker", async () => {
+    const executor = successfulExecutor();
+    const runtime = createFleetContainerRuntime(executor);
+    const profile = {
+      runtime: "docker",
+      hostPort: 19_100,
+      environment: { FEATURE: "synthetic-docker" },
+    } as unknown as CellContainerProfile;
+
+    await runtime.run(profile, true);
+    await runtime.run(profile, false);
+
+    expect(profileMocks.buildCellContainerArgs).toHaveBeenNthCalledWith(1, "run", profile, {
+      environmentFile: expect.any(String),
+    });
+    expect(profileMocks.buildCellContainerArgs).toHaveBeenNthCalledWith(2, "create", profile, {
+      environmentFile: expect.any(String),
+    });
+    expect(executor).toHaveBeenNthCalledWith(1, "docker", expect.any(Array), {
+      redactValues: ["synthetic-docker"],
+    });
+    expect(executor).toHaveBeenNthCalledWith(2, "docker", expect.any(Array), {
+      redactValues: ["synthetic-docker"],
+    });
+  });
+
   it("preserves fleet profile validation errors before staging an invalid environment", async () => {
     const executor = successfulExecutor();
     const failure = new Error("Invalid fleet cell environment entry: BAD KEY");
@@ -201,6 +227,7 @@ describe("fleet container runtime", () => {
           State: { Status: "running", Running: true },
           Config: {
             Env: ["OPENCLAW_GATEWAY_TOKEN=test-auth-token", "FEATURE=a=b"],
+            Cmd: ["node", "dist/index.js", "gateway", "--port", "18789"],
             Image: "ghcr.io/openclaw/openclaw:latest",
             Labels: { "openclaw.fleet.tenant": "acme" },
             User: "1000:1000",
@@ -227,6 +254,7 @@ describe("fleet container runtime", () => {
       labels: { "openclaw.fleet.tenant": "acme" },
       environment: { OPENCLAW_GATEWAY_TOKEN: "test-auth-token", FEATURE: "a=b" },
       imageId: "sha256:old-image-id",
+      command: ["node", "dist/index.js", "gateway", "--port", "18789"],
       memory: "2147483648",
       cpus: "2",
       pidsLimit: 512,

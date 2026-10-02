@@ -21,7 +21,7 @@ import {
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
-import { normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js";
+import { normalizeStateDirEnv } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
@@ -63,13 +63,11 @@ import {
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
-import { parseTcpPort } from "../../infra/tcp-port.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { printClawBanner, type ClawBannerResult } from "../claw-banner.js";
 import { formatCliCommand } from "../command-format.js";
-import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import type { InvalidConfigRecoveryDeps } from "../invalid-config-recovery.js";
 import { withProgress } from "../progress.js";
 import {
@@ -80,6 +78,7 @@ import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
 import { getGatewayStartGuardErrors } from "./pre-bootstrap.js";
 import { runGatewayLoop } from "./run-loop.js";
 import type { GatewayRunOpts } from "./run-options.js";
+import { resolveGatewayRunPorts } from "./run-ports.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   resolveGatewayStartupFailureExitCode,
@@ -597,18 +596,13 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     }
   }
   await hooks.refreshManagedProxy?.(cfg.proxy);
-  const portOverride = parseTcpPort(opts.port);
-  if (opts.port !== undefined && portOverride === null) {
-    defaultRuntime.error(formatInvalidPortOption("--port"));
-    defaultRuntime.exit(1);
+  const ports = resolveGatewayRunPorts(opts, cfg);
+  if ("error" in ports) {
+    defaultRuntime.error(ports.error);
+    defaultRuntime.exit(ports.exitCode);
     return;
   }
-  const port = portOverride ?? resolveGatewayPort(cfg);
-  if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
-    defaultRuntime.error(formatInvalidConfigPort("gateway.port"));
-    defaultRuntime.exit(EXIT_CONFIG_ERROR);
-    return;
-  }
+  const { port, publishedPort } = ports;
   // Only capture the *explicit* bind value here.  The container-aware
   // default is deferred until after Tailscale mode is known (see below)
   // so that Tailscale's loopback constraint is respected.
@@ -976,6 +970,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
         startupConfigSnapshotReadForNextStart = undefined;
         return await startGatewayServer(port, {
           bind,
+          ...(publishedPort !== null ? { publishedPort } : {}),
           ...(opts.updateCanary ? { updateCanary: true } : {}),
           ...(activeBootId ? { bootId: activeBootId } : {}),
           auth: authOverride,

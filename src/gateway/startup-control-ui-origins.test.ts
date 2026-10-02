@@ -24,9 +24,24 @@ describe("maybeSeedControlUiAllowedOriginsAtStartup", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
+  it("does not turn launch-only origins into a config overlay", async () => {
+    const config = { gateway: {} };
+    const result = await maybeSeedControlUiAllowedOriginsAtStartup({
+      config,
+      log: { info: vi.fn(), warn: vi.fn() },
+      runtimeBind: "lan",
+      runtimePort: 18789,
+      publishedPort: 25432,
+    });
+    expect(result.config).toBe(config);
+    expect(result.seededAllowedOrigins).toBe(false);
+    expect(config.gateway).not.toHaveProperty("controlUi");
+  });
+
   it.each<OpenClawConfig>([
     { gateway: { controlUi: { allowedOrigins: ["https://control.example.com"] } } },
     { gateway: { publicOrigin: "https://control.example.com" } },
+    { gateway: { controlUi: { allowedOrigins: [] } } },
   ])("does not rewrite an already configured origin policy: %j", async (config) => {
     const log = { info: vi.fn(), warn: vi.fn() };
 

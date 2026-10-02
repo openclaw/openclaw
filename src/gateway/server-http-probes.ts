@@ -13,6 +13,7 @@ const getHttpAuthUtilsModule = createLazyRuntimeModule(() => import("./http-auth
 
 async function shouldIncludeGatewayProbeDetails(params: {
   req: IncomingMessage;
+  publishedPort?: number;
   resolvedAuth: ResolvedGatewayAuth;
   trustedProxies: string[];
   allowRealIpFallback: boolean;
@@ -37,7 +38,11 @@ async function shouldIncludeGatewayProbeDetails(params: {
       trustedProxies: params.trustedProxies,
       allowRealIpFallback: params.allowRealIpFallback,
       rateLimiter: params.rateLimiter,
-      browserOriginPolicy: resolveHttpBrowserOriginPolicy(params.req),
+      browserOriginPolicy: resolveHttpBrowserOriginPolicy(
+        params.req,
+        undefined,
+        params.publishedPort,
+      ),
     })
   ).ok;
 }
@@ -66,6 +71,7 @@ export async function handleGatewayProbeRequest(
   rateLimiter?: AuthRateLimiter,
   getReadiness?: ReadinessChecker,
   getStartup?: StartupChecker,
+  publishedPort?: number,
 ): Promise<boolean> {
   const status = classifyGatewayProbePath(requestPath);
   if (status === "namespace" || status === "outside") {
@@ -92,6 +98,7 @@ export async function handleGatewayProbeRequest(
     const includeDetails = await shouldIncludeGatewayProbeDetails({
       req,
       resolvedAuth,
+      publishedPort,
       trustedProxies,
       allowRealIpFallback,
       rateLimiter,
@@ -110,6 +117,7 @@ export async function handleGatewayProbeRequest(
     const includeDetails = await shouldIncludeGatewayProbeDetails({
       req,
       resolvedAuth,
+      publishedPort,
       trustedProxies,
       allowRealIpFallback,
       rateLimiter,
