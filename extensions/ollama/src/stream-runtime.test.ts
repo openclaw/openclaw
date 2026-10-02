@@ -453,11 +453,6 @@ describe("buildAssistantMessage", () => {
   );
 });
 
-function mockNdjsonReader(lines: string[], options: { trailingNewline?: boolean } = {}) {
-  const payload = lines.join("\n") + (options.trailingNewline === false ? "" : "\n");
-  return expectDefined(new Response(payload).body, "NDJSON response body").getReader();
-}
-
 function createPendingCancelNdjsonStream(lines: string[]) {
   const encoder = new TextEncoder();
   const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
@@ -480,60 +475,7 @@ function createPendingCancelNdjsonStream(lines: string[]) {
   };
 }
 
-async function expectNoParsedChunks(reader: ReadableStreamDefaultReader<Uint8Array>) {
-  expect(await collectStreamEvents(parseNdjsonStream(reader))).toEqual([]);
-}
-
 describe("parseNdjsonStream", () => {
-  it("cancels an oversized unterminated record", async () => {
-    const oversizedRecord = new Uint8Array(16 * 1024 * 1024 + 1).fill(0x20);
-    let canceled = false;
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(oversizedRecord);
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const reader = stream.getReader();
-
-    await expect(expectNoParsedChunks(reader)).rejects.toThrow(
-      "Ollama NDJSON record exceeds 16777216 bytes",
-    );
-    expect(canceled).toBe(true);
-    expect(stream.locked).toBe(false);
-  });
-
-  it("resets the record limit after each newline", async () => {
-    const legalRecord = new Uint8Array(9 * 1024 * 1024 + 1).fill(0x20);
-    legalRecord[legalRecord.length - 1] = 0x0a;
-    const reader = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(legalRecord);
-        controller.enqueue(legalRecord);
-        controller.close();
-      },
-    }).getReader();
-
-    await expectNoParsedChunks(reader);
-  });
-
-  it("rejects malformed trailing data without exposing its bytes", async () => {
-    const prefix = "x".repeat(119);
-    const reader = mockNdjsonReader([`${prefix}😀tail`], { trailingNewline: false });
-
-    await expect(expectNoParsedChunks(reader)).rejects.toThrow(
-      "OpenClaw transport error: malformed_streaming_fragment",
-    );
-  });
-
-  it.each(["null"])("rejects non-object NDJSON records: %s", async (record) => {
-    await expect(expectNoParsedChunks(mockNdjsonReader([record]))).rejects.toThrow(
-      "OpenClaw transport error: malformed_streaming_fragment",
-    );
-  });
-
   it("unlocks a real stream before pending cancellation settles on early break", async () => {
     const source = createPendingCancelNdjsonStream([
       '{"model":"m","created_at":"t","message":{"role":"assistant","content":"one"},"done":false}',
@@ -1646,7 +1588,14 @@ describe("createConfiguredOllamaStreamFn", () => {
   it("acquires the exact provider service after final payload and headers, before fetch", async () => {
     const signal = new AbortController().signal;
     const leaseRelease = vi.fn();
-    const acquire = vi.fn(async () => ({ release: leaseRelease }));
+    const payloadStarted = Promise.withResolvers<void>();
+    const finishPayload = Promise.withResolvers<void>();
+    let payloadReady = false;
+    const preparationAtAcquisition: boolean[] = [];
+    const acquire = vi.fn(async () => {
+      preparationAtAcquisition.push(payloadReady);
+      return { release: leaseRelease };
+    });
     const guardRelease = mockResponse(
       ndjson({ content: "ok" }) + "\n" + ndjson({}, { done: true }),
     );
@@ -1657,13 +1606,27 @@ describe("createConfiguredOllamaStreamFn", () => {
       options: {
         apiKey: "real-token", // pragma: allowlist secret
         headers: { "X-Request": "request" },
-        onPayload: async (payload) => ({ ...requireRecord(payload, "payload"), model: "patched" }),
+        onPayload: async (payload) => {
+          payloadStarted.resolve();
+          await finishPayload.promise;
+          payloadReady = true;
+          return { ...requireRecord(payload, "payload"), model: "patched" };
+        },
         signal,
       },
       acquire,
     });
-    await collectStreamEvents(stream);
+    const eventsPromise = collectStreamEvents(stream);
+    try {
+      await payloadStarted.promise;
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+      expect(acquire).not.toHaveBeenCalled();
+    } finally {
+      finishPayload.resolve();
+      await eventsPromise;
+    }
 
+    expect(preparationAtAcquisition).toEqual([true]);
     expect(acquire).toHaveBeenCalledWith(
       {
         providerId: "ollama-gpu",

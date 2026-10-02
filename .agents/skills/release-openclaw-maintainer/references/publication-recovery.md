@@ -136,8 +136,15 @@ uncertain dispatch or rerun all publication jobs to fix a download failure.
 
 ClawHub v2 publishes stage immutable bytes before the parent succeeds. With
 `wait_for_clawhub=true`, one plugin failure fails the child and parent, stranding
-staged siblings. Recover their attempts before resuming the parent. A public
-version 404 does not prove absence; attempt status requires publisher auth.
+staged siblings. Recover their attempts before resuming the parent. The release
+plan checks the public version publication-state endpoint: pending and failed
+versions are excluded from republishing, while only absent versions become
+candidates. Pending attempts wait for their original parent; failed attempts
+appear in the workflow summary with a recovery command when eligible, or an
+operator-action notice otherwise. Edit the pinned-checkout and reason placeholders
+before running recovery with a human publisher token. Recovery eligibility is
+advisory and is revalidated by ClawHub. A version 404 alone does not prove absence;
+older servers fall back to that probe until the publication endpoint is deployed.
 
 Download the original child's `*-publish-json` artifacts (retain its exact run
 and attempt), then render recovery commands for that release version:

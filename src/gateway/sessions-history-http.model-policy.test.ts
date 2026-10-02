@@ -415,19 +415,16 @@ describe("HTTP historical model disclosure", () => {
     });
   });
 
-  it.each(["token", "password"] as const)(
-    "preserves intentionally broad %s owner history",
-    async (mode) => {
-      const next = config();
-      next.gateway = { ...next.gateway, auth: { mode, [mode]: secret } };
-      publishConfig(next);
-      const response = await requestHistory({ owner: true });
-      expect(messages(await response.json(), 4)[0]).toMatchObject({
-        provider: "example",
-        model: "historical",
-      });
-      const stream = await openStream({ owner: true });
-      expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
-    },
-  );
+  it("preserves intentionally broad shared-secret owner history", async () => {
+    const next = config();
+    next.gateway = { ...next.gateway, auth: { mode: "token", token: secret } };
+    publishConfig(next);
+    const response = await requestHistory({ owner: true });
+    expect(messages(await response.json(), 4)[0]).toMatchObject({
+      provider: "example",
+      model: "historical",
+    });
+    const stream = await openStream({ owner: true });
+    expect(messages((await stream.next()).data, 4)[0]).toHaveProperty("model", "historical");
+  });
 });

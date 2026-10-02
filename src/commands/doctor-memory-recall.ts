@@ -67,6 +67,8 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
     pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
   });
   for (const scope of scopes) {
+    const report = (message: string) =>
+      note(formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message), "Memory search");
     try {
       const workspaceDir = await resolveRuntimeMemoryWorkspaceDir(cfg, scope.agentId);
       if (!workspaceDir) {
@@ -79,7 +81,7 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
         `Recall store: ${audit.storePath}`,
       );
       if (message) {
-        note(formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message), "Memory search");
+        report(message);
       }
       const dreamingAudit = await auditDreamingArtifacts({ workspaceDir });
       const dreamingMessage = buildMemoryArtifactIssueNote(
@@ -88,28 +90,13 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
         `Dream corpus: ${dreamingAudit.sessionCorpusDir}`,
       );
       if (dreamingMessage) {
-        note(
-          formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, dreamingMessage),
-          "Memory search",
-        );
+        report(dreamingMessage);
       }
     } catch (err) {
-      note(
-        formatMemoryDoctorAgentMessage(
-          scope.agentId,
-          labelAgents,
-          `Memory recall audit could not be completed: ${formatErrorMessage(err)}`,
-        ),
-        "Memory search",
-      );
+      report(`Memory recall audit could not be completed: ${formatErrorMessage(err)}`);
     } finally {
-      note(
-        formatMemoryDoctorAgentMessage(
-          scope.agentId,
-          labelAgents,
-          `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
-        ),
-        "Memory search",
+      report(
+        `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (cadence ${dreaming.frequency}).`,
       );
     }
   }
@@ -122,6 +109,8 @@ export async function maybeRepairMemoryRecallHealth(params: {
   const scopes = resolveMemoryDoctorAgentScopes(params.cfg);
   const labelAgents = scopes.length > 1;
   for (const scope of scopes) {
+    const agentMessage = (message: string) =>
+      formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
     await maybeRepairWorkspaceMemoryHealth({
       ...params,
       scope: {
@@ -139,9 +128,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
       const hasFixableRecallIssue = audit.issues.some((issue) => issue.fixable);
       if (hasFixableRecallIssue) {
         const approved = await params.prompter.confirmRuntimeRepair({
-          message: formatMemoryDoctorAgentMessage(
-            scope.agentId,
-            labelAgents,
+          message: agentMessage(
             "Remove dangling memory recalls, normalize recall artifacts, and remove stale promotion locks?",
           ),
           initialValue: true,
@@ -169,10 +156,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
               repair.removedStaleLock ? "- removed stale promotion lock" : null,
               `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
             ].filter(Boolean);
-            note(
-              formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, lines.join("\n")),
-              "Doctor changes",
-            );
+            note(agentMessage(lines.join("\n")), "Doctor changes");
           }
         }
       }
@@ -183,9 +167,7 @@ export async function maybeRepairMemoryRecallHealth(params: {
         continue;
       }
       const approvedDreamingRepair = await params.prompter.confirmRuntimeRepair({
-        message: formatMemoryDoctorAgentMessage(
-          scope.agentId,
-          labelAgents,
+        message: agentMessage(
           "Archive contaminated dreaming artifacts and reset derived dream corpus state?",
         ),
         initialValue: true,
@@ -206,17 +188,10 @@ export async function maybeRepairMemoryRecallHealth(params: {
         ...dreamingRepair.warnings.map((warning) => `- warning: ${warning}`),
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
       ].filter(Boolean);
-      note(
-        formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, lines.join("\n")),
-        "Doctor changes",
-      );
+      note(agentMessage(lines.join("\n")), "Doctor changes");
     } catch (err) {
       note(
-        formatMemoryDoctorAgentMessage(
-          scope.agentId,
-          labelAgents,
-          `Memory artifact repair could not be completed: ${formatErrorMessage(err)}`,
-        ),
+        agentMessage(`Memory artifact repair could not be completed: ${formatErrorMessage(err)}`),
         "Memory search",
       );
     }

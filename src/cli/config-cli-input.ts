@@ -461,10 +461,6 @@ async function readConfigPatchInput(opts: ConfigPatchOptions): Promise<unknown> 
   return parseConfigMutationJson5(raw, `${sourceLabel} as JSON5`);
 }
 
-function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
-  return { ...buildUnsetOperation(path), inputMode: "json" };
-}
-
 export function buildUnsetOperation(
   path: PathSegment[],
   pathTokens?: readonly ConcreteConfigPathSegment[],
@@ -477,23 +473,6 @@ export function buildUnsetOperation(
     value: undefined,
     mutation: "delete",
   };
-}
-
-function buildApplyValueOperation(params: {
-  path: PathSegment[];
-  value: unknown;
-  mutation?: ConfigSetOperation["mutation"];
-}): ConfigSetOperation {
-  const ref = isPlainRecord(params.value) ? coerceSecretRef(params.value) : null;
-  const operation = buildAssignmentOperation({
-    requestedPath: params.path,
-    value: ref
-      ? parseSecretRefFromUnknown(params.value, `patch.${toDotPath(params.path)}`)
-      : params.value,
-    inputMode: "json",
-    validatedRef: Boolean(ref),
-  });
-  return { ...operation, ...(params.mutation ? { mutation: params.mutation } : {}) };
 }
 
 function buildConfigPatchOperations(params: {
@@ -523,15 +502,21 @@ function buildConfigPatchOperations(params: {
     if (mergeObject && Object.keys(value).length > 0) {
       return true;
     }
-    operations.push(
-      value === null
-        ? buildDeleteOperation([...path])
-        : buildApplyValueOperation({
-            path: [...path],
-            value,
-            mutation: replace ? "replace" : mergeObject ? "merge" : undefined,
-          }),
-    );
+    if (value === null) {
+      operations.push({ ...buildUnsetOperation([...path]), inputMode: "json" });
+    } else {
+      const ref = isPlainRecord(value) ? coerceSecretRef(value) : null;
+      const operation = buildAssignmentOperation({
+        requestedPath: [...path],
+        value: ref ? parseSecretRefFromUnknown(value, `patch.${toDotPath(path)}`) : value,
+        inputMode: "json",
+        validatedRef: Boolean(ref),
+      });
+      if (replace || mergeObject) {
+        operation.mutation = replace ? "replace" : "merge";
+      }
+      operations.push(operation);
+    }
     return false;
   });
 

@@ -3,7 +3,7 @@ import path from "node:path";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-store.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
   resolveSqliteTargetFromSessionStorePath,
   SessionStoreRegistryReadRequired,

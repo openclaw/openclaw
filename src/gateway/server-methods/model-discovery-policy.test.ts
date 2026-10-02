@@ -14,7 +14,8 @@ import {
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
@@ -292,6 +293,38 @@ describe("operator model discovery at registered reads", () => {
       expect(staff).toMatchObject(diagnostics);
     });
   });
+
+  it.each([
+    { utilityModel: "example/fallback", routeVisible: true },
+    { utilityModel: "example/restricted-model", routeVisible: false },
+  ])(
+    "discloses the utility route only when $utilityModel is visible to the role",
+    async ({ utilityModel, routeVisible }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const f = createFixture();
+        expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel = utilityModel;
+        expectDefined(f.cfg.models?.providers?.example, "example provider").apiKey =
+          "synthetic-key";
+        await state.writeConfig(f.cfg);
+        const respond = await f.request("models.list", { agentId: "main", view: "configured" });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        const { defaultModels } = expectDefined(
+          respond.mock.calls[0]?.[1] as ModelsListResult | undefined,
+          "models.list result",
+        );
+        if (routeVisible) {
+          expect(defaultModels?.utilityRuntime).toEqual({
+            id: "openclaw",
+            kind: "api",
+            label: "OpenClaw Default",
+          });
+        } else {
+          expect(defaultModels).toBeDefined();
+          expect(defaultModels).not.toHaveProperty("utilityRuntime");
+        }
+      });
+    },
+  );
 
   it("does not publish held metadata after a role policy change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

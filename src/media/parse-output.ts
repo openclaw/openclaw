@@ -97,12 +97,6 @@ function looksLikeLocalFilePath(candidate: string): boolean {
   );
 }
 
-// Recognize safe local file path patterns for media approval, rejecting
-// traversal and unsupported home-dir paths so they never reach downstream load/send logic.
-function isLikelyLocalPath(candidate: string): boolean {
-  return !hasTraversalOrUnsupportedHomeDirPrefix(candidate) && looksLikeLocalFilePath(candidate);
-}
-
 function normalizeRemoteMediaHostname(value: string): string {
   const normalized = value
     .trim()
@@ -192,14 +186,13 @@ function isValidMedia(
     }
   }
 
-  if (isLikelyLocalPath(candidate)) {
-    return true;
-  }
-
   // Hard reject traversal/unsupported home-dir patterns before the bare-filename fallback
   // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
   if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
     return false;
+  }
+  if (looksLikeLocalFilePath(candidate)) {
+    return true;
   }
 
   // Accept bare filenames (e.g. "image.png") only when the caller opts in.

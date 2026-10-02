@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { clearWarmBootState } from "../../app/bootstrap-warm-boot.ts";
+import * as cacheDatabase from "./session-roster-cache-database.ts";
 import {
   clearCachedBootState,
   flushSessionRosters,
@@ -86,6 +89,71 @@ afterEach(async () => {
 });
 
 describe("persistent session roster", () => {
+  it.each(["persisted", "pending", "lazy", "in-flight"])(
+    "retires only a legacy roster with %s work",
+    async (stage) => {
+      const scope = "ws://legacy-gateway.test";
+      const peerScope = 'account:["ws://legacy-gateway.test","peer-account"]';
+      const unrelatedScope = "ws://other-gateway.test";
+      sessionRosterCache.write(record(scope));
+      sessionRosterCache.write(record(peerScope));
+      sessionRosterCache.write(record(unrelatedScope));
+      await vi.dynamicImportSettled();
+      await flushSessionRosters();
+      const replacement = [{ key: "agent:main:replacement", kind: "direct" as const }];
+      if (stage !== "persisted") {
+        sessionRosterCache.write(record(scope, replacement));
+        sessionRosterCache.write(record(peerScope, replacement));
+        if (stage !== "lazy") {
+          await vi.dynamicImportSettled();
+        }
+      }
+      const entered = createDeferred();
+      const release = createDeferred();
+      let writing: Promise<void> | undefined;
+      if (stage === "in-flight") {
+        const open = cacheDatabase.openSessionRosterDatabase;
+        vi.spyOn(cacheDatabase, "openSessionRosterDatabase").mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return open();
+        });
+        writing = flushSessionRosters();
+        await entered.promise;
+      }
+      const readingPeer = sessionRosterCache.read(peerScope, expected);
+      const clearing = clearWarmBootState(scope, {
+        authMethod: "token",
+        credential: "legacy-fingerprint",
+      });
+      release.resolve();
+      await Promise.all([writing, clearing]);
+      await vi.dynamicImportSettled();
+      await flushSessionRosters();
+      expect(await sessionRosterCache.read(scope, expected)).toBeNull();
+      expect(await readingPeer).not.toBeNull();
+      expect((await sessionRosterCache.read(peerScope, expected))?.result.sessions).toEqual(
+        stage === "persisted" ? record().result.sessions : replacement,
+      );
+      expect((await sessionRosterCache.read(unrelatedScope, expected))?.result.sessions).toEqual(
+        record().result.sessions,
+      );
+    },
+  );
+
+  it("keeps an unrelated owner's scheduled publication after exact retirement", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    persist(record("retired"));
+    persist(record("surviving"));
+    await clearCachedBootState("retired");
+    await vi.advanceTimersByTimeAsync(500);
+    // Observe the normal scheduled write; an explicit flush would conceal a lost timer.
+    await vi.waitFor(async () => {
+      expect(await sessionRosterCache.read("surviving", expected)).not.toBeNull();
+    });
+    expect(await sessionRosterCache.read("retired", expected)).toBeNull();
+  });
+
   it("round-trips durable sidebar fields while excluding live run state and avatars", async () => {
     const writes = vi.spyOn(IDBObjectStore.prototype, "put");
     const row: GatewaySessionRow = {
@@ -359,15 +427,41 @@ describe("persistent session roster", () => {
     },
   );
 
-  it("clears both boot stores and fences writes still waiting for the runtime import", async () => {
+  it("joins cache clearing before admitting a successor write", async () => {
+    const entered = createDeferred();
+    const release = createDeferred();
+    const reset = cacheDatabase.resetSessionRosterDatabase;
+    vi.spyOn(cacheDatabase, "resetSessionRosterDatabase").mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      await reset();
+    });
+    const opened = vi.spyOn(cacheDatabase, "openSessionRosterDatabase");
+    const clearing = clearCachedBootState();
+    await entered.promise;
+    persist(record("successor"));
+    const writing = flushSessionRosters();
+    try {
+      await vi.dynamicImportSettled();
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await clearing;
+      await writing;
+    }
+    expect(await sessionRosterCache.read("successor", expected)).not.toBeNull();
+  });
+
+  it("clears roster writes awaiting the runtime import without retiring boot admission", async () => {
     localStorage.setItem(`${BOOT_RECORD_PREFIX}gateway-one`, "cached");
     persist(record());
     await flushSessionRosters();
     sessionRosterCache.write(record("pending"));
     await clearCachedBootState();
     await flushSessionRosters();
-    expect(localStorage.getItem(`${BOOT_RECORD_PREFIX}gateway-one`)).toBeNull();
+    expect(localStorage.getItem(`${BOOT_RECORD_PREFIX}gateway-one`)).toBe("cached");
     expect(await sessionRosterCache.read("gateway-one", expected)).toBeNull();
     expect(await sessionRosterCache.read("pending", expected)).toBeNull();
+    localStorage.removeItem(`${BOOT_RECORD_PREFIX}gateway-one`);
   });
 });

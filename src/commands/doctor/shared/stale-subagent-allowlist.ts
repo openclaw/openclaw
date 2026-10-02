@@ -1,4 +1,3 @@
-// Doctor scanner and repair for subagent allowlists that reference missing agents.
 import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";

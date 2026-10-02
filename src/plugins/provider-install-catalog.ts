@@ -15,7 +15,7 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { loadPluginRegistrySnapshot, type PluginRegistryRecord } from "./plugin-registry.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import {
   resolveManifestProviderAuthChoices,
@@ -141,19 +141,6 @@ function resolveInstallInfoFromPackageSource(params: {
   };
 }
 
-function resolveInstallInfoFromRegistryRecord(params: {
-  record: PluginRegistryRecord;
-  installRecord?: InstalledPluginInstallRecordInfo;
-}): PluginPackageInstall | null {
-  return (
-    resolveInstallInfoFromInstallRecord(params.installRecord) ??
-    resolveInstallInfoFromPackageSource({
-      origin: params.record.origin,
-      source: params.record.packageInstall,
-    })
-  );
-}
-
 function resolvePreferredInstallsByPluginId(
   params: ProviderInstallCatalogParams,
 ): PreferredInstallSources {
@@ -179,10 +166,12 @@ function resolvePreferredInstallsByPluginId(
     ) {
       continue;
     }
-    const install = resolveInstallInfoFromRegistryRecord({
-      record,
-      installRecord: index.installRecords[record.pluginId],
-    });
+    const install =
+      resolveInstallInfoFromInstallRecord(index.installRecords[record.pluginId]) ??
+      resolveInstallInfoFromPackageSource({
+        origin: record.origin,
+        source: record.packageInstall,
+      });
     if (!install) {
       continue;
     }

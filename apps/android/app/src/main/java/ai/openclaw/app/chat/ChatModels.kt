@@ -467,10 +467,18 @@ data class ChatSessionEntry(
   val hasColorMetadata: Boolean = color != null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
+  val sharingRole: String? = null,
+  val visibility: String? = null,
+  val hasSharingRoleMetadata: Boolean = sharingRole != null,
+  val hasVisibilityMetadata: Boolean = visibility != null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
   val markedUnreadAt: Long? = null,
   val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
+  val snoozedUntil: Long? = null,
+  val snoozedAt: Long? = null,
+  val hasSnoozedUntilMetadata: Boolean = snoozedUntil != null,
+  val hasSnoozedAtMetadata: Boolean = snoozedAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
   val hasAgentStatusMetadata: Boolean = agentStatus != null,
   val observerDigest: SessionObserverDigest? = null,
@@ -523,7 +531,9 @@ data class ChatSessionEntry(
     inputTokens != null || outputTokens != null || estimatedCostUsd != null,
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
-)
+) {
+  fun isSnoozed(nowMs: Long): Boolean = snoozedUntil?.let { it > nowMs } == true
+}
 
 // Match Gateway precedence: terminal status wins; only missing live flags use historical status.
 internal fun isSessionRunActive(

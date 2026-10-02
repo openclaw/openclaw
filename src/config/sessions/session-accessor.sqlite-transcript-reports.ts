@@ -264,7 +264,6 @@ async function withReportWorker<T>(
                 runId: cliWriter.runId,
                 authFingerprint: cliWriter.authFingerprint,
                 lifecycleRevision: cliWriter.lifecycleRevision,
-                expectedWriterRunId: cliWriter.expectedWriterRunId,
               },
             }
           : {}),

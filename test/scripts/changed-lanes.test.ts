@@ -691,6 +691,7 @@ describe("scripts/changed-lanes", () => {
       "check:line-cap-ratchet",
       "check:max-lines-ratchet",
       "check:assertion-safety",
+      "check:test-timeout-race-ratchet",
     ]) {
       expect(checked.stderr).toContain(`${command} --staged --base ${base}`);
     }
@@ -914,9 +915,14 @@ describe("scripts/changed-lanes", () => {
     expect(parseChangedLaneOutput(result.stdout).lanes.all).toBe(true);
   });
 
-  it("targets mixed core, extension, script, and root test lint without full-owner fan-out", () => {
+  it.each([
+    ["config/assertion-safety-baseline.txt", "check:assertion-safety"],
+    ["config/env-var-count-budget.txt", "check:max-lines-ratchet"],
+    ["config/max-lines-baseline.txt", "check:max-lines-ratchet"],
+    ["config/test-timeout-race-baseline.txt", "check:test-timeout-race-ratchet"],
+  ])("targets mixed-owner lint while retaining the guard for %s", (baseline, guard) => {
     const result = detectChangedLanes([
-      "config/assertion-safety-baseline.txt",
+      baseline,
       ".github/workflows/ci.yml",
       "src/gateway/node-registry.ts",
       "extensions/lmstudio/src/models.fetch.ts",
@@ -939,7 +945,7 @@ describe("scripts/changed-lanes", () => {
       );
     }
     const commandNames = plan.commands.map((command) => command.args[0]);
-    expect(commandNames).toContain("check:assertion-safety");
+    expect(commandNames).toContain(guard);
     for (const fullLane of ["lint:core", "lint:extensions", "lint:scripts"]) {
       expect(commandNames).not.toContain(fullLane);
     }
@@ -1652,6 +1658,7 @@ describe("scripts/changed-lanes", () => {
         "check:line-cap-ratchet",
         "check:max-lines-ratchet",
         "check:assertion-safety",
+        "check:test-timeout-race-ratchet",
       ]) {
         expect(commands.find(({ args }) => args[0] === owner)?.args).toEqual([
           owner,

@@ -137,20 +137,6 @@ async function warnAboutLaunchAgentWrapperOverwrite(
   }
 }
 
-function isLaunchAgentEnvironmentWrapperArgs(params: {
-  programArguments: string[];
-  envFilePath: string;
-  wrapperPath: string;
-}): boolean {
-  return (
-    (params.programArguments[0] === params.wrapperPath &&
-      params.programArguments[1] === params.envFilePath) ||
-    (params.programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
-      params.programArguments[1] === params.wrapperPath &&
-      params.programArguments[2] === params.envFilePath)
-  );
-}
-
 async function prepareLaunchAgentProgramArguments(params: {
   env: GatewayServiceEnv;
   label: string;
@@ -186,17 +172,17 @@ async function prepareLaunchAgentProgramArguments(params: {
     definitionTransaction: params.definitionTransaction,
   });
 
+  const { programArguments } = params;
   if (
-    isLaunchAgentEnvironmentWrapperArgs({
-      programArguments: params.programArguments,
-      envFilePath,
-      wrapperPath,
-    })
+    (programArguments[0] === wrapperPath && programArguments[1] === envFilePath) ||
+    (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL &&
+      programArguments[1] === wrapperPath &&
+      programArguments[2] === envFilePath)
   ) {
-    return params.programArguments;
+    return programArguments;
   }
 
-  return [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapperPath, envFilePath, ...params.programArguments];
+  return [LAUNCH_AGENT_ENV_WRAPPER_SHELL, wrapperPath, envFilePath, ...programArguments];
 }
 
 export function resolveLaunchAgentPlistPath(env: GatewayServiceEnv): string {
@@ -210,11 +196,6 @@ export function resolveLaunchAgentEnvironmentReadOptions(env: GatewayServiceEnv,
     expectedEnvironmentFilePath: resolveLaunchAgentEnvFilePath(env, label),
     generatedEnvironmentLabel: label,
   };
-}
-
-async function ensureLaunchAgentPlistReadable(plistPath: string): Promise<void> {
-  assertGatewayServiceUpdateCurrent();
-  await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
 }
 
 type LaunchAgentFileSnapshot = { contents: Buffer; mode: number };
@@ -536,7 +517,8 @@ export async function rewriteLaunchAgentPlistForRestart({
     });
     const previousPlist = await fs.readFile(plistPath, "utf8").catch(() => "");
     if (previousPlist === plist) {
-      await ensureLaunchAgentPlistReadable(plistPath);
+      assertGatewayServiceUpdateCurrent();
+      await fs.chmod(plistPath, LAUNCH_AGENT_PLIST_MODE).catch(() => undefined);
       return false;
     }
     await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });

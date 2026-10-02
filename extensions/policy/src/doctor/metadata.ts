@@ -1,4 +1,3 @@
-// Policy doctor rule metadata.
 import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
 
 type PolicyStrictnessKind =
@@ -100,7 +99,7 @@ const SANDBOX_POLICY_RULE_METADATA = [
   },
 ] as const satisfies readonly PolicyRuleMetadata[];
 
-export const POLICY_RULE_METADATA = [
+export const POLICY_RULE_METADATA: readonly PolicyRuleMetadata[] = [
   {
     policyPath: ["channels", "denyRules"],
     strictness: "denylist-superset",
@@ -450,4 +449,4 @@ export const POLICY_RULE_METADATA = [
     emptyList: "disabled",
     allowedValues: ["api_key", "aws-sdk", "oauth", "token"],
   },
-] as const satisfies readonly PolicyRuleMetadata[];
+];

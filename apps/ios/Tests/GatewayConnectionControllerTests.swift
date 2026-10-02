@@ -38,16 +38,7 @@ struct GatewayRegistryTestIsolation {
         "preferredStableID",
         "lastDiscoveredStableID",
     ]
-    private static let legacyDefaultsKeys = [
-        "gateway.last.kind",
-        "gateway.last.host",
-        "gateway.last.port",
-        "gateway.last.tls",
-        "gateway.last.stableID",
-    ]
-
     private let previousKeychain: [String: String?]
-    private let previousDefaults: [String: Any?]
     private let previousRelay: ShareGatewayRelayConfig?
 
     init() {
@@ -55,15 +46,9 @@ struct GatewayRegistryTestIsolation {
         self.previousKeychain = Dictionary(uniqueKeysWithValues: Self.keychainAccounts.map { account in
             (account, GenericPasswordKeychainStore.loadString(service: Self.service, account: account))
         })
-        self.previousDefaults = Dictionary(uniqueKeysWithValues: Self.legacyDefaultsKeys.map { key in
-            (key, UserDefaults.standard.object(forKey: key))
-        })
         self.previousRelay = ShareGatewayRelaySettings.loadConfig()
         for account in Self.keychainAccounts {
             _ = GenericPasswordKeychainStore.delete(service: Self.service, account: account)
-        }
-        for key in Self.legacyDefaultsKeys {
-            UserDefaults.standard.removeObject(forKey: key)
         }
     }
 
@@ -72,12 +57,6 @@ struct GatewayRegistryTestIsolation {
             _ = GenericPasswordKeychainStore.delete(service: Self.service, account: account)
             if let value {
                 _ = GenericPasswordKeychainStore.saveString(value, service: Self.service, account: account)
-            }
-        }
-        for (key, value) in self.previousDefaults {
-            UserDefaults.standard.removeObject(forKey: key)
-            if let value {
-                UserDefaults.standard.set(value, forKey: key)
             }
         }
         ShareGatewayRelaySettings.clearConfig()
@@ -2172,11 +2151,6 @@ private func waitUntil(
             "gateway.manual.port": 443,
             "gateway.manual.tls": true,
             "node.instanceId": "ios-test",
-            "gateway.last.host": nil,
-            "gateway.last.port": nil,
-            "gateway.last.tls": nil,
-            "gateway.last.stableID": nil,
-            "gateway.last.kind": nil,
             "gateway.preferredStableID": nil,
             "gateway.lastDiscoveredStableID": nil,
         ]) {
@@ -2995,6 +2969,8 @@ private func waitUntil(
         var ownerlessPrefixed = session
         ownerlessPrefixed.key = "agent:main:legacy"
         ownerlessPrefixed.agentId = nil
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        session.snoozedUntil = now.addingTimeInterval(3600).timeIntervalSince1970 * 1000
         appModel.gatewayDefaultAgentId = "main"
 
         await appModel.storeCachedChatSessions(
@@ -3018,6 +2994,14 @@ private func waitUntil(
             matchingBare,
             expectedPrefixed,
         ])
+        #expect(!appModel.isOperatorGatewayConnected)
+        let roster = try await appModel.loadChatSessionRoster(limit: 200)
+        #expect(roster.isCached)
+        #expect(roster.sessions == cachedSessions)
+        #expect(SessionStatusScope.available(isConnected: appModel.isOperatorGatewayConnected).contains(.snoozed))
+        let snoozed = roster.sessions.filter { SessionStatusScope.snoozed.includes($0, at: now) }
+        #expect(snoozed == [session])
+        #expect(CommandCenterTab.sessionDetail(session, now: now).hasPrefix("Wakes "))
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])
     }

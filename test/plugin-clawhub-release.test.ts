@@ -376,6 +376,128 @@ describe("resolveSelectedClawHubPublishablePluginPackages", () => {
 });
 
 describe("collectPluginClawHubReleasePlan", () => {
+  it.each([
+    { state: "published" },
+    { state: "absent" },
+    { state: "pending", stage: "staging" },
+    { state: "pending", stage: "checks", attemptId: "jd7abc_123-xyz" },
+    { state: "pending", stage: "finalization", attemptId: "jd7abc_123-xyz" },
+    { state: "failed", recoverable: true, attemptId: "jd7abc_123-xyz" },
+    { state: "failed", recoverable: false, attemptId: "jd7abc_123-xyz" },
+    { state: "failed", recoverable: false },
+  ])(
+    "plans publication detail without republishing $state/$stage/$recoverable",
+    async (publication) => {
+      const repoDir = createTempPluginRepo();
+      const name = "@openclaw/demo-plugin";
+      const version = "2026.4.1";
+      const { fetchImpl, requests } = createClawHubPlanFetch({
+        packages: { [name]: { status: 200 } },
+        trustedPublishers: { [name]: { status: 200, body: { trustedPublisher } } },
+        publications: {
+          [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
+        },
+        // A legacy probe would wrongly turn pending/failed into a publish candidate.
+        versions: { [`${name}@${version}`]: 404 },
+      });
+      const plan = await collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl });
+      for (const [bucket, state] of [
+        ["candidates", "absent"],
+        ["skippedPublished", "published"],
+        ["pendingPublication", "pending"],
+        ["failedPublication", "failed"],
+      ] as const) {
+        expect(plan[bucket]).toEqual(publication.state === state ? plan.all : []);
+      }
+      expect(plan.all[0]).toMatchObject({
+        publication,
+        alreadyPublished: publication.state === "published",
+      });
+      expect(requests.filter((url) => url.includes("/versions/"))).toEqual([
+        `/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/${version}/publication`,
+      ]);
+    },
+  );
+
+  it.each([
+    { state: "pending", stage: "staging" },
+    { state: "failed", recoverable: true, attemptId: "attempt_recover" },
+  ])(
+    "does not bootstrap a $state package shell hidden by the metadata route",
+    async (publication) => {
+      const repoDir = createTempPluginRepo();
+      const name = "@openclaw/demo-plugin";
+      const version = "2026.4.1";
+      const { fetchImpl } = createClawHubPlanFetch({
+        packages: { [name]: { status: 404 } },
+        publications: {
+          [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
+        },
+      });
+      const plan = await collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl });
+      expect(plan.candidates).toEqual([]);
+      expect(plan.bootstrapCandidates).toEqual([]);
+      expect(plan.missingTrustedPublisher).toEqual([]);
+      expect([...plan.pendingPublication, ...plan.failedPublication]).toEqual(plan.all);
+      expect(plan.all[0]?.publication).toEqual(publication);
+    },
+  );
+
+  it.each([404, 200])(
+    "uses the legacy probe after a %i response without state",
+    async (publicationStatus) => {
+      const repoDir = createTempPluginRepo({ extraExtensionIds: ["demo-two"] });
+      const names = ["@openclaw/demo-plugin", "@openclaw/demo-two"];
+      const { fetchImpl, requests } = createClawHubPlanFetch({
+        packages: Object.fromEntries(names.map((name) => [name, { status: 200 }])),
+        trustedPublishers: Object.fromEntries(
+          names.map((name) => [name, { status: 200, body: { trustedPublisher } }]),
+        ),
+        publications: Object.fromEntries(
+          names.map((name) => [
+            `${name}@2026.4.1`,
+            { status: publicationStatus, body: { version: {} } },
+          ]),
+        ),
+        versions: { "@openclaw/demo-plugin@2026.4.1": 200, "@openclaw/demo-two@2026.4.1": 404 },
+      });
+      const plan = await collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl });
+      expect(plan.skippedPublished.map((entry) => entry.packageName)).toEqual([names[0]]);
+      expect(plan.candidates.map((entry) => entry.packageName)).toEqual([names[1]]);
+      expect(requests.filter((url) => url.endsWith("/versions/2026.4.1"))).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    { state: "future" },
+    { state: null },
+    { state: "published", extra: "private detail" },
+    { state: "published", name: "@openclaw/wrong" },
+    { state: "absent", version: "2026.4.2" },
+    { state: "pending", stage: "checks" },
+    { state: "pending", stage: "staging", attemptId: "attempt-1" },
+    { state: "pending", stage: "unknown", attemptId: "attempt-1" },
+    { state: "failed", recoverable: "true" },
+    { state: "failed", recoverable: true, attemptId: "bad\ncommand" },
+    { state: "failed", recoverable: false, attemptId: "x".repeat(201) },
+  ])("fails closed on invalid publication detail %j", async (publication) => {
+    const repoDir = createTempPluginRepo();
+    const name = "@openclaw/demo-plugin";
+    const version = "2026.4.1";
+    const { fetchImpl, requests } = createClawHubPlanFetch({
+      packages: { [name]: { status: 200 } },
+      trustedPublishers: { [name]: { status: 200, body: { trustedPublisher } } },
+      publications: {
+        [`${name}@${version}`]: { status: 200, body: { name, version, ...publication } },
+      },
+      versions: { [`${name}@${version}`]: 404 },
+    });
+    await expect(collectPluginClawHubReleasePlan({ rootDir: repoDir, fetchImpl })).rejects.toThrow(
+      "Invalid ClawHub publication state",
+    );
+    expect(requests.some((url) => url.endsWith(`/versions/${version}`))).toBe(false);
+  });
+
   it("consumes completed package observations without another ClawHub read", async () => {
     const repoDir = createTempPluginRepo({ requiredLatestDependencyVersion: "1.2.3" });
     const forbidden = vi.fn(async () => {
@@ -433,13 +555,18 @@ describe("collectPluginClawHubReleasePlan", () => {
     }).fetchImpl;
     let activeRequests = 0;
     let maxActiveRequests = 0;
+    let releaseFirstWave: () => void;
+    const firstWave = new Promise<void>((resolve) => {
+      releaseFirstWave = resolve;
+    });
     const fetchImpl: typeof fetch = async (...args) => {
       activeRequests += 1;
       maxActiveRequests = Math.max(maxActiveRequests, activeRequests);
       try {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 5);
-        });
+        if (activeRequests === 8) {
+          releaseFirstWave();
+        }
+        await firstWave;
         return await baseFetch(...args);
       } finally {
         activeRequests -= 1;
@@ -545,6 +672,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     expect(requests).toEqual([
       "/api/v1/packages/%40openclaw%2Fdemo-plugin",
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/trusted-publisher",
+      "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1/publication",
       "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1",
     ]);
   });
@@ -574,6 +702,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (url.pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (url.pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response(
@@ -629,6 +760,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
@@ -686,6 +820,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           { status: 200 },
         );
       }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
+      }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
       }
@@ -726,6 +863,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         versionRequests += 1;
@@ -832,6 +972,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           { status: 200 },
         );
       }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
+      }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
       }
@@ -878,6 +1021,9 @@ describe("collectPluginClawHubReleasePlan", () => {
           }),
           { status: 200 },
         );
+      }
+      if (pathname.endsWith("/publication")) {
+        return new Response(null, { status: 404 });
       }
       if (pathname === "/api/v1/packages/%40openclaw%2Fdemo-plugin/versions/2026.4.1") {
         return new Response("", { status: 404 });
@@ -1088,6 +1234,7 @@ describe("collectPluginClawHubReleasePlan", () => {
     });
     expect(plan.skippedPublished).toHaveLength(1);
     expect(plan.skippedPublished[0]).toEqual({
+      publication: { state: "published" },
       alreadyPublished: true,
       artifactName: "clawhub-package-openclaw-demo-plugin-2026.4.1",
       channel: "stable",
@@ -2166,6 +2313,7 @@ function createClawHubPlanFetch(config: {
     }
   >;
   versions?: Record<string, number>;
+  publications?: Record<string, { status: number; body?: unknown }>;
 }) {
   const requests: string[] = [];
   const fetchImpl: typeof fetch = async (input) => {
@@ -2202,13 +2350,24 @@ function createClawHubPlanFetch(config: {
       });
     }
 
+    const publicationMatch = url.pathname.match(
+      /^\/api\/v1\/packages\/([^/]+)\/versions\/([^/]+)\/publication$/u,
+    );
+    if (publicationMatch?.[1] && publicationMatch[2]) {
+      const key = `${decodeURIComponent(publicationMatch[1])}@${decodeURIComponent(publicationMatch[2])}`;
+      const reply = config.publications?.[key] ?? { status: 404 };
+      return new Response(JSON.stringify(reply.body ?? {}), { status: reply.status });
+    }
+
     const versionMatch = url.pathname.match(/^\/api\/v1\/packages\/([^/]+)\/versions\/([^/]+)$/u);
     const encodedVersionPackageName = versionMatch?.[1];
     const encodedVersion = versionMatch?.[2];
     if (encodedVersionPackageName !== undefined && encodedVersion !== undefined) {
       const packageName = decodeURIComponent(encodedVersionPackageName);
       const version = decodeURIComponent(encodedVersion);
-      const status = config.versions?.[`${packageName}@${version}`];
+      const status =
+        config.versions?.[`${packageName}@${version}`] ??
+        (config.packages[packageName]?.status === 404 ? 404 : undefined);
       if (!status) {
         throw new Error(`Unexpected version detail request for ${packageName}@${version}`);
       }

@@ -195,6 +195,9 @@ export function setupGoogleMeetPlugin(
       gateway: {
         isAvailable: vi.fn(async () => options.gatewayAvailable === true),
         request: gatewayRequest,
+        async readSessionFacts() {
+          throw new Error("Unexpected session facts request");
+        },
       },
       system: {
         runCommandWithTimeout,

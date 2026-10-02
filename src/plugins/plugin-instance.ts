@@ -1,4 +1,4 @@
-import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -16,6 +16,7 @@ import {
   resolvePluginInstanceOwner,
   type PluginInstanceOwner,
 } from "./plugin-instance-scope.js";
+import { waitForPluginInstanceSettlement } from "./plugin-instance-settlement.js";
 import { createPluginValueView } from "./plugin-instance-value-views.js";
 import type {
   PluginInstanceCallLease,
@@ -124,6 +125,15 @@ export class PluginInstance {
     return this.activeCall() !== undefined;
   }
 
+  /** A reload has reserved this instance and is draining its admitted work. */
+  get replacementPending(): boolean {
+    return this.replacementReserved;
+  }
+
+  holdsPendingReplacement(token: object): boolean {
+    return this.replacementReserved && this.hasToken(token);
+  }
+
   run<T>(run: () => T): T {
     const current = this.activeCall();
     if (current) {
@@ -214,37 +224,23 @@ export class PluginInstance {
     );
   }
 
-  /** Observe host settlement without closing the callbacks that retained runs still need. */
-  async waitForRetainedWork(signal: AbortSignal, includeConsumers = true): Promise<void> {
-    await this.waitForSettlement(
-      () => (includeConsumers ? this.retainedWorkCount : this.retainedWork.size) === 0,
-      signal,
-    );
+  get ordinaryCallCount(): number {
+    return [...this.calls.values()].filter((call) => !call.cleanup).length;
   }
 
-  private async waitForSettlement(settled: () => boolean, signal: AbortSignal): Promise<void> {
-    signal.throwIfAborted();
-    if (settled()) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      const cleanup = () => {
-        this.waiters.delete(wake);
-        signal.removeEventListener("abort", abort);
-      };
-      const wake = () => {
-        if (settled()) {
-          cleanup();
-          resolve();
-        }
-      };
-      const abort = () => {
-        cleanup();
-        reject(toErrorObject(signal.reason, `Plugin ${this.pluginId} work drain aborted`));
-      };
-      this.waiters.add(wake);
-      signal.addEventListener("abort", abort, { once: true });
-    });
+  /** Observe admitted work without closing callbacks or idle publication custody. */
+  async waitForRetainedWork(
+    signal: AbortSignal,
+    { includeConsumers = true, includeCalls = false } = {},
+  ): Promise<void> {
+    await waitForPluginInstanceSettlement(
+      this.pluginId,
+      this.waiters,
+      () =>
+        (!includeCalls || this.ordinaryCallCount === 0) &&
+        (includeConsumers ? this.retainedWorkCount : this.retainedWork.size) === 0,
+      signal,
+    );
   }
 
   /** Reserve replacement atomically before host owners invalidate or stop this instance. */
@@ -396,9 +392,12 @@ export class PluginInstance {
   }
 
   private enter<T>(token: object, run: () => T): T {
+    pluginInvocationContext.getStore()?.assertCurrent?.(this);
     const current = invocation.getStore();
     const call =
-      current?.instance === this && current.token === token ? current : { instance: this, token };
+      current?.instance === this && current.token === token
+        ? current
+        : { instance: this, token, parent: current };
     if (!this.owner) {
       const enter = () => invocation.run(call, run);
       // Deferred setup imports use the same SDK resolver facts as their initial load.
@@ -542,7 +541,9 @@ export class PluginInstance {
     try {
       await this.waitForCalls(ownToken, options?.signal);
       if (options?.includeConsumers) {
-        await this.waitForSettlement(
+        await waitForPluginInstanceSettlement(
+          this.pluginId,
+          this.waiters,
           () => this.consumers.size === 0,
           options.signal ?? new AbortController().signal,
         );
@@ -558,7 +559,7 @@ export class PluginInstance {
     const settled = () => [...this.calls.keys()].every((token) => token === ownToken);
     if (signal) {
       // Reload owns its observation budget; disposal keeps its independent deadline.
-      return this.waitForSettlement(settled, signal);
+      return waitForPluginInstanceSettlement(this.pluginId, this.waiters, settled, signal);
     }
     const deadline = new AbortController();
     const timer = setTimeout(() => {
@@ -567,7 +568,7 @@ export class PluginInstance {
       );
     }, SHUTDOWN_TIMEOUT_MS);
     try {
-      await this.waitForSettlement(settled, deadline.signal);
+      await waitForPluginInstanceSettlement(this.pluginId, this.waiters, settled, deadline.signal);
     } finally {
       clearTimeout(timer);
     }

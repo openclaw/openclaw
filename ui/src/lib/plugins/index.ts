@@ -4,7 +4,6 @@ import type {
   PluginsCatalogGetResult,
   PluginsListResult,
   PluginsSetEnabledParams,
-  PluginsSetEnabledResult,
   PluginsUninstallResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -24,7 +23,7 @@ export type {
   PluginsCatalogGetResult as PluginDiscoveryDetailResult,
   PluginsListResult as PluginListResult,
 } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
-export type PluginMutationResult = PluginsInstallResult | PluginsSetEnabledResult;
+export type PluginMutationResult = PluginsInstallResult;
 
 export function loadPluginCatalog(client: GatewayBrowserClient): Promise<PluginsListResult> {
   return client.request<PluginsListResult>("plugins.list", {});

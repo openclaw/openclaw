@@ -51,16 +51,11 @@ type AcpPendingPromptAdmission = {
 };
 
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode =
-    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
-      ? (err as { gatewayCode?: string }).gatewayCode
-      : undefined;
   return (
+    err instanceof Error &&
     err.name === "GatewayClientRequestError" &&
-    gatewayCode === "INVALID_REQUEST" &&
+    "gatewayCode" in err &&
+    err.gatewayCode === "INVALID_REQUEST" &&
     err.message.includes("system provenance fields require admin scope")
   );
 }

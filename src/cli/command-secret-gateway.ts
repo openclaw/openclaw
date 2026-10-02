@@ -116,13 +116,6 @@ function targetsRuntimeWebPath(path: string): boolean {
   return path.startsWith("plugins.entries.");
 }
 
-function targetsRuntimeWebResolution(params: {
-  targetIds: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-}): boolean {
-  return [...(params.allowedPaths ?? params.targetIds)].some(targetsRuntimeWebPath);
-}
-
 function collectConfiguredTargetRefPaths(params: {
   config: OpenClawConfig;
   targetIds: Set<string>;
@@ -335,10 +328,6 @@ async function callGatewaySecretsResolve(params: {
   }
 }
 
-function isDirectRuntimeWebTargetPath(path: string): boolean {
-  return /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path);
-}
-
 async function resolveCommandSecretRefsLocally(params: {
   config: OpenClawConfig;
   commandName: string;
@@ -370,11 +359,10 @@ async function resolveCommandSecretRefsLocally(params: {
     agentId: params.agentId,
   });
   if (
-    targetsRuntimeWebResolution({
-      targetIds: params.targetIds,
-      allowedPaths: params.allowedPaths,
-    }) &&
-    !runtimeWebTargets.every((target) => isDirectRuntimeWebTargetPath(target.path))
+    [...(params.allowedPaths ?? params.targetIds)].some(targetsRuntimeWebPath) &&
+    !runtimeWebTargets.every((target) =>
+      /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(target.path),
+    )
   ) {
     try {
       await resolveRuntimeWebTools({

@@ -1,13 +1,13 @@
 ---
-summary: "Which typed-public SDK subpath replaces each legacy import, including the retained channel facades"
+summary: "Which typed-public SDK subpath replaces each legacy import, including the removed channel facades"
 read_when:
   - You are replacing a broad SDK barrel import with a focused subpath
-  - You need the retained channel facade to channel-outbound mappings
+  - You need the removed channel facade to channel-outbound mappings
 title: "Import path reference"
 sidebarTitle: "Import paths"
 ---
 
-How to pick the narrowest documented subpath, and the per-export mappings for the retained channel facades. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
+How to pick the narrowest documented subpath, and the per-export mappings for the removed channel facades. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
 ## Import path reference
 
@@ -38,9 +38,11 @@ Use the narrowest import that matches the job. If you cannot find an export,
 check the source at `src/plugin-sdk/` or ask maintainers which generic
 contract should own it.
 
-### Retained channel facade mappings
+<a id="retained-channel-facade-mappings" />
 
-The retained channel facades are not interchangeable with `channel-outbound`.
+### Removed channel facade mappings
+
+The removed channel facades are not interchangeable with `channel-outbound`.
 Migrate each function and type separately.
 
 For `openclaw/plugin-sdk/channel-reply-pipeline`, use these exports from
@@ -52,39 +54,34 @@ For `openclaw/plugin-sdk/channel-reply-pipeline`, use these exports from
 | `resolveChannelSourceReplyDeliveryMode`                                         | `resolveChannelMessageSourceReplyDeliveryMode` |
 | `createReplyPrefixContext`, `createReplyPrefixOptions`, `createTypingCallbacks` | Same names                                     |
 
-These functions share their implementations with the retained facade. The named
-types do not all move with them: `channel-outbound` does not export
+These functions preserve the former facade's implementations. Their named
+types are also available unchanged from `channel-outbound`:
 `ChannelReplyPipeline`, `CreateTypingCallbacksParams`, `ReplyPrefixContext`,
-`ReplyPrefixContextBundle`, `ReplyPrefixOptions`, or `TypingCallbacks`.
-`SourceReplyDeliveryMode` is available from the typed-public
-`openclaw/plugin-sdk/reply-runtime` subpath. Callers that still need the other
-named imports must retain their compatibility type imports until an SDK owner
-approves a public replacement; do not import the internal `channel-reply-core`
-source file.
+`ReplyPrefixContextBundle`, `ReplyPrefixOptions`, `SourceReplyDeliveryMode`,
+and `TypingCallbacks`.
 
 From `openclaw/plugin-sdk/channel-lifecycle`, these functions move unchanged to
 `channel-outbound`: `createAccountStatusSink`, `createChannelRunQueue`,
 `keepHttpServerTaskAlive`, `runPassiveAccountLifecycle`, `waitUntilAbort`,
 `createDraftStreamLoop`, `createFinalizableDraftLifecycle`,
-`createFinalizableDraftStreamControlsForState`, and `takeMessageIdAfterStop`.
-Other lifecycle helpers need more than a path change:
-
-| Retained helper                                       | Migration limit                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deliverFinalizableDraftPreview`                      | Adapt to `defineFinalizableLivePreviewAdapter` and `deliverWithFinalizableLivePreviewAdapter`. Move preview callbacks into `adapter` and handle an object result with `kind` and optional `liveState`, not the legacy string result. The adapter can return `preview-retained`; the legacy wrapper maps that kind to `normal-skipped`. |
-| `createFinalizableDraftStreamControls`                | `createFinalizableDraftStreamControlsForState` requires a shared `{ stopped, final }` object instead of custom state getter/marker callbacks.                                                                                                                                                                                          |
-| `clearFinalizableDraftMessage`                        | Adopting `createFinalizableDraftLifecycle` changes cleanup ownership: it serializes clears and retains failed deletions for retry. `takeMessageIdAfterStop` only takes the ID; it does not delete the message.                                                                                                                         |
-| `createRunStateMachine`, `createArmableStallWatchdog` | No modern public equivalents. Keep retained imports pending an SDK-owner decision.                                                                                                                                                                                                                                                     |
+`createFinalizableDraftStreamControls`,
+`createFinalizableDraftStreamControlsForState`, `clearFinalizableDraftMessage`,
+`takeMessageIdAfterStop`, `createRunStateMachine`, and `createArmableStallWatchdog`.
 
 The named types `ChannelRunQueue`, `ChannelRunQueueParams`,
-`ChannelRunQueueTaskContext`, `DraftPreviewFinalizerDraft`,
-`DraftPreviewFinalizerResult`, `DraftStreamLoop`, `FinalizableDraftStreamState`,
-`ArmableStallWatchdog`, and `StallWatchdogTimeoutMeta` are not exported by
-`channel-outbound`. Nor does it export `deliverFinalizableLivePreview`,
-`LivePreviewFinalizerDraft`, or `LivePreviewFinalizerResult`, despite the legacy
-finalizer annotations recommending them. Keep needed compatibility type imports;
-inferred factory results are not necessarily identical to caller-implemented
-legacy interfaces.
+`ChannelRunQueueTaskContext`, `DraftStreamLoop`, `FinalizableDraftStreamState`,
+`ArmableStallWatchdog`, and `StallWatchdogTimeoutMeta` also move unchanged to
+`channel-outbound`.
+
+Replace `deliverFinalizableDraftPreview` with
+`defineFinalizableLivePreviewAdapter` and `deliverWithFinalizableLivePreviewAdapter`.
+Move preview callbacks into `adapter` and handle an object result with `kind`
+and optional `liveState`, not the legacy string result. The adapter can return
+`preview-retained`; the removed wrapper mapped that kind to `normal-skipped`.
+
+The legacy `DraftPreviewFinalizerDraft` and `DraftPreviewFinalizerResult` names
+are removed. Adapt type usage to the focused live-preview contracts and account
+for the result-shape change.
 
 For `openclaw/plugin-sdk/channel-message`, move outbound exports unchanged to
 `channel-outbound`, but migrate its three dispatch aliases to

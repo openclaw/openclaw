@@ -205,10 +205,7 @@ export type ReplyBackendHandle = {
   isStopped?: () => boolean;
   isAbortable?: () => boolean;
   /** @deprecated Compatibility for shipped embedded handles. Use messageInjection. */
-  queueMessage?: (
-    text: string,
-    options?: ReplyBackendQueueMessageOptions,
-  ) => Promise<void | ReplyBackendQueueMessageResult>;
+  queueMessage?: ReplyBackendMessageInjection["queueMessage"];
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -344,6 +341,8 @@ export type ReplyOperation = {
    * Final delivery reads it because the original dispatch context cannot change.
    */
   readonly acceptedSteeredInboundAudio: boolean;
+  /** Sticky fact: a final message-tool send already answered this turn's source. */
+  readonly sourceReplyDelivered: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
   /** Initial selected model; a concrete attempt must not replace user intent. */
@@ -361,15 +360,7 @@ export type ReplyOperation = {
   /** Capture lineage before a pending barrier outlives this operation's lane. */
   captureOwnedSessionIds(): Set<string>;
   recordActivity(): void;
-  setPhase(
-    next:
-      | "queued"
-      | "waiting_for_deferred_maintenance"
-      | "waiting_for_global_lane"
-      | "preflight_compacting"
-      | "memory_flushing"
-      | "running",
-  ): void;
+  setPhase(next: Exclude<ReplyOperationPhase, "completed" | "failed" | "aborted">): void;
   markWaitingForDeferredMaintenance(): void;
   /** Return a maintenance-waiting operation to queued if the run has not started. */
   markDeferredMaintenanceWaitEnded(): void;
@@ -377,7 +368,9 @@ export type ReplyOperation = {
   /** Return a global-lane-waiting operation to queued once capacity is granted. */
   markGlobalLaneWaitEnded(): void;
   markTerminalRecovery(): void;
-  markAcceptedSteeredInboundAudio(): void;
+  /** A steered input joined this operation; any earlier source answer predates it. */
+  markSteeredInputAccepted(params: { inboundAudio: boolean }): void;
+  markSourceReplyDelivered(): void;
   /** Freeze the complete caller policy before a concrete backend attempt attaches. */
   bindToolAuthoritySnapshot(snapshot: ReplyToolAuthoritySnapshot): void;
   setAutomaticFallbackRoute(route: ReplyToolAuthorityRoute | undefined): void;

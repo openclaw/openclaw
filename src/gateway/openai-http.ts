@@ -13,7 +13,6 @@ import {
 import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { z } from "zod";
-import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { toOpenAiChatCompletionsUsage, type OpenAiChatCompletionsUsage } from "../agents/usage.js";
@@ -57,10 +56,7 @@ import { rejectDisabledGatewayUpload } from "./http-upload-policy.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   authorizeOpenAiCompatibleHttpSession,
-  isAgentSelectionRequiredError,
-  isGatewaySessionKeyOverrideError,
-  isInvalidGatewayModelError,
-  isUnknownGatewayAgentError,
+  isGatewayRequestContextError,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveSharedSecretHttpOperatorScopes,
@@ -68,13 +64,13 @@ import {
 } from "./http-utils.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
 import {
-  resolveOpenAiCompatError,
   validateOpenAiSamplingParams,
   resolveResponseFormat,
   resolveStopSequences,
 } from "./openai-compat-errors.js";
 import {
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
@@ -617,12 +613,7 @@ export async function handleOpenAiHttpRequest(
       useMessageChannelHeader: true,
     }));
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isUnknownGatewayAgentError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
-    ) {
+    if (isGatewayRequestContextError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -798,18 +789,8 @@ export async function handleOpenAiHttpRequest(
         return true;
       }
       logWarn(`openai-compat: chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        sendInvalidRequest(res, "invalid tool configuration");
-        return true;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        sendJson(res, mapped.status, { error: mapped.error });
-        return true;
-      }
-      sendJson(res, 500, {
-        error: { message: "internal error", type: "api_error" },
-      });
+      const mapped = resolveOpenAiCompatibleAgentError(err);
+      sendJson(res, mapped.status, { error: mapped.error });
     }
     return true;
   }
@@ -1024,23 +1005,7 @@ export async function handleOpenAiHttpRequest(
       }
       terminalLifecyclePhase = "error";
       logWarn(`openai-compat: streaming chat completion failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        finishStreamWithError({
-          message: "invalid tool configuration",
-          type: "invalid_request_error",
-        });
-        return;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        finishStreamWithError(mapped.error);
-        return;
-      }
-      if (terminalStreamError) {
-        finishStreamWithError(terminalStreamError);
-        return;
-      }
-      finishStreamWithError({ message: "internal error", type: "api_error" });
+      finishStreamWithError(resolveOpenAiCompatibleAgentError(err, terminalStreamError).error);
     } finally {
       releaseAgentRootWork?.();
       // The provider owns observed terminals; a second end would erase a failed session.

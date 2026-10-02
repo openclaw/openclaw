@@ -147,39 +147,32 @@ export function registerWebCapabilityCommands(capability: Command): void {
       ),
     );
 
-  registerLocalProvidersCommand(
-    web,
-    "List web providers",
-    async (cfg, agentId) => {
-      const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-      const { isWebFetchProviderConfigured, listWebFetchProviders } =
-        await import("../../web-fetch/runtime.js");
-      const { isWebSearchProviderConfigured, listWebSearchProviders } =
-        await import("../../web-search/runtime.js");
-      const agentDir = resolveAgentDir(cfg, agentId);
-      const selectedSearchProvider = normalizeLowercaseStringOrEmpty(
-        cfg.tools?.web?.search?.provider,
-      );
-      const selectedFetchProvider = normalizeLowercaseStringOrEmpty(
-        cfg.tools?.web?.fetch?.provider,
-      );
-      return {
-        search: listWebSearchProviders({ config: cfg }).map((provider) => ({
-          available: true,
-          configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
-          selected: provider.id === selectedSearchProvider,
-          id: provider.id,
-          envVars: provider.envVars,
-        })),
-        fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
-          available: true,
-          configured: isWebFetchProviderConfigured({ provider, config: cfg }),
-          selected: provider.id === selectedFetchProvider,
-          id: provider.id,
-          envVars: provider.envVars,
-        })),
-      };
-    },
-    (value) => JSON.stringify(value, null, 2),
-  );
+  registerLocalProvidersCommand(web, "List web providers", async (cfg, agentId) => {
+    const { resolveAgentDir } = await import("../../agents/agent-scope.js");
+    const { isWebFetchProviderConfigured, listWebFetchProviders } =
+      await import("../../web-fetch/runtime.js");
+    const { isWebSearchProviderConfigured, listWebSearchProviders } =
+      await import("../../web-search/runtime.js");
+    const agentDir = resolveAgentDir(cfg, agentId);
+    const selectedSearchProvider = normalizeLowercaseStringOrEmpty(
+      cfg.tools?.web?.search?.provider,
+    );
+    const selectedFetchProvider = normalizeLowercaseStringOrEmpty(cfg.tools?.web?.fetch?.provider);
+    return {
+      search: listWebSearchProviders({ config: cfg }).map((provider) => ({
+        available: true,
+        configured: isWebSearchProviderConfigured({ provider, config: cfg, agentDir }),
+        selected: provider.id === selectedSearchProvider,
+        id: provider.id,
+        envVars: provider.envVars,
+      })),
+      fetch: listWebFetchProviders({ config: cfg }).map((provider) => ({
+        available: true,
+        configured: isWebFetchProviderConfigured({ provider, config: cfg }),
+        selected: provider.id === selectedFetchProvider,
+        id: provider.id,
+        envVars: provider.envVars,
+      })),
+    };
+  });
 }

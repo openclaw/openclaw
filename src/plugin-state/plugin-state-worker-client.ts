@@ -35,9 +35,10 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
   checks: {
     assertCurrent?: () => void;
     isObservation?: ObservationCheck<Key>;
+    existingOnly?: { missing: () => PluginStateWorkerRequests[Key]["output"] };
   } = {},
 ): Promise<PluginStateWorkerRequests[Key]["output"]> {
-  const { assertCurrent, isObservation } = checks;
+  const { assertCurrent, isObservation, existingOnly } = checks;
   const assertAdmission = assertCurrent
     ? () => {
         assertActive?.();
@@ -95,7 +96,11 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       assertCurrent: assertAdmission,
       createAdmission,
+      existingOnly: existingOnly !== undefined,
     });
+    if (result === undefined && existingOnly) {
+      return existingOnly.missing();
+    }
     if (isObservation?.(result)) {
       assertAdmission?.();
     }
@@ -200,6 +205,18 @@ export function deletePluginStateInWorker(
 
 export const listPluginStateInWorker = createOperation("pluginState.entries", () => []);
 export const clearPluginStateInWorker = createOperation("pluginState.clear");
+
+export function clearRuntimeHealthInWorker(
+  params: Input<"pluginState.clearRuntimeHealth"> & { assertCurrent?: () => void },
+): Promise<void> {
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
+  return execute(
+    { env, assertActive, sessionEntryCurrent },
+    { type: "pluginState.clearRuntimeHealth", input },
+    undefined,
+    { assertCurrent, existingOnly: { missing: () => undefined } },
+  );
+}
 
 export function sweepExpiredPluginStateEntriesInWorker(
   params: HostAdmission = {},

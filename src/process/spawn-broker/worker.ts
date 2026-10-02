@@ -7,7 +7,7 @@ import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
 import { hasLiveOwnedProcessGroupMembers } from "../supervisor/service-child-group-ownership.js";
 import { serializeExecaError } from "./execa-protocol.js";
-import { startBrokerExeca } from "./execa-worker.js";
+import { startBrokerExeca, type BrokerExecaProcess } from "./execa-worker.js";
 import { createBrokerReceiver } from "./ipc.js";
 import { holdPipeForTransfer, takePipePrefix } from "./pipe.js";
 import {
@@ -20,18 +20,17 @@ import type { BrokerResourceRequest, BrokerResourceResponse } from "./resource-p
 import { createBrokerNativeResourceServer } from "./resource-server.js";
 import { createWorkerSender } from "./worker-sender.js";
 
-type ExecaRun = Awaited<ReturnType<typeof startBrokerExeca>>;
 type Owned = {
   child: ChildProcess;
   detached: boolean;
-  execa?: ExecaRun;
+  execa?: BrokerExecaProcess;
   announced: boolean;
   events: BrokerResponse[];
   exited: boolean;
   resultSettled: boolean;
   openPipes: Set<number>;
 };
-type Admission = { type: "started"; entry: Owned } | { type: "failed"; execa: ExecaRun };
+type Admission = { type: "started"; entry: Owned } | { type: "failed"; execa: BrokerExecaProcess };
 const owned = new Map<number, Owned>();
 const receiver = createBrokerReceiver();
 let stopping = false;

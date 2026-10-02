@@ -55,6 +55,13 @@ vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
       ? { state: "live", mode: "supervised", pid: 4242 }
       : undefined,
 }));
+vi.mock("../../commands/doctor-maintenance-inspection.js", async (original) => ({
+  ...(await original<typeof import("../../commands/doctor-maintenance-inspection.js")>()),
+  readDoctorGatewayOwnerLease: async () =>
+    native.inspecting && !native.stopped
+      ? { state: "live", mode: "supervised", pid: 4242 }
+      : undefined,
+}));
 vi.mock("../../infra/gateway-state-owner.js", async (original) => {
   const actual = await original<typeof import("../../infra/gateway-state-owner.js")>();
   return {

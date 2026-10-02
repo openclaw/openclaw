@@ -19,15 +19,6 @@ import {
   resolveOpenAIProviderConfigRecord,
 } from "./realtime-provider-shared.js";
 
-type OpenAIRealtimeTranscriptionProviderConfig = {
-  apiKey?: string;
-  language?: string;
-  model?: string;
-  prompt?: string;
-  silenceDurationMs?: number;
-  vadThreshold?: number;
-};
-
 type OpenAIRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey?: string;
   cfg?: OpenClawConfig;
@@ -88,9 +79,7 @@ function appendedUtf8ByteLength(previous: string, appended: string): number {
   return joinsSurrogatePair ? appendedBytes - 2 : appendedBytes;
 }
 
-function normalizeProviderConfig(
-  config: RealtimeTranscriptionProviderConfig,
-): OpenAIRealtimeTranscriptionProviderConfig {
+function normalizeProviderConfig(config: RealtimeTranscriptionProviderConfig) {
   const raw = resolveOpenAIProviderConfigRecord(config);
   return {
     apiKey:

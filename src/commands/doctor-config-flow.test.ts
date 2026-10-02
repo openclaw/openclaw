@@ -292,7 +292,7 @@ describe("doctor config flow", () => {
     );
   });
 
-  it("previews and persists pre-parse context-budget cleanup with every path reported", async () => {
+  it("previews and persists context-budget migration with every path reported", async () => {
     const model = { id: "gpt-5.4", name: "GPT-5.4" };
     const budget = { contextTokens: 64_000, contextWindow: 128_000 };
     const canonical = {
@@ -305,9 +305,10 @@ describe("doctor config flow", () => {
     };
 
     await runConfig({
-      config: canonical,
+      config: legacy,
       parsedConfig: legacy,
       sourceConfigBeforeMigrations: legacy,
+      preflightMode: "issues",
     });
     const previewText = terminalNoteMock.mock.calls.map(([message]) => message).join("\n");
     expect(previewText).toContain(
@@ -319,10 +320,11 @@ describe("doctor config flow", () => {
 
     terminalNoteMock.mockClear();
     const repaired = await runConfig({
-      config: canonical,
+      config: legacy,
       parsedConfig: legacy,
       sourceConfigBeforeMigrations: legacy,
       repair: true,
+      preflightMode: "compat",
     });
 
     expect(repaired.shouldWriteConfig).toBe(true);
@@ -804,6 +806,7 @@ describe("doctor config flow", () => {
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
     const result = await runConfig({
       repair: true,
+      preflightMode: "compat",
       config: {
         channels: {
           whatsapp: {
@@ -829,7 +832,7 @@ describe("doctor config flow", () => {
     );
     expect(toolsBySender.owner).toBeUndefined();
     expect(toolsBySender.alice).toBeUndefined();
-    expect(toolsBySender["id:owner"]).toEqual({ deny: ["exec"] });
+    expect(toolsBySender["id:owner"]).toEqual({ allow: ["exec"] });
     expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });

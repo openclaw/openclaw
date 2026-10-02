@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
+import { decodeXml, escapeXml } from "../../shared/xml.js";
 
 export interface Skill {
   name: string;
@@ -28,22 +29,13 @@ export interface Skill {
 
 export { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 
+// Preserve the names and signatures in SDK-reachable namespace declarations.
 export function escapeSkillXml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+  return escapeXml(str);
 }
 
 export function decodeSkillXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  return decodeXml(value);
 }
 
 export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
@@ -79,7 +71,7 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
     catalog.replace(
       /<description>([\s\S]*?)<\/description>/gu,
       (_match, description: string) =>
-        `<description>${escapeSkillXml(truncateSkillDescription(decodeSkillXml(description), maxChars))}</description>`,
+        `<description>${escapeXml(truncateSkillDescription(decodeXml(description), maxChars))}</description>`,
     ) +
     prompt.slice(end);
   // Names, mapped locations and loading notes are an identity floor, not optional prose.
@@ -119,14 +111,14 @@ function formatSkillCatalog(
   ];
   for (const skill of skills) {
     lines.push("  <skill>");
-    lines.push(`    <name>${escapeSkillXml(skill.name)}</name>`);
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     const description = descriptionForSkill(skill);
     if (description !== undefined) {
-      lines.push(`    <description>${escapeSkillXml(description)}</description>`);
+      lines.push(`    <description>${escapeXml(description)}</description>`);
     }
-    lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
     if (skill.locationNote) {
-      lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
     }
     lines.push("  </skill>");
   }

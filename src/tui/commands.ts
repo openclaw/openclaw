@@ -208,10 +208,6 @@ function commandIsVisible(command: TuiCommandDescriptor, local: boolean): boolea
   return command.scope !== (local ? "remote" : "local");
 }
 
-function normalizeSlashCommandName(value: string): string {
-  return value.replace(/^\//, "").trim();
-}
-
 function appendSlashCommand(
   commands: SlashCommand[],
   seen: Map<string, SlashCommand["getArgumentCompletions"]>,
@@ -219,7 +215,7 @@ function appendSlashCommand(
   description: string,
   getArgumentCompletions?: SlashCommand["getArgumentCompletions"],
 ) {
-  const normalizedName = normalizeSlashCommandName(name);
+  const normalizedName = name.replace(/^\//, "").trim();
   if (!normalizedName || seen.has(normalizedName)) {
     return;
   }

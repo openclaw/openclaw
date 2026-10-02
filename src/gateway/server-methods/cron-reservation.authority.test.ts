@@ -6,11 +6,11 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { CronService } from "../../cron/service.js";
-import { assertServiceCronRunReceiptCurrent } from "../../cron/service/run-receipts.js";
 import { saveCronStore } from "../../cron/store.js";
 import {
   finishCronRunReceiptAsync,
   prepareCronRunReceiptClaim,
+  readCronRunReceiptCurrentJob,
 } from "../../cron/store/run-receipt-store.js";
 import { claimCronRunReceiptInDatabaseForTest } from "../../cron/store/run-receipt-store.test-support.js";
 import {
@@ -56,9 +56,13 @@ it("revalidates a scheduled Gateway caller while its child reservation holds the
       }),
     );
     const operationalRunInstance = createOperationalRunInstanceRef("scheduled-cron-caller");
-    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, () =>
-      assertServiceCronRunReceiptCurrent(state, receipt),
-    );
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance, () => {
+      readCronRunReceiptCurrentJob({
+        handle: receipt,
+        resolveAgentId: () => "main",
+        isAgentAvailable: state.deps.isAgentAvailable,
+      });
+    });
     const cron = new CronService(state.deps);
     const client = createSyntheticPluginRuntimeClient();
     client.internal = {

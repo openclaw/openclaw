@@ -8,7 +8,6 @@ import {
   continueRealtimeTalkConversation,
   orderRealtimeTalkConversation,
   updateRealtimeTalkConversation,
-  type RealtimeTalkConversationEntry,
   type RealtimeTalkConversationState,
 } from "./talk/conversation.ts";
 import {
@@ -33,7 +32,6 @@ export type ChatRealtimeState = {
   realtimeTalkInputNotice: string | null;
   realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
-  realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkVideoStream: MediaStream | null;
   realtimeTalkCameraDevices: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable: boolean;
@@ -60,7 +58,6 @@ export function createInitialChatRealtimeState(): Pick<
     realtimeTalkInputNotice: null,
     realtimeTalkUseSystemDefault: null,
     realtimeTalkInputLevel: new RealtimeTalkLevelSignal(),
-    realtimeTalkConversation: [],
     realtimeTalkVideoStream: null,
     realtimeTalkCameraDevices: [],
     realtimeTalkVideoCapable: false,
@@ -74,7 +71,6 @@ export function createInitialChatRealtimeState(): Pick<
 
 function resetChatRealtimeConversation(state: ChatRealtimeState) {
   state.realtimeTalkConversationState = createRealtimeTalkConversationState();
-  state.realtimeTalkConversation = [];
 }
 
 export function stopChatRealtimeTalk(
@@ -102,7 +98,6 @@ export function stopChatRealtimeTalk(
     state.realtimeTalkConversationState = continueRealtimeTalkConversation(
       state.realtimeTalkConversationState,
     );
-    state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
   } else {
     resetChatRealtimeConversation(state);
   }
@@ -219,7 +214,6 @@ export function attachChatRealtimeActions(
       state.realtimeTalkConversationState = continueRealtimeTalkConversation(
         state.realtimeTalkConversationState,
       );
-      state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
       conversationGeneration += 1;
       state.requestUpdate();
       await closed;
@@ -256,7 +250,7 @@ export function attachChatRealtimeActions(
     }
     const voiceController = state.realtimeTalkVoiceController;
     const itemPrefix = voiceChange ? `voice-${conversationGeneration}:` : "";
-    const orderOffset = voiceChange ? state.realtimeTalkConversation.length : 0;
+    const orderOffset = voiceChange ? state.realtimeTalkConversationState.entries.length : 0;
     const videoDeviceId = talkSettings.realtimeTalkVideoDeviceId?.trim() || undefined;
     const autoEnableCamera = talkSettings.talkCameraAutoEnable === true;
     let autoEnableCameraAttempted = false;
@@ -331,7 +325,6 @@ export function attachChatRealtimeActions(
                   order: entry.order === undefined ? undefined : orderOffset + entry.order,
                 },
           );
-          state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();
         }),
         onTranscriptOrder: forCurrentSession((orders) => {
@@ -342,7 +335,6 @@ export function attachChatRealtimeActions(
               order: orderOffset + order,
             })),
           );
-          state.realtimeTalkConversation = state.realtimeTalkConversationState.entries;
           state.requestUpdate();
         }),
         onVideoStream: forCurrentSession((stream) => {

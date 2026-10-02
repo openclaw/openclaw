@@ -1,4 +1,3 @@
-// QR/setup-code CLI for mobile/device pairing with local or remote Gateway credentials.
 import type { Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
@@ -168,14 +167,8 @@ export function registerQrCli(program: Command) {
         }
 
         const explicitUrl = trimToUndefined(opts.url) ?? trimToUndefined(opts.publicUrl);
-        const publicUrl =
-          explicitUrl ??
-          (wantsRemote
-            ? undefined
-            : trimToUndefined(cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"]));
-
         const resolved = await resolvePairingSetupFromConfig(cfg, {
-          publicUrl,
+          publicUrl: explicitUrl,
           preferRemoteUrl: wantsRemote,
           ...(opts.voiceNode
             ? { bootstrapProfile: VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE }

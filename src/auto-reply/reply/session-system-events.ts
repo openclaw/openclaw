@@ -31,14 +31,13 @@ function compactSystemEvent(event: SystemEvent): string | null {
     return trimmed;
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.includes("reason periodic")) {
-    return null;
-  }
   // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (lower.startsWith("read heartbeat.md")) {
-    return null;
-  }
-  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+  if (
+    lower.includes("reason periodic") ||
+    lower.startsWith("read heartbeat.md") ||
+    lower.includes("heartbeat poll") ||
+    lower.includes("heartbeat wake")
+  ) {
     return null;
   }
   if (trimmed.startsWith("Node:")) {

@@ -110,7 +110,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["openclaw.chat", "system-agent", "operator.admin", "<=2026.7"],
   ["openclaw.chat.history", "system-agent", "operator.admin", "2026.7"],
   ["openclaw.changes.list", "system-changes", "operator.admin", "<=2026.7"],
-  ["openclaw.approval.list", "system-agent", "operator.approvals", "<=2026.7"],
+  ["openclaw.approval.list", "system-agent-approvals", "operator.approvals", "<=2026.7"],
   ["openclaw.setup.detect", "system-agent", "operator.admin", "<=2026.7"],
   // Failed activation candidates are non-mutating probes. Keep this admin-only
   // without the shared three-write budget so the automatic ladder can finish.
@@ -685,4 +685,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["users.merge", "users", "operator.admin", "2026.9"],
   ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
+  ["sessions.catalog.import", "session-catalog", "operator.write", "2026.9"],
+  ["backup.status", "backup", "operator.read", "2026.9"],
+  ["storage.locations.list", "storage", "operator.read", "2026.9"],
+  ["storage.locations.probe", "storage", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

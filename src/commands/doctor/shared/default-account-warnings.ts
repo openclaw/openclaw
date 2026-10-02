@@ -1,4 +1,3 @@
-// Doctor warnings for multi-account channels missing explicit default account routing.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,

@@ -5,6 +5,7 @@ import {
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readResolvedDeferredPluginMigrationWarnings } from "../../infra/deferred-plugin-migration-warnings.js";
+import { readInstallOwner } from "../../infra/install-owner.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   DEFAULT_PACKAGE_CHANNEL,
@@ -18,6 +19,7 @@ import {
   DoctorMaintenanceRefusalError,
   normalizeUpdatePostInstallDoctorWarnings,
 } from "../../infra/update-doctor-result.js";
+import type { ManagedHandoffRepair } from "../../infra/update-managed-service-handoff-lease-types.js";
 import { POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV } from "../../infra/update-post-core-context.js";
 import { formatUpdateRunOwnership } from "../../infra/update-run-activity.js";
 import {
@@ -36,6 +38,7 @@ import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-stat
 import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
+import { refuseHostOwnedUpdate, reportHostOwnedUpdate } from "./host-owned.js";
 import {
   parseUpdateTimeoutMs,
   readPackageVersion,
@@ -84,7 +87,11 @@ import {
 export async function updateFinalizeCommand(
   opts: UpdateFinalizeOptions,
   recoveryRunIds?: readonly string[],
+  handoff?: ManagedHandoffRepair,
 ): Promise<void> {
+  // Refuse retained recovery before discovery; preflight rechecks before state writes.
+  await assertUpdateRecoveryAdmission({ env: process.env });
+  await refuseHostOwnedUpdate(await resolveUpdateRoot(), opts);
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
@@ -100,6 +107,7 @@ export async function updateFinalizeCommand(
   let exitCode: number | undefined;
   await withCommandProcessScope(async (stopChildren) => {
     const lifecycle = new UpdateFinalizationLifecycle(Boolean(opts.json), timeoutMs, stopChildren);
+    lifecycle.handoff = handoff;
     try {
       const { root, installKind, runId } = await withUpdateAdmissionReporting(
         opts,
@@ -124,6 +132,9 @@ export async function updateFinalizeCommand(
                 const resolvedInstallKind = await resolveUpdateInstallKind(resolvedRoot, {
                   timeoutMs: lifecycle.budget("preflight"),
                 });
+                if (resolvedInstallKind === "host") {
+                  reportHostOwnedUpdate(await readInstallOwner(resolvedRoot), opts);
+                }
                 lifecycle.recordInstallKind(
                   resolvedInstallKind,
                   await readPackageVersion(resolvedRoot),
@@ -517,6 +528,9 @@ async function updateFinalizeCommandInternal(
               })
             : undefined;
         const observed = failure ? await lifecycle.observeFailure(failure) : undefined;
+        if (!failure) {
+          lifecycle.handoff?.complete(invokingRunId);
+        }
         if (opts.json) {
           defaultRuntime.writeJson({
             ...result,

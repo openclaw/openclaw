@@ -4,6 +4,7 @@ import {
   MessageChannel,
   parentPort,
   SHARE_ENV,
+  setEnvironmentData,
   Worker,
   workerData,
   type Transferable,
@@ -150,6 +151,10 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
       resourcePorts = new MessageChannel();
       childData = { ...options.workerData, [descriptor.workerDataKey]: resourcePorts.port2 };
       workerTransfers = [...request.transferList, resourcePorts.port2];
+    }
+    // The carrier may predate admission; each child inherits the spawning caller's current facts.
+    for (const [key, value] of request.environmentData) {
+      setEnvironmentData(key, value);
     }
     worker = new Worker(
       request.filename.kind === "url" ? new URL(request.filename.value) : request.filename.value,

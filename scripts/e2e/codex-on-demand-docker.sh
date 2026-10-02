@@ -9,7 +9,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 
@@ -53,19 +52,11 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-on-demand "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-on-demand "$PACKAGE_TGZ")"
-    return 0
-  fi
-  if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
-    echo "OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
-    exit 1
-  fi
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-on-demand)"
-}
-
-prepare_package_tgz
+if [ -z "$PACKAGE_TGZ" ] && [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
+  echo "OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
+  exit 1
+fi
+PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-on-demand "$PACKAGE_TGZ")"
 
 if [ -z "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] &&
   [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ] &&

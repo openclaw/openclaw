@@ -692,13 +692,15 @@ export async function readMediaBuffer(
     throw new Error(`readMediaBuffer: media ID does not resolve to a file: ${JSON.stringify(id)}`);
   }
   if (opened.stat.size > maxBytes) {
-    throw new Error(
+    throw new FsSafeError(
+      "too-large",
       `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
     );
   }
   const buffer = await opened.handle.readFile();
   if (buffer.byteLength > maxBytes) {
-    throw new Error(
+    throw new FsSafeError(
+      "too-large",
       `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
     );
   }

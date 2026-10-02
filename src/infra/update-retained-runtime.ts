@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
+import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { isPathInside } from "./path-guards.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
   registerRetainedUpdateRuntime,
@@ -20,6 +23,8 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import { linkUpdateCandidatePluginTrees } from "./update-retained-runtime-tree.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
+
+const log = createSubsystemLogger("update/retained-runtime");
 
 type RetainedUpdateRuntimeMetrics = {
   inventoryMs: number;
@@ -44,11 +49,21 @@ export async function withRetainedUpdateRuntime<T>(
   moduleUrl: string,
   operation: (retain: RetainUpdateRuntime) => Promise<T>,
 ): Promise<T> {
+  return await withUserPathBaseDirectory(tryProcessCwd(), () =>
+    runWithRetainedUpdateRuntime(moduleUrl, operation),
+  );
+}
+
+async function runWithRetainedUpdateRuntime<T>(
+  moduleUrl: string,
+  operation: (retain: RetainUpdateRuntime) => Promise<T>,
+): Promise<T> {
   let directory: string | undefined;
   let prepared = false;
   let closing = false;
   let preparation: ReturnType<RetainUpdateRuntime> | undefined;
   let unregister: (() => void) | undefined;
+  let parkedCwd: { original: string; parked: string } | undefined;
   return await withRuntimeWorkerGeneration(
     async (bind) =>
       await operation((params) => {
@@ -73,6 +88,26 @@ export async function withRetainedUpdateRuntime<T>(
           const mutations = mutationRoots.map((entry) =>
             resolvePathViaExistingAncestorSync(path.resolve(entry)),
           );
+          const packageOwner = installTarget
+            ? (resolveNativePackageProjectRoot(installTarget, env) ?? installTarget.globalRoot)
+            : undefined;
+          const mutationBoundaries = [
+            ...mutations,
+            ...(packageOwner
+              ? [resolvePathViaExistingAncestorSync(path.resolve(packageOwner))]
+              : []),
+          ];
+          const cwd = tryProcessCwd();
+          if (!parkedCwd && cwd) {
+            const physicalCwd = resolvePathViaExistingAncestorSync(cwd);
+            if (mutationBoundaries.some((entry) => isPathInside(entry, physicalCwd))) {
+              const parked = path.parse(process.execPath).root;
+              assertCurrent();
+              // Node Worker bootstrap needs a live physical cwd before its own code runs.
+              process.chdir(parked);
+              parkedCwd = { original: cwd, parked: tryProcessCwd() ?? parked };
+            }
+          }
           if (
             !mutations.some(
               (entry) => isPathInside(entry, sourceRoot) || isPathInside(sourceRoot, entry),
@@ -88,16 +123,7 @@ export async function withRetainedUpdateRuntime<T>(
           assertCurrent();
           // Package inventories include their module owner, and native activation
           // replaces its whole project. Scratch must be a sibling of both boundaries.
-          const packageOwner = installTarget
-            ? (resolveNativePackageProjectRoot(installTarget, env) ?? installTarget.globalRoot)
-            : undefined;
-          const boundaries = [
-            sourceRoot,
-            ...mutations,
-            ...(packageOwner
-              ? [resolvePathViaExistingAncestorSync(path.resolve(packageOwner))]
-              : []),
-          ];
+          const boundaries = [sourceRoot, ...mutationBoundaries];
           let parent = path.dirname(sourceRoot);
           while (boundaries.some((entry) => isPathInside(entry, parent))) {
             const ancestor = path.dirname(parent);
@@ -185,11 +211,12 @@ export async function withRetainedUpdateRuntime<T>(
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
-            { directory: privateRoot, bytes: plan.bytes, timeoutMs },
-            async (signal) =>
+            { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
+            async (signal, reportProgress) =>
               await linkUpdateCandidatePluginTrees(plan, {
                 targetStateDir: privateRoot,
                 candidateRoot,
+                onMaterialized: reportProgress,
                 onProgress: () => {
                   signal.throwIfAborted();
                 },
@@ -241,5 +268,17 @@ export async function withRetainedUpdateRuntime<T>(
       }
       return directory;
     },
-  );
+  ).finally(() => {
+    if (!parkedCwd || tryProcessCwd() !== parkedCwd.parked) {
+      return;
+    }
+    try {
+      process.chdir(parkedCwd.original);
+    } catch (error) {
+      // Replacement can retire the launch path; keep the update's original outcome.
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
+        log.warn(`Could not restore updater launch directory: ${formatErrorMessage(error)}`);
+      }
+    }
+  });
 }

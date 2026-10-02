@@ -16,7 +16,6 @@ import {
   type WorkboardArtifact,
   type WorkboardAttachment,
   type WorkboardAutomation,
-  type WorkboardBoardMetadata,
   type WorkboardClaim,
   type WorkboardComment,
   type WorkboardDiagnostic,
@@ -24,7 +23,6 @@ import {
   type WorkboardDiagnosticKind,
   type WorkboardEvent,
   type WorkboardExecution,
-  type WorkboardExecutionMode,
   type WorkboardLink,
   type WorkboardLinkType,
   type WorkboardLaunchState,
@@ -32,7 +30,6 @@ import {
   type WorkboardNotification,
   type WorkboardNotificationKind,
   type WorkboardNotificationSubscription,
-  type WorkboardOrchestrationSettings,
   type WorkboardPriority,
   type WorkboardProof,
   type WorkboardRunAttempt,
@@ -42,6 +39,10 @@ import {
   type WorkboardWorkerProtocol,
   type WorkboardWorkspace,
 } from "@openclaw/workboard-contract";
+import {
+  resolveIntegerOption,
+  resolveOptionalIntegerOption,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeBoundedOptionalString,
@@ -64,7 +65,6 @@ import {
 } from "./store-constants.js";
 import type {
   WorkboardAttachmentInput,
-  WorkboardBoardInput,
   WorkboardNotificationSubscribeInput,
   WorkboardProofInput,
 } from "./store-inputs.js";
@@ -84,105 +84,6 @@ export function normalizeBoardId(value: unknown, fallback?: string): string | un
 
 export function normalizeBoardIdRequired(value: unknown): string {
   return normalizeBoardId(value) ?? "default";
-}
-
-export function normalizeBoardMetadata(
-  input: WorkboardBoardInput,
-  fallback: WorkboardBoardMetadata | undefined,
-  now = Date.now(),
-): WorkboardBoardMetadata {
-  const id = normalizeBoardId(input.id, fallback?.id) ?? "default";
-  const name = normalizeBoundedString(input.name, fallback?.name, 120, "board name");
-  const description = normalizeBoundedString(
-    input.description,
-    fallback?.description,
-    1000,
-    "board description",
-  );
-  const clearAppearance = input.clearAppearance === undefined ? [] : input.clearAppearance;
-  if (
-    !Array.isArray(clearAppearance) ||
-    clearAppearance.some((field) => field !== "icon" && field !== "color")
-  ) {
-    throw new Error("clearAppearance must be an array containing only icon or color.");
-  }
-  // Legacy empty/null inputs preserve appearance. Explicit clears take precedence.
-  const icon = clearAppearance.includes("icon")
-    ? undefined
-    : normalizeBoundedString(input.icon, fallback?.icon, 40, "board icon");
-  const color = clearAppearance.includes("color")
-    ? undefined
-    : normalizeBoundedString(input.color, fallback?.color, 40, "board color");
-  let automationJobId = fallback?.automationJobId;
-  if (Object.hasOwn(input, "automationJobId")) {
-    automationJobId = normalizeOptionalString(input.automationJobId);
-    if (!automationJobId) {
-      throw new Error("automation job id must be a non-empty string.");
-    }
-    if (automationJobId.length > 128) {
-      throw new Error("automation job id must be 128 characters or fewer.");
-    }
-  }
-  const defaultWorkspace = Object.hasOwn(input, "defaultWorkspace")
-    ? normalizeWorkspace(input.defaultWorkspace, fallback?.defaultWorkspace)
-    : fallback?.defaultWorkspace;
-  const orchestration = Object.hasOwn(input, "orchestration")
-    ? normalizeOrchestration(input.orchestration, fallback?.orchestration)
-    : fallback?.orchestration;
-  const archivedAt = Object.hasOwn(input, "archived")
-    ? input.archived === false
-      ? undefined
-      : now
-    : fallback?.archivedAt;
-  return {
-    id,
-    ...(name ? { name } : {}),
-    ...(description ? { description } : {}),
-    ...(icon ? { icon } : {}),
-    ...(color ? { color } : {}),
-    ...(automationJobId ? { automationJobId } : {}),
-    ...(defaultWorkspace ? { defaultWorkspace } : {}),
-    ...(orchestration ? { orchestration } : {}),
-    createdAt: fallback?.createdAt ?? now,
-    updatedAt: now,
-    ...(archivedAt ? { archivedAt } : {}),
-  };
-}
-
-function normalizeOrchestration(
-  value: unknown,
-  fallback?: WorkboardOrchestrationSettings,
-): WorkboardOrchestrationSettings | undefined {
-  if (!isRecord(value)) {
-    return fallback;
-  }
-  const record = value;
-  const autoDecompose =
-    typeof record.autoDecompose === "boolean" ? record.autoDecompose : fallback?.autoDecompose;
-  const autoDecomposePerDispatch =
-    typeof record.autoDecomposePerDispatch === "number" &&
-    Number.isFinite(record.autoDecomposePerDispatch)
-      ? Math.max(1, Math.min(20, Math.trunc(record.autoDecomposePerDispatch)))
-      : fallback?.autoDecomposePerDispatch;
-  const defaultAssignee = normalizeBoundedString(
-    record.defaultAssignee,
-    fallback?.defaultAssignee,
-    120,
-    "default assignee",
-  );
-  const orchestratorProfile = normalizeBoundedString(
-    record.orchestratorProfile,
-    fallback?.orchestratorProfile,
-    120,
-    "orchestrator profile",
-  );
-  const next: WorkboardOrchestrationSettings = {
-    ...(autoDecompose !== undefined ? { autoDecompose } : {}),
-    ...(autoDecomposePerDispatch ? { autoDecomposePerDispatch } : {}),
-    ...(defaultAssignee ? { defaultAssignee } : {}),
-    ...(orchestratorProfile ? { orchestratorProfile } : {}),
-  };
-  return Object.keys(next).length ? next : undefined;
 }
 
 function normalizeNotificationKinds(value: unknown): WorkboardNotificationKind[] | undefined {
@@ -372,7 +273,7 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number | u
   return Math.max(1, Math.trunc(value));
 }
 
-function normalizeWorkspace(
+export function normalizeWorkspace(
   value: unknown,
   fallback?: WorkboardWorkspace,
 ): WorkboardWorkspace | undefined {
@@ -572,9 +473,7 @@ export function normalizeTemplateId(value: unknown): WorkboardTemplateId | undef
 }
 
 export function normalizeTimestamp(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value)
-    ? Math.max(0, Math.trunc(value))
-    : fallback;
+  return resolveOptionalIntegerOption(value, { min: 0 }) ?? fallback;
 }
 
 function normalizeEvent(value: unknown): WorkboardEvent | null {
@@ -623,16 +522,14 @@ function normalizeAttempt(value: unknown): WorkboardRunAttempt | null {
   const error = normalizeBoundedString(record.error, undefined, 800, "attempt error");
   const engine = normalizeBoundedString(record.engine, undefined, 160, "attempt engine");
   const model = normalizeBoundedString(record.model, undefined, 160, "attempt model");
+  const mode = normalizeEnumValue(record.mode, WORKBOARD_EXECUTION_MODES, undefined);
   return {
     id,
     status: normalizeEnumValue(record.status, WORKBOARD_ATTEMPT_STATUSES, "running"),
     startedAt,
     ...(endedAt ? { endedAt } : {}),
     ...(engine ? { engine } : {}),
-    ...(typeof record.mode === "string" &&
-    WORKBOARD_EXECUTION_MODES.includes(record.mode as WorkboardExecutionMode)
-      ? { mode: record.mode as WorkboardExecutionMode }
-      : {}),
+    ...(mode ? { mode } : {}),
     ...(model ? { model } : {}),
     ...(sessionKey ? { sessionKey } : {}),
     ...(runId ? { runId } : {}),
@@ -731,10 +628,7 @@ function normalizeAttachment(value: unknown): WorkboardAttachment | null {
   const cardId = normalizeBoundedString(record.cardId, undefined, 120, "card id");
   const fileName = normalizeBoundedString(record.fileName, undefined, 240, "attachment file name");
   const createdAt = normalizeTimestamp(record.createdAt, 0);
-  const byteSize =
-    typeof record.byteSize === "number" && Number.isFinite(record.byteSize)
-      ? Math.max(0, Math.trunc(record.byteSize))
-      : 0;
+  const byteSize = normalizeTimestamp(record.byteSize, 0);
   if (!id || !cardId || !fileName || !createdAt || byteSize <= 0) {
     return null;
   }
@@ -911,10 +805,7 @@ function normalizeDiagnostic(value: unknown): WorkboardDiagnostic | null {
     detail,
     firstSeenAt,
     lastSeenAt,
-    count:
-      typeof record.count === "number" && Number.isFinite(record.count)
-        ? Math.max(1, Math.trunc(record.count))
-        : 1,
+    count: resolveIntegerOption(record.count, 1, { min: 1 }),
     actions: Array.isArray(record.actions)
       ? record.actions
           .map(normalizeDiagnosticAction)
@@ -1142,9 +1033,7 @@ export function normalizeMetadata(
       ? normalizeTimestamp(record.lifecycleStatusSourceUpdatedAt, 0)
       : fallback.lifecycleStatusSourceUpdatedAt,
     failureCount:
-      typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
-        ? Math.max(0, Math.trunc(record.failureCount))
-        : fallback.failureCount,
+      resolveOptionalIntegerOption(record.failureCount, { min: 0 }) ?? fallback.failureCount,
   };
   return trimMetadataToBudget(normalized, options);
 }

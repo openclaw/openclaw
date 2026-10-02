@@ -13,7 +13,6 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { createSessionsTool } from "../agents/tools/sessions-tool.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -164,17 +163,6 @@ describe("scoped session archive tools", () => {
               (tool) => tool.name === "sessions",
             ),
           ).toBe(false);
-          await expect(
-            createSessionsTool({
-              config: cfg,
-              agentSessionKey: TARGET,
-              agentSessionId: TARGET_ID,
-              controlOnly: true,
-            }).execute("no-write-grant", {
-              action: "patch",
-              archived: true,
-            }),
-          ).rejects.toThrow(/current operator write grant/);
         };
         if (caller === "unbound") {
           await check();
@@ -240,7 +228,7 @@ describe("scoped session archive tools", () => {
                   expectedSessionId: TARGET_ID,
                   archived: true,
                 }),
-              ).rejects.toThrow(/owner|assigned|own session/i);
+              ).rejects.toThrow(/session creator/i);
             },
           ),
         );
@@ -437,7 +425,7 @@ describe("scoped session archive tools", () => {
     },
   );
 
-  it("exposes owner and assignee self-archive for operator.write through the assembled tool surface", async () => {
+  it("allows creator self-archive and denies assignee archive or restore through the assembled tool surface", async () => {
     const scope = "operator.write";
     await withSessionToolsFixture(async (cfg) => {
       const request = getPluginRuntimeGatewayRequestScope();
@@ -480,7 +468,7 @@ describe("scoped session archive tools", () => {
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
       });
-      let retained: ReturnType<typeof createSessionsTool> | undefined;
+      let retained: ReturnType<typeof createOpenClawCodingTools>[number] | undefined;
       try {
         const result = await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -534,14 +522,16 @@ describe("scoped session archive tools", () => {
                   expectedSessionId: TARGET_ID,
                   archived: value,
                 });
-              await archiveAssigned(true);
-              expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt).toEqual(
-                expect.any(Number),
-              );
-              await archiveAssigned(false);
+              await expect(archiveAssigned(true)).rejects.toThrow(/session creator/i);
               expect(
                 loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt,
               ).toBeUndefined();
+              const archivedAt = 123;
+              await upsertSessionEntryCore({ agentId: "main", sessionKey: TARGET }, { archivedAt });
+              await expect(archiveAssigned(false)).rejects.toThrow(/session creator/i);
+              expect(loadSessionEntry({ agentId: "main", sessionKey: TARGET })?.archivedAt).toBe(
+                archivedAt,
+              );
               return await admission.run(() =>
                 tool.execute("archive-own-session", { action: "patch", archived: true }),
               );

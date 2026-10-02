@@ -380,17 +380,14 @@ export class SidebarSessionProjection {
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
-    if (!params.session.hasActiveRun || !params.showPreview) {
-      return resolveSidebarSessionSubtitle(params);
-    }
     // While a run is live the held value is the display: observeSubtitle
     // refreshed it this update pass, applying the minimum-display floor.
     // Tool identity and its prepared progress must advance together; the
     // ambient narration hold must not pair a new glyph with an old tool label.
-    if (params.toolActivity) {
-      return resolveSidebarSessionSubtitle(params);
-    }
-    const held = this.heldSubtitles.get(params.session.key);
+    const held =
+      params.session.hasActiveRun && params.showPreview && !params.toolActivity
+        ? this.heldSubtitles.get(params.session.key)
+        : undefined;
     if (!held) {
       return resolveSidebarSessionSubtitle(params);
     }

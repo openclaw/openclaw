@@ -200,7 +200,7 @@ describe("worker turn launcher claim admission", () => {
     expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, {});
     expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
-    placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+    await placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
     placements.acceptWorkspaceResult(priorClaim);
     placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
     await expect(replacement).rejects.toThrow(
@@ -331,7 +331,7 @@ describe("worker turn launcher claim admission", () => {
     expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, {});
     expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
-    placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+    await placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
     placements.acceptWorkspaceResult(priorClaim);
     placements.completeWorkspaceResultAndReleaseTurn(priorClaim);
     await expect(replacement).rejects.toThrow(
@@ -360,7 +360,10 @@ describe("worker turn launcher claim admission", () => {
     placements.markWorkspaceResultPending(priorClaim);
     placements.startWorkspaceResultDrain(priorClaim);
     vi.spyOn(placements, "waitForTurnClaimRelease").mockImplementationOnce(async () => {
-      placements.updateWorkspaceBaseManifest({ claim: priorClaim, manifestRef: MANIFEST_REF });
+      await placements.updateWorkspaceBaseManifest({
+        claim: priorClaim,
+        manifestRef: MANIFEST_REF,
+      });
       placements.acceptWorkspaceResult(priorClaim);
       completeReclaimedWorkspaceTeardown({
         placements,
@@ -614,7 +617,7 @@ describe("worker turn launcher claim admission", () => {
             launchRequest.plan.assignment.toolAuthority.allowedToolNames.includes("portal"),
           ).toBe(portalAvailable);
           expect(environments.supportsNodePortal).toHaveBeenCalledWith(ENVIRONMENT_ID, OWNER_EPOCH);
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: launchRequest.turnClaim,
             transcriptSeq: 2,
             liveSeq: 1,
@@ -703,7 +706,7 @@ describe("worker turn launcher claim admission", () => {
                   timestamp: 31,
                 }),
               );
-              createWorkerSessionPlacementGate(placements).updateAckCursors({
+              await createWorkerSessionPlacementGate(placements).updateAckCursors({
                 claim: request.turnClaim,
                 transcriptSeq: 2,
                 liveSeq: 1,

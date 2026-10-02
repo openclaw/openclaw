@@ -108,7 +108,7 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
     if (request.source.kind !== "local") {
       throw new Error("expected a local workspace source");
     }
-    request.source.journal.commit(MANIFEST_REF);
+    await request.source.journal.commit(MANIFEST_REF);
     return {
       manifestRef: MANIFEST_REF,
       changed: false,
@@ -119,11 +119,11 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
     };
   };
 
-export function acknowledgeCompletedWorkerTurn(
+export async function acknowledgeCompletedWorkerTurn(
   claim: WorkerSessionTurnClaim,
   transcriptLeafId: string,
-): SpawnResult {
-  createWorkerSessionPlacementGate(placements).updateAckCursors({
+): Promise<SpawnResult> {
+  await createWorkerSessionPlacementGate(placements).updateAckCursors({
     claim,
     transcriptSeq: 2,
     liveSeq: 1,

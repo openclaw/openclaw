@@ -217,12 +217,6 @@ type StructuredQaParityLabel = {
 // Display labels are not provider/model provenance identifiers.
 function parseStructuredLabelRef(label: string): StructuredQaParityLabel | null {
   const trimmed = label.trim();
-  if (trimmed.length === 0) {
-    return null;
-  }
-  if (trimmed !== trimmed.toLowerCase()) {
-    return null;
-  }
   const separatorMatch = /^([a-z0-9][a-z0-9-]*)[/:]([a-z0-9][a-z0-9._-]*)$/.exec(trimmed);
   if (!separatorMatch) {
     return null;

@@ -5,7 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { isMissingPathError } from "../infra/errno.js";
 import { clamp } from "../utils.js";
-import { isRollingLogFilePath, isSameRollingLogFileFamily } from "./log-file-path.js";
+import { isSameRollingLogFileFamily } from "./log-file-path.js";
 import "./logger.js";
 import { getResolvedLoggerFileTarget } from "./logger-settings-internal.js";
 import { parseLogLine, type ParsedLogLine } from "./parse-log-line.js";
@@ -41,13 +41,10 @@ type ParsedLogTailPayload = Omit<LogTailPayload, "lines"> & {
 type ResolvedLogFile = { file: string; stat: Stats | null };
 
 /** Resolves a rolling daily log path to the newest existing rolling log when needed. */
-async function resolveLogFile(
-  file: string,
-  options?: { rolling?: boolean },
-): Promise<ResolvedLogFile> {
+async function resolveLogFile(file: string, rolling: boolean): Promise<ResolvedLogFile> {
   const stat = await fs.stat(file).catch(missingPathToNull);
   const source = { file, stat };
-  if (stat || !(options?.rolling ?? isRollingLogFilePath(file))) {
+  if (stat || !rolling) {
     return source;
   }
 
@@ -278,7 +275,7 @@ export async function readConfiguredLogTail(
   filter?: (line: string) => boolean,
 ): Promise<LogTailPayload> {
   const target = getResolvedLoggerFileTarget();
-  const { file, stat } = await resolveLogFile(target.file, { rolling: target.rolling });
+  const { file, stat } = await resolveLogFile(target.file, target.rolling);
   const result = await readLogSlice({
     file,
     stat,

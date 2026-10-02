@@ -1,4 +1,3 @@
-// Doctor warning builder for allowlist policies that would block every sender.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";

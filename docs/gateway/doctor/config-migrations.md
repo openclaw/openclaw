@@ -9,6 +9,119 @@ read_when:
 Checks 0-2 cover config normalization and the legacy config key migrations,
 plus how doctor publishes shared-state schema during an update.
 
+Plugin config repairs run in order on private config copies. If a repair throws,
+Doctor keeps the config from before that hook, reports the failure, and continues
+with the remaining repairs. Warning-only results stay visible without changing
+config. Repair the affected plugin, then run `openclaw doctor --fix` again.
+
+## Runtime config migration
+
+Runtime config reads require per-model context budgets and current GitHub Copilot
+settings. Doctor migrates retired provider-level `contextTokens` and
+`contextWindow` values into explicit model entries, preserves existing per-model
+values, and reports agent-level caps that cannot be represented per model. Doctor
+also removes `plugins.entries.github-copilot.config.discovery.enabled`; configured
+Copilot access refreshes its catalog automatically.
+
+Run `openclaw doctor --fix` before starting with these retired keys. Updates apply
+the same transforms before candidate config validation, through the existing
+backup and include-aware write flow. Ordinary reads leave the authored values
+untouched so Doctor can report and persist the repair.
+
+## Retention policy
+
+OpenClaw supports migrations from formats written by shipped releases on or after
+July 1, 2026. Retain a transform whenever a release in that window can still write
+its input format. A supported release that preserves a legacy
+format when rewriting existing data also counts as a writer. A format last
+written before the cutoff may be retired only with a clear refusal naming an
+intermediate release to upgrade through before retrying. Retirement must never
+silently discard persisted data.
+
+Legacy normalization belongs to Doctor and migration owners, with the existing
+backup and verification flow. Runtime readers consume canonical state.
+
+OpenClaw `v2026.9.7` can still write ownerless and mode-less cron jobs, and its
+migration/import writers can preserve null, `deliver`, or mixed-case delivery
+modes. Those cron repairs remain supported; this change retires no cron format.
+
+Doctor refuses these retired inputs:
+
+- `agents.defaults.llm`, agent `embeddedPi`, `embeddedHarness`, whole-agent
+  `agentRuntime`, `systemPromptOverride`, and `sandbox.perSession`.
+- Agent and surface `silentReplyRewrite` and `silentReply.direct`.
+- `memorySearch.store.path`, including its agent and `memory.search` forms.
+- `plugins.installs`, `gateway.webchat`, `session.parentForkMaxTokens`,
+  `browser.relayBindHost`, and `browser.ssrfPolicy.allowPrivateNetwork`.
+- Queue modes `queue`, `steer-backlog`, and `steer+backlog` in `messages.queue.mode`
+  or `messages.queue.byChannel`.
+- Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
+- `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
+  and the retired `channels.webchat` section.
+- `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
+  including per-account settings.
+
+Configs containing these keys must be repaired before current validation can
+succeed. Doctor preserves the config and stops with recovery guidance instead
+of stripping these settings or replacing them with a backup. For an older installation,
+[upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its Doctor migrations before installing the latest version.
+
+## Cron ownership before roster migration
+
+Before retiring a legacy agent roster's default marker, Doctor pins ownerless
+cron jobs to that historical agent. This also applies when a different system
+agent is selected. Explicit job owners and agent-qualified session keys remain
+unchanged. Doctor saves a verified SQLite backup and rechecks the stored owner
+and definition before committing. If ownership cannot be repaired, it preserves
+the roster marker and reports the condition to resolve.
+
+When legacy import or delivery normalization precedes ownership repair, each
+stage saves its own verified snapshot. The earliest backup preserves the original
+persisted cron definitions, ownership, and runtime state; the later backup also
+includes imported jobs before their owners are pinned. Archived legacy JSON keeps
+its original bytes.
+
+An owner recorded only in the SQLite owner column is copied into the job's
+canonical definition by Doctor. Its agent identity and runtime state stay the
+same; a different system-agent selection does not override it.
+
+Ordinary config writes do not repair cron ownership. A roster change that would
+lose the historical owner is refused with `openclaw doctor --fix` guidance.
+Run Doctor before updating or removing an unresolved historical job. Agent-scoped
+management does not inherit these jobs from the currently selected system agent;
+operators with unrestricted session access can still inspect them. Restricted
+profile and agent views wait for `openclaw doctor --fix` when ownership is
+unresolved; runtime does not infer sharing permission from a legacy SQL owner or
+default marker. Explicit creator and agent-qualified session ownership keep their
+existing sharing checks. Deleting another agent leaves unresolved rows intact.
+The normal `openclaw update` Doctor phase performs this repair before saving
+the migrated config, including its early preflight and include-recovery writes.
+During the earlier update rehearsal, Doctor can import and normalize cron rows in
+the private database copy. It preserves uncopied legacy files, including linked
+state, quarantine, and run-log files, and reports their deferred archival. The
+live Doctor phase imports those sources and archives them after package installation. This
+also protects updates started by supported older releases.
+
+## Legacy cron delivery settings
+
+A stored delivery object must name its mode: `none`, `announce`, or `webhook`.
+Doctor repairs a missing or null mode and the retired `deliver` value to
+`announce`. It also trims and lowercases recognized modes. Unknown modes stay
+unchanged with guidance to review the intended route.
+
+The scheduler keeps unrepaired jobs visible and reports `openclaw doctor --fix`;
+it withholds their execution while healthy jobs continue. Doctor repairs known
+legacy values. For an unknown value, explicitly edit the delivery mode after
+reviewing the intended route. Unrelated edits cannot silently discard it.
+Wholly omitted delivery still uses the job's normal defaults; optional failure
+notification fields still inherit their configured defaults.
+
+Gateway `cron.add` and `cron.update` requests still accept the deprecated
+`delivery.mode: "deliver"` spelling and persist `announce`. Clients should send
+`announce`. This request adapter does not repair stored `deliver` values; those
+still require Doctor.
+
 ## Channel ownership during an update
 
 When Doctor migrates a legacy `agents.list` roster without a `default: true` marker
@@ -25,6 +138,19 @@ account-wide ownership. If the original roster is unavailable, Doctor reports
 the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
+
+## Sender tool policies
+
+Doctor migrates unprefixed `toolsBySender` keys to `id:` entries before config
+validation, including the update-time Doctor pass. It preserves the previous
+matching behavior: a leading `@` on an unprefixed key is removed, IDs match
+without regard to case, and the first configured policy wins when multiple keys
+normalize to the same ID. Doctor reports shadowed entries and preserves their
+original values in the normal config backup before saving the repair.
+
+Runtime config requires typed sender keys or `"*"`. After replacing the binary
+directly, run `openclaw doctor --fix` before starting the Gateway. Explicit
+`id:@user:server` policies and incoming sender-ID matching remain supported.
 
 ## Channel webhook listeners
 
@@ -75,6 +201,24 @@ Microsoft Teams uses the same owner: Doctor moves explicit
 wildcard bind. After verifying the Azure Bot endpoint through the Gateway port,
 set `channels.msteams.legacyWebhook: false` to close the compatibility listener.
 Teams keeps its Express body parser and SDK authentication on both listeners.
+
+## Talk realtime inheritance
+
+Doctor copies previously inherited Voice Call realtime provider settings into
+`talk.realtime` through its normal validated, backed-up config write. Explicit
+Talk settings win, including whole provider blocks and a sole configured Talk
+provider. SecretRefs remain references. Voice Call's own realtime and streaming
+settings stay unchanged for telephony and Talk transcription.
+
+After repair, realtime Talk reads only `talk.realtime`; changing Voice Call
+settings no longer changes Talk sessions. A sole migrated provider follows Talk's
+normal single-provider selection rule. Doctor fills missing Talk provider settings
+when the Voice Call inputs remain, and repeated repair is unchanged until those
+inputs or missing destinations change. This repair also runs during updates driven
+by a published updater that invokes Doctor without `--fix`.
+Voice Call-only settings remain valid configuration. Doctor detects this pending
+inheritance repair independently of schema errors; ordinary config reads never
+copy the settings into Talk.
 
 ## ACP agents' model precedence
 
@@ -270,6 +414,43 @@ changing the chat model. Downloads require setup consent. In the July provider,
 Doctor therefore preserves both fields instead of silently turning an ignored
 model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp).
 
+## Auth credential fields
+
+Doctor owns legacy credential-field conversion in both JSON imports and existing
+SQLite auth stores, including stores whose profile IDs already use current
+provider names. Field-only SQLite repair saves a private, verified backup and
+preserves profile IDs, credential material, unknown metadata, and rotation state.
+Malformed credential values and unreadable rotation-state JSON remain intact;
+they do not block repairs to supported fields. Alias renames still require valid
+complete stores and rotation state. Doctor defers affected config, session, and
+personal-account references whenever an owner cannot safely rename its IDs.
+An occupied alias destination or changed account receipt defers that mapping
+without preventing independent credential-field repairs or safe aliases.
+
+The conversion moves a recognized `mode` to a missing `type`, changes
+`type: "apiKey"` to `api_key`, and moves usable `apiKey` or `api_key` values to
+`key`. Usable canonical keys and references take precedence; empty or malformed
+keys do not discard a usable legacy value. These aliases may also hold SecretRefs.
+A SecretRef in the credential type's `key` or `token` moves to the matching
+`keyRef` or `tokenRef` only when that reference is missing or invalid. Fields for
+other credential types and aliases that did not supply a replacement stay intact.
+Doctor removes converted field names, verifies source rows before
+committing, and does nothing on a second run. Runtime rejects convertible legacy
+fields with `openclaw doctor --fix` instructions. Malformed extras do not prevent
+an otherwise valid canonical credential from loading.
+
+JSON import retains its existing canonical projection: recognized credential
+types and supported fields enter SQLite, string metadata is retained, and unknown
+fields or malformed sibling entries are omitted from the active import. The
+original JSON bytes are archived exactly with the existing migration receipt, so
+those omitted values remain recoverable. This differs from field-only repair of
+existing SQLite rows, which preserves unknown and malformed values in place.
+
+The installed updater invokes candidate Doctor before activation, so the same
+conversion runs during an update. Mixed JSON and SQLite stores are normalized
+before their credential sets are merged, and supplied alias mappings are checked
+against the current SQLite owners before the import can rename profiles.
+
 ## Checks 0-2
 
 <AccordionGroup>
@@ -291,7 +472,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
   <Accordion title="2. Legacy config key migrations">
     Ordinary Doctor, including `doctor --non-interactive`, automatically normalizes a legacy single-file config when the shared migration transforms produce a fully valid result. This also covers older npm updaters that invoke Doctor without `--fix`. The planner still requires complete plugin validation. Doctor preserves the original in the config backup ring and keeps state migration ordering intact. Includes, externally managed config, newer-written config, and remaining validation errors require the existing explicit repair or operator recovery path. Updaters that explicitly defer plugin repair or advertise a later writable config handoff keep automatic normalization deferred. This does not enable repair maintenance, service changes, or exec-approval migration without `--fix`.
 
-    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config and defers importing retired plugin install records, including with `--fix`. A supported fresh update continuation runs Doctor before plugin convergence and rereads the repaired config. Existing canonical plugin install records keep precedence. Doctor imports missing records before rewriting config and completes required workspace-state migration in the same repair pass. An older Git updater without that continuation requires `openclaw doctor --fix` after the update; Gateway startup does not finish its legacy repair.
+    Older Git updaters can keep an in-memory config snapshot and write it after Doctor exits. When that parent marks the update in progress without advertising support for Doctor config writes, Doctor preserves the config, including with `--fix`. A supported fresh update continuation runs Doctor before plugin convergence and rereads the repaired config. An older Git updater without that continuation requires `openclaw doctor --fix` after the update; Gateway startup does not finish its legacy repair.
 
     Gateway and local CLI startup validate current config without rewriting legacy keys. Invalid legacy config remains unchanged and startup prints the `openclaw doctor --fix` hint. An interactive terminal can offer to run Doctor and retry once; headless services stop with the hint. Doctor preserves the original in the five-slot `openclaw.json.bak` / `.bak.1` through `.bak.4` backup ring before writing a validated repair. Includes, externally managed config, newer-written config, and unresolved validation errors retain their existing repair and recovery safeguards.
 
@@ -303,7 +484,7 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
 
     During an update, Doctor records model-retirement repairs that must wait until plugin installation finishes. The updated OpenClaw completes those repairs after plugin convergence, even when no plugin version changed. `openclaw update status` records their completion so retired subscription models do not fall through to metered API credentials.
 
-    Utility-model separation preserves an older config's implicit primary before recording `meta.migrations.utilityModelSeparation: true`. Doctor and normal config writes use the previous config to save that primary explicitly; existing primary selections, fallbacks, and credential bindings stay authoritative. This keeps regular chat available when the old implicit primary also served utility tasks. Fresh utility setup records the separation without choosing a primary, and a provider added during utility setup is not mistaken for the previous primary. See [agent model configuration](/gateway/config-agents/models#agentsdefaultsmodel).
+    Utility-model separation preserves an older config's implicit primary before recording `meta.migrations.utilityModelSeparation: true`. Doctor and normal config writes use the previous config to save that primary explicitly; existing primary selections, fallbacks, and credential bindings stay authoritative. This keeps regular chat available when the old implicit primary also served utility tasks. Fresh utility setup records the separation without choosing a primary, and a provider added during utility setup is not mistaken for the previous primary. See [agent model configuration](/gateway/config-agents/models#agents.defaults.model).
 
     Other commands that encounter legacy keys still ask you to run `openclaw doctor`. Doctor explains the issues, shows its migrations, and rewrites `~/.openclaw/openclaw.json` with the updated schema. Cron job store migrations are also handled by `openclaw doctor --fix`; automatic config-key migration does not import legacy session stores or repair services.
 
@@ -314,31 +495,11 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     For legacy rosters with multiple agents and no resolvable ambient owner, Doctor seeds `agents.defaults.systemAgent.agentId` from a uniquely marked `default: true` agent, or `main` when present. Sole-agent rosters and legacy default markers already honored by the runtime need no owner repair and produce no missing-owner advice. Explicit fleet ownership disables the legacy default-marker fallback, so those rosters may still need repair. Doctor also pins `agents.defaults.heartbeat.agentId` only when heartbeat enrollment would otherwise be unresolved; existing heartbeat owners, shared defaults, and per-agent enrollment are preserved. These changes are reported and saved by `doctor --fix`, including the update-time doctor pass. If no default can be identified, configure the system-agent owner explicitly.
 
     <Note>
-      Doctor only carries automatic migrations for roughly two months after a
-      key is retired. Older legacy keys (for example the original
-      `routing.queue`, `routing.bindings`, `routing.agents`/`defaultAgentId`,
-      `routing.transcribeAudio`, top-level `agent.*`, or top-level `identity`
-      from the pre-multi-agent config shape) no longer have a migration path;
-      config using them now fails validation instead of being rewritten. Fix
-      those keys by hand against the current
-      [configuration reference](/gateway/configuration-reference) before doctor
-      can proceed.
+      Migration retention follows the July 2026 cutoff in the
+      [retention policy](/gateway/doctor/config-migrations#retention-policy), based
+      on which supported releases can still write the format. For a retired
+      format, follow Doctor's intermediate-upgrade instructions before retrying.
     </Note>
-
-    Doctor no longer repairs these pre-June keys:
-
-    - Agent `embeddedHarness`, `embeddedPi`, `sandbox.perSession`, and `agents.defaults.llm`.
-    - Top-level `heartbeat`, `routing.allowFrom`, and `routing.groupChat`.
-    - `channels.telegram.requireMention`, `channels.feishu.accounts.<id>.botName`,
-      and retired `channels.webchat` / `gateway.webchat` sections.
-    - `session.threadBindings.ttlHours` and Discord/LINE/Matrix/Telegram `threadBindings.ttlHours`,
-      including per-account settings.
-
-    Configs containing these keys must be repaired before current validation can
-    succeed. Doctor preserves the config and stops with recovery guidance instead
-    of stripping these settings or replacing them with a backup. For an older installation,
-    [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
-    and run its Doctor migrations before installing the latest version.
 
     Active migrations:
 
@@ -368,10 +529,8 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | `plugins.entries.voice-call.config.streaming.sttProvider`                                        | `plugins.entries.voice-call.config.streaming.provider`                      |
     | `plugins.entries.voice-call.config.streaming.openaiApiKey`/`sttModel`/`silenceDurationMs`/`vadThreshold` | `plugins.entries.voice-call.config.streaming.providers.openai.*`             |
     | `models.providers.*.api: "openai"`                                                               | `"openai-completions"` (gateway startup also skips providers whose `api` is a future/unknown enum value rather than failing closed) |
-    | `browser.ssrfPolicy.allowPrivateNetwork`                                                         | `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`                          |
     | `browser.profiles.*.driver: "extension"` with a stale `cdpUrl`                                  | driver preserved; stale relay URL removed                                     |
-    | `browser.relayBindHost`                                                                          | removed (legacy Chrome extension relay setting)                             |
-    | `mcp.servers.*.type` (CLI-native aliases)                                                        | `mcp.servers.*.transport`                                                    |
+    | `mcp.servers.*.type`, `nodeHost.mcp.servers.*.type` (CLI-native aliases)                           | corresponding `transport` field                                            |
     | `mcp.servers.*.disabled`                                                                         | inverse `mcp.servers.*.enabled`                                              |
     | MCP timeout aliases `connectTimeout`/`connect_timeout`/`timeout`                                 | `connectionTimeoutMs`/`requestTimeoutMs`                                    |
     | MCP snake-case server fields                                                                     | camelCase MCP server fields                                                   |
@@ -402,19 +561,21 @@ model value into a different embedding model. See [llama.cpp](/plugins/llama-cpp
     | top-level `tui`                                                                                  | removed (the TUI footer uses the compact default)                            |
     | `plugins.entries.codex.config.codexDynamicToolsProfile`                                          | removed (Codex app-server always keeps Codex-native workspace tools native) |
     | `commands.modelsWrite`                                                                           | removed (`/models add` is deprecated)                                       |
-    | `agents.defaults/list[].silentReplyRewrite`, `surfaces.*.silentReplyRewrite`                     | removed (exact `NO_REPLY` is no longer rewritten to visible fallback text)  |
-    | `agents.defaults/list[].systemPromptOverride`                                                    | removed (OpenClaw owns the generated system prompt)                        |
+    | `agents.defaults.silentReply.internal`, `surfaces.*.silentReply.internal`          | removed (only external channel groups may opt into silent replies)          |
     | top-level `memorySearch`, `agents.defaults.memorySearch`                                         | `memory.search`                                                             |
     | `agents.entries.*.memorySearch`                                                                     | `agents.entries.*.memory.search`                                               |
     | `memorySearch.provider: "auto"`                                                                  | `"openai"`                                                                    |
-    | `memorySearch.store.path` (any level)                                                            | removed (memory indexes live in each agent database)                       |
     | `plugins.openai-codex` policy ids                                                                | `plugins.openai`                                                             |
     | `tools.web.x_search.apiKey`                                                                      | `plugins.entries.xai.config.webSearch.apiKey`                               |
-    | `session.maintenance.rotateBytes`, `session.parentForkMaxTokens`                                 | removed (deprecated)                                                        |
+    | `session.maintenance.rotateBytes`                                 | removed (deprecated)                                                        |
     | Runtime and channel tuning knobs retired in 2026.7                                               | removed (built-in production defaults apply)                               |
     | `diagnostics.memoryPressureSnapshot`, legacy `diagnostics.memoryPressureBundle`                  | removed (automatic critical-memory snapshots were retired; no replacement automatic capture) |
 
+    Doctor migrates MCP `type: "http"` to `transport: "streamable-http"` and `type: "sse"` to `transport: "sse"` in both server maps. An existing `transport` wins. For command-based servers, Doctor removes `type: "stdio"`; the command still selects stdio. The update-time Doctor pass uses the same backed-up config repair. Plugin bundle files keep their external `type` format: bundle loading translates recognized types, and CLI exports use the destination's required format. An unknown bundle HTTP transport is rejected instead of being treated as SSE; its original `type` remains available to the destination CLI.
+
     Code Mode's runtime migration preserves an explicit QuickJS choice in global config, keyed agent entries, and legacy agent rosters. Existing `executor` values win, and activation and limits remain unchanged. Selecting the bundled QuickJS runtime works even when generic plugins are disabled or allowlisted, without enabling other plugins; an explicit deny or disabled entry for `code-mode-quickjs` still blocks it. Configurations that never selected a runtime use the new `node` default. See [Code Mode executors](/tools/code-mode/executors) before enabling Node execution; `node:vm` is not a security boundary.
+
+    Doctor removes retired `silentReply.internal` settings from agent defaults and surface overrides while preserving `silentReply.group`. This repair runs through the normal config backup and validation flow, including update-time Doctor. Direct chats and internal sessions, including subagents, require a result; only external channel groups can opt into `NO_REPLY`.
 
     Doctor names the retired tuning paths it actually removes in one notice, including explicit `false` values: `Removed retired runtime tuning knobs: diagnostics.memoryPressureSnapshot; built-in defaults now apply.` Run `openclaw doctor --fix` before starting with these retired keys. Memory-pressure events remain available; use [diagnostics export or manual allocation profiling](/gateway/diagnostics) for current evidence.
 

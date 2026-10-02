@@ -17,7 +17,7 @@ import { createOpenAIRealtimeClientSecret } from "./realtime-provider-shared.js"
 import { OpenAIQuicksilverVoiceBridge } from "./realtime-quicksilver-bridge.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
 import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instructions.js";
-import type { createOpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
+import type { OpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
   isOpenAIGptLiveModel,
@@ -46,10 +46,6 @@ import {
   type OpenAIRealtimeVoice,
   type OpenAIRealtimeVoiceProviderConfig,
 } from "./realtime-voice-session-policy.js";
-
-type OpenAIQuicksilverBrowserSessionBroker = ReturnType<
-  typeof createOpenAIQuicksilverBrowserSessionBroker
->["broker"];
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 

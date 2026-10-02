@@ -24,7 +24,7 @@ import {
   uiConversationMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-export type SessionArchivedFilter = "active" | "archived" | "all";
+export type SessionArchivedFilter = "active" | "snoozed" | "archived" | "all";
 
 type SessionNavigationInput = {
   result: SessionsListResult | null;

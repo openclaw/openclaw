@@ -369,10 +369,7 @@ function mapLiveTransportQaCommanderOptions(
   };
 }
 function registerLiveTransportQaCli(
-  params: LiveTransportQaCliRegistrationOptions & {
-    qa: Command;
-    run: (opts: LiveTransportQaCommandOptions) => Promise<void>;
-  },
+  params: LiveTransportQaCliRegistrationOptions & { qa: Command },
 ) {
   const command = params.qa
     .command(params.commandName)
@@ -560,13 +557,9 @@ function listDeclaredQaRunnerPlugins(
         qaRunners: NonNullable<PluginManifestRecord["qaRunners"]>;
       } => Array.isArray(plugin.qaRunners) && plugin.qaRunners.length > 0,
     )
-    .toSorted((left, right) => {
-      const idCompare = left.id.localeCompare(right.id);
-      if (idCompare !== 0) {
-        return idCompare;
-      }
-      return left.rootDir.localeCompare(right.rootDir);
-    });
+    .toSorted(
+      (left, right) => left.id.localeCompare(right.id) || left.rootDir.localeCompare(right.rootDir),
+    );
 }
 
 function indexRuntimeRegistrations(

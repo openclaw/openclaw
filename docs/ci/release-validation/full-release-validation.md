@@ -81,10 +81,16 @@ Docker seed runs all six lanes in every ordinary manual/release scope:
 `npm-beta` and `npm-stable` qualification. The survivor uses `legacy-operator-state`
 with `auto-auth`, so the published driver must update
 the running managed Gateway. Every admitted canonical main run retains this
-exact combination; PRs omit Docker seed and QA Smoke. Manual/release CI builds
-the full declaration-complete package. Main's smoke package instead uses the
+exact combination. Frozen targets retain it when their declared scenario catalog
+supports `legacy-operator-state`; historical targets retain `base` with `auto-auth`.
+Missing historical catalogs keep that fallback; malformed or invalid catalogs fail.
+PRs defer the complete survivor to hourly main and Full Release Validation, while
+the other Docker seed lanes and QA Smoke retain their owner maps.
+Ordinary manual/release CI builds the full declaration-complete package. Main and
+selected PRs, including exact-head `release_gate` fallbacks, use the
 existing `ciArtifacts` profile and canonical packer with `--skip-build`, retaining
 the runtime, public SDK declarations, and unchanged tarball integrity check.
+The hourly protected cache warmer also retains full declaration generation.
 Hosted manual CI splits QA Smoke into six parts; normal hybrid first attempts use four parts
 with the same coverage.
 
@@ -93,9 +99,9 @@ For targets with [test runtime selection](/ci/pipeline#test-runtime-selection),
 Bun-compatible selection on Bun. Both results are required; they share existing
 jobs and execute sequentially within each worker slot. Older targets without this
 capability retain Node-only testing.
-This includes the Control UI config when the target's runtime owner admits it;
-its Bun pass excludes two GC-sensitive files retained in the full Node pass.
-An older unit-only runtime owner retains the UI's Node pass.
+This includes the complete Control UI selection on both runtimes, including the
+retention assertions, when the target's runtime owner admits it. Older targets
+retain the UI's Node pass and only the Bun selections their runtime owner admits.
 
 Package Acceptance separately retains expanded published-upgrade scenarios:
 current unpublished candidates include native operator state, and stable/full

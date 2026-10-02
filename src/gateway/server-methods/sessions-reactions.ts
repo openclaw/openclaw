@@ -6,7 +6,6 @@ import {
   isReactionEmoji,
   validateSessionReactionsListParams,
   validateSessionReactionsSetParams,
-  type MessageReactionSummary,
   type SessionReactionMirror,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
@@ -16,10 +15,11 @@ import {
   resolveMessageActionDiscoveryForPlugin,
 } from "../../channels/plugins/message-action-discovery.js";
 import {
-  setSessionReaction,
+  setSessionReactionAsync,
   SessionReactionLimitError,
   SessionReactionMessageMissingError,
 } from "../../config/sessions/session-reaction-store.js";
+import type { SessionReactionWrite } from "../../config/sessions/session-reaction-store.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isConfiguredChannel } from "../../infra/outbound/channel-selection.js";
 import { resolveMessageActionOutcome } from "../../infra/outbound/message-action-contracts.js";
@@ -49,13 +49,12 @@ import type { GatewayClient, GatewayRequestContext, GatewayRequestHandlers } fro
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type ReactionTarget = NonNullable<ReturnType<typeof resolveSessionSharingTarget>>;
-type ReactionAuthorization = {
+
+function authorizeSessionReaction(params: {
   client: GatewayClient | null;
   cfg: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
   target: ReactionTarget;
-};
-
-function authorizeSessionReaction(params: ReactionAuthorization) {
+}) {
   const role = resolveSessionSharingRole(params);
   const cap = operatorSessionCap(params.client, params.cfg);
   if (cap === "none") {
@@ -74,9 +73,9 @@ function reactionScope(target: ReactionTarget) {
   return { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath };
 }
 
-// A channel holds one bot reaction per emoji for all Control UI reactors. Mirrors
-// for one message and emoji run in local commit order, so an older add can never
-// land after a newer remove and leave the channel out of step with the store.
+// Mirrors run in local commit order per message and channel reaction slot, so
+// an older add can never land after a newer remove and leave the channel out of
+// step with the store. Single-slot channels share the queue across all emoji.
 const mirrorQueues = new Map<string, Promise<SessionReactionMirror>>();
 
 function enqueueMirror(
@@ -137,29 +136,33 @@ async function mirrorReaction(params: {
   context: GatewayRequestContext;
   target: ReactionTarget;
   transport: MirrorTransport;
+  newestRemainingEmoji: string | undefined;
   emoji: string;
   remove: boolean;
   assertCurrent: () => void;
 }): Promise<SessionReactionMirror> {
-  const { transport } = params;
-  const scope = { ...reactionScope(params.target), sessionId: params.target.entry.sessionId };
-  const cfg = params.context.getRuntimeConfig();
-  // Start capture now and reserve commit order before yielding to another mutation.
-  const captured = readSessionConversationBindingAsync(scope, transport.conversationRef).then(
-    (conversation) => ({ ok: true as const, conversation }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-  return enqueueMirror(
-    [
-      params.target.agentId,
-      params.target.storeKey,
-      params.target.entry.sessionId,
-      transport.conversationRef,
-      transport.messageId,
-      params.emoji,
-    ].join("\0"),
-    async () => {
-      try {
+  try {
+    const { transport } = params;
+    const plugin = getRuntimeVisibleChannelPlugin(transport.channel);
+    const singleSlot = plugin?.capabilities.reactionSlots === "single";
+    const replacement = singleSlot && params.remove ? params.newestRemainingEmoji : undefined;
+    const scope = { ...reactionScope(params.target), sessionId: params.target.entry.sessionId };
+    const cfg = params.context.getRuntimeConfig();
+    // Start capture now and reserve commit order before yielding to another mutation.
+    const captured = readSessionConversationBindingAsync(scope, transport.conversationRef).then(
+      (conversation) => ({ ok: true as const, conversation }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    return await enqueueMirror(
+      [
+        params.target.agentId,
+        params.target.storeKey,
+        params.target.entry.sessionId,
+        transport.conversationRef,
+        transport.messageId,
+        singleSlot ? "" : params.emoji,
+      ].join("\0"),
+      async () => {
         const resolved = await captured;
         if (!resolved.ok) {
           throw resolved.error;
@@ -198,7 +201,6 @@ async function mirrorReaction(params: {
         ) {
           return { status: "skipped", reason: "source channel does not support reactions" };
         }
-        const plugin = getRuntimeVisibleChannelPlugin(channel);
         if (!plugin) {
           return { status: "skipped", reason: "source channel is unavailable" };
         }
@@ -223,19 +225,6 @@ async function mirrorReaction(params: {
             throw new Error("channel configuration changed before reaction delivery");
           }
         };
-        const current = await readSessionConversationBindingAsync(scope, transport.conversationRef);
-        if (
-          !current ||
-          current.channel !== conversation.channel ||
-          current.accountId !== conversation.accountId ||
-          current.target !== conversation.target ||
-          current.threadId !== conversation.threadId ||
-          current.nativeChannelId !== conversation.nativeChannelId
-        ) {
-          return { status: "failed", reason: "source conversation changed before delivery" };
-        }
-        // The registry has no synchronous worker read: binding is the last awaited
-        // check before handoff; the adapter guard retains live reactor/session/config checks.
         assertCurrent();
         const outcome = resolveMessageActionOutcome(
           await runMessageAction({
@@ -247,6 +236,22 @@ async function mirrorReaction(params: {
             // A person asked for this reaction from the Control UI; like the CLI it
             // is an operator action, not a model-delegated conversation read.
             conversationReadOrigin: "direct-operator",
+            onPlatformSendDispatch: async () => {
+              const current = await readSessionConversationBindingAsync(
+                scope,
+                transport.conversationRef,
+              );
+              if (
+                !current ||
+                current.channel !== conversation.channel ||
+                current.accountId !== conversation.accountId ||
+                current.target !== conversation.target ||
+                current.threadId !== conversation.threadId ||
+                current.nativeChannelId !== conversation.nativeChannelId
+              ) {
+                throw new Error("source conversation changed before delivery");
+              }
+            },
             assertDirectAdapterHandoff: assertCurrent,
             params: {
               channel,
@@ -254,8 +259,8 @@ async function mirrorReaction(params: {
               accountId: conversation.accountId,
               ...(conversation.threadId ? { threadId: conversation.threadId } : {}),
               messageId: transport.messageId,
-              emoji: params.emoji,
-              remove: params.remove,
+              emoji: replacement ?? params.emoji,
+              remove: params.remove && !replacement,
             },
           }),
         );
@@ -263,13 +268,13 @@ async function mirrorReaction(params: {
           throw new Error(outcome.error);
         }
         return { status: "delivered" };
-      } catch (error) {
-        const reason = formatErrorMessage(error);
-        params.context.logGateway.warn(`Control UI reaction mirror failed: ${reason}`);
-        return { status: "failed", reason };
-      }
-    },
-  );
+      },
+    );
+  } catch (error) {
+    const reason = formatErrorMessage(error);
+    params.context.logGateway.warn(`Control UI reaction mirror failed: ${reason}`);
+    return { status: "failed", reason };
+  }
 }
 
 export const sessionReactionHandlers: GatewayRequestHandlers = {
@@ -428,16 +433,17 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
           throw new Error("reaction author or session authority changed");
         }
       };
-      let write: { reactions: MessageReactionSummary[]; changed: boolean };
+      let write: SessionReactionWrite;
       try {
         assertCurrent();
-        write = setSessionReaction(scope, {
+        write = await setSessionReactionAsync(scope, {
           messageId: params.messageId,
           emoji: params.emoji,
           identityId: actor.id,
           identityLabel: actor.label,
           remove: params.remove,
           expectedSessionId: target.entry.sessionId,
+          assertCurrent,
         });
         assertCurrent();
       } catch (error) {
@@ -518,6 +524,7 @@ export const sessionReactionHandlers: GatewayRequestHandlers = {
               context,
               target,
               transport: decision.transport,
+              newestRemainingEmoji: write.newestRemainingEmoji,
               emoji: params.emoji,
               remove: params.remove === true,
               assertCurrent,

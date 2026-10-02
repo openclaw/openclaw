@@ -48,7 +48,7 @@ import {
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { killSubagentRunAdmin } from "../registry/subagent-control.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
 import { registerSubagentRun } from "../registry/subagent-registry.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
@@ -338,7 +338,7 @@ describe("pending spawn invocation authority", () => {
           },
         });
       let registrationAbortRequested = false;
-      const stopObservingRegistration = onSubagentRegistryPersisted(() => {
+      const stopObservingRegistration = subscribeSubagentRunChanges("persistence", () => {
         if (
           closure === "abort during registration" &&
           !registrationAbortRequested &&

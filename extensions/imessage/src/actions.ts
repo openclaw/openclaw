@@ -260,28 +260,16 @@ function buildChatContextFromActionParams(params: {
 
 function mapTapbackReaction(emoji?: string): string | undefined {
   const value = normalizeOptionalLowercaseString(emoji)?.replace(/\ufe0f/g, "");
-  if (!value) {
-    return undefined;
-  }
-  if (["love", "heart", "❤", "❤️"].includes(value)) {
-    return "love";
-  }
-  if (["like", "+1", "thumbsup", "👍"].includes(value)) {
-    return "like";
-  }
-  if (["dislike", "-1", "thumbsdown", "👎"].includes(value)) {
-    return "dislike";
-  }
-  if (["laugh", "haha", "😂", "🤣"].includes(value)) {
-    return "laugh";
-  }
-  if (["emphasize", "!!", "‼", "‼️"].includes(value)) {
-    return "emphasize";
-  }
-  if (["question", "?", "？", "❓"].includes(value)) {
-    return "question";
-  }
-  return undefined;
+  return value
+    ? [
+        ["love", "heart", "❤"],
+        ["like", "+1", "thumbsup", "👍"],
+        ["dislike", "-1", "thumbsdown", "👎"],
+        ["laugh", "haha", "😂", "🤣"],
+        ["emphasize", "!!", "‼"],
+        ["question", "?", "？", "❓"],
+      ].find((aliases) => aliases.includes(value))?.[0]
+    : undefined;
 }
 
 function decodeBase64Buffer(params: Record<string, unknown>, action: string): Uint8Array {

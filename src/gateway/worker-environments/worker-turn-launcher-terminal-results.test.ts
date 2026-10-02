@@ -214,7 +214,7 @@ describe("worker turn launcher terminal results", () => {
               timestamp: 21,
             }),
           );
-          gate.updateAckCursors({ claim: request.turnClaim, transcriptSeq: 2 });
+          await gate.updateAckCursors({ claim: request.turnClaim, transcriptSeq: 2 });
           identity = {
             environmentId: ENVIRONMENT_ID,
             credentialHash: grant.deliveryId,
@@ -292,7 +292,7 @@ describe("worker turn launcher terminal results", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

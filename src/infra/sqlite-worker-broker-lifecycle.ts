@@ -26,12 +26,14 @@ const runOutsideCaller = AsyncLocalStorage.snapshot();
 
 /** The broker retains these maps; this owner drains clients before native close custody. */
 export function createSqliteWorkerLifecycle({
+  explicitSqliteCloseReleasesNativeResources,
   actors,
   slots,
   stores,
   enqueueClose,
   fail,
 }: {
+  explicitSqliteCloseReleasesNativeResources: boolean;
   actors: Map<string, Actor>;
   slots: Set<Slot>;
   stores: Map<object, StoreClient>;
@@ -46,9 +48,7 @@ export function createSqliteWorkerLifecycle({
     borrowedGenerationSlot: boolean,
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
   ): Slot {
-    if (process.versions.bun && process.platform === "darwin") {
-      ensureSqliteLibrarySelected();
-    }
+    ensureSqliteLibrarySelected();
     options.assertCurrent?.();
     const worker = runOutsideCaller(() =>
       createCpuTrackedWorker(options.carrierUrl, {
@@ -189,7 +189,7 @@ export function createSqliteWorkerLifecycle({
         try {
           await enqueueClose(actor, maintenanceScope);
           actor.backendClosed = true;
-          if (!process.versions.bun) {
+          if (explicitSqliteCloseReleasesNativeResources) {
             actor.markNativeStopped();
           }
         } catch (error) {
@@ -200,11 +200,11 @@ export function createSqliteWorkerLifecycle({
       }
       try {
         if (
-          process.versions.bun ||
+          !explicitSqliteCloseReleasesNativeResources ||
           actor.slot.failed ||
           (!actor.slot.pendingOpens && [...actor.slot.actors].every((entry) => entry.backendClosed))
         ) {
-          // Bun retains native statements after close; keep pathname ownership until VM exit.
+          // Unproven close retains pathname ownership until VM exit.
           await retire(actor.slot);
         }
       } catch (error) {

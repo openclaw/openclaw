@@ -4,6 +4,7 @@ import type {
   MemoryOriginReadTarget,
   MemoryOriginReadFilters,
 } from "../memory-entry-origins-task.js";
+import type { ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import type {
   MemoryIndexPreparationInput,
@@ -37,6 +38,29 @@ const indexing = new WorkerTaskPool<MemoryIndexTask, MemoryIndexTaskResult>({
 });
 
 type MemoryReadTarget = { databasePath: string; agentId: string };
+
+export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
+  ensureSqliteLibrarySelected();
+  let inputBytes =
+    2 * (request.agentId.length + request.databasePath.length + request.stateDir.length);
+  for (const values of [
+    request.changedPaths,
+    request.removedPaths,
+    request.sessionIds,
+    request.excludedSessionIds,
+    request.entryKeys,
+    request.corpusSnippets,
+  ]) {
+    for (const value of values) {
+      inputBytes += value.length * 2;
+    }
+  }
+  const result = await retrieval.run(request, { inputBytes });
+  if (result.kind !== "forget-index-plan") {
+    throw new Error("Invalid memory Forget index plan worker result");
+  }
+  return result.plan;
+}
 
 function originReadBytes(target: MemoryOriginReadTarget, filters: MemoryOriginReadFilters = {}) {
   return (

@@ -173,7 +173,7 @@ suite.define(() => {
               timestamp: Date.now(),
             }),
           );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: request.turnClaim,
             transcriptSeq: launched.length * 2,
             liveSeq: launched.length,
@@ -198,7 +198,7 @@ suite.define(() => {
           if (request.source.kind !== "local") {
             throw new Error("expected local fixture source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

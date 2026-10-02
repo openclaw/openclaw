@@ -18,9 +18,10 @@ import {
   resolvePackageActivationJournalPath,
 } from "./package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
+import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
-import { writePackageRoot } from "./package-update-steps.test-support.js";
+import { createNpmTarget, writePackageRoot } from "./package-update-steps.test-support.js";
 import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
 import * as snapshot from "./sqlite-snapshot.js";
@@ -44,6 +45,38 @@ afterEach(async () => {
   }
 });
 
+it.skipIf(process.platform === "win32")(
+  "accepts an npm root reached through a canonical directory alias",
+  () =>
+    fixtures.lifetime.run(async () => {
+      const f = await createPackageSwapFixture(root);
+      await fixtures.writePostCoreCapability(f.params.stage.packageRoot);
+      const aliasPrefix = path.join(root, "live-alias");
+      fs.symlinkSync(path.join(root, "live"), aliasPrefix, "dir");
+      const aliasGlobalRoot = path.join(aliasPrefix, "lib", "node_modules");
+      const aliasPackageRoot = path.join(aliasGlobalRoot, "openclaw");
+      const installTarget = createNpmTarget(aliasGlobalRoot);
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(aliasPackageRoot);
+        let transaction: PackageUpdateTransaction | undefined;
+        const result = await swapStagedPackageInstall({
+          ...f.params,
+          installTarget,
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+          onTransaction: (issued) => {
+            transaction = issued;
+          },
+        });
+        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+        expect(transaction).toBeDefined();
+        await transaction!.complete({ activationVerified: true }, fence.assertCurrent);
+        expect(
+          JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")),
+        ).toEqual({ name: "openclaw", version: "2.0.0" });
+      });
+    }),
+);
+
 it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
   "completes real launcher publication and binds retirement to its %s directory",
   (retirement) =>
@@ -55,7 +88,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },
@@ -114,7 +147,7 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           let nextTransaction: PackageUpdateTransaction | undefined;
           const next = await swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             onTransaction: (issued) => {
               nextTransaction = issued;
             },
@@ -148,7 +181,7 @@ it.skipIf(process.platform === "win32")(
         await expect(
           swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             beforeActivate: async () => {
               throw refusal;
             },
@@ -187,7 +220,11 @@ it.skipIf(process.platform === "win32")(
             assertNoPendingPackageActivation(f.packageRoot);
             const result = await swapStagedPackageInstall({
               ...f.params,
-              activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+              activation: {
+                fence,
+                runtime: packageActivationRuntimeForTest(),
+                onPrepared: () => {},
+              },
               beforeActivate: async () => {},
             });
             expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
@@ -214,7 +251,7 @@ it.skipIf(process.platform === "win32")(
         await expect(
           swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             beforeActivate: async () => {
               throw uncertainty;
             },
@@ -245,7 +282,7 @@ it.skipIf(process.platform === "win32")(
         await expect(
           swapStagedPackageInstall({
             ...f.params,
-            activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+            activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
             beforeActivate: async () => {
               fs.renameSync(f.packageRoot, previous);
               await writePackageRoot(f.packageRoot, "3.0.0");
@@ -298,7 +335,7 @@ it.skipIf(process.platform === "win32")(
         let transaction: PackageUpdateTransaction | undefined;
         const result = await swapStagedPackageInstall({
           ...f.params,
-          activation: { fence, nodeRunner: process.execPath, onPrepared: () => {} },
+          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
           onTransaction: (issued) => {
             transaction = issued;
           },

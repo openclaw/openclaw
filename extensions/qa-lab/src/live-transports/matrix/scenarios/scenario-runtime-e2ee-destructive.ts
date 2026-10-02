@@ -99,25 +99,6 @@ async function registerMatrixQaDestructiveOwner(
   };
 }
 
-async function createMatrixQaDestructiveOwnerClient(params: {
-  account: Awaited<ReturnType<typeof registerMatrixQaDestructiveOwner>>;
-  context: MatrixQaScenarioContext;
-  scenarioId: MatrixQaE2eeScenarioId;
-}) {
-  return await createMatrixQaE2eeScenarioClient({
-    accessToken: params.account.accessToken,
-    actorId: `driver-destructive-${randomUUID().slice(0, 8)}`,
-    baseUrl: params.context.baseUrl,
-    deviceId: params.account.deviceId,
-    observedEvents: params.context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(params.context),
-    password: params.account.password,
-    scenarioId: params.scenarioId,
-    timeoutMs: params.context.timeoutMs,
-    userId: params.account.userId,
-  });
-}
-
 async function ensureMatrixQaOwnerReady(params: {
   client: MatrixQaE2eeScenarioClient;
   label: string;
@@ -183,7 +164,18 @@ async function prepareMatrixQaDestructiveSetup(
     inviteUserIds: [],
     name: `Matrix QA ${scenarioId}`,
   });
-  const owner = await createMatrixQaDestructiveOwnerClient({ account, context, scenarioId });
+  const owner = await createMatrixQaE2eeScenarioClient({
+    accessToken: account.accessToken,
+    actorId: `driver-destructive-${randomUUID().slice(0, 8)}`,
+    baseUrl: context.baseUrl,
+    deviceId: account.deviceId,
+    observedEvents: context.observedEvents,
+    outputDir: requireMatrixQaE2eeOutputDir(context),
+    password: account.password,
+    scenarioId,
+    timeoutMs: context.timeoutMs,
+    userId: account.userId,
+  });
   try {
     const ready = await ensureMatrixQaOwnerReady({ client: owner, label: "destructive owner" });
     const seededEventId = await owner.sendTextMessage({

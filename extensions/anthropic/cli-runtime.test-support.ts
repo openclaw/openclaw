@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 writeFileSync("fixture.pid", String(process.pid));
 const scenario = process.env.CLAUDE_FIXTURE_SCENARIO;
@@ -72,6 +73,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     hooks = initialize.hooks;
     if (scenario === "revoked-initialize") {
       writeFileSync("initialize.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "initialize.ready"), "ready");
       while (!existsSync("initialize.release")) await delay(5);
     }
     assert.ok(hooks.PreToolUse[0].hookCallbackIds[0]);
@@ -146,8 +148,9 @@ for await (const line of createInterface({ input: process.stdin })) {
     if (scenario === "background-success") {
       send({ type: "system", subtype: "background_tasks_changed",
         tasks: [{ task_id: "background-agent", task_type: "local_agent" }] });
-      send({ type: "result", subtype: "success", is_error: false, result: "", session_id: "fixture-session" });
       writeFileSync("background.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "background.ready"), "ready");
+      send({ type: "result", subtype: "success", is_error: false, result: "", session_id: "fixture-session" });
       while (!existsSync("background.release")) await delay(5);
       send({ type: "system", subtype: "background_tasks_changed", tasks: [] });
       send({ type: "system", subtype: "task_notification", task_id: "background-agent",
@@ -197,9 +200,10 @@ for await (const line of createInterface({ input: process.stdin })) {
           message: { role: "user", content: notification("background-bash") } });
         if (inline) replayTask("background-bash");
       }
+      writeFileSync("background.ready", "ready");
+      sendReceipt(path.join(process.cwd(), "background.ready"), "ready");
       if (!inline) send({ type: "result", subtype: "success", is_error: false, num_turns: 1,
         result: "", session_id: "fixture-session" });
-      writeFileSync("background.ready", "ready");
       while (!existsSync("background.release")) await delay(5);
       if (!early) finishTasks();
       if (batched) {

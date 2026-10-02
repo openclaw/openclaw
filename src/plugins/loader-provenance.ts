@@ -58,10 +58,10 @@ function addPathToMatcher(
 }
 
 function matchesPathMatcher(matcher: PathMatcher, sourcePath: string): boolean {
-  if (matcher.exact.has(sourcePath)) {
-    return true;
-  }
-  return matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath));
+  return (
+    matcher.exact.has(sourcePath) ||
+    matcher.dirs.some((dirPath) => isPathInside(dirPath, sourcePath))
+  );
 }
 
 function formatPluginInspectCommand(pluginId: string): string {
@@ -132,10 +132,7 @@ export function warnWhenAllowlistIsOpen(params: {
   explicitlyEnabledPluginIds?: ReadonlySet<string>;
   discoverablePlugins: Array<{ id: string; source: string; origin: PluginRecord["origin"] }>;
 }) {
-  if (!params.emitWarning) {
-    return;
-  }
-  if (!params.pluginsEnabled) {
+  if (!params.emitWarning || !params.pluginsEnabled) {
     return;
   }
   const autoDiscoverable = params.discoverablePlugins.filter(
@@ -151,7 +148,7 @@ export function warnWhenAllowlistIsOpen(params: {
   const allDiscoveredIds = new Set(params.discoverablePlugins.map((entry) => entry.id));
   const hasConfiguredAllowlist = params.allow.length > 0;
   const allowHasDiscoveredMatch = params.allow.some((id) => allDiscoveredIds.has(id));
-  if (hasConfiguredAllowlist && allowHasDiscoveredMatch) {
+  if (allowHasDiscoveredMatch) {
     return;
   }
   if (params.warningCache.hasOpenAllowlistWarning(params.warningCacheKey)) {

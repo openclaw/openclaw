@@ -23,13 +23,6 @@ import {
 } from "./runtime-web-tools-selection.types.js";
 import type { RuntimeWebDiagnostic } from "./runtime-web-tools.types.js";
 import { isRecord } from "./shared.js";
-export { isRecord } from "./shared.js";
-export {
-  type RuntimeWebProviderSelectionResult,
-  type RuntimeWebSecretOwner,
-  type RuntimeWebUnavailableProvider,
-  type SecretResolutionResult,
-} from "./runtime-web-tools-selection.types.js";
 
 const loadResolveManifestContractOwnerPluginId = createLazyRuntimeNamedExport(
   () => import("./runtime-web-tools-manifest.runtime.js"),

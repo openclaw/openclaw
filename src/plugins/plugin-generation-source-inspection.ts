@@ -59,7 +59,7 @@ export function inspectPluginSourceDependencies(
               path.isAbsolute(specifier) ||
               specifier.startsWith("file:");
             try {
-              const conditions = ["node", kind];
+              const conditions = ["node", "module-sync", kind];
               const result = artifact.captureModule(captured, specifier, conditions);
               const target =
                 result && "target" in result

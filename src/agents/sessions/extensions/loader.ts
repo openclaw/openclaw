@@ -92,12 +92,8 @@ async function loadCreateJitiLoaderFactory(): Promise<typeof createJiti> {
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 
-function normalizeUnicodeSpaces(str: string): string {
-  return str.replace(UNICODE_SPACES, " ");
-}
-
 function expandPath(p: string): string {
-  const normalized = normalizeUnicodeSpaces(p);
+  const normalized = p.replace(UNICODE_SPACES, " ");
   if (normalized.startsWith("~/")) {
     return path.join(os.homedir(), normalized.slice(2));
   }
@@ -160,10 +156,10 @@ export function createExtensionRuntime(): ExtensionRuntime {
       "Extension runtime not initialized. Action methods cannot be called during extension loading.",
     );
   };
-  const state: { staleMessage?: string } = {};
+  let staleMessage: string | undefined;
   const assertActive = () => {
-    if (state.staleMessage) {
-      throw new Error(state.staleMessage);
+    if (staleMessage) {
+      throw new Error(staleMessage);
     }
   };
 
@@ -187,7 +183,7 @@ export function createExtensionRuntime(): ExtensionRuntime {
     pendingProviderRegistrations: [],
     assertActive,
     invalidate: (message) => {
-      state.staleMessage ??=
+      staleMessage ??=
         message ??
         "This extension ctx is stale after session replacement or reload. Do not use a captured api or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().";
     },
@@ -221,7 +217,7 @@ function createExtensionAPI(
     runtime.assertActive();
     return runtime;
   };
-  const api = {
+  return {
     // Registration methods - write to extension
     on(event: string, handler: HandlerFn): void {
       runtime.assertActive();
@@ -322,8 +318,6 @@ function createExtensionAPI(
 
     events: eventBus,
   } as ExtensionAPI;
-
-  return api;
 }
 
 function resolveExtensionFactory(module: unknown): ExtensionFactory | undefined {

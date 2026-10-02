@@ -213,11 +213,7 @@ async function runEmbeddedAgentInternal(
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??
-    (channelHint
-      ? isMarkdownCapableMessageChannel(channelHint)
-        ? "markdown"
-        : "plain"
-      : "markdown");
+    (!channelHint || isMarkdownCapableMessageChannel(channelHint) ? "markdown" : "plain");
   const isProbeSession = params.sessionId?.startsWith("probe-") ?? false;
   throwIfAborted();
 

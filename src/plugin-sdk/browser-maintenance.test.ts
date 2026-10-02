@@ -305,18 +305,9 @@ describe("browser maintenance", () => {
   it("uses the resolved trash directory for reserved destinations", async () => {
     const resolvedHomeDir = path.join(testRoot, "real", "home", "test");
     const resolvedTrashDir = path.join(resolvedHomeDir, ".Trash");
-    realMkdirSync(path.join(homeDir, ".Trash"), { recursive: true, mode: 0o700 });
     realMkdirSync(resolvedTrashDir, { recursive: true, mode: 0o700 });
-    vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
-      const value = String(candidate);
-      if (value === homeDir) {
-        return resolvedHomeDir;
-      }
-      if (value === path.join(homeDir, ".Trash")) {
-        return resolvedTrashDir;
-      }
-      return realRealpathSyncNative(candidate);
-    });
+    realRmSync(homeDir, { recursive: true });
+    fs.symlinkSync(resolvedHomeDir, homeDir, process.platform === "win32" ? "junction" : "dir");
     const renameSync = vi.spyOn(fs, "renameSync");
 
     const { movePathToTrash } = await import("./browser-maintenance.js");
@@ -325,7 +316,9 @@ describe("browser maintenance", () => {
     const moved = await movePathToTrash(target);
     expectMovedTarget(target, moved, resolvedTrashDir);
     expect(renameSync).toHaveBeenCalledWith(target, moved);
-    expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([]);
+    expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([
+      path.basename(path.dirname(moved)),
+    ]);
   });
 
   it("refuses to trash filesystem roots", async () => {

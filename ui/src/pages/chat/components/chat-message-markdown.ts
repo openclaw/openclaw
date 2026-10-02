@@ -1,7 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
-import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { renderCopyAsMarkdownButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
@@ -25,7 +24,7 @@ import { extractMessageMediaText } from "./chat-message-media.ts";
 import {
   ownReactionEmoji,
   type MessageReactionAction,
-  type MessageReactionPlacement,
+  type MessageReactionOptions,
 } from "./chat-message-reactions.ts";
 
 registerChatMessageMetadataEnglish();
@@ -149,12 +148,8 @@ export function hasMessageActionButtons(
 
 export function renderMessageActionButtons(
   details: MessageActionDetails | null | undefined,
-  opts: {
+  opts: MessageReactionOptions & {
     onReply?: (target: MessageReplyTarget) => void;
-    onReact?: MessageReactionAction;
-    messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
-    userId?: string | null;
-    reactionPlacement?: MessageReactionPlacement;
   },
 ) {
   if (!details) {

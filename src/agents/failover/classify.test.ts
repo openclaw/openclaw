@@ -6,7 +6,6 @@ import {
   isBillingErrorMessage,
   isCloudCodeAssistFormatError,
   isContextOverflowError,
-  isFailoverErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
@@ -352,8 +351,8 @@ it("keeps aborted finish reasons in the timeout lane", () => {
 });
 
 it("matches bare terminated transport failures without matching unrelated prose", () => {
-  expect(isFailoverErrorMessage("terminated")).toBe(true);
-  expect(isFailoverErrorMessage("The user terminated the session manually.")).toBe(false);
+  expect(classifyFailoverReason("terminated")).toBe("timeout");
+  expect(classifyFailoverReason("The user terminated the session manually.")).toBeNull();
 });
 
 it("does not classify MALFORMED_FUNCTION_CALL as timeout", () => {

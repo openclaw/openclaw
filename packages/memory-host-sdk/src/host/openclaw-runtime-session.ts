@@ -1,6 +1,7 @@
 // Session/runtime facade for memory transcript helpers.
 import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
   readTranscriptExportSnapshotReadOnlySync,
   readTranscriptStatsBatchReadOnlySync,
@@ -18,7 +19,7 @@ export {
 } from "../../../../src/config/sessions/session-accessor.js";
 export { isIncognitoSessionKey } from "../../../../src/routing/session-key.js";
 export { isIncognitoOpenClawAgentSqlitePath } from "../../../../src/state/openclaw-agent-db.paths.js";
-export { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
+export { cloneEnvWithPlatformSemantics };
 
 /** Keep worker launch machinery behind the memory host's existing lazy runtime bridge. */
 export async function prepareSessionEntryInWorker(
@@ -31,6 +32,17 @@ export async function prepareSessionEntryInWorker(
   return prepare(...args);
 }
 
+export async function readSessionEntrySummariesInWorker(
+  input: Parameters<
+    typeof import("../../../../src/config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
+  >[0],
+) {
+  const captured = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
+  const { readSessionEntrySummariesInWorker: read } =
+    await import("../../../../src/config/sessions/session-entry-read-runtime.js");
+  return read(captured);
+}
+
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 export { isHeartbeatUserMessage } from "../../../../src/auto-reply/heartbeat-filter.js";
@@ -41,11 +53,7 @@ export {
   SILENT_REPLY_TOKEN,
   isSilentReplyPayloadText,
 } from "../../../../src/auto-reply/tokens.js";
-export {
-  getRuntimeConfig,
-  /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
-  loadConfig,
-} from "../../../../src/config/config.js";
+export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,

@@ -37,6 +37,7 @@ import {
   createChatPaneSessionActionCallbacks,
   readChatPaneComposerAccess,
   readChatPaneMutationAccess,
+  readChatPublicationAccess,
   renderChatPaneComposerControls,
 } from "./chat-pane-session-controls.ts";
 import {
@@ -299,7 +300,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       }
       const publication = this.githubPublication;
       publication?.sync({
-        canWrite: !selectedSessionArchived && !sessionParticipationBlocked && hasWriteScope,
+        ...readChatPublicationAccess(gatewaySnapshot, publicationRow, sessionParticipationBlocked),
         personalReady:
           !hasAbortableSessionRun(state) &&
           (!isCloudWorkerPlacementState(placement?.state) ||
@@ -479,7 +480,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       realtimeTalkDetail: state.realtimeTalkDetail,
       realtimeTalkInputNotice: state.realtimeTalkInputNotice,
       realtimeTalkInputLevel: state.realtimeTalkInputLevel,
-      realtimeTalkConversation: state.realtimeTalkConversation,
+      realtimeTalkConversation: state.realtimeTalkConversationState.entries,
       realtimeTalkVideoStream: state.realtimeTalkVideoStream,
       realtimeTalkCameraDevices: state.realtimeTalkCameraDevices,
       realtimeTalkVideoCapable: state.realtimeTalkVideoCapable,
@@ -557,8 +558,15 @@ export class ChatPane extends ChatPaneLayoutRender {
       },
       composerControls: composerControls?.composerControls ?? nothing,
       permissionPicker: composerControls?.permissionPicker,
-      ...this.collaborationChatProps(state.connected, selectedSessionArchived, multiIdentity),
-      ...this.sessionPullRequestChatProps(selectedSession?.sessionId),
+      ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
+      messageReactions: this.messageReactions,
+      onReact: this.canReactToCurrentSession() ? this.handleMessageReaction : undefined,
+      pullRequests: this.visibleSessionPullRequests,
+      pullRequestsGateway: this.context.gateway,
+      pullRequestsSessionId: selectedSession?.sessionId,
+      pullRequestsBranch: this.sessionPullRequestsBranch,
+      pullRequestsStatus: this.sessionPullRequestsStatus,
+      onDismissPullRequest: this.dismissSessionPullRequest,
       // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
       // Do not mint a checkout link that can prefetch the wrong repository.
       githubRepo: projectCatalog.result ? this.githubRepo : null,

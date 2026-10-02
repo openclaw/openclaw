@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import type { SpawnResult } from "../../process/exec.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -9,6 +11,7 @@ import {
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
@@ -51,6 +54,88 @@ async function activePlacement(
 }
 
 describe("worker placement read projection", () => {
+  it("discovers disk-probe placements off thread in session order before live sample checks", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-disk-inventory-"));
+    const database = openOpenClawStateDatabase();
+    const last = await activePlacement(database, "z-disk");
+    const first = await activePlacement(database, "a-disk");
+    const store = createWorkerSessionPlacementStore({ database, now: () => 2000 });
+    const claim = await store.claimTurn({
+      ...first.identity,
+      owner: placementTurnOwner(first.placement),
+      claimId: "recent-disk-turn",
+      runId: "recent-disk-run",
+    });
+    await store.releaseTurn(claim);
+    await store.startDispatch({
+      sessionId: "inactive-disk",
+      sessionKey: "agent:main:inactive-disk",
+      agentId: "main",
+    });
+    const sample: SpawnResult = {
+      stdout: JSON.stringify({
+        availableBytes: String(6 * 1024 ** 3),
+        totalBytes: String(10 * 1024 ** 3),
+      }),
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    };
+    const unexpected = async () => {
+      throw new Error("unexpected workspace mutation during a disk probe");
+    };
+    const sql = observeHostDataSql();
+    try {
+      expect(store.get(first.placement.sessionId)?.state).toBe("active");
+      expect(sql.queries.length).toBeGreaterThan(0);
+      const beforeSweep = sql.queries.length;
+      let discoverySql: string[] | undefined;
+      const requestedEnvironments: string[] = [];
+      const warn = vi.fn();
+      const monitor = createWorkerPlacementDiskSpaceMonitor({
+        placements: store,
+        environments: {
+          async startTunnel({ environmentId, ownerEpoch }) {
+            discoverySql ??= sql.queries.slice(beforeSweep);
+            requestedEnvironments.push(environmentId);
+            return {
+              environmentId,
+              ownerEpoch,
+              runWorkspaceCommand: async () => sample,
+              quiesceWorkspace: unexpected,
+              syncWorkspace: unexpected,
+              reconcileWorkspace: unexpected,
+              stop: async () => {},
+            };
+          },
+        },
+        warn,
+        now: () => 2000,
+      });
+      await monitor.sweep();
+
+      expect(discoverySql).toEqual([]);
+      expect(requestedEnvironments).toEqual([
+        first.placement.environmentId,
+        last.placement.environmentId,
+      ]);
+      for (const { placement } of [first, last]) {
+        expect(monitor.read(store.get(placement.sessionId)!)).toEqual({
+          status: "ok",
+          availableBytes: 6 * 1024 ** 3,
+          totalBytes: 10 * 1024 ** 3,
+          observedAtMs: 2000,
+        });
+      }
+      expect(monitor.version()).toBe(2);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      sql.restore();
+    }
+  });
+
   it("reads placement, move, pending-result and environment facts off the host SQLite thread", async () => {
     const stateDir = roots.make("placement-projection-worker-");
     const otherStateDir = roots.make("placement-projection-other-");
@@ -254,10 +339,13 @@ describe("worker placement read projection", () => {
           createdAt,
         );
       }
-      const journalOwners = store.listWorkspaceReconciliationOwners();
+      const journalOwners = await store.listWorkspaceReconciliationOwners();
+      const journalPlacements = await Promise.all(
+        journalOwners.map((owner) => store.getWorkspaceReconciliationPlacement(owner)),
+      );
       const blockingOwners = new Set(
         journalOwners
-          .filter((owner) => store.getWorkspaceReconciliationPlacement(owner))
+          .filter((_owner, index) => journalPlacements[index])
           .map((owner) => owner.sessionId),
       );
       expect(blockingOwners).toEqual(new Set(["journal-current", "journal-draining"]));

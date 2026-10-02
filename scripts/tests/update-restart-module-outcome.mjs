@@ -161,6 +161,7 @@ async function fixture({
     DEFINITION_DENIAL: /fixture-definition-denial/,
     resolveGatewayService: () => service,
     getUpdateRun: () => undefined,
+    getUpdateRunAsync: async () => undefined,
     isContainerEnvironment: () => false,
     resolveStateDir: () => "/fixture/state",
     mutateRun: (runId, update, options) => {
@@ -261,6 +262,8 @@ async function fixture({
   const realNames = [
     "update-command-service",
     "update-command-post-update",
+    "update-command-mutable-signals",
+    "update-command-execution-guards",
     "update-command-result",
     "../../infra/update-run-step",
     "update-command-verification",

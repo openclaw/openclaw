@@ -19,7 +19,7 @@ import { BrokerChild } from "./child.js";
 import { terminateBrokerProcessGroup, terminateLostBrokerChild } from "./cleanup.js";
 import type { BrokerExecaOptions, BrokerExecaResult } from "./execa-protocol.js";
 import { createBrokerReceiver, createBrokerSender } from "./ipc.js";
-import { holdPipe, restorePipePrefix, restoreStdinPipe } from "./pipe.js";
+import { holdPipe, restoreStdinPipe } from "./pipe.js";
 import {
   SpawnBrokerError,
   type BrokerRequest,
@@ -239,15 +239,11 @@ export class SpawnBrokerHost {
     }
     if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
       this.process.ref();
-      // Bun's ChildProcess owns the reference; its channel is only an EventEmitter.
-      if (!process.versions.bun) {
-        this.process.channel?.ref();
-      }
+      // Newer Bun releases, like Node, reference IPC independently of the child.
+      this.process.channel?.ref?.();
     } else {
       this.process.unref();
-      if (!process.versions.bun) {
-        this.process.channel?.unref();
-      }
+      this.process.channel?.unref?.();
     }
   }
 
@@ -546,8 +542,8 @@ export class SpawnBrokerHost {
         void this.transmit({ type: "pipe-received", id: message.id, fd: message.fd }).catch(fail);
       } else if (message.type === "pipe-prefix") {
         const pipe = request.child.stdio[message.fd];
-        if (pipe instanceof Socket) {
-          restorePipePrefix(pipe, message.bytes);
+        if (pipe instanceof Socket && message.bytes.length > 0) {
+          pipe.unshift(message.bytes);
         }
       } else if (message.type === "execa-result") {
         // Started commands publish their owned PID first on this ordered channel.

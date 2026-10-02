@@ -68,8 +68,6 @@ enum VoiceWakeTextUtils {
             guard !normalizedTokens.isEmpty else { continue }
             let rawTrigger = trigger.trimmingCharacters(in: self.whitespaceAndPunctuation)
             let tokenCount = normalizedTokens.count
-            guard !rawTrigger.isEmpty else { continue }
-
             var searchStart = transcript.startIndex
             while searchStart < transcript.endIndex,
                   let range = transcript.range(

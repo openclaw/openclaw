@@ -1,4 +1,5 @@
 import {
+  type ChannelsStartParams,
   ErrorCodes,
   errorShape,
   validateChannelsStartParams,
@@ -44,7 +45,7 @@ import {
 } from "./channels-status-issues.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestHandler, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
 type ChannelOperationParams = {
@@ -110,6 +111,35 @@ async function respondWithChannelOperationPayload<TPayload>(params: {
   await respondUnavailableOnThrow(params.respond, async () => {
     params.respond(true, await params.run(), undefined);
   });
+}
+
+function channelAccountOperationHandler(
+  method: "channels.start" | "channels.stop",
+  validate: Validator<ChannelsStartParams>,
+  run: (params: ChannelAccountParams) => Promise<unknown>,
+): GatewayRequestHandler {
+  return async ({ params, respond, context }) => {
+    const resolved = resolveChannelOperationParams({
+      method,
+      rawParams: params,
+      respond,
+      validate,
+    });
+    if (!resolved) {
+      return;
+    }
+    await respondWithChannelOperationPayload({
+      respond,
+      run: () =>
+        run({
+          channelId: resolved.channelId,
+          accountId: resolved.params.accountId,
+          cfg: context.getRuntimeConfig(),
+          context,
+          plugin: resolved.plugin,
+        }),
+    });
+  };
 }
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
@@ -261,10 +291,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateChannelsStatusParams, "channels.status", respond)) {
       return;
     }
-    const probe = (params as { probe?: boolean }).probe === true;
-    const timeoutMsRaw = (params as { timeoutMs?: unknown }).timeoutMs;
-    const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw });
-    const rawChannel = (params as { channel?: unknown }).channel;
+    const probe = params.probe === true;
+    const timeoutMs = resolveChannelsStatusTimeoutMs({ probe, timeoutMsRaw: params.timeoutMs });
+    const rawChannel = params.channel;
     const cfg = context.getRuntimeConfig();
     const plugins = listReadOnlyChannelPluginsForConfig(cfg);
     const requestedChannel =
@@ -471,6 +500,9 @@ export const channelsHandlers: GatewayRequestHandlers = {
     };
 
     const uiCatalog = buildChannelUiCatalog(selectedPlugins);
+    const channelsMap: Record<string, unknown> = {};
+    const accountsMap: Record<string, ChannelAccountSnapshot[]> = {};
+    const defaultAccountIdMap: Record<string, string> = {};
     const payload: Record<string, unknown> = {
       ts: Date.now(),
       channelOrder: uiCatalog.order,
@@ -479,13 +511,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       channelSystemImages: uiCatalog.systemImages,
       channelMeta: uiCatalog.entries,
       ...(context.getEventLoopHealth ? { eventLoop: context.getEventLoopHealth() } : {}),
-      channels: {} as Record<string, unknown>,
-      channelAccounts: {} as Record<string, unknown>,
-      channelDefaultAccountId: {} as Record<string, unknown>,
+      channels: channelsMap,
+      channelAccounts: accountsMap,
+      channelDefaultAccountId: defaultAccountIdMap,
     };
-    const channelsMap = payload.channels as Record<string, unknown>;
-    const accountsMap = payload.channelAccounts as Record<string, unknown>;
-    const defaultAccountIdMap = payload.channelDefaultAccountId as Record<string, unknown>;
     const { results: channelResults } = await runTasksWithConcurrency({
       tasks: statusPlugins.map((plugin) => async () => {
         const { accounts, defaultAccountId, defaultAccount, resolvedAccounts } =
@@ -509,11 +538,7 @@ export const channelsHandlers: GatewayRequestHandlers = {
                 account: resolvedAccounts[defaultAccountId],
                 cfg,
                 defaultAccountId,
-                snapshot:
-                  defaultAccount ??
-                  ({
-                    accountId: defaultAccountId,
-                  } as ChannelAccountSnapshot),
+                snapshot: defaultAccount ?? { accountId: defaultAccountId },
               }),
           });
           summary = summaryResult.ok
@@ -550,52 +575,16 @@ export const channelsHandlers: GatewayRequestHandlers = {
 
     respond(true, payload, undefined);
   },
-  "channels.start": async ({ params, respond, context }) => {
-    const resolved = resolveChannelOperationParams({
-      method: "channels.start",
-      rawParams: params,
-      respond,
-      validate: validateChannelsStartParams,
-    });
-    if (!resolved) {
-      return;
-    }
-    const { params: parsedParams, channelId, plugin } = resolved;
-    await respondWithChannelOperationPayload({
-      respond,
-      run: () =>
-        startChannelAccount({
-          channelId,
-          accountId: parsedParams.accountId,
-          cfg: context.getRuntimeConfig(),
-          context,
-          plugin,
-        }),
-    });
-  },
-  "channels.stop": async ({ params, respond, context }) => {
-    const resolved = resolveChannelOperationParams({
-      method: "channels.stop",
-      rawParams: params,
-      respond,
-      validate: validateChannelsStopParams,
-    });
-    if (!resolved) {
-      return;
-    }
-    const { params: parsedParams, channelId, plugin } = resolved;
-    await respondWithChannelOperationPayload({
-      respond,
-      run: () =>
-        stopChannelAccount({
-          channelId,
-          accountId: parsedParams.accountId,
-          cfg: context.getRuntimeConfig(),
-          context,
-          plugin,
-        }),
-    });
-  },
+  "channels.start": channelAccountOperationHandler(
+    "channels.start",
+    validateChannelsStartParams,
+    startChannelAccount,
+  ),
+  "channels.stop": channelAccountOperationHandler(
+    "channels.stop",
+    validateChannelsStopParams,
+    stopChannelAccount,
+  ),
   "channels.logout": async (invocation) => {
     const { params, respond, context } = invocation;
     const resolved = resolveChannelOperationParams({

@@ -171,6 +171,10 @@ export class CronService implements CronServiceContract {
     return result;
   }
 
+  async waitForManualRun(runId: string, timeoutMs: number, signal?: AbortSignal) {
+    return await runOps.waitForManualRun(this.state, runId, timeoutMs, signal);
+  }
+
   getJob(id: string): CronJob | undefined {
     return this.state.store?.jobs.find((job) => job.id === id);
   }

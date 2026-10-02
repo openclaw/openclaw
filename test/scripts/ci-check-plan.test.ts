@@ -2,10 +2,12 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCiCheckPlan, type CiCheckPlanInput } from "../../scripts/ci-check-plan.mts";
+import { resolveCiExtensionLintSelection } from "../../scripts/lib/ci-extension-lint-plan.mts";
 import {
   createExtensionOxlintShards,
   selectExtensionOxlintStripe,
 } from "../../scripts/run-oxlint-shards.mts";
+import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowExpression,
@@ -21,7 +23,7 @@ const typeSelection = vi.hoisted(() => ({
 }));
 
 vi.mock("../../scripts/run-tsgo-core-test-shards.mts", () => ({
-  createChangedCiTypeCheckPlan: async () => ({
+  createChangedCiTypeCheckPlan: vi.fn(async () => ({
     mode: "targeted",
     graphs: typeSelection.graphs ?? [
       {
@@ -30,7 +32,10 @@ vi.mock("../../scripts/run-tsgo-core-test-shards.mts", () => ({
       },
       { name: "scripts", config: "tsconfig.scripts.json" },
     ],
-  }),
+  })),
+}));
+vi.mock("../../scripts/lib/ci-extension-lint-plan.mts", () => ({
+  resolveCiExtensionLintSelection: vi.fn(),
 }));
 
 const checkJobs = [
@@ -50,8 +55,9 @@ function admittedCheckRows(context: Parameters<typeof evaluateWorkflowExpression
   });
 }
 
-function materializePlan(runnerProfile: string, rows: number) {
+function materializePlan(runnerProfile: string, rows: number, changedBaseRef?: string) {
   const input: CiCheckPlanInput = {
+    ...(changedBaseRef !== undefined ? { changedBaseRef } : {}),
     typeGraphBoundaryOwner: "",
     changedPaths: ["docs/ci.md"],
     changedCoreTestPaths: null,
@@ -93,6 +99,137 @@ function materializePlan(runnerProfile: string, rows: number) {
 }
 
 describe("CI check-plan completion count", () => {
+  it.each(["hybrid", "github", "blacksmith"])(
+    "selects complete extension roots without narrowing full check owners (%s)",
+    async (runnerProfile) => {
+      for (const mode of ["affected", "none", "full"] as const) {
+        const roots = mode === "affected" ? ["extensions/discord"] : [];
+        vi.mocked(resolveCiExtensionLintSelection).mockResolvedValue({
+          mode: mode === "full" ? "full" : "selected",
+          extensionRoots: roots,
+          reasons: Object.fromEntries(roots.map((root) => [root, ["changed owner"]])),
+          fullReasons: mode === "full" ? ["OPENCLAW_CI_EXTENSION_LINT_FULL"] : [],
+        });
+        vi.mocked(createChangedCiTypeCheckPlan).mockClear();
+        const checkMatrix = {
+          include: ["lint", "prod-types", "test-types", "guards"].map((task) => ({
+            check_name: `check-${task}`,
+            task,
+            runner: "unused",
+          })),
+        };
+        const coreStripes = runnerProfile === "hybrid" ? [1, 2] : [1, 2, 3, 4, 5];
+        const coreTypeMatrix = { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) };
+        const plan = await createCiCheckPlan({
+          changedBaseRef: "a".repeat(40),
+          extensionLintMode: mode === "full" ? "full" : "affected",
+          preserveFullChecks: true,
+          typeGraphBoundaryOwner: "additional-checks",
+          changedPaths: ["package.json"],
+          changedCoreTestPaths: null,
+          runnerProfile,
+          checkMatrix,
+          coreTypeMatrix,
+          lintCoreMatrix: { include: coreStripes.map((stripe) => ({ stripe })) },
+          lintExtensionMatrix: { include: [1, 2, 3, 4, 5, 6].map((stripe) => ({ stripe })) },
+        });
+        expect(plan.check_matrix).toEqual(checkMatrix);
+        expect(resolveCiExtensionLintSelection).toHaveBeenLastCalledWith(
+          ["package.json"],
+          process.cwd(),
+          { forceFull: mode === "full", baseRef: "a".repeat(40) },
+        );
+        expect(plan.core_type_matrix.include).toEqual(
+          runnerProfile === "blacksmith" ? [] : coreTypeMatrix.include,
+        );
+        expect(createChangedCiTypeCheckPlan).not.toHaveBeenCalled();
+        const encoded = [
+          plan.central_lint_selection_json,
+          ...plan.lint_core_matrix.include.map((row) => row.lint_selection_json),
+          ...plan.lint_extension_matrix.include.map((row) => row.lint_selection_json),
+        ];
+        const payloads = encoded
+          .filter((value): value is string => Boolean(value))
+          .map((value) => JSON.parse(value));
+        const central = JSON.parse(plan.central_lint_selection_json);
+        expect(central.fullGroups).toEqual(
+          runnerProfile === "blacksmith" ? ["core", "scripts"] : ["scripts"],
+        );
+        if (runnerProfile === "hybrid") {
+          expect(plan.lint_core_matrix.include).toEqual([{ stripe: 1 }, { stripe: 2 }]);
+          expect(plan.run_lint_extensions).toBe(mode !== "none");
+        } else if (runnerProfile === "github") {
+          expect(payloads.flatMap((payload) => payload.fullCoreStripes ?? [])).toEqual([
+            1, 2, 3, 4, 5,
+          ]);
+        }
+        const extensionPayloads = payloads.filter(
+          (payload) => payload.extensionRoots || payload.fullExtensionStripes,
+        );
+        if (mode === "none") {
+          expect(extensionPayloads).toEqual([]);
+          expect(plan.lint_extension_matrix.include).toEqual([]);
+        } else {
+          expect(extensionPayloads.length).toBeGreaterThan(0);
+          for (const payload of extensionPayloads) {
+            expect(payload.extensionStripeCount).toBe(
+              runnerProfile === "hybrid" ? 3 : runnerProfile === "github" ? 6 : 1,
+            );
+            if (mode === "affected") {
+              expect(payload.extensionRoots).toEqual(roots);
+              expect(payload.extensionStripes.length).toBeGreaterThan(0);
+              expect(payload.fullExtensionStripes).toBeUndefined();
+            } else {
+              expect(payload.extensionRoots).toBeUndefined();
+              expect(payload.fullExtensionStripes.length).toBeGreaterThan(0);
+            }
+          }
+        }
+      }
+    },
+  );
+  it.each(["", "check-plan", "additional-checks"] as const)(
+    "passes only an admitted parallel boundary owner without adding compiler rows (%s)",
+    async (typeGraphBoundaryOwner) => {
+      typeSelection.graphs = [
+        { name: "extensions", config: "tsconfig.extensions.json" },
+        { name: "extensions-test", config: "test/tsconfig/tsconfig.extensions.test.json" },
+        { name: "test-root", config: "test/tsconfig/tsconfig.test.root.json" },
+      ];
+      vi.mocked(createChangedCiTypeCheckPlan).mockClear();
+      try {
+        const paths = ["extensions/example/value.ts"];
+        const plan = await createCiCheckPlan({
+          typeGraphBoundaryOwner,
+          changedPaths: paths,
+          changedCoreTestPaths: null,
+          runnerProfile: "hybrid",
+          checkMatrix: {
+            include: [
+              { check_name: "check-prod-types", task: "prod-types", runner: "unused" },
+              { check_name: "check-test-types", task: "test-types", runner: "unused" },
+            ],
+          },
+          coreTypeMatrix: { include: [1, 2, 3, 4, 5].map((stripe) => ({ stripe })) },
+          lintCoreMatrix: { include: [] },
+          lintExtensionMatrix: { include: [] },
+        });
+        expect(createChangedCiTypeCheckPlan).toHaveBeenCalledExactlyOnceWith(paths, {
+          cwd: process.cwd(),
+          coreBoundaryOwner:
+            typeGraphBoundaryOwner === "additional-checks" ? "additional-checks" : undefined,
+        });
+        expect(plan.core_type_matrix.include).toEqual([]);
+        expect(plan.check_job_count).toBe(2);
+        expect(
+          plan.check_matrix.include.map((row) => JSON.parse(row.type_graph_names_json!)),
+        ).toEqual([["extensions"], ["extensions-test", "test-root"]]);
+      } finally {
+        typeSelection.graphs = null;
+      }
+    },
+  );
+
   it.each([
     ["hybrid", [1, 2, 4, 5]],
     ["github", [1, 2, 3, 4, 5]],
@@ -266,4 +403,13 @@ describe("CI check-plan completion count", () => {
     expect(run.stderr).toContain("400-job");
     expect(outputs).toEqual({});
   });
+  it.each(["main", "a".repeat(39), ""])(
+    "rejects an unpinned extension lint comparison base %s",
+    (base) => {
+      const { run, outputs } = materializePlan("hybrid", 0, base);
+      expect(run.status).toBe(1);
+      expect(run.stderr).toContain("40-hex changed base commit");
+      expect(outputs).toEqual({});
+    },
+  );
 });

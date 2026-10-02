@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
+import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import { listUnsettledRequesterChildrenInRuns } from "../registry/subagent-registry-requester-yield.js";
-import { consumeSubagentPauseNotice } from "../registry/subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   setSessionStore,
@@ -34,7 +34,8 @@ describe("requester pause notices", () => {
           childSessionKey: requesterKey,
         });
         registryRuntimeMock.getLatestLiveSubagentRunByChildSessionKey.mockImplementation(
-          () => requester,
+          (sessionKey, matches) =>
+            sessionKey === requesterKey && (!matches || matches(requester)) ? requester : undefined,
         );
         setSessionStore({ [requesterKey]: { sessionId: "requester-session" } });
         const child = makeSettledChild({

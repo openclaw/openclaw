@@ -423,10 +423,10 @@ function pairingChangedResult(event: string): NodeEventHandleResult {
 }
 
 async function cleanupNodeEventMedia(
-  ids: Iterable<string>,
+  media: Iterable<{ id: string }>,
   ctx: Pick<NodeEventContext, "logGateway">,
 ): Promise<void> {
-  for (const id of ids) {
+  for (const { id } of media) {
     try {
       await deleteMediaBuffer(id);
     } catch (cleanupErr) {
@@ -674,10 +674,7 @@ export const handleNodeEvent = async (
             acceptNonImage: false,
           });
           if (!(await isNodeEventConnectionCurrent(opts))) {
-            await cleanupNodeEventMedia(
-              (parsed.offloadedRefs ?? []).map((ref) => ref.id),
-              ctx,
-            );
+            await cleanupNodeEventMedia(parsed.offloadedRefs ?? [], ctx);
             return pairingChangedResult(evt.event);
           }
           message = parsed.message.trim();
@@ -689,10 +686,7 @@ export const handleNodeEvent = async (
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
             );
             if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
-              await cleanupNodeEventMedia(
-                parsed.offloadedRefs.map((ref) => ref.id),
-                ctx,
-              );
+              await cleanupNodeEventMedia(parsed.offloadedRefs, ctx);
             }
             return undefined;
           }
@@ -718,10 +712,7 @@ export const handleNodeEvent = async (
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          (offloadedRefs ?? []).map((ref) => ref.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
         return pairingChangedResult(evt.event);
       }
       await touchSessionStore({
@@ -732,10 +723,7 @@ export const handleNodeEvent = async (
         now,
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          (offloadedRefs ?? []).map((ref) => ref.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
         return pairingChangedResult(evt.event);
       }
 
@@ -762,10 +750,7 @@ export const handleNodeEvent = async (
       }
 
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          (offloadedRefs ?? []).map((ref) => ref.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
         return pairingChangedResult(evt.event);
       }
       const persistedTranscriptMedia = await persistInboundImagesForTranscript({
@@ -775,10 +760,7 @@ export const handleNodeEvent = async (
         logContext: "agent.request",
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          persistedTranscriptMedia.entries.map((media) => media.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx);
         return pairingChangedResult(evt.event);
       }
       if (persistedTranscriptMedia.omission === "inline-image-save-failed") {
@@ -836,11 +818,7 @@ export const handleNodeEvent = async (
           allowModelOverride: false,
         },
         opts?.isConnectionCurrent,
-        () =>
-          cleanupNodeEventMedia(
-            persistedTranscriptMedia.entries.map((media) => media.id),
-            ctx,
-          ),
+        () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
       );
       return undefined;
     }

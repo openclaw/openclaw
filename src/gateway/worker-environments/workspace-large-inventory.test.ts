@@ -149,7 +149,12 @@ it("recovers the shipped v1 full tree while applying only changed entries", asyn
     root: local,
     stagedResultRef: ref,
     expectedBaseManifestRef: base.ref,
-    journal: { load: () => undefined, begin: () => {}, commit: () => {}, abort: () => {} },
+    journal: {
+      load: async () => undefined,
+      begin: async () => {},
+      commit: async () => {},
+      abort: async () => {},
+    },
   });
 
   expect(result.changed).toBe(true);
@@ -191,13 +196,13 @@ it("recovers a converged shipped v1 deletion above the historical 25,000-record 
     current,
     manifest: currentManifest,
   });
-  const begin = vi.fn();
+  const begin = vi.fn(async () => {});
 
   const result = await applyStagedWorkerWorkspaceResult({
     root: local,
     stagedResultRef: ref,
     expectedBaseManifestRef: base.ref,
-    journal: { load: () => undefined, begin, commit: () => {}, abort: () => {} },
+    journal: { load: async () => undefined, begin, commit: async () => {}, abort: async () => {} },
   });
 
   expect(result.changed).toBe(true);
@@ -309,19 +314,19 @@ it("stages, applies, and recovers modified files across Git tree batches", async
   });
   let serializedJournal: string | undefined;
   let basePack: Uint8Array | undefined;
-  const committed = vi.fn();
+  const committed = vi.fn(async () => {});
   const result = await applyStagedWorkerWorkspaceResult({
     root: local,
     stagedResultRef,
     expectedBaseManifestRef: base.ref,
     journal: {
-      load: () => undefined,
-      begin: (journal) => {
+      load: async () => undefined,
+      begin: async (journal) => {
         serializedJournal = serializeWorkerWorkspaceReconciliationPlan(journal);
         basePack = Uint8Array.from(journal.basePack);
       },
       commit: committed,
-      abort: () => {},
+      abort: async () => {},
     },
   });
   expect(result.conflictPaths).toEqual([]);
@@ -433,16 +438,16 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
     },
   );
   expect(message.stdout).toContain("version 2\n");
-  const committed = vi.fn();
+  const committed = vi.fn(async () => {});
   await applyStagedWorkerWorkspaceResult({
     root: local,
     stagedResultRef: ref,
     expectedBaseManifestRef: base.ref,
     journal: {
-      load: () => undefined,
-      begin: () => {},
+      load: async () => undefined,
+      begin: async () => {},
       commit: committed,
-      abort: () => {},
+      abort: async () => {},
     },
   });
   expect(committed).toHaveBeenCalledOnce();
@@ -468,10 +473,10 @@ it("stages only a one-file delta for a 31,274-entry Git baseline", async () => {
     stagedResultRef: unchangedRef,
     expectedBaseManifestRef: current.ref,
     journal: {
-      load: () => undefined,
-      begin: () => {},
-      commit: () => {},
-      abort: () => {},
+      load: async () => undefined,
+      begin: async () => {},
+      commit: async () => {},
+      abort: async () => {},
     },
   });
   expect(unchanged.changed).toBe(false);

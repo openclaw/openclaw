@@ -317,6 +317,13 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
 
     Session-level activation command: `/activation mention` or `/activation always`. This updates session state (not global config) and is owner-gated.
 
+    Named accounts use only their own account-scoped activation. They no longer
+    inherit an older unscoped group's preference. If that was your only saved
+    preference, the configured mention policy applies until you run `/activation`
+    again in the intended account's group. Existing scoped and default-account
+    preferences, session history, and stored rows remain unchanged; no automatic
+    migration copies the older setting.
+
   </Tab>
 </Tabs>
 

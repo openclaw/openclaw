@@ -9,8 +9,9 @@ import { icons } from "../../components/icons.ts";
 import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { renderSessionMenuItem } from "./cloud-target.ts";
-import { folderDisplayName, parentFolderDisplayName } from "./path.ts";
+import { parentFolderDisplayName } from "./path.ts";
 import { renderPickerLabel } from "./picker-label.ts";
 import type { PlaceBrowserState } from "./place-browser-state.ts";
 import { renderPlaceBrowser } from "./place-browser.ts";
@@ -73,13 +74,13 @@ export function resolveProjectChip(params: {
         : params.selectedRemoteProject?.identity
           ? params.selectedRemoteProject.identity
           : folder
-            ? folderDisplayName(folder)
-            : folderDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
+            ? pathDisplayName(folder)
+            : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     localProjects,
     recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
       !normalizedQuery ||
-      [folderDisplayName(params.workspace), params.workspace]
+      [pathDisplayName(params.workspace), params.workspace]
         .join("\n")
         .toLowerCase()
         .includes(normalizedQuery),
@@ -227,7 +228,7 @@ export function renderProjectChip(params: {
                       ? renderSessionMenuItem(
                           {
                             value: "workspace",
-                            label: folderDisplayName(params.workspace),
+                            label: pathDisplayName(params.workspace),
                             icon: icons.folder,
                             checked:
                               !params.freshWorkspace &&

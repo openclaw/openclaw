@@ -1,5 +1,3 @@
-// Exec approval gateway methods create, list, inspect, and resolve command
-// approval requests, including iOS push delivery and requester visibility.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -38,10 +36,9 @@ import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { InvalidApprovalIdError } from "../exec-approval-registration.js";
 import {
   buildCronExecOperationBinding,
-  listCronStandingGrants,
   parseCronExecOperationBinding,
-  revokeCronStandingGrant,
 } from "../operator-approval-standing-grants.js";
+import { listCronStandingGrants, revokeCronStandingGrant } from "../operator-approval-store.js";
 import { resolveGrantExpiryDaysConfig } from "../standing-grant-expiry-config.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
@@ -79,11 +76,10 @@ export function createExecApprovalHandlers(
       if (!assertValidParams(params, validateExecApprovalGetParams, "exec.approval.get", respond)) {
         return;
       }
-      const p = params as { id: string };
       const resolved = await resolvePendingApprovalRecord({
         authority,
         manager,
-        inputId: p.id,
+        inputId: params.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         exposeAmbiguousPrefixError: true,
@@ -442,7 +438,7 @@ export function createExecApprovalHandlers(
       await handleApprovalWaitDecision({
         authority,
         manager,
-        inputId: (params as { id?: string }).id,
+        inputId: params.id,
         client,
         ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
         respond,
@@ -452,7 +448,9 @@ export function createExecApprovalHandlers(
         },
       });
     },
-    "exec.approval.grants.list": async ({ params, respond }) => {
+    "exec.approval.grants.list": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond } = options;
       if (
         !assertValidParams(
           params,
@@ -463,9 +461,9 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      // SAFETY: validated against ExecApprovalGrantsListParamsSchema above.
-      const p = params as { limit?: number };
-      const grants = listCronStandingGrants(p.limit ? { limit: p.limit } : {}).map((grant) => {
+      const records = await listCronStandingGrants({ limit: params.limit, guard: authority.guard });
+      authority.assertCurrent();
+      const grants = records.map((grant) => {
         const operation = parseCronExecOperationBinding(grant.operationBinding);
         return {
           grantId: grant.grantId,
@@ -488,7 +486,9 @@ export function createExecApprovalHandlers(
       });
       respond(true, { grants }, undefined);
     },
-    "exec.approval.grants.revoke": async ({ params, respond, client }) => {
+    "exec.approval.grants.revoke": async (options) => {
+      using authority = createApprovalRequestAuthority(options);
+      const { params, respond, client } = options;
       if (
         !assertValidParams(
           params,
@@ -499,12 +499,14 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
-      // SAFETY: validated against ExecApprovalGrantsRevokeParamsSchema above.
-      const p = params as { grantId: string };
-      // Same actor attribution as approval resolution; recorded for the ledger.
       const revokedBy =
         client?.connect?.client?.displayName ?? client?.connect?.client?.id ?? "operator";
-      const result = revokeCronStandingGrant({ grantId: p.grantId, revokedBy });
+      const result = await revokeCronStandingGrant({
+        grantId: params.grantId,
+        revokedBy,
+        guard: authority.guard,
+      });
+      authority.assertCurrent();
       respond(true, { outcome: result.outcome }, undefined);
     },
     "exec.approval.resolve": async (options) => {
@@ -523,8 +525,7 @@ export function createExecApprovalHandlers(
       // Grant terms freeze at resolve time. An explicit per-resolve override
       // (custom operator UIs) wins over the configured default; the manager
       // applies tools.exec.grantExpiryDays when this stays undefined.
-      // SAFETY: schema-validated above; the typeof guard re-narrows the field.
-      const overrideDays = (params as { grantExpiresInDays?: unknown }).grantExpiresInDays;
+      const overrideDays = params.grantExpiresInDays;
       const grantExpiresAtMs =
         decision === "allow-always" && typeof overrideDays === "number"
           ? Date.now() + Math.floor(overrideDays) * 86_400_000

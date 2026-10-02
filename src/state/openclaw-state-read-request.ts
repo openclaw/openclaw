@@ -1,18 +1,21 @@
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadRequest,
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (isWorkspaceJournalReadCommand(command)) {
+    return command.type === "placementJournals.owners"
+      ? { ...command }
+      : { ...command, owner: { ...command.owner } };
+  }
   if (command.type === "workerPlacements.changeSnapshot" && command.profileIds) {
     return { ...command, profileIds: [...command.profileIds] };
   }
   if (command.type === "cron.scratch") {
     return { ...command, selector: { ...command.selector } };
-  }
-  if (command.type === "tui.lastSession.retiredPointers") {
-    return { ...command, retiredSessionKeys: [...command.retiredSessionKeys] };
   }
   if (command.type === "userProfiles.avatar.read") {
     return { ...command, expected: { ...command.expected } };
@@ -28,6 +31,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   }
   if (command.type === "cron.jobNames") {
     return { ...command, jobIds: [...command.jobIds] };
+  }
+  if (command.type === "cron.quarantine") {
+    return { type: command.type, storeKey: command.storeKey };
   }
   if (command.type === "githubPublication.sharedObservation") {
     return {
@@ -93,6 +99,15 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
       },
     };
   }
+  if (command.type === "cron.currentReceipt") {
+    const { receiptId, storeKey, jobId, agentId, ownerPid, ownerStartTime } = command.handle;
+    return {
+      type: command.type,
+      handle: { receiptId, storeKey, jobId, agentId, ownerPid, ownerStartTime },
+      includeJob: command.includeJob,
+      includeAvailability: command.includeAvailability,
+    };
+  }
   if (command.type === "cron.observeRunRecovery") {
     return {
       type: command.type,
@@ -107,8 +122,11 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   if (command.type === "devicePairing.bootstrapContext") {
     return { ...command, input: { ...command.input } };
   }
-  if (command.type === "operatorApprovals.history") {
-    return { ...command, input: { ...command.input } };
+  if (
+    command.type === "operatorApprovals.history" ||
+    command.type === "operatorApprovals.listCronGrants"
+  ) {
+    return structuredClone(command);
   }
   if (
     command.type === "acpSessions.metadata" ||
@@ -183,6 +201,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
+  if (isWorkspaceJournalReadCommand(command)) {
+    return Buffer.byteLength(JSON.stringify(command), "utf8");
+  }
   let bytes = Buffer.byteLength(command.type, "utf8");
   if (command.type === "cron.activeReceiptOwners") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
@@ -195,12 +216,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
-  }
-  if (command.type === "tui.lastSession.retiredPointers") {
-    return command.retiredSessionKeys.reduce(
-      (total, key) => total + Buffer.byteLength(key, "utf8"),
-      bytes,
-    );
   }
   if (isChannelIngressReadCommand(command)) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input ?? null), "utf8");
@@ -228,6 +243,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (sum, id) => sum + Buffer.byteLength(id, "utf8"),
       bytes + Buffer.byteLength(command.storePath ?? "", "utf8"),
     );
+  }
+  if (command.type === "cron.quarantine") {
+    return bytes + Buffer.byteLength(command.storeKey, "utf8");
   }
   if (command.type === "githubPublication.sharedObservation") {
     return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
@@ -295,6 +313,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       )
     );
   }
+  if (command.type === "cron.currentReceipt") {
+    return bytes + Buffer.byteLength(JSON.stringify(command.handle), "utf8") + 2;
+  }
   if (command.type === "cron.observeRunRecovery") {
     return command.proposals.reduce(
       (total, proposal) =>
@@ -342,6 +363,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       Buffer.byteLength(command.input.kind ?? "", "utf8") +
       16
     );
+  }
+  if (command.type === "operatorApprovals.listCronGrants") {
+    return bytes + 8;
   }
   if (command.type === "deliveryQueue.outbound") {
     return bytes + Buffer.byteLength(command.id ?? "", "utf8");
@@ -418,6 +442,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
   if (
+    command.type === "userModelAccounts.links" ||
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.avatar.inspect" ||
     command.type === "userProfiles.channelIdentity.list" ||

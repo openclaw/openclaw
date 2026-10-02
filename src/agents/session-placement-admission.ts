@@ -289,6 +289,7 @@ export async function withLocalSessionPlacementTurnSettlement(
         return result;
       },
       {
+        sessionTarget: claim,
         priority: resolveEmbeddedRunSessionLanePolicy(options.trigger, options.inputProvenance)
           .priority,
         onQueued: () => {

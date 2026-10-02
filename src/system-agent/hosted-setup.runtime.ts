@@ -184,12 +184,7 @@ export async function runHostedGatewaySetup(
   beforePersistentApply: (runtime: RuntimeEnv) => Promise<void>,
   runtime?: RuntimeEnv,
 ): Promise<HostedSetupCompletion> {
-  const [
-    { resolveGatewayPort },
-    { configureGatewayForSetup },
-    { resolveQuickstartGatewayDefaults },
-  ] = await Promise.all([
-    import("../config/config.js"),
+  const [{ configureGatewayForSetup }, { resolveQuickstartGatewayDefaults }] = await Promise.all([
     import("../wizard/setup.gateway-config.js"),
     loadSetupShared(),
   ]);
@@ -198,16 +193,14 @@ export async function runHostedGatewaySetup(
     runtime,
     beforePersistentApply,
     afterWrite: GATEWAY_WRITE_POLICY,
-    run: async ({ baseConfig, runtime: setupRuntime }) => {
+    run: async ({ baseConfig }) => {
       requireLocalGateway(baseConfig);
       const result = await configureGatewayForSetup({
         flow: "advanced",
         baseConfig,
         nextConfig: baseConfig,
-        localPort: resolveGatewayPort(baseConfig),
         quickstartGateway: resolveQuickstartGatewayDefaults(baseConfig),
         prompter,
-        runtime: setupRuntime,
       });
       return { nextConfig: result.nextConfig };
     },

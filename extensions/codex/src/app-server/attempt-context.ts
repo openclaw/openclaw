@@ -10,7 +10,10 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { readNonBlankString as readNonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
   CODEX_MEMORY_CONTEXT_BASENAME,
@@ -19,7 +22,6 @@ import {
   getCodexContextFileDisplayBasename,
   isNonEmptyString,
   normalizeCodexContextFilePath,
-  normalizeCodexDynamicToolName,
   type CodexBootstrapFile,
   type CodexWorkspaceBootstrapContext,
 } from "./attempt-workspace-context.js";
@@ -131,6 +133,7 @@ export function buildCodexSystemPromptReport(params: {
   developerInstructions: string;
   workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
   omitWorkspaceReferences?: boolean;
+  parentLocalEgress?: boolean;
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
@@ -163,9 +166,10 @@ export function buildCodexSystemPromptReport(params: {
       bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
       injectedFiles: params.workspaceBootstrapContext.promptContextFiles ?? [],
       omitReferenceFiles: params.omitWorkspaceReferences,
+      omitPersonalProfiles: !params.parentLocalEgress,
       developerInstructionFiles: [
         ...(params.workspaceBootstrapContext.threadDeveloperInstructionFiles ?? []),
-        ...(params.workspaceBootstrapContext.turnScopedDeveloperInstructionFiles ?? []),
+        ...(params.workspaceBootstrapContext.personaFiles ?? []),
       ],
       memoryToolRoutedBootstrapFiles:
         params.workspaceBootstrapContext.memoryToolRoutedBootstrapFiles ?? [],
@@ -239,6 +243,7 @@ function buildCodexBootstrapInjectionStats(params: {
   bootstrapFiles: CodexBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
   omitReferenceFiles?: boolean;
+  omitPersonalProfiles?: boolean;
   developerInstructionFiles?: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles?: CodexBootstrapFile[];
   memoryToolRouted?: boolean;
@@ -283,6 +288,7 @@ function buildCodexBootstrapInjectionStats(params: {
       };
     }
     const omitted =
+      (params.omitPersonalProfiles && file.personalUser === true) ||
       memoryToolRoutedFile ||
       (params.omitReferenceFiles &&
         readCodexIndexedContextFileContent(injectedIndex, pathValue, fileName) !== undefined);
@@ -385,7 +391,7 @@ export function buildCodexWatchedSessionsContext(params: {
     sessionKey: params.sessionKey,
     sandboxed: params.sandboxed,
     toolNames: flattenCodexDynamicToolFunctions(params.dynamicTools).map((tool) =>
-      normalizeCodexDynamicToolName(tool.name),
+      normalizeLowercaseStringOrEmpty(tool.name),
     ),
   });
 }
@@ -393,13 +399,36 @@ export function buildCodexWatchedSessionsContext(params: {
 export function renderCodexSkillsInstructions(params: {
   attempt: EmbeddedRunAttemptParams;
   skillsPrompt?: string;
+  dynamicTools?: readonly CodexDynamicToolSpec[];
 }): string | undefined {
   if (!shouldIncludeAgentHarnessRuntimeContext(params.attempt)) {
     return undefined;
   }
-  return params.skillsPrompt?.trim()
-    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-    : undefined;
+  const names = new Set(
+    flattenCodexDynamicToolFunctions(params.dynamicTools ?? []).map((tool) =>
+      normalizeLowercaseStringOrEmpty(tool.name),
+    ),
+  );
+  const prompt = params.skillsPrompt?.trim();
+  const search = names.has("skills_search");
+  const read = names.has("skills_read");
+  if (!prompt && !search) {
+    return undefined;
+  }
+  return [
+    "## OpenClaw Skills",
+    ...(search
+      ? [
+          "The directory is bounded. Use OpenClaw's skills_search tool to find relevant installed skills omitted from it. Search does not install skills.",
+        ]
+      : []),
+    ...(read
+      ? [
+          "Use OpenClaw's skills_read tool with an exact name for complete instructions; a known name does not require search first.",
+        ]
+      : []),
+    ...(prompt ? [prompt] : []),
+  ].join("\n");
 }
 
 /**

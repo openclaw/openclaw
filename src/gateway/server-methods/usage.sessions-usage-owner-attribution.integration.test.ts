@@ -10,11 +10,14 @@ import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/co
 import {
   listSessionTranscriptInstances,
   loadSessionEntryReadOnly,
+  patchSessionEntryCore,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
+import { prepareCronSession } from "../../cron/isolated-agent/session.js";
 import { discoverAllSessions, loadSessionCostSummary } from "../../infra/session-cost-usage.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
@@ -94,6 +97,64 @@ function contextReport(generatedAt: number, ordinal = 0): SessionSystemPromptRep
     tools: { listChars: ordinal, schemaChars: 0, entries: [] },
   };
 }
+
+it("keeps prior cron runs attributed through guarded replacement and the real usage handler", async () => {
+  await withUsageState(async (state) => {
+    const config = getRuntimeConfig();
+    const sessionKey = "agent:main:cron:usage-history";
+    const scope = { agentId: "main", sessionKey };
+    const sessionIds: string[] = [];
+    const timestamp = Date.now() - 60_000;
+    for (const tokens of [10, 20, 30]) {
+      const cronSession = await prepareCronSession({
+        cfg: config,
+        ...scope,
+        nowMs: timestamp,
+        forceNew: true,
+      });
+      await createPersistCronSessionEntry({
+        cronSession,
+        agentSessionKey: sessionKey,
+        workspaceDir: state.workspaceDir,
+        persistSessionEntry: async ({ storePath, fallbackEntry, update }) => {
+          await patchSessionEntryCore(
+            { ...scope, storePath },
+            (_entry, context) => update(context.existingEntry),
+            { fallbackEntry, replaceEntry: true },
+          );
+        },
+      })();
+      const sessionId = cronSession.sessionEntry.sessionId;
+      sessionIds.push(sessionId);
+      await persistSessionTranscriptTurn(
+        { ...scope, sessionId },
+        {
+          cwd: state.workspaceDir,
+          updateMode: "none",
+          messages: [{ message: usageMessage(tokens, timestamp), now: timestamp }],
+        },
+      );
+    }
+    expect(loadSessionEntryReadOnly(scope)).toMatchObject({
+      usageFamilyKey: sessionKey,
+      usageFamilySessionIds: sessionIds,
+      createdActor: { type: "system" },
+    });
+    for (const { sessionId, sessionFile } of await discoverAllSessions({ agentId: "main" })) {
+      await loadSessionCostSummary({ agentId: "main", sessionId, sessionFile, config });
+    }
+    for (const groupBy of ["instance", "family"]) {
+      const result = await readUsage({ range: "all", agentId: "main", groupBy });
+      expect(result.totals.totalTokens).toBe(60);
+      expect(result.totals.totalCost).toBeCloseTo(0.03);
+      expect(result.sessions).toHaveLength(groupBy === "instance" ? 3 : 1);
+      expect(result.sessions.every((row) => row.createdActor?.type === "system")).toBe(true);
+      expect(result.aggregates.byCreator).toMatchObject([
+        { actor: { type: "system" }, totals: { totalTokens: 60, totalCost: 0.03 } },
+      ]);
+    }
+  });
+});
 
 it("hydrates context metadata only for emitted usage rows while aggregating every match", async () => {
   await withUsageState(async (state) => {

@@ -29,6 +29,7 @@ export const runtimeProcessEntrypoints = {
   fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
   sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
   authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
+  pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),
   agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
   workspaceMemory: runtimeProcessEntrypoint("worker/memory-worker-entry"),
   localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),
@@ -49,6 +50,7 @@ export const runtimeProcessEntrypoints = {
   sqliteReadOnlyNativeResource: runtimeProcessEntrypoint("infra/sqlite-readonly-native-resource"),
   sqliteSourceRevision: runtimeProcessEntrypoint("infra/sqlite-source-revision.worker"),
   sqliteIntegrity: runtimeProcessEntrypoint("infra/sqlite-integrity.worker"),
+  sqliteCloseProbe: runtimeProcessEntrypoint("infra/bun-sqlite-close-probe.worker"),
   preparedModelCatalog: runtimeProcessEntrypoint("agents/prepared-model-catalog.worker"),
   providerPromptState: runtimeProcessEntrypoint(
     "agents/embedded-agent-runner/provider-prompt-state.worker",

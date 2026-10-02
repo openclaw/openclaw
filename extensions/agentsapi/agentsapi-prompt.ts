@@ -33,6 +33,34 @@ const SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS = [
   "OpenClaw does not automatically transfer output files from this executor through the Agents API.",
 ].join("\n\n");
 
+const INLINE_IMAGE_INPUT_INSTRUCTIONS = [
+  "The OpenClaw Agents API harness does not support inline image inputs. Do not send images as inline input to this harness.",
+  "For image or document tasks, use supplied text or available tools to inspect original files at the prepared execution paths in the current message.",
+  "If the needed content is unavailable, ask for a text description. Do not claim to have viewed an image you have not inspected.",
+].join(" ");
+
+export const HOSTED_ATTACHMENT_UPLOAD_UNAVAILABLE_FEEDBACK =
+  "Input attachment feedback: The hosted environment is unavailable for file uploads. There are no confirmed hosted VM paths for this message's attachments, including any files uploaded before the environment disconnected. Files retained from earlier turns do not establish the contents of these new attachments. Use supplied text or available Gateway tools that can access the originals. If the needed content remains inaccessible, explain that limitation and ask for relevant text. Do not claim to have inspected the current attachments unless a tool actually reads them.";
+
+const INLINE_IMAGE_INPUT_CAPABILITY_NOTICE =
+  "Input capability feedback: The Agents API harness does not support inline image inputs. The inline images for this message were not sent.";
+const OMITTED_IMAGE_REPLY_GUIDANCE =
+  "Continue the task without claiming to have viewed the omitted images.";
+
+// The attachment owner prepared originals, so the model can inspect their execution paths.
+const IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS = [
+  INLINE_IMAGE_INPUT_CAPABILITY_NOTICE,
+  "Original attachments are available at the prepared execution paths above. Use any supplied text or inspect those files with available tools to try another approach.",
+  OMITTED_IMAGE_REPLY_GUIDANCE,
+].join(" ");
+
+// No execution paths are confirmed for the current originals, even if an upload began.
+const IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS = [
+  INLINE_IMAGE_INPUT_CAPABILITY_NOTICE,
+  "No confirmed execution paths are available for this message's original attachments. Use supplied text or available tools that can access the originals, or ask for a text description if the image is necessary and remains inaccessible.",
+  OMITTED_IMAGE_REPLY_GUIDANCE,
+].join(" ");
+
 /** The native session owns this snapshot until OpenClaw resets its binding. */
 export async function buildAgentsApiInstructions(
   params: AgentHarnessAttemptParamsV2,
@@ -76,6 +104,7 @@ export async function buildAgentsApiInstructions(
     environment.type === "openai_hosted"
       ? OPENAI_HOSTED_ENVIRONMENT_INSTRUCTIONS
       : `${SELF_HOSTED_ENVIRONMENT_INSTRUCTIONS}\n\nYour executor workspace directory is ${JSON.stringify(environment.workspace_directory)}.`,
+    INLINE_IMAGE_INPUT_INSTRUCTIONS,
     environment.type === "openai_hosted"
       ? "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your hosted VM. Do not try to reread or edit those paths with hosted shell or file tools."
       : "OpenClaw workspace files below are Gateway-owned instruction and reference snapshots. Their paths identify their source, not files available in your connected executor. Do not try to reread or edit those paths with executor shell or file tools.",
@@ -137,14 +166,33 @@ export function buildAgentsApiTurnInput(
   prompt: string,
   mappingText: string,
   environmentType: AgentsApiEnvironment["type"],
+  attachmentFeedback?: string,
 ): string {
   // Deduplicate only after prompt hooks; a replacement prompt still needs
   // the workspace owner's freshly prepared executor paths.
   const attachmentNote =
     environmentType === "self_hosted" && prompt.endsWith(`\n\n${mappingText}`) ? "" : mappingText;
-  return [buildAgentsApiTurnContext(params, tools), prompt, attachmentNote]
+  return [
+    buildAgentsApiTurnContext(params, tools),
+    prompt,
+    attachmentNote,
+    attachmentFeedback,
+    buildAgentsApiImageInputNotice(params.images, mappingText),
+  ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+function buildAgentsApiImageInputNotice(
+  images: AgentHarnessAttemptParamsV2["images"],
+  mappingText: string,
+): string | undefined {
+  if (!images?.length) {
+    return undefined;
+  }
+  return mappingText
+    ? IMAGE_RECOVERY_WITH_PREPARED_ATTACHMENTS
+    : IMAGE_RECOVERY_WITHOUT_PREPARED_ATTACHMENTS;
 }
 
 /** Current facts use the existing input carrier, not immutable session instructions. */

@@ -5,7 +5,8 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { handleInvoke } from "../node-host/invoke.js";
 import {

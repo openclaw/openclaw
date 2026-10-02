@@ -78,18 +78,20 @@
   text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
 }
 
-/* ---------- detail overlay ---------- */
-
-.channels-detail {
+.channels-detail,
+.channels-wizard {
   display: flex;
   flex-direction: column;
-  width: min(680px, calc(100vw - 48px));
-  max-height: min(85dvh, 860px);
   overflow-y: auto;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: var(--popover);
   box-shadow: var(--shadow-xl);
+}
+
+.channels-detail {
+  width: min(680px, calc(100vw - 48px));
+  max-height: min(85dvh, 860px);
 }
 
 .channels-detail__header {
@@ -127,8 +129,6 @@
   gap: var(--space-3);
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
-
-/* ---------- DM sender access requests ---------- */
 
 .channels-pairing-filters {
   display: flex;
@@ -233,18 +233,9 @@
   }
 }
 
-/* ---------- setup wizard dialog ---------- */
-
 .channels-wizard {
-  display: flex;
-  flex-direction: column;
   width: min(540px, calc(100vw - 48px));
   max-height: min(85dvh, 760px);
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
 }
 
 .channels-wizard__header {

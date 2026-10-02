@@ -422,10 +422,9 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
   const storedOrigin = deliveryFields.origin;
   const avatar = normalizeOptionalString(storedOrigin?.avatar);
   const controlUiBasePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  const pinnedAt =
-    entry?.pinnedAt !== undefined && isPinnableSessionEntry(key, entry)
-      ? entry.pinnedAt
-      : undefined;
+  // Snooze shares the pin root-session rule.
+  const pinnable = isPinnableSessionEntry(key, entry);
+  const pinnedAt = pinnable ? entry?.pinnedAt : undefined;
 
   // Reserve temporal fields in wire order; presentation fills a fresh copy.
   const row: GatewaySessionRow = {
@@ -481,6 +480,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     subject: entry?.subject,
     groupChannel: entry?.groupChannel,
     space: entry?.space,
+    conversationLink: entry?.conversationLink,
     chatType: entry?.chatType,
     origin: storedOrigin
       ? (({ avatar: _avatar, ...safeOrigin }) => safeOrigin)(storedOrigin)
@@ -491,6 +491,8 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     archiveReason: entry?.archiveReason,
     pinned: pinnedAt !== undefined,
     pinnedAt,
+    snoozedUntil: pinnable ? entry?.snoozedUntil : undefined,
+    snoozedAt: pinnable ? entry?.snoozedAt : undefined,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
     markedUnreadAt: entry?.markedUnreadAt,

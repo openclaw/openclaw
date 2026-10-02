@@ -48,10 +48,8 @@ import {
   authorizeOpenAiCompatibleHttpSession,
   getBearerToken,
   getHeader,
-  isAgentSelectionRequiredError,
-  isGatewaySessionKeyOverrideError,
-  isInvalidGatewayModelError,
-  isUnknownGatewayAgentError,
+  isGatewayAgentRequestError,
+  isGatewayRequestContextError,
   resolveAgentIdForRequest,
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
@@ -67,10 +65,10 @@ import {
   type Usage,
 } from "./open-responses.schema.js";
 import { resolveAgentRunUsage } from "./openai-agent-run-usage.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
 import {
   type OpenAiCompatiblePendingToolCall,
   readOpenAiHttpRunTerminal,
+  resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
   type OpenAiCompatibleHttpOptions,
 } from "./openai-compatible-agent-run.js";
@@ -90,15 +88,6 @@ import {
 } from "./openresponses-shape.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
-
-function normalizeResponseSessionScope(scope: ResponseSessionScope): ResponseSessionScope {
-  const requestedSessionKey = scope.requestedSessionKey?.trim();
-  return {
-    authSubject: scope.authSubject.trim(),
-    agentId: scope.agentId,
-    requestedSessionKey: requestedSessionKey || undefined,
-  };
-}
 
 function resolveResponseSessionAuthSubject(params: {
   req: IncomingMessage;
@@ -128,16 +117,12 @@ function createResponseSessionScope(params: {
   agentId: string;
   resolveGatewayContext?: GatewayContextResolver;
 }): ResponseSessionScope {
-  return normalizeResponseSessionScope({
-    authSubject: resolveResponseSessionAuthSubject(params),
+  return {
+    authSubject: resolveResponseSessionAuthSubject(params).trim(),
     agentId: params.agentId,
-    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key"),
-  });
+    requestedSessionKey: getHeader(params.req, "x-openclaw-session-key")?.trim() || undefined,
+  };
 }
-
-export const testing = {
-  resolveResponsesLimits,
-};
 
 function writeSseEvent(res: ServerResponse, event: StreamingEvent) {
   res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
@@ -154,10 +139,6 @@ function extractClientTools(body: CreateResponseBody): ClientToolDefinition[] {
       strict: tool.strict,
     },
   }));
-}
-
-function createEmptyUsage(): Usage {
-  return toOpenAiResponsesUsage(undefined);
 }
 
 function extractUsageFromResult(result: unknown): Usage {
@@ -220,11 +201,7 @@ export async function handleOpenResponsesHttpRequest(
   try {
     agentId = resolveAgentIdForRequest({ req, model });
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isUnknownGatewayAgentError(err)
-    ) {
+    if (isGatewayAgentRequestError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -369,12 +346,7 @@ export async function handleOpenResponsesHttpRequest(
       useMessageChannelHeader: true,
     });
   } catch (err) {
-    if (
-      isAgentSelectionRequiredError(err) ||
-      isUnknownGatewayAgentError(err) ||
-      isInvalidGatewayModelError(err) ||
-      isGatewaySessionKeyOverrideError(err)
-    ) {
+    if (isGatewayRequestContextError(err)) {
       sendInvalidRequest(res, err.message);
       return true;
     }
@@ -585,24 +557,12 @@ export async function handleOpenResponsesHttpRequest(
         return true;
       }
       logWarn(`openresponses: non-stream response failed: ${String(err)}`);
-      if (isClientToolNameConflictError(err)) {
-        const response = createFailedResponse({
-          code: "invalid_request_error",
-          message: "invalid tool configuration",
-        });
-        sendJson(res, 400, response);
-        return true;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        const mappedResponse = createFailedResponse({
-          code: mapped.error.type,
-          message: mapped.error.message,
-        });
-        sendJson(res, mapped.status, mappedResponse);
-        return true;
-      }
-      sendJson(res, 500, createFailedResponse({ code: "api_error", message: "internal error" }));
+      const mapped = resolveOpenAiCompatibleAgentError(err);
+      sendJson(
+        res,
+        mapped.status,
+        createFailedResponse({ code: mapped.error.type, message: mapped.error.message }),
+      );
     }
     return true;
   }
@@ -954,30 +914,13 @@ export async function handleOpenResponsesHttpRequest(
       terminalLifecyclePhase = "error";
       logWarn(`openresponses: streaming response failed: ${String(err)}`);
 
-      finalUsage = finalUsage ?? createEmptyUsage();
-      if (isClientToolNameConflictError(err)) {
-        finalizeFailedResponse(
-          createFailedResponse(
-            { code: "invalid_request_error", message: "invalid tool configuration" },
-            finalUsage,
-          ),
-        );
-        return;
-      }
-      const mapped = resolveOpenAiCompatError(err);
-      if (mapped) {
-        const mappedResponse = createFailedResponse(
-          {
-            code: mapped.error.type,
-            message: mapped.error.message,
-          },
-          finalUsage,
-        );
-        finalizeFailedResponse(mappedResponse);
-        return;
-      }
+      finalUsage = finalUsage ?? toOpenAiResponsesUsage(undefined);
+      const mapped = resolveOpenAiCompatibleAgentError(err);
       finalizeFailedResponse(
-        createFailedResponse({ code: "api_error", message: "internal error" }, finalUsage),
+        createFailedResponse(
+          { code: mapped.error.type, message: mapped.error.message },
+          finalUsage,
+        ),
       );
     } finally {
       releaseAgentRootWork?.();

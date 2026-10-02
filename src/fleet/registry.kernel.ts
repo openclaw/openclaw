@@ -10,7 +10,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { allocateHostPort } from "./cell-profile.js";
 import type {
   FleetCellRecord,
-  FleetRegistryWriteOperations,
+  FleetCellOperationName,
   ReserveFleetCellParams,
 } from "./registry.types.js";
 
@@ -154,7 +154,7 @@ export function updateFleetCellImageInDatabase(
 
 export function acquireFleetCellOperationInDatabase(
   db: DatabaseSync,
-  params: FleetRegistryWriteOperations["fleet.operation.acquire"]["input"],
+  params: { tenantId: string; operation: FleetCellOperationName; owner: string; nowMs?: number },
 ): void {
   const nowMs = params.nowMs ?? Date.now();
   const expiresAt = nowMs + FLEET_OPERATION_LEASE_TTL_MS;
@@ -213,7 +213,7 @@ export function acquireFleetCellOperationInDatabase(
 
 export function heartbeatFleetCellOperationInDatabase(
   db: DatabaseSync,
-  params: FleetRegistryWriteOperations["fleet.operation.heartbeat"]["input"],
+  params: { tenantId: string; owner: string; nowMs?: number },
 ): void {
   const nowMs = params.nowMs ?? Date.now();
   const expiresAt = nowMs + FLEET_OPERATION_LEASE_TTL_MS;
@@ -234,7 +234,7 @@ export function heartbeatFleetCellOperationInDatabase(
 
 export function releaseFleetCellOperationInDatabase(
   db: DatabaseSync,
-  params: FleetRegistryWriteOperations["fleet.operation.release"]["input"],
+  params: { tenantId: string; owner: string },
 ): void {
   executeSqliteQuerySync(
     db,

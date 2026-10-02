@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { listStagedChangedPaths } from "../../scripts/changed-lanes.mts";
 import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import {
@@ -14,13 +14,20 @@ import {
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
+  TSGO_CI_ADDITIONAL_GRAPHS,
   selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
@@ -58,6 +65,9 @@ describe("tsgo core test shards", () => {
     }
     for (const [file, owner] of [
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
+      ["src/agents/subagents/spawn/acp-spawn-target.test.ts", "agents-sessions"],
+      ["src/agents/session-maintenance/run.test.ts", "agents-sessions"],
+      ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
       ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
@@ -403,6 +413,13 @@ describe("changed core test graph selection", () => {
 
 // The compiler owns dependency reachability; test root partitions alone cannot prove it.
 const lifetime = createFixtureLifetime();
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts.close();
+});
 afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
@@ -635,6 +652,83 @@ process.exit(result.status??1);
       const initial = await check([leaf], "1/5");
       expect(initial.result.status, initial.result.stderr).toBe(0);
       expect(initial.builds).toEqual([]);
+      const extension = "extensions/example/value.ts";
+      write(extension, "export type ExtensionValue = number;\n");
+      const noncoreConsumer = "test/noncore-consumer.ts";
+      write(
+        noncoreConsumer,
+        "export type { ExtensionValue } from '../extensions/example/value.js';\n",
+      );
+      for (const graph of TSGO_CI_ADDITIONAL_GRAPHS) {
+        write(
+          graph.config,
+          JSON.stringify({
+            compilerOptions: {
+              noEmit: true,
+              strict: true,
+              types: [],
+              lib: ["es5"],
+              module: "nodenext",
+              target: "es2022",
+            },
+            files: [path.join(root, noncoreConsumer)],
+          }),
+        );
+      }
+      const plannerDriver = write(
+        "scripts/extension-plan-fixture.mts",
+        `import { createChangedCiTypeCheckPlan } from "./run-tsgo-core-test-shards.mts";
+import { checkCoreTsgoGraphBoundary } from "./check-tsgo-core-boundary.mts";
+if (process.argv[2] === "boundary") {
+  await checkCoreTsgoGraphBoundary();
+} else {
+  const plan = await createChangedCiTypeCheckPlan([${JSON.stringify(extension)}], {
+    cwd: process.cwd(), coreBoundaryOwner: "additional-checks",
+  });
+  console.log(JSON.stringify({ mode: plan.mode, names: plan.graphs.map(({ name }) => name) }));
+}
+`,
+      );
+      const inspectExtension = async (mode: "plan" | "boundary") => {
+        write("compiler-events.jsonl", "");
+        return await lifetime.track(
+          runNodeScript(
+            [
+              "--import",
+              pathToFileURL(path.join(sourceRoot, "scripts/tsx.mjs")).href,
+              plannerDriver,
+              mode,
+            ],
+            env,
+            undefined,
+            { cwd: root, signal, requireProcessTreeExit: true },
+          ),
+        );
+      };
+      const extensionPlan = await inspectExtension("plan");
+      expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
+      expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
+        mode: "changed",
+        names: ["extensions", "extensions-test", "scripts", "test-root"],
+      });
+      const discovery = fs
+        .readFileSync(path.join(root, "compiler-events.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as string[]);
+      expect(discovery).toHaveLength(4);
+      expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
+      // Its parallel owner must still reject a type-only edge into an extension.
+      write(
+        consumer,
+        "export type { ExtensionValue } from '../../../extensions/example/value.js';\n",
+      );
+      const extensionBoundary = await inspectExtension("boundary");
+      expect(extensionBoundary.status).not.toBe(0);
+      expect(extensionBoundary.stderr).toContain(
+        "Core tsgo graphs include bundled extension files",
+      );
+      expect(extensionBoundary.stderr).toContain(extension);
       write(
         consumer,
         "import type {Value} from '../nested/leaf.test.js';\nconst value: Value = 1;\n",
@@ -764,6 +858,12 @@ process.exit(result.status??1);
         expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
       }
       // Target only the boundary owner PID; its managed compiler must forward and join its group.
+      const receiptClient = write(
+        "compiler-receipts.mjs",
+        `${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
+export { sendReceipt };
+`,
+      );
       write(
         "node_modules/.bin/tsgo",
         `#!/usr/bin/env node
@@ -773,7 +873,7 @@ let terminating=false;
 const finish=()=>{if(terminating && (child.exitCode!==null || child.signalCode!==null)){fs.writeFileSync('compiler.joined','joined');process.exit(0);}};
 child.once('exit',finish);
 process.on('SIGTERM',()=>{terminating=true;fs.writeFileSync('compiler.signal','SIGTERM');finish();});
-child.once('message',()=>{child.disconnect();fs.writeFileSync('compiler.pid',String(process.pid));fs.writeFileSync('descendant.pid',String(child.pid));});
+child.once('message',async()=>{child.disconnect();const {sendReceipt}=await import(${JSON.stringify(pathToFileURL(receiptClient).href)});fs.writeFileSync('compiler.pid',String(process.pid));fs.writeFileSync('descendant.pid',String(child.pid));sendReceipt(${JSON.stringify(root)},'ready');});
 setInterval(()=>{},1000);
 `,
       );
@@ -800,11 +900,29 @@ setInterval(()=>{},1000);
         ),
       );
       try {
-        const compilerPid = await waitForPidFile(path.join(root, "compiler.pid"), 5_000);
-        const descendantPid = await waitForPidFile(path.join(root, "descendant.pid"), 5_000);
+        const readPids = () => {
+          const readPid = (name: string) => {
+            const file = path.join(root, name);
+            const pid = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : Number.NaN;
+            if (!Number.isInteger(pid) || pid <= 0) {
+              throw new Error(`timeout waiting for pid in ${file}`);
+            }
+            return pid;
+          };
+          return { compilerPid: readPid("compiler.pid"), descendantPid: readPid("descendant.pid") };
+        };
+        // The query captures compiler stdout. Its durable PID records precede the
+        // separate receipt, so an early driver exit checks those same records.
+        const { compilerPid, descendantPid } = await withinTest(
+          Promise.race([
+            fixtureReceipts.waitFor(root, "ready").then(readPids),
+            running.then(readPids),
+          ]),
+          signal,
+        );
         expect(ownerPid).toBeDefined();
         process.kill(ownerPid!, "SIGTERM");
-        const canceled = await running;
+        const canceled = await withinTest(running, signal);
         expect(canceled.error).toBeUndefined();
         expect(canceled.status).toBe(143);
         expect(canceled.stderr).toContain("interrupted by SIGTERM");

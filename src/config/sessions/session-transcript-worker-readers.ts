@@ -81,7 +81,27 @@ export function createSessionHistoryWorkerReaders(
       "historical-eviction-candidates",
       "eviction candidates",
       (input) => ({ kind: "historical-eviction-candidates", ...input }),
-      (value) => value.sessionIds,
+      (value) => {
+        if (!("sessionIds" in value)) {
+          throw new Error(
+            "Session history worker returned archived instead of historical candidates",
+          );
+        }
+        return value.sessionIds;
+      },
+    ),
+    readArchivedEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      "archived eviction candidates",
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+      (value) => {
+        if (!("batch" in value)) {
+          throw new Error(
+            "Session history worker returned historical instead of archived candidates",
+          );
+        }
+        return value.batch;
+      },
     ),
     readArchivePruning: reader(
       "session-archive-pruning",
@@ -93,6 +113,12 @@ export function createSessionHistoryWorkerReaders(
       "cold-metadata",
       "cold metadata",
       (input) => ({ kind: "cold-metadata", ...input }),
+      (value) => value,
+    ),
+    readColdStorageInventory: reader(
+      "cold-storage-inventory",
+      "cold storage inventory",
+      (input) => ({ kind: "cold-storage-inventory", ...input }),
       (value) => value,
     ),
     searchTranscripts: reader(
@@ -113,6 +139,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-title-fields", ...input }),
       (value) => value.fields,
     ),
+    readWatermark: reader(
+      "transcript-watermark",
+      "a transcript watermark",
+      (input) => ({ kind: "transcript-watermark", ...input }),
+      (value) => value.watermark,
+    ),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",
@@ -130,7 +162,9 @@ export function createSessionHistoryWorkerReaders(
         if (
           typeof value === "boolean" ||
           Array.isArray(value) ||
-          (value.kind !== "reactions" &&
+          (value.kind !== "active-accounting" &&
+            value.kind !== "bounded-tail" &&
+            value.kind !== "reactions" &&
             value.kind !== "conversation-binding" &&
             value.kind !== "transcript-binding" &&
             value.kind !== "artifacts" &&
@@ -141,6 +175,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
+            value.kind !== "inline-visibility" &&
             value.kind !== "recent" &&
             value.kind !== "message-by-id" &&
             value.kind !== "message-count" &&
@@ -282,6 +317,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
+    readGoalOperationReceipt: reader(
+      "goal-operation-receipt",
+      "a Goal operation receipt",
+      (input) => ({ kind: "goal-operation-receipt", ...input }),
+      (value) => value.result,
+    ),
     readEntryResult: reader(
       "session-entry-read",
       "an entry",
@@ -303,11 +344,20 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-diagnostic-text", ...input }),
       (value) => value.text,
     ),
-    readEntries: reader(
-      "session-entry-list",
-      "entries",
-      (scope) => ({ kind: "session-entry-list", scope }),
-      (value) => value.entries,
+    readEntries: async (scope, continuation) =>
+      runRequest(
+        () => ({ kind: "session-entry-list", scope, continuation }),
+        JSON.stringify({ scope, continuation }).length * 2,
+        (value) => {
+          assertResultKind(value, "session-entry-list", "entries");
+          return value.entries;
+        },
+      ),
+    readStoreSummary: reader(
+      "session-store-summary",
+      "a store summary",
+      (input) => ({ kind: "session-store-summary", ...input }),
+      (value) => value.summary,
     ),
     readIdentityEvidence: reader(
       "session-identity-evidence",

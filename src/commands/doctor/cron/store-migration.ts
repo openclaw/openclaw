@@ -1,4 +1,3 @@
-// Cron store row normalization for doctor repair and quarantine decisions.
 import { randomUUID } from "node:crypto";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { timestampMsToIsoString } from "../../../../packages/normalization-core/src/number-coercion.js";
@@ -15,7 +14,7 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
-import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store/types.js";
+import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
@@ -112,6 +111,7 @@ type NormalizeCronStoreJobsResult = {
   unresolvedAgentTurnShellToolPromptJobs: string[];
   legacyTriggerScriptJobs: string[];
   unsupportedLegacyTriggerScriptJobs: string[];
+  unsupportedDeliveryModeJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   legacyGatewayExecJobs: string[];
@@ -157,6 +157,28 @@ function normalizeStoredCronJobIdentity(raw: Record<string, unknown>): {
   };
 }
 
+function resolveLegacyCronDeliveryMode(mode: unknown): "none" | "announce" | "webhook" | undefined {
+  if (mode === undefined || mode === null) {
+    return "announce";
+  }
+  const normalized = normalizeOptionalLowercaseString(mode);
+  if (normalized === "deliver") {
+    return "announce";
+  }
+  return normalized === "none" || normalized === "announce" || normalized === "webhook"
+    ? normalized
+    : undefined;
+}
+
+/** Unknown delivery intent must remain untouched until the operator supplies a supported mode. */
+export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
+  return (
+    delivery === undefined ||
+    (isRecord(delivery) && resolveLegacyCronDeliveryMode(delivery.mode) !== undefined)
+  );
+}
+
+/** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
   options: {
@@ -169,6 +191,7 @@ export function normalizeStoredCronJobs(
   const unresolvedAgentTurnShellToolPromptJobs: string[] = [];
   const legacyTriggerScriptJobs: string[] = [];
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
+  const unsupportedDeliveryModeJobs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
   const scheduledToolPolicyMigrations = createScheduledToolPolicyMigrationCollector();
   const unresolvedAgentTurnPromptJobsByKind = {
@@ -181,6 +204,15 @@ export function normalizeStoredCronJobs(
   const codexRuntimePolicyTargets = new Map<string, CronCodexRuntimePolicyTarget>();
 
   for (const [sourceIndex, raw] of jobs.entries()) {
+    if (!canRepairCronDeliveryForDoctor(raw.delivery)) {
+      unsupportedDeliveryModeJobs.push(
+        normalizeOptionalStringifiedId(raw.id) ??
+          normalizeOptionalStringifiedId(raw.jobId) ??
+          "<unnamed>",
+      );
+      keptJobs.push(raw);
+      continue;
+    }
     const jobIssues = new Set<CronStoreIssueKey>();
     const trackIssue = (key: CronStoreIssueKey) => {
       if (jobIssues.has(key)) {
@@ -510,17 +542,11 @@ export function normalizeStoredCronJobs(
 
     const delivery = asNullableRecord(raw.delivery);
     if (delivery) {
-      const modeRaw = delivery.mode;
-      if (typeof modeRaw === "string") {
-        const lowered = normalizeOptionalLowercaseString(modeRaw) ?? "";
-        if (lowered === "deliver") {
-          delivery.mode = "announce";
-          mutated = true;
-          trackIssue("legacyDeliveryMode");
-        }
-      } else if (modeRaw === undefined || modeRaw === null) {
-        delivery.mode = "announce";
+      const mode = resolveLegacyCronDeliveryMode(delivery.mode);
+      if (mode !== undefined && mode !== delivery.mode) {
+        delivery.mode = mode;
         mutated = true;
+        trackIssue("legacyDeliveryMode");
       }
     }
 
@@ -619,6 +645,7 @@ export function normalizeStoredCronJobs(
     unresolvedAgentTurnShellToolPromptJobs,
     legacyTriggerScriptJobs,
     unsupportedLegacyTriggerScriptJobs,
+    unsupportedDeliveryModeJobs,
     legacyScheduledToolPolicyJobs: scheduledToolPolicyMigrations.legacyJobs,
     invalidScheduledToolPolicyJobs: scheduledToolPolicyMigrations.invalidJobs,
     legacyGatewayExecJobs,

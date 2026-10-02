@@ -9,10 +9,8 @@ import type {
   FollowupRequest,
   FollowupCompletionOwner,
 } from "../subagents/completion/session-followup-completion.types.js";
-import {
-  prepareSessionsSendFollowup,
-  startSessionsSendFollowup,
-} from "./sessions-send-followup.js";
+import { prepareSessionsSendFollowup } from "./sessions-send-followup-custody.js";
+import { startSessionsSendFollowup } from "./sessions-send-followup.js";
 import { startSessionsSendReplyFlow } from "./sessions-send-reply-flow.js";
 vi.mock("./sessions-send-reply-flow.js", () => ({ startSessionsSendReplyFlow: vi.fn() }));
 const mocks = vi.hoisted(() => ({
@@ -158,9 +156,7 @@ describe("followup retained session authorization", () => {
       targetSessionKey: input.targetSessionKey,
       targetAgentId: "main",
       displayKey: input.targetSessionKey,
-      message: "followup",
-      announceTimeoutMs: 30000,
-      maxPingPongTurns: 0,
+      replyTimeoutMs: 30000,
       replyMode: "one-way" as const,
       requesterSessionKey: input.requesterSessionKey,
       requesterAgentId: input.requesterAgentId,

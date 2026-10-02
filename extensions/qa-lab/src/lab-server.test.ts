@@ -4,7 +4,13 @@ import { createServer, request as httpRequest } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+  withinTest,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import { startQaLabServer, type QaLabServerStartParams } from "./lab-server.js";
 
@@ -56,6 +62,13 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 }));
 
 const cleanups: Array<() => Promise<void>> = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function makeTempDir(prefix: string) {
   const dir = await mkdtemp(path.join(os.tmpdir(), prefix));
@@ -173,29 +186,6 @@ async function waitForRunnerCatalog(baseUrl: string, timeoutMs = 5_000) {
     throw new Error("runner catalog stayed loading");
   }
   return catalog;
-}
-
-async function waitForFileContent(filePath: string, expected: string, timeoutMs = 5_000) {
-  let content: string | undefined;
-  await vi.waitFor(
-    async () => {
-      try {
-        content = await readFile(filePath, "utf8");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-          throw error;
-        }
-      }
-      if (content !== expected) {
-        throw new Error(`file did not reach expected content: ${filePath}`);
-      }
-    },
-    { interval: 1, timeout: timeoutMs },
-  );
-  if (content === undefined) {
-    throw new Error(`file did not reach expected content: ${filePath}`);
-  }
-  return content;
 }
 
 async function expectFileMissing(filePath: string): Promise<void> {
@@ -1437,22 +1427,25 @@ describe("qa-lab server", () => {
     expect(await readFile(markerPath, "utf8")).toContain("models list --all --json");
   });
 
-  it("aborts an in-flight runner model catalog when the lab stops", async () => {
+  it("aborts an in-flight runner model catalog when the lab stops", async ({ signal }) => {
     const repoRoot = await makeTempDir("qa-lab-abort-catalog-");
     const markerPath = path.join(repoRoot, "runner-catalog-started.txt");
     const stoppedPath = path.join(repoRoot, "runner-catalog-stopped.txt");
 
     await mkdir(path.join(repoRoot, "dist"), { recursive: true });
     await mkdir(path.join(repoRoot, "extensions/qa-lab/web/dist"), { recursive: true });
+    await writeFile(path.join(repoRoot, "dist/package.json"), '{"type":"module"}');
     await writeFile(
       path.join(repoRoot, "dist/index.js"),
       [
-        'const fs = require("node:fs");',
+        'import fs from "node:fs";',
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {",
         `  fs.writeFileSync(${JSON.stringify(stoppedPath)}, "terminated", "utf8");`,
         "  process.exit(0);",
         "});",
         `fs.writeFileSync(${JSON.stringify(markerPath)}, process.env.OPENCLAW_CODEX_DISCOVERY_LIVE || "", "utf8");`,
+        `sendReceipt(${JSON.stringify(markerPath)}, "started");`,
         "setInterval(() => {}, 1000);",
       ].join("\n"),
       "utf8",
@@ -1477,12 +1470,14 @@ describe("qa-lab server", () => {
 
     const bootstrapResponse = await fetchWithRetry(`${lab.baseUrl}/api/bootstrap`);
     expect(bootstrapResponse.status).toBe(200);
-    expect(await waitForFileContent(markerPath, "0")).toBe("0");
+    await withinTest(receipts.waitFor(markerPath, "started"), signal);
+    expect(await readFile(markerPath, "utf8")).toBe("0");
 
     await lab.stop();
     stopped = true;
     if (process.platform !== "win32") {
-      expect(await waitForFileContent(stoppedPath, "terminated")).toBe("terminated");
+      // stop joins the catalog command's close, after its SIGTERM handler writes this marker.
+      expect(await readFile(stoppedPath, "utf8")).toBe("terminated");
     }
   });
 

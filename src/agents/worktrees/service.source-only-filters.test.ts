@@ -3,11 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as commands from "../../process/exec.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -15,14 +14,11 @@ import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const exec = promisify(execFile);
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    vi.unstubAllEnvs();
-    cleanup();
-  }),
-);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "source-only-filters-");
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 const initialize = useManagedWorktreeTestRepository();
 const git = async (cwd: string, ...args: string[]) =>
   (await exec("git", ["-C", cwd, ...args])).stdout.trim();
@@ -33,7 +29,7 @@ let root: string,
   script: string,
   service: ManagedWorktreeService;
 beforeEach(async () => {
-  root = tempDirs.make("source-only-filters-");
+  root = sessionDirs.make();
   globalConfig = path.join(root, "global-config");
   await fs.writeFile(globalConfig, "");
   vi.stubEnv("GIT_CONFIG_GLOBAL", globalConfig);

@@ -110,7 +110,7 @@ describe("MCP automation creator capture", () => {
     { label: "native excluded", nativeExec: true, nativeRestriction: "allow" },
   ];
   it.each(cases)(
-    "persists the final $label creator surface",
+    "persists the $label creator authority",
     async ({ toolsAllow, nativeExec, unreadableSchema, nativeRestriction }) => {
       const root = tempDirs.make("openclaw-cli-cron-capture-");
       const storePath = path.join(root, "cron", "jobs.json");
@@ -232,9 +232,7 @@ describe("MCP automation creator capture", () => {
           execTarget: stored.toolsAllowExecTarget,
         });
         const capturesNativeExec = nativeExec && !nativeRestriction;
-        expect(stored.payload.toolsAllow).toEqual(
-          toolsAllow ?? ["automations", ...(capturesNativeExec ? ["exec"] : [])],
-        );
+        expect(stored.payload.toolsAllow).toEqual(toolsAllow ?? ["*"]);
         expect(stored.toolsAllowExecTarget).toEqual(
           capturesNativeExec ? { version: 1, host: "gateway" } : undefined,
         );

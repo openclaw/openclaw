@@ -6,10 +6,7 @@ import { i18n } from "../i18n/index.ts";
 import type { createStoredChatOutboxReader } from "../lib/chat/outbox-store-projection.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { projectSidebarHomeSession } from "./app-sidebar-agent-session-rows.ts";
-import {
-  projectSidebarSessionCatalogs,
-  type SidebarSessionCatalog,
-} from "./app-sidebar-session-catalogs.ts";
+import type { SidebarSessionCatalog } from "./app-sidebar-session-catalogs.ts";
 import { findActiveSidebarLineageRow } from "./app-sidebar-session-lookup.ts";
 import {
   buildSidebarSessionNavigationState,
@@ -19,6 +16,7 @@ import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
+import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
 import type {
   SidebarEmptyGroupsMode,
   SidebarRecentSession,
@@ -235,10 +233,13 @@ export function memoizedSidebarCatalogs(
   memo: SidebarProjectionMemo<SidebarSessionCatalog[]>,
   host: SidebarProjectionHost,
   ownerId: string | null,
-  liveRows: () => GatewaySessionRow[],
 ) {
   return memo.read(
     () => [
+      host.sessionDataContext,
+      host.sessionDataContext?.sessions.revision,
+      host.expandedAgentId(),
+      host.resolveSessionAttention,
       host.sessionData.sessionCatalogs,
       host.sessionData.pendingCatalogArchives,
       host.hiddenSessionCatalogIds,
@@ -247,7 +248,7 @@ export function memoizedSidebarCatalogs(
       host.sessionData.sessionsResult,
       host.sessionData.sessionResultsByAgent,
     ],
-    () => projectSidebarSessionCatalogs(host.visibleSessionCatalogs(), ownerId, liveRows()),
+    () => projectSidebarSnoozeCatalogs(host, ownerId),
   );
 }
 

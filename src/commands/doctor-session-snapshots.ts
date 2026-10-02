@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { decodeXml } from "../shared/xml.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 
@@ -65,15 +66,6 @@ function resolveSessionSnapshotBundledSkillsDir(params?: {
   return packageRoot ? path.join(packageRoot, "skills") : undefined;
 }
 
-function decodeXmlText(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
 function extractSkillLocations(prompt: unknown): string[] {
   if (typeof prompt !== "string" || !prompt.trim()) {
     return [];
@@ -83,7 +75,7 @@ function extractSkillLocations(prompt: unknown): string[] {
   for (const match of prompt.matchAll(locationPattern)) {
     const raw = match[1]?.trim();
     if (raw) {
-      locations.push(decodeXmlText(raw));
+      locations.push(decodeXml(raw));
     }
   }
   return locations;

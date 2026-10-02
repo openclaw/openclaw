@@ -247,10 +247,13 @@ parallel, builds and qualifies their final package bytes, and seals a readiness
 receipt only after every package can be downloaded and verified. Preparation
 does not publish packages or change public selectors.
 
-Every ClawHub package must already have the normal trusted-publisher binding.
-Preparation refuses to issue a readiness receipt for packages needing bootstrap
-or publisher repair; use the existing ClawHub owner workflow to finish that setup
-first. The button rechecks this prerequisite before starting any plugin writer.
+ClawHub packages needing publication or adoption must have the normal
+trusted-publisher binding. Use the existing ClawHub owner workflow to finish
+bootstrap or publisher repair first; the button rechecks this prerequisite before
+starting a plugin writer. Pending and failed publications stay out of writer and
+repair rosters, including staged package shells hidden by public metadata. Their
+publication state and operator recovery instructions remain visible in the release
+plan summary; final public verification still requires published downloads.
 
 When preparation succeeds, copy its summary's `prepared_artifact` JSON into
 **OpenClaw Release Button**, selecting the same protected tooling tag. This is

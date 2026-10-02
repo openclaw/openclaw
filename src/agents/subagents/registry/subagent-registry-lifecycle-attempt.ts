@@ -122,7 +122,7 @@ export function runDetachedCleanupAttempt(
   const stateContext = args.stateContext;
   let startCommitted = false;
   let ownsReservation = true;
-  const stopReservationObservation = subscribeSubagentRunChanges((runIds) => {
+  const stopReservationObservation = subscribeSubagentRunChanges("projection", ({ runIds }) => {
     if (runIds === undefined || runIds.includes(args.runId)) {
       ownsReservation = false;
     }

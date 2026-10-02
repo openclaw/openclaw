@@ -24,6 +24,7 @@ const PROVIDER_CONTRIBUTION_CONTRACTS = [
   "webFetchProviders",
   "webSearchProviders",
   "workerProviders",
+  "storageProviders",
   "usageProviders",
 ] as const;
 

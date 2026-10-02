@@ -23,14 +23,8 @@ import {
 } from "./legacy-config-migrations.runtime.models.refs.js";
 import { isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
-import {
-  modelEntryWithRuntimePolicy,
-  selectedCanonicalModelRefsForRuntimePolicy,
-} from "./legacy-runtime-model-policy.js";
-import {
-  migrateLegacyRuntimeModelRef,
-  resolveLegacyCliRuntimeAlias,
-} from "./legacy-runtime-model-providers.js";
+import { modelEntryWithRuntimePolicy } from "./legacy-runtime-model-policy.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
 const INHERITED_ACCOUNT_POLICY_KEYS = ["dmPolicy", "allowFrom", "groupPolicy", "groupAllowFrom"];
@@ -48,14 +42,6 @@ export function normalizeLegacyBrowserConfig(
 
   const browser = structuredClone(rawBrowser);
   let browserChanged = false;
-
-  if ("relayBindHost" in browser) {
-    delete browser.relayBindHost;
-    browserChanged = true;
-    changes.push(
-      "Removed browser.relayBindHost (legacy Chrome extension relay setting; the extension relay binds loopback on the profile cdpPort).",
-    );
-  }
 
   // driver "extension" is a live driver again (Chrome extension relay v2). Old
   // relay-era profiles could carry a cdpUrl pointing at the retired gateway
@@ -85,34 +71,6 @@ export function normalizeLegacyBrowserConfig(
       browser.profiles = profiles;
       browserChanged = true;
     }
-  }
-
-  const rawSsrFPolicy = browser.ssrfPolicy;
-  if (isRecord(rawSsrFPolicy) && "allowPrivateNetwork" in rawSsrFPolicy) {
-    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
-    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
-
-    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
-    if (
-      typeof legacyAllowPrivateNetwork === "boolean" ||
-      typeof currentDangerousAllowPrivateNetwork === "boolean"
-    ) {
-      resolvedDangerousAllowPrivateNetwork =
-        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
-    } else if (currentDangerousAllowPrivateNetwork === undefined) {
-      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
-    }
-
-    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
-    delete nextSsrFPolicy.allowPrivateNetwork;
-    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
-      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
-    }
-    browser.ssrfPolicy = nextSsrFPolicy;
-    browserChanged = true;
-    changes.push(
-      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
-    );
   }
 
   if (!browserChanged) {
@@ -488,10 +446,6 @@ function normalizeLegacyRuntimeAgentContainer(
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
-  const legacyWholeAgentRuntime = resolveLegacyCliRuntimeAlias(
-    isRecord(raw.agentRuntime) ? raw.agentRuntime.id : undefined,
-  );
-
   const model = normalizeLegacyRuntimeAgentModelConfig(raw.model, blockedModelIdentities);
   if (model.changed) {
     next.model = model.value;
@@ -547,30 +501,6 @@ function normalizeLegacyRuntimeAgentContainer(
     }
     changed = true;
     changes.push(`Moved ${path}.${key}.model to canonical refs with model runtime policy.`);
-  }
-
-  if (legacyWholeAgentRuntime) {
-    const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
-      next.model ?? raw.model,
-      legacyWholeAgentRuntime.provider,
-    ).map((ref) => ({
-      ref,
-      runtime: legacyWholeAgentRuntime.runtime,
-    }));
-    const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
-    if (modelRuntimes.changed) {
-      next.models = modelRuntimes.value;
-      changed = true;
-      changes.push(
-        `Moved ${path}.agentRuntime.id ${legacyWholeAgentRuntime.runtime} to matching ${legacyWholeAgentRuntime.provider} model runtime policy.`,
-      );
-    }
-  }
-
-  if (model.selectedRuntime && isRecord(raw.agentRuntime)) {
-    delete next.agentRuntime;
-    changed = true;
-    changes.push(`Removed ${path}.agentRuntime; runtime is now model scoped.`);
   }
 
   if (modelPolicy.runtimes.size > 0) {
@@ -993,15 +923,6 @@ function resolveConfiguredOllamaModelNumCtxBudget(params: {
   );
 }
 
-function resolveConfiguredOllamaProviderNumCtxBudget(
-  provider: Record<string, unknown>,
-): number | undefined {
-  return (
-    normalizeConfiguredPositiveInteger(provider.contextWindow) ??
-    normalizeConfiguredPositiveInteger(provider.maxTokens)
-  );
-}
-
 function isNativeOllamaProviderConfig(provider: Record<string, unknown>): boolean {
   return normalizeOptionalLowercaseString(provider.api) === "ollama";
 }
@@ -1024,33 +945,32 @@ function applyLegacyOllamaProviderNumCtxParams(params: {
   providerId: string;
   provider: Record<string, unknown>;
   changes: string[];
-}): { provider: Record<string, unknown>; changed: boolean } {
+}): Record<string, unknown> {
   if (!isNativeOllamaProviderConfig(params.provider)) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
 
   const rawParams = params.provider.params;
   if (rawParams !== undefined && !isRecord(rawParams)) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
   if (rawParams && Object.hasOwn(rawParams, "num_ctx")) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
 
-  const numCtx = resolveConfiguredOllamaProviderNumCtxBudget(params.provider);
+  const numCtx =
+    normalizeConfiguredPositiveInteger(params.provider.contextWindow) ??
+    normalizeConfiguredPositiveInteger(params.provider.maxTokens);
   if (numCtx === undefined) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
 
   params.changes.push(
     `Set models.providers.${sanitizeForLog(params.providerId)}.params.num_ctx to ${numCtx} for native Ollama compatibility.`,
   );
   return {
-    provider: {
-      ...params.provider,
-      params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
-    },
-    changed: true,
+    ...params.provider,
+    params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
   };
 }
 
@@ -1070,14 +990,13 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       (model) =>
         isRecord(model) && normalizeConfiguredPositiveInteger(model.contextTokens) !== undefined,
     );
-    const providerParams = hasRuntimeCaps
-      ? { provider: rawProvider, changed: false }
+    const provider = hasRuntimeCaps
+      ? rawProvider
       : applyLegacyOllamaProviderNumCtxParams({ providerId, provider: rawProvider, changes });
     const providerNumCtxApplies =
-      isNativeOllamaProviderConfig(providerParams.provider) &&
-      hasConfiguredOllamaProviderNumCtx(providerParams.provider);
+      isNativeOllamaProviderConfig(provider) && hasConfiguredOllamaProviderNumCtx(provider);
     if (rawModels.length === 0) {
-      return providerParams.provider;
+      return provider;
     }
 
     let modelsChanged = false;
@@ -1085,7 +1004,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       if (!isRecord(model)) {
         return model;
       }
-      if (!isNativeOllamaModelConfig(providerParams.provider, model)) {
+      if (!isNativeOllamaModelConfig(provider, model)) {
         return model;
       }
 
@@ -1099,7 +1018,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
 
       const numCtx = resolveConfiguredOllamaModelNumCtxBudget({
         model,
-        provider: providerParams.provider,
+        provider,
         providerNumCtxApplies,
       });
       if (numCtx === undefined) {
@@ -1115,8 +1034,8 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       });
     });
 
-    return modelsChanged || providerParams.changed
-      ? { ...providerParams.provider, models: nextModels }
+    return modelsChanged || provider !== rawProvider
+      ? { ...provider, models: nextModels }
       : rawProvider;
   });
 }
@@ -1138,26 +1057,23 @@ function normalizeLegacyMistralModelCost<T extends Record<string, unknown>>(para
   modelId: string;
   index: number;
   changes: string[];
-}): { model: T; changed: boolean } {
+}): T {
   const cost = params.model.cost;
   if (!isRecord(cost) || cost.cacheRead !== 0) {
-    return { model: params.model, changed: false };
+    return params.model;
   }
 
   const normalizedCacheRead = MISTRAL_MODEL_CACHE_READ_COST_BY_ID[params.modelId.toLowerCase()];
   if (normalizedCacheRead === undefined) {
-    return { model: params.model, changed: false };
+    return params.model;
   }
 
   params.changes.push(
     `Normalized models.providers.${sanitizeForLog(params.providerId)}.models[${params.index}].cost.cacheRead (0 → ${normalizedCacheRead}) for Mistral prompt-cache billing.`,
   );
   return {
-    model: {
-      ...params.model,
-      cost: { ...cost, cacheRead: normalizedCacheRead },
-    },
-    changed: true,
+    ...params.model,
+    cost: { ...cost, cacheRead: normalizedCacheRead },
   };
 }
 
@@ -1186,7 +1102,6 @@ export function normalizeLegacyMistralModelDefaults(
       }
 
       let nextModel = model;
-      let modelChanged = false;
       const contextWindow = asFiniteNumber(model.contextWindow) ?? null;
       const maxTokens = asFiniteNumber(model.maxTokens) ?? null;
 
@@ -1199,29 +1114,21 @@ export function normalizeLegacyMistralModelDefaults(
         });
         if (normalizedMaxTokens !== maxTokens) {
           nextModel = Object.assign({}, nextModel, { maxTokens: normalizedMaxTokens });
-          modelChanged = true;
           changes.push(
             `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
           );
         }
       }
 
-      const costNormalization = normalizeLegacyMistralModelCost({
+      nextModel = normalizeLegacyMistralModelCost({
         providerId,
         model: nextModel,
         modelId,
         index,
         changes,
       });
-      if (costNormalization.changed) {
-        nextModel = costNormalization.model;
-        modelChanged = true;
-      }
-
-      if (modelChanged) {
-        modelsChanged = true;
-      }
-      return modelChanged ? nextModel : model;
+      modelsChanged ||= nextModel !== model;
+      return nextModel;
     });
 
     return modelsChanged ? { ...rawProvider, models: nextModels } : rawProvider;

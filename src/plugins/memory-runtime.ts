@@ -16,6 +16,7 @@ import {
   setStandaloneMemoryManagerActive,
 } from "./memory-state.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
+import { runPluginCleanupScope } from "./plugin-invocation-scope.js";
 import type {
   MemoryPluginRuntime,
   RegisteredMemorySearchManager,
@@ -356,19 +357,23 @@ export function prepareMemoryRuntimeReload(
   // the Gateway owner. Final shutdown must join close() before disposing shared state.
   const close = () => {
     if (!cleanup) {
-      cleanup = Promise.allSettled(
-        prepared.map(({ runtime, handle }) =>
-          Promise.resolve().then(() =>
-            runPluginCleanup(runtime, async () => {
-              // Admission stays outside this catch; only admitted teardown reports faults.
-              try {
-                return await handle.drain();
-              } catch (error) {
-                return { errors: [error] };
-              }
-            }),
+      cleanup = runPluginCleanupScope(
+        [...prepared.map(({ runtime }) => runtime), ...retiringEmbeddingProviders],
+        () =>
+          Promise.allSettled(
+            prepared.map(({ runtime, handle }) =>
+              Promise.resolve().then(() =>
+                runPluginCleanup(runtime, async () => {
+                  // Admission stays outside this catch; only admitted teardown reports faults.
+                  try {
+                    return await handle.drain();
+                  } catch (error) {
+                    return { errors: [error] };
+                  }
+                }),
+              ),
+            ),
           ),
-        ),
       ).then((results) => {
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],

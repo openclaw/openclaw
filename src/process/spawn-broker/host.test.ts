@@ -3,6 +3,8 @@ import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { spawnWithFallback } from "../spawn-utils.js";
 import { runWithSpawnBroker } from "./context.js";
@@ -28,8 +30,9 @@ type BootstrapFixtureMode = "native" | "stale-ambient" | "send-throw" | "send-ca
 async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown> {
   const script = `
     import assert from 'node:assert/strict';
-    import {ChildProcess} from 'node:child_process';
+    import childProcess from 'node:child_process';
     import {once} from 'node:events';
+    import {syncBuiltinESMExports} from 'node:module';
     import {mock} from 'node:test';
     const mode = ${JSON.stringify(mode)};
     const keys = ['OPENCLAW_SPAWN_RESOURCE_ENDPOINT', 'OPENCLAW_SPAWN_RESOURCE_SECRET', 'OPENCLAW_SPAWN_RESOURCE_GENERATION'];
@@ -39,7 +42,7 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
       process.env[keys[1]] = 'synthetic-stale-value';
       process.env[keys[2]] = 'not-a-generation';
     }
-    const originalSpawn = ChildProcess.prototype.spawn;
+    const originalSpawn = childProcess.spawn;
     let nativeChild;
     let environmentKeys;
     let bootstrapCalls = 0;
@@ -47,19 +50,16 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
     let ordinaryCommandClosed = false;
     const events = [];
     const sendHooks = [];
-    const observed = mock.method(ChildProcess.prototype, 'spawn', function(options) {
-      assert.ok(Array.isArray(options.envPairs) || (options.env && typeof options.env === 'object'));
-      const names = Array.isArray(options.envPairs)
-        ? options.envPairs.map(pair => pair.slice(0, pair.indexOf('=')))
-        : Object.keys(options.env);
+    const observed = mock.method(childProcess, 'spawn', function(command, args, options) {
+      const names = Object.keys(options.env ?? process.env);
       environmentKeys = keys.filter(key => names.includes(key));
-      nativeChild = this;
-      this.once('spawn', () => events.push('spawn'));
-      this.once('exit', () => events.push('exit'));
-      this.once('close', () => events.push('close'));
-      const result = Reflect.apply(originalSpawn, this, [options]);
-      const originalSend = this.send.bind(this);
-      sendHooks.push(mock.method(this, 'send', function(message, ...args) {
+      const child = Reflect.apply(originalSpawn, this, [command, args, options]);
+      nativeChild = child;
+      child.once('spawn', () => events.push('spawn'));
+      child.once('exit', () => events.push('exit'));
+      child.once('close', () => events.push('close'));
+      const originalSend = child.send.bind(child);
+      sendHooks.push(mock.method(child, 'send', function(message, ...args) {
         if (message?.type === 'bootstrap') {
           bootstrapCalls++;
           if (mode === 'stale-ambient') {
@@ -79,8 +79,9 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
         }
         return originalSend(message, ...args);
       }));
-      return result;
+      return child;
     });
+    syncBuiltinESMExports();
     process.stderr.write('bootstrap fixture pid=' + process.pid + '\\n');
     const watchdog = setTimeout(() => {
       nativeChild?.kill('SIGKILL');
@@ -127,6 +128,7 @@ async function runBootstrapFixture(mode: BootstrapFixtureMode): Promise<unknown>
       if (nativeChild?.exitCode === null && nativeChild.signalCode === null) nativeChild.kill('SIGKILL');
       for (const hook of sendHooks) hook.mock.restore();
       observed.mock.restore();
+      syncBuiltinESMExports();
     }
   `;
   // A failing bootstrap or close stays outside the shared broker afterEach cleanup.
@@ -413,7 +415,9 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     15_000,
   );
 
-  it("cleans a detached descendant after its root exits and the host disconnects", async () => {
+  it("cleans a detached descendant after its root exits and the host disconnects", async ({
+    signal,
+  }) => {
     const host = await start();
     const child = host.spawn(
       process.execPath,
@@ -436,7 +440,7 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
     await Promise.all([once(child, "exit"), pidOutput]);
     const descendant = Number(stdout);
     try {
-      await host.close();
+      await withinTest(host.close(), signal);
       const running = async () => {
         try {
           process.kill(descendant, 0);
@@ -446,18 +450,17 @@ describe.skipIf(skipBrokerTests)("spawn broker native transport", () => {
           }
           return true;
         } catch (error) {
-          if (
-            (error as NodeJS.ErrnoException).code === "ESRCH" ||
-            (error as NodeJS.ErrnoException).code === "ENOENT"
-          ) {
+          if (hasErrnoCode(error, "ESRCH") || hasErrnoCode(error, "ENOENT")) {
             return false;
           }
           throw error;
         }
       };
-      const deadline = Date.now() + 1000;
-      while ((await running()) && Date.now() < deadline) {
-        await delay(25);
+      // Broker shutdown signals the orphaned group but cannot join this foreign PID.
+      while (await running()) {
+        await withinTest(delay(25), signal).catch((cause: unknown) => {
+          throw new Error(`Detached descendant ${descendant} is still running`, { cause });
+        });
       }
       expect(await running()).toBe(false);
     } finally {

@@ -391,12 +391,6 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
   defaultRuntime.log(`Plugin ${result.pluginId} is valid.`);
 }
 
-function assertCanCreate(filePath: string, force: boolean): void {
-  if (!force && fs.existsSync(filePath)) {
-    throw new Error(`Refusing to overwrite existing path: ${filePath}`);
-  }
-}
-
 function resolveScaffoldType(input: string | undefined): PluginScaffoldType {
   const type = input ?? "tool";
   const supported = SUPPORTED_PLUGIN_SCAFFOLD_TYPES.find((candidate) => candidate === type);
@@ -496,16 +490,14 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
     openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
   };
   const idLiteral = JSON.stringify(params.id);
-  const nameLiteral = JSON.stringify(params.name);
   const description = `Add ${params.name} tools to OpenClaw.`;
-  const descriptionLiteral = JSON.stringify(description);
   const indexSource = `import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 
 export default defineToolPlugin({
   id: ${idLiteral},
-  name: ${nameLiteral},
-  description: ${descriptionLiteral},
+  name: ${JSON.stringify(params.name)},
+  description: ${JSON.stringify(description)},
   tools: (tool) => [
     tool({
       name: "echo",
@@ -617,16 +609,8 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
   const idLiteral = JSON.stringify(params.id);
   const nameLiteral = JSON.stringify(params.name);
   const envVarLiteral = JSON.stringify(envVar);
-  const optionKeyLiteral = JSON.stringify(optionKey);
-  const flagNameLiteral = JSON.stringify(flagName);
   const defaultModelIdLiteral = JSON.stringify(defaultModelId);
   const defaultModelRefLiteral = JSON.stringify(defaultModelRef);
-  const descriptionLiteral = JSON.stringify(description);
-  const apiKeyLabelLiteral = JSON.stringify(`${params.name} API key`);
-  const promptMessageLiteral = JSON.stringify(`Enter ${params.name} API key`);
-  const noteMessageLiteral = JSON.stringify(
-    `Replace https://api.example.com/v1 with your ${params.name} API base URL.`,
-  );
   const indexSource = `import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth";
 
@@ -638,7 +622,7 @@ const DEFAULT_MODEL_REF = ${defaultModelRefLiteral};
 export default definePluginEntry({
   id: PLUGIN_ID,
   name: ${nameLiteral},
-  description: ${descriptionLiteral},
+  description: ${JSON.stringify(description)},
   register(api) {
     api.registerProvider({
       id: PROVIDER_ID,
@@ -649,16 +633,16 @@ export default definePluginEntry({
         createProviderApiKeyAuthMethod({
           providerId: PROVIDER_ID,
           methodId: "api-key",
-          label: ${apiKeyLabelLiteral},
+          label: ${JSON.stringify(`${params.name} API key`)},
           hint: "OpenAI-compatible API endpoint",
-          optionKey: ${optionKeyLiteral},
-          flagName: ${flagNameLiteral},
+          optionKey: ${JSON.stringify(optionKey)},
+          flagName: ${JSON.stringify(flagName)},
           envVar: ${envVarLiteral},
-          promptMessage: ${promptMessageLiteral},
+          promptMessage: ${JSON.stringify(`Enter ${params.name} API key`)},
           defaultModel: DEFAULT_MODEL_REF,
           expectedProviders: [PROVIDER_ID],
           noteTitle: ${nameLiteral},
-          noteMessage: ${noteMessageLiteral},
+          noteMessage: ${JSON.stringify(`Replace https://api.example.com/v1 with your ${params.name} API base URL.`)},
         }),
       ],
       catalog: {
@@ -864,8 +848,9 @@ export async function runPluginsInitCommand(
   const name = opts.name ? normalizeRequiredPluginText(opts.name, "display name") : titleFromId(id);
   const type = resolveScaffoldType(opts.type);
   const rootDir = path.resolve(opts.directory ?? id);
-  const force = opts.force === true;
-  assertCanCreate(rootDir, force);
+  if (opts.force !== true && fs.existsSync(rootDir)) {
+    throw new Error(`Refusing to overwrite existing path: ${rootDir}`);
+  }
   fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
   const tsconfig = buildScaffoldTsconfig(type);
 

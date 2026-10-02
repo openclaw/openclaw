@@ -176,7 +176,6 @@ export async function runAgentResetPhase(params: {
     const deliverySession =
       params.request.deliver === true
         ? loadBareSessionResetDeliverySession({
-            cfg: params.cfg,
             sessionKey: resetResult.key,
             ...(params.agentId ? { agentId: params.agentId } : {}),
           })

@@ -249,7 +249,7 @@ export function createHarness(
         throw new Error("workspace conflict");
       }
       if (options.reconcileCommitsManifest !== false) {
-        journal.commit(reconciledManifestRef);
+        await journal.commit(reconciledManifestRef);
       }
       if (options.terminalizeReclaimOnTunnelDrop) {
         const owned = placementStore.get(REQUEST.sessionId);
@@ -318,7 +318,7 @@ export function createHarness(
           ? {
               applyPreparedStagedResult: async () => {
                 log.push("workspace:apply-prepared");
-                journal.commit(reconciledManifestRef);
+                await journal.commit(reconciledManifestRef);
               },
             }
           : {}),

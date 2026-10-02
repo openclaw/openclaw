@@ -1,7 +1,6 @@
 import type { z } from "zod";
 import type {
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingPreviewSchema,
   ChannelStreamingProgressSchema,
   UnifiedStreamingModeSchema,
 } from "./zod-schema.channel-messaging-common.js";
@@ -23,8 +22,6 @@ import type {
 import type { DiagnosticsConfigSchema, LoggingConfigSchema } from "./zod-schema.logging.js";
 import type { SessionSchema } from "./zod-schema.session-config.js";
 
-/** Reply handling mode for chat command surfaces. */
-export type ReplyMode = "text" | "command";
 /** Typing indicator timing policy shared by channel configs. */
 export type TypingMode = z.input<typeof TypingModeSchema>;
 /** Session-key ownership model for inbound messages. */
@@ -49,21 +46,9 @@ export type ChannelStreamingCommandTextMode = NonNullable<
   z.input<typeof ChannelStreamingProgressSchema>["commandText"]
 >;
 
-export type OutboundRetryConfig = {
-  /** Max retry attempts for outbound requests (default: 3). */
-  attempts?: number;
-  /** Minimum retry delay in ms (default: 300-500ms depending on provider). */
-  minDelayMs?: number;
-  /** Maximum retry delay cap in ms (default: 30000). */
-  maxDelayMs?: number;
-  /** Jitter factor (0-1) applied to delays (default: 0.1). */
-  jitter?: number;
-};
-
 export type BlockStreamingCoalesceConfig = z.input<typeof BlockStreamingCoalesceSchema>;
 export type BlockStreamingChunkConfig = z.input<typeof BlockStreamingChunkSchema>;
 export type ChannelStreamingProgressConfig = z.input<typeof ChannelStreamingProgressSchema>;
-export type ChannelStreamingPreviewConfig = z.input<typeof ChannelStreamingPreviewSchema>;
 export type ChannelStreamingBlockConfig = z.input<typeof ChannelStreamingBlockSchema>;
 
 type SchemaChannelStreamingConfig = z.input<typeof ChannelPreviewStreamingConfigSchema>;
@@ -90,18 +75,10 @@ export type HumanDelayConfig = z.input<typeof HumanDelaySchema>;
 
 type SessionSchemaInput = NonNullable<z.input<typeof SessionSchema>>;
 
-export type SessionSendPolicyConfig = NonNullable<SessionSchemaInput["sendPolicy"]>;
-export type SessionSendPolicyAction = NonNullable<SessionSendPolicyConfig["default"]>;
-export type SessionSendPolicyRule = NonNullable<SessionSendPolicyConfig["rules"]>[number];
-export type SessionSendPolicyMatch = NonNullable<SessionSendPolicyRule["match"]>;
-
 export type SessionResetConfig = NonNullable<SessionSchemaInput["reset"]>;
 export type SessionResetMode = NonNullable<SessionResetConfig["mode"]>;
-export type SessionResetByTypeConfig = NonNullable<SessionSchemaInput["resetByType"]>;
 
 export type SessionThreadBindingsConfig = NonNullable<SessionSchemaInput["threadBindings"]>;
-
-export type SessionSharingConfig = NonNullable<SessionSchemaInput["sharing"]>;
 
 export type SessionConfig = SessionSchemaInput;
 
@@ -116,9 +93,5 @@ export type IdentityConfig = NonNullable<z.input<typeof IdentitySchema>>;
 export type LoggingConfig = NonNullable<z.input<typeof LoggingConfigSchema>>;
 
 export type DiagnosticsConfig = NonNullable<z.input<typeof DiagnosticsConfigSchema>>;
-
-export type DiagnosticsOtelConfig = NonNullable<DiagnosticsConfig["otel"]>;
-
-export type DiagnosticsCacheTraceConfig = NonNullable<DiagnosticsConfig["cacheTrace"]>;
 
 export type AuditConfig = NonNullable<LoggingConfig["audit"]>;

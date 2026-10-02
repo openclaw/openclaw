@@ -680,7 +680,12 @@ export async function startQaLabServer(
         }
         if (req.method === "POST" && url.pathname === "/api/scenario/self-check") {
           const result = await runSelfCheck();
-          writeJson(res, 200, serializeSelfCheck(result));
+          writeJson(res, 200, {
+            outputPath: result.outputPath,
+            report: result.report,
+            checks: result.checks,
+            scenario: result.scenarioResult,
+          });
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/scenario/suite") {
@@ -958,12 +963,4 @@ export async function startQaLabServer(
   }
 }
 
-function serializeSelfCheck(result: QaSelfCheckResult) {
-  return {
-    outputPath: result.outputPath,
-    report: result.report,
-    checks: result.checks,
-    scenario: result.scenarioResult,
-  };
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

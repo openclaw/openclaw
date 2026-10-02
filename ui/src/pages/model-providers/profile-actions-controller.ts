@@ -15,6 +15,7 @@ import {
 } from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
+import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
   cardId: string;
@@ -272,9 +273,7 @@ export class ModelProviderProfileActionsController {
     if (orders[provider] !== expected) {
       return false;
     }
-    const next = { ...orders };
-    delete next[provider];
-    this.options.setOrders(next);
+    this.options.setOrders(updateRecordEntry<string[]>(orders, provider, null));
     return true;
   }
 

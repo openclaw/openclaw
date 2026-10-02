@@ -25,8 +25,10 @@ import { SessionManager } from "../sessions/session-manager.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   createBackgroundMaintenanceEngine,
+  createMaintenanceSessionManagerOpenFixture,
   expectRecordFields,
   firstMaintainParams,
+  loadContextEngineMaintenanceModuleForTest,
   requireRecord,
 } from "./context-engine-maintenance.fixtures.test-support.js";
 import { resolveSessionLane } from "./lanes.js";
@@ -36,11 +38,8 @@ const rewriteTranscriptEntriesInSessionManagerMock = vi.fn((_params?: unknown) =
   bytesFreed: 77,
   rewrittenEntries: 1,
 }));
-let openedSessionManager: { getSessionTarget: () => SessionTranscriptRuntimeTarget } | undefined;
-const sessionManagerOpenMock = vi.fn((target: SessionTranscriptRuntimeTarget) => {
-  openedSessionManager = { getSessionTarget: () => target };
-  return openedSessionManager;
-});
+const sessionManagerFixture = createMaintenanceSessionManagerOpenFixture();
+const sessionManagerOpenMock = sessionManagerFixture.open;
 const resolveRuntimeTranscriptReadTargetMock = vi.fn(async (scope: Record<string, unknown>) => ({
   agentId: scope.agentId ?? "main",
   sessionId: scope.sessionId,
@@ -71,23 +70,17 @@ vi.mock("./transcript-runtime-state.js", () => ({
     resolveRuntimeTranscriptReadTargetMock(scope),
 }));
 
-async function loadContextEngineMaintenanceModuleForTest() {
-  // Import once and reset the owned singleton state between cases.
-  ({ runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
-    await import("./context-engine-maintenance.js"));
-  ({ resetDeferredTurnMaintenanceStateForTest } =
-    await import("./context-engine-maintenance.test-support.js"));
-  resetDeferredTurnMaintenanceStateForTest();
-}
-
 describe("runContextEngineMaintenance", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     rewriteTranscriptEntriesInSessionManagerMock.mockClear();
-    openedSessionManager = undefined;
-    sessionManagerOpenMock.mockClear();
+    sessionManagerFixture.reset();
     resolveRuntimeTranscriptReadTargetMock.mockClear();
-    await loadContextEngineMaintenanceModuleForTest();
+    ({
+      runContextEngineMaintenance,
+      waitForDeferredTurnMaintenanceForSession,
+      resetDeferredTurnMaintenanceStateForTest,
+    } = await loadContextEngineMaintenanceModuleForTest());
   });
 
   it("passes a rewrite-capable runtime context into maintain()", async () => {
@@ -157,7 +150,7 @@ describe("runContextEngineMaintenance", () => {
       });
       expect(sessionManagerOpenMock).toHaveBeenCalledWith(sessionTarget);
       expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-        sessionManager: openedSessionManager,
+        sessionManager: sessionManagerFixture.current,
         replacements: [
           { entryId: "entry-2", message: { role: "user", content: "hello", timestamp: 2 } },
         ],
@@ -396,7 +389,7 @@ describe("runContextEngineMaintenance", () => {
         expect(maintain).toHaveBeenCalledTimes(1);
         await waitForDeferredTurnMaintenanceForSession(sessionKey);
         expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
-          sessionManager: openedSessionManager,
+          sessionManager: sessionManagerFixture.current,
           replacements: [
             {
               entryId: "entry-1",
@@ -584,11 +577,16 @@ describe("runContextEngineMaintenance", () => {
         secondEngine.dispose.mockImplementation(async () => {
           secondDisposed.resolve();
         });
-        registerLegacyContextEngine();
+        await registerLegacyContextEngine();
         const sharedEngineId = "shutdown-shared-engine";
-        registerContextEngineForOwner(sharedEngineId, () => firstEngine, `test:${sharedEngineId}`, {
-          allowSameOwnerRefresh: true,
-        });
+        await registerContextEngineForOwner(
+          sharedEngineId,
+          () => firstEngine,
+          `test:${sharedEngineId}`,
+          {
+            allowSameOwnerRefresh: true,
+          },
+        );
         const contextEngineConfig = {
           plugins: { slots: { contextEngine: sharedEngineId } },
         };

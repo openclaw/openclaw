@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
-// Transcript filter for removing heartbeat-only prompt/ack artifacts.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -95,10 +94,7 @@ function hasSuccessfulToolResultMessage(message: HeartbeatTranscriptMessage): bo
   if (resultBlocks.length > 0) {
     return resultBlocks.some((block) => !isFailedToolResultRecord(block));
   }
-  if (!isToolResultMessage(message)) {
-    return false;
-  }
-  return !isFailedToolResultRecord(message as Record<string, unknown>);
+  return isToolResultMessage(message) && !isFailedToolResultRecord(message);
 }
 
 function collectSuccessfulToolResultCallIds(message: HeartbeatTranscriptMessage): string[] {
@@ -176,18 +172,14 @@ export function isHeartbeatUserMessage(
   ) {
     return true;
   }
-  if (matchesHeartbeatPromptText(trimmed, normalizedHeartbeatPrompt)) {
-    return true;
-  }
-  if (matchesHeartbeatPromptText(trimmed, HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
-    return true;
-  }
   if (
-    normalizedHeartbeatPrompt &&
-    matchesHeartbeatPromptText(
-      trimmed,
-      resolveHeartbeatPromptForResponseTool(normalizedHeartbeatPrompt),
-    )
+    matchesHeartbeatPromptText(trimmed, normalizedHeartbeatPrompt) ||
+    matchesHeartbeatPromptText(trimmed, HEARTBEAT_RESPONSE_TOOL_PROMPT) ||
+    (normalizedHeartbeatPrompt &&
+      matchesHeartbeatPromptText(
+        trimmed,
+        resolveHeartbeatPromptForResponseTool(normalizedHeartbeatPrompt),
+      ))
   ) {
     return true;
   }
@@ -202,17 +194,11 @@ export function isHeartbeatOkResponse(
   message: HeartbeatTranscriptMessage,
   ackMaxChars?: number,
 ): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  if (collectAssistantToolCalls(message).length > 0) {
+  if (message.role !== "assistant" || collectAssistantToolCalls(message).length > 0) {
     return false;
   }
   const { text, hasNonTextContent } = resolveMessageText(message.content);
-  if (hasNonTextContent) {
-    return false;
-  }
-  return isHeartbeatAcknowledgementText(text, ackMaxChars);
+  return !hasNonTextContent && isHeartbeatAcknowledgementText(text, ackMaxChars);
 }
 
 function advancePastAdjacentToolResults(

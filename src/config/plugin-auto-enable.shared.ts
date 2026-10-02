@@ -16,6 +16,10 @@ import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-cata
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
+import {
+  collectConfiguredStorageProviderIds,
+  listBundledStorageProviderOwners,
+} from "../plugins/storage-provider-manifest.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
 import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
@@ -109,9 +113,6 @@ function hasPluginOwnedToolConfig(cfg: OpenClawConfig, plugin: PluginManifestRec
   const entry = cfg.plugins?.entries?.[plugin.id];
   const pluginConfig = entry?.config;
   if (isNativeSessionCatalogOptOutOnly(plugin.id, entry) || !isRecord(pluginConfig)) {
-    return false;
-  }
-  if ((plugin.contracts?.tools?.length ?? 0) === 0) {
     return false;
   }
   const properties = isRecord(plugin.configSchema) ? plugin.configSchema.properties : undefined;
@@ -293,6 +294,7 @@ function hasConfiguredPluginProviders(cfg: OpenClawConfig): boolean {
     hasConfiguredProviderModelOrHarness(cfg) ||
     hasConfiguredVoiceProviderSelection(cfg) ||
     collectConfiguredWorkerProviderIds(cfg).length > 0 ||
+    collectConfiguredStorageProviderIds(cfg).length > 0 ||
     hasConfiguredWebSearchProviderSelection(cfg)
   );
 }
@@ -413,6 +415,12 @@ export function resolveConfiguredPluginAutoEnableCandidates(
     collectConfiguredWorkerProviderIds(params.config),
   )) {
     changes.push({ pluginId, kind: "worker-provider-selected", providerId });
+  }
+  for (const { pluginId, providerId } of listBundledStorageProviderOwners(
+    params.registry,
+    collectConfiguredStorageProviderIds(params.config),
+  )) {
+    changes.push({ pluginId, kind: "storage-provider-selected", providerId });
   }
 
   const decisionProviderIds = new Set(getConfiguredDecisionProviderIds(params.config));

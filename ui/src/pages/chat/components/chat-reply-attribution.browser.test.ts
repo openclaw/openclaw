@@ -213,6 +213,48 @@ it("updates a mounted reply across the mobile breakpoint without losing navigati
   expect(onOpenReply).toHaveBeenCalledTimes(6);
 });
 
+it("keeps the unavailable-original label visible inside an own reply without a sender name", async () => {
+  await page.viewport(1440, 800);
+  host.style.width = "720px";
+  render(
+    renderMessageGroup(
+      {
+        kind: "group",
+        key: "own-missing-reply",
+        role: "user",
+        timestamp: 1,
+        isStreaming: false,
+        visibleContent: "text",
+        messages: [
+          {
+            key: "reply-paged",
+            hasVisibleContent: true,
+            message: {
+              role: "user",
+              content: "Follow up on the earlier synthetic answer.",
+              __openclaw: { id: "reply-paged", replyToId: "earlier-answer" },
+            },
+          },
+        ],
+      },
+      { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
+    ),
+    host,
+  );
+  await document.fonts.ready;
+  const fallback = host.querySelector<HTMLElement>(
+    ".chat-reply-attribution--inline .chat-reply-attribution__unavailable",
+  )!;
+  expect(fallback.textContent?.trim()).toBe("Original message unavailable");
+  expect(getComputedStyle(fallback).visibility).toBe("visible");
+  const bounds = fallback.getBoundingClientRect();
+  const bubble = fallback.closest(".chat-bubble")!.getBoundingClientRect();
+  expect(bounds.width).toBeGreaterThan(0);
+  expect(bounds.height).toBeGreaterThan(0);
+  expect(bounds.left).toBeGreaterThanOrEqual(bubble.left);
+  expect(bounds.right).toBeLessThanOrEqual(bubble.right);
+});
+
 it.each([1440, 390])(
   "keeps a short own reply readable without overlapping its label at %d px",
   async (width) => {

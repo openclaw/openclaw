@@ -1,4 +1,3 @@
-// Collects configured startup channels, slots, paths, and validation references.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -220,19 +219,13 @@ export function shouldConsiderForGatewayStartup(params: {
   memorySlotStartupPluginId?: string;
   contextEngineSlotStartupPluginId?: string;
 }): boolean {
-  if (params.manifest?.activation?.onStartup === true) {
-    return true;
-  }
-  if (params.contextEngineSlotStartupPluginId === params.plugin.pluginId) {
-    return true;
-  }
-  if (!params.plugin.startup.memory) {
-    return false;
-  }
-  if (params.startupDreamingPluginIds.has(params.plugin.pluginId)) {
-    return true;
-  }
-  return params.memorySlotStartupPluginId === params.plugin.pluginId;
+  return (
+    params.manifest?.activation?.onStartup === true ||
+    params.contextEngineSlotStartupPluginId === params.plugin.pluginId ||
+    (params.plugin.startup.memory &&
+      (params.startupDreamingPluginIds.has(params.plugin.pluginId) ||
+        params.memorySlotStartupPluginId === params.plugin.pluginId))
+  );
 }
 
 export function hasConfiguredActivationPath(params: {
@@ -353,9 +346,6 @@ export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
 export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   const providerIds: string[] = [];
   const pushProviderId = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
     const normalized = normalizeOptionalLowercaseString(value);
     if (normalized) {
       providerIds.push(normalized);

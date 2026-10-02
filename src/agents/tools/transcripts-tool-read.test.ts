@@ -11,7 +11,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
-import { activeSessions } from "../../transcripts/capture.js";
+import { activeSessions } from "../../transcripts/capture-startup.js";
 import type {
   TranscriptSessionDescriptor,
   TranscriptSourceProvider,

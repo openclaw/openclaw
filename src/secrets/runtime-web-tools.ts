@@ -36,14 +36,15 @@ import { hasCredentialBearingObjectValue } from "./runtime-secret-scan.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
 import { runtimeWebSecretOwnerId } from "./runtime-web-secret-owner.js";
+import type {
+  RuntimeWebProviderSelectionResult,
+  RuntimeWebSecretOwner,
+  RuntimeWebUnavailableProvider,
+  SecretResolutionResult,
+} from "./runtime-web-tools-selection.types.js";
 import {
-  isRecord,
   resolveRuntimeWebProviderSurface,
   resolveRuntimeWebProviderSelection,
-  type RuntimeWebProviderSelectionResult,
-  type RuntimeWebSecretOwner,
-  type RuntimeWebUnavailableProvider,
-  type SecretResolutionResult,
 } from "./runtime-web-tools.shared.js";
 import type {
   RuntimeWebDiagnostic,
@@ -52,6 +53,7 @@ import type {
   RuntimeWebToolsMetadata,
 } from "./runtime-web-tools.types.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
+import { isRecord } from "./shared.js";
 
 const loadRuntimeWebToolsFallbackProviders = createLazyRuntimeSurface(
   () => import("./runtime-web-tools-fallback.runtime.js"),
@@ -526,21 +528,12 @@ async function resolveSecretInputWithEnvFallback(params: {
     }
   }
 
-  if (resolvedFromRef) {
-    return {
-      value: resolvedFromRef,
-      source: "secretRef",
-      secretRefConfigured: true,
-      secretRef: ref,
-      secretRefKey: secretRefKey(ref),
-    };
-  }
-
   return {
-    source: "missing",
+    ...(resolvedFromRef
+      ? { value: resolvedFromRef, source: "secretRef" as const }
+      : { source: "missing" as const, unresolvedRefReason }),
     secretRef: ref,
     secretRefKey: secretRefKey(ref),
-    unresolvedRefReason,
     secretRefConfigured: true,
   };
 }

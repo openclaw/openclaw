@@ -13,6 +13,8 @@ import ai.openclaw.app.i18n.joinedNativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import ai.openclaw.app.node.asObjectOrNull
+import ai.openclaw.app.node.parseJsonBooleanFlag
+import ai.openclaw.app.node.parseJsonDouble
 import ai.openclaw.app.node.parseJsonParamsObject
 import android.Manifest
 import android.annotation.SuppressLint
@@ -1360,13 +1362,9 @@ class TalkModeManager internal constructor(
               enqueue()
             }
           }
-        check(
-          json
-            .parseToJsonElement(response)
-            .asObjectOrNull()
-            ?.get("ok")
-            .asBooleanOrNull() == true,
-        ) { "Voice change was not confirmed" }
+        check(parseJsonBooleanFlag(json.parseToJsonElement(response).asObjectOrNull(), "ok") == true) {
+          "Voice change was not confirmed"
+        }
         return
       } catch (_: RealtimeCaptureChanged) {
         currentCoroutineContext().ensureActive()
@@ -1699,9 +1697,9 @@ class TalkModeManager internal constructor(
 
         "transcript" -> {
           val role = obj["role"].asJsonStringOrNull()
-          val isFinal = obj["final"].asBooleanOrNull() == true
+          val isFinal = parseJsonBooleanFlag(obj, "final") == true
           val statusOwner = if (role == "assistant") realtimeOutputStatusOwner(turnId) else currentStatus.owner
-          val text = realtimeTranscriptText(obj["text"].asJsonStringOrNull(), isFinal)
+          val text = obj["text"].asJsonStringOrNull()?.takeIf { if (isFinal) it.isNotBlank() else it.isNotEmpty() }
           if (text != null) {
             when (role) {
               "user" -> {
@@ -1709,7 +1707,6 @@ class TalkModeManager internal constructor(
               }
 
               "assistant" -> {
-                finishRealtimeConversationEntry(VoiceConversationRole.User)
                 upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
               }
             }
@@ -1727,7 +1724,7 @@ class TalkModeManager internal constructor(
             callId = callId,
             name = name,
             args = obj["args"],
-            forced = obj["forced"].asBooleanOrNull() == true,
+            forced = parseJsonBooleanFlag(obj, "forced") == true,
           )
         }
 
@@ -2127,14 +2124,6 @@ class TalkModeManager internal constructor(
     _conversation.value = updated
   }
 
-  private fun realtimeTranscriptText(
-    rawText: String?,
-    isFinal: Boolean,
-  ): String? {
-    val text = rawText ?: return null
-    return text.takeIf { if (isFinal) it.isNotBlank() else it.isNotEmpty() }
-  }
-
   private fun mergeRealtimeTranscriptText(
     existing: String,
     incoming: String,
@@ -2223,14 +2212,6 @@ class TalkModeManager internal constructor(
   private val transcriptSpaceAfterPunctuation =
     setOf('.', '!', '?', ',', ':', ';', ')', ']', '}', '"', '\'', '’', '”')
 
-  // API 33 adds segmented callbacks and caller-owned audio. Keep this ordered ladder
-  // in one place: removing the restart rung makes older devices drop speech after a pause.
-  private fun pushToTalkCandidates(first: PushToTalkRecognitionCandidate?): List<PushToTalkRecognitionCandidate> =
-    pushToTalkRecognitionCandidates(
-      supportsSegmentedRecognition = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
-      first = first,
-    )
-
   private fun startPushToTalkRecognition(
     captureId: String,
     firstCandidate: PushToTalkRecognitionCandidate? = null,
@@ -2238,7 +2219,13 @@ class TalkModeManager internal constructor(
     if (activePttCaptureId != captureId || pttReleaseCompletion != null || stopRequested) return@synchronized
     val recognizerInstance = recognizer ?: error("Speech recognizer unavailable")
     var lastFailure: Throwable? = null
-    for (candidate in pushToTalkCandidates(firstCandidate)) {
+    // API 33 adds segmented callbacks and caller-owned audio; older devices retain the restarting rung.
+    val candidates =
+      pushToTalkRecognitionCandidates(
+        supportsSegmentedRecognition = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU,
+        first = firstCandidate,
+      )
+    for (candidate in candidates) {
       try {
         val rung =
           when (candidate) {
@@ -2847,7 +2834,7 @@ class TalkModeManager internal constructor(
       val obj = item.asObjectOrNull() ?: continue
       if (obj["role"].asJsonStringOrNull() != "assistant") continue
       if (sinceSeconds != null) {
-        val timestamp = obj["timestamp"].asDoubleOrNull()
+        val timestamp = parseJsonDouble(obj, "timestamp")
         if (timestamp != null && !TalkModeRuntime.isMessageTimestampAfter(timestamp, sinceSeconds)) continue
       }
       val content = obj["content"] as? JsonArray ?: continue
@@ -3358,21 +3345,6 @@ internal fun requireAcceptedRealtimeOutputCancellation(
     "talk.session.cancelOutput turnId did not match"
   }
   return result
-}
-
-private fun JsonElement?.asDoubleOrNull(): Double? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.content.toDoubleOrNull()
-}
-
-private fun JsonElement?.asBooleanOrNull(): Boolean? {
-  val primitive = this as? JsonPrimitive ?: return null
-  val content = primitive.content.trim().lowercase()
-  return when (content) {
-    "true", "yes", "1" -> true
-    "false", "no", "0" -> false
-    else -> null
-  }
 }
 
 private fun GatewaySession.ErrorShape.isUnsupportedSessionLanguageParam(): Boolean =

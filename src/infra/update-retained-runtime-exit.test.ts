@@ -8,6 +8,74 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let base: string;
 let root: string;
 
+it.each([false, true])(
+  "keeps cold workers runnable and restores the invoking directory when available (removed=%s)",
+  async (removed) => {
+    const install = path.join(tempDirs.make("openclaw-retained-cwd-"), "install");
+    await fs.cp(root, install, { recursive: true });
+    const launch = path.join(install, "invocation");
+    await fs.mkdir(launch);
+    const result = spawnNodeEvalSync(
+      `import assert from "node:assert/strict";
+       import fs from "node:fs";
+       import path from "node:path";
+       import { pathToFileURL } from "node:url";
+       import { Worker } from "node:worker_threads";
+       import { withRetainedUpdateRuntime } from ${JSON.stringify(new URL("./update-retained-runtime.ts", import.meta.url).href)};
+       import { resolveUserPath } from ${JSON.stringify(new URL("./home-dir.ts", import.meta.url).href)};
+       import { resolveSessionStorePathCore } from ${JSON.stringify(new URL("../config/sessions/paths.ts", import.meta.url).href)};
+       const install = ${JSON.stringify(install)};
+       const launch = ${JSON.stringify(launch)};
+       process.chdir(launch);
+       const original = process.cwd();
+       const agentPath = resolveUserPath("../operator-agent");
+       const sessionPath = resolveSessionStorePathCore("../sessions.json", { agentId: "main" });
+       const value = await withRetainedUpdateRuntime(pathToFileURL(path.join(install, "dist/updater.mjs")).href, async (retain) => {
+         await retain({ mutationRoots: [install], timeoutMs: 30000, assertCurrent() {} });
+         if (${removed}) fs.rmdirSync(launch);
+         assert.equal(resolveUserPath("../operator-agent"), agentPath);
+         assert.equal(resolveSessionStorePathCore("../sessions.json", { agentId: "main" }), sessionPath);
+         const worker = new Worker("require('node:worker_threads').parentPort.postMessage(process.cwd())", { eval: true, execArgv: [] });
+         let workerCwd;
+         await new Promise((resolve, reject) => {
+           worker.once("message", (cwd) => { workerCwd = cwd; });
+           worker.once("error", reject);
+           worker.once("exit", (code) => code === 0 ? resolve() : reject(new Error("worker exit " + code)));
+         });
+         assert.equal(fs.statSync(workerCwd).isDirectory(), true);
+         return "settled";
+       });
+       assert.equal(value, "settled");
+       if (${removed}) {
+         assert.equal(fs.existsSync(launch), false);
+         assert.notEqual(process.cwd(), original);
+         assert.equal(fs.statSync(process.cwd()).isDirectory(), true);
+       } else {
+         assert.equal(process.cwd(), original);
+       }
+       console.log("cold worker and cwd custody verified");`,
+      {
+        imports: [import.meta.resolve("tsx")],
+        input: "",
+        timeout: 20_000,
+        env: {
+          PATH: process.env.PATH,
+          HOME: base,
+          TMPDIR: base,
+          OPENCLAW_STATE_DIR: path.join(base, "state"),
+          OPENCLAW_CONFIG_PATH: path.join(base, "state/openclaw.json"),
+          XDG_CACHE_HOME: path.join(base, "cache"),
+          OPENCLAW_LOG_LEVEL: "silent",
+        },
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.signal, result.stderr).toBeNull();
+    expect(result.stdout).toContain("cold worker and cwd custody verified");
+  },
+);
+
 beforeAll(async () => {
   base = tempDirs.make("openclaw-retained-runtime-exit-");
   root = path.join(base, "openclaw");

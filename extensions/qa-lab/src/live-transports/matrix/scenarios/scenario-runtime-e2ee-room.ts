@@ -99,11 +99,10 @@ function buildOwnerSignatureUploadBlockedFaultRule(accessToken: string): MatrixQ
 
 function removeMatrixQaSyncStateAfterEncryptionEvents(payload: unknown) {
   if (!isRecord(payload)) {
-    return 0;
+    return;
   }
   const rooms = isRecord(payload.rooms) ? payload.rooms : {};
   const join = isRecord(rooms.join) ? rooms.join : {};
-  let removed = 0;
   for (const room of Object.values(join)) {
     if (!isRecord(room)) {
       continue;
@@ -112,16 +111,10 @@ function removeMatrixQaSyncStateAfterEncryptionEvents(payload: unknown) {
     if (!isRecord(stateAfter) || !Array.isArray(stateAfter.events)) {
       continue;
     }
-    const filtered = stateAfter.events.filter((event) => {
-      if (isRecord(event) && event.type === "m.room.encryption") {
-        removed += 1;
-        return false;
-      }
-      return true;
-    });
-    stateAfter.events = filtered;
+    stateAfter.events = stateAfter.events.filter(
+      (event) => !isRecord(event) || event.type !== "m.room.encryption",
+    );
   }
-  return removed;
 }
 
 export function buildSyncStateAfterMissingEncryptionFaultRule(

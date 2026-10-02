@@ -535,9 +535,21 @@ describe("plugin lifecycle lease", () => {
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
         // Both processes and their SQLite workers share the lease clock for this cache handoff.
+        // Bun's explicit worker env skips inherited preloads in these non-Vitest children.
         const clockPreload = await state.writeText(
           "lease-clock.cjs",
-          `Date.now = () => ${Date.now()};\n`,
+          `Date.now = () => ${Date.now()};
+if (process.versions.bun) {
+  const threads = require("node:worker_threads");
+  const Worker = threads.Worker;
+  threads.Worker = class extends Worker {
+    constructor(url, options) {
+      super(url, { ...options, execArgv: [...(options?.execArgv ?? process.execArgv), "--preload", __filename] });
+    }
+  };
+  require("node:module").syncBuiltinESMExports();
+}
+`,
         );
         const childEnv = { ...process.env };
         for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(clockPreload))) {

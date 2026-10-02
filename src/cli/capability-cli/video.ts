@@ -321,6 +321,5 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           })),
       };
     },
-    (value) => JSON.stringify(value, null, 2),
   );
 }

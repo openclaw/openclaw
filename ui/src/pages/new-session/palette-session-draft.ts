@@ -221,7 +221,6 @@ export class PaletteSessionDraft implements ReactiveController {
       agentId,
       requestedAgentId: agentId,
       catalogId: "",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };

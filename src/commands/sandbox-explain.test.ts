@@ -1,15 +1,17 @@
 // Sandbox explain tests cover command output for sandbox browser and container diagnostics.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { sandboxExplainCommand } from "./sandbox-explain.js";
 
 const SANDBOX_EXPLAIN_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 30_000;
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sandbox-explain-");
 
 let mockCfg: unknown = {};
 
@@ -363,7 +365,7 @@ describe("sandbox explain command", () => {
   });
 
   it("uses persisted spawned-session workspace and cwd overrides", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -381,20 +383,16 @@ describe("sandbox explain command", () => {
       session: { store: storePath },
     };
 
-    try {
-      const parsed = await explain({ json: true, session: sessionKey });
-      expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-        path.resolve("/tmp/openclaw-child-workspace"),
-      );
-      expect(parsed.sandbox.runtimeWorkdir).toBe("/tmp/openclaw-child-workspace/task");
-      expect(parsed.sandbox.workspaceSource).toBe("direct");
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const parsed = await explain({ json: true, session: sessionKey });
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-child-workspace"),
+    );
+    expect(parsed.sandbox.runtimeWorkdir).toBe("/tmp/openclaw-child-workspace/task");
+    expect(parsed.sandbox.workspaceSource).toBe("direct");
   });
 
   it("mounts a persisted spawned workspace for sandboxed sessions", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-explain-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:builder:subagent:child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -413,20 +411,16 @@ describe("sandbox explain command", () => {
       session: { store: storePath },
     };
 
-    try {
-      const parsed = await explain({ json: true, session: sessionKey });
-      expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
-        path.resolve("/tmp/openclaw-child-workspace"),
-      );
-      expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
-      expect(parsed.sandbox.workspaceMounts[0]).toMatchObject({
-        hostRoot: path.resolve("/tmp/openclaw-child-workspace"),
-        containerRoot: "/workspace",
-        writable: true,
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const parsed = await explain({ json: true, session: sessionKey });
+    expect(parsed.sandbox.effectiveHostWorkspaceRoot).toBe(
+      path.resolve("/tmp/openclaw-child-workspace"),
+    );
+    expect(parsed.sandbox.runtimeWorkdir).toBe("/workspace");
+    expect(parsed.sandbox.workspaceMounts[0]).toMatchObject({
+      hostRoot: path.resolve("/tmp/openclaw-child-workspace"),
+      containerRoot: "/workspace",
+      writable: true,
+    });
   });
 
   it("reports a global main session as direct in non-main mode", async () => {

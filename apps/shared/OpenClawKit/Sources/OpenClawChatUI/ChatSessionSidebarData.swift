@@ -28,13 +28,21 @@ public final class OpenClawChatSessionSidebarData {
     private var revision = 0
     private(set) var scopeRevision = 0
     var onChange: (() -> Void)?
+    var queryState: ChatSidebarQueryState?
+    @ObservationIgnored var queryTask: Task<Void, Never>?
 
-    enum Projection: Hashable { case conversation(String), members([String]), swarm }
+    enum Projection: Hashable { case conversation(String), members([String]), swarm, sidebar }
     private(set) var projectionRevision = 0
     @ObservationIgnored private var projections: [Projection: [OpenClawChatSessionEntry]] = [:]
     @ObservationIgnored var onProjectionComputed: ((Projection) -> Void)?
 
     public init() {}
+
+    isolated deinit { self.queryTask?.cancel() }
+
+    func invalidateQueryProjection() {
+        self.projections[.sidebar] = nil
+    }
 
     static func identity(_ row: OpenClawChatSessionEntry) -> String {
         "\(OpenClawChatSessionKey.agentID(from: row.key) ?? row.agentId ?? "")\u{0}\(row.key)"
@@ -71,7 +79,7 @@ public final class OpenClawChatSessionSidebarData {
         }
     }
 
-    private func cachedProjection(
+    func cachedProjection(
         _ key: Projection, build: () -> [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry]
     {
         // Cache hits must still subscribe to the owner boundary, including empty rosters.
@@ -96,7 +104,12 @@ public final class OpenClawChatSessionSidebarData {
 
     /// All list ingress uses request order, local-write order, then same-incarnation observer order.
     @discardableResult
-    func receive(_ rows: [OpenClawChatSessionEntry], read: Read, replacingAgent agentID: String? = nil) -> [String] {
+    func receive(
+        _ rows: [OpenClawChatSessionEntry],
+        read: Read,
+        replacingAgent agentID: String? = nil,
+        enriched: Bool = false) -> [String]
+    {
         guard read.scope == self.scopeRevision else { return [] }
         if let agentID, read.revision < self.rosterRevisions[agentID, default: 0] { return [] }
         var entries = self.entries
@@ -106,7 +119,7 @@ public final class OpenClawChatSessionSidebarData {
             if let held = entries[id], held.sessionId == incoming.sessionId,
                let offeredDate = incoming.updatedAt, let heldDate = held.updatedAt, offeredDate < heldDate { continue }
             var row = incoming
-            if let held = entries[id], held.sessionId == row.sessionId, row.sessionId != nil {
+            if !enriched, let held = entries[id], held.sessionId == row.sessionId, row.sessionId != nil {
                 // Existing metadata/palette requests omit enrichment; absence is not a clearing receipt.
                 row.derivedTitle = row.derivedTitle ?? held.derivedTitle
                 row.lastMessagePreview = row.lastMessagePreview ?? held.lastMessagePreview
@@ -256,6 +269,7 @@ public final class OpenClawChatSessionSidebarData {
     }
 
     func invalidate(clear: Bool = false) {
+        self.invalidateQuery(clear: clear)
         self.scopeRevision += 1
         self.pending = [:]
         self.latest = [:]
@@ -290,7 +304,7 @@ public final class OpenClawChatSessionSidebarData {
     }
 
     private static func same(_ field: Field, _ lhs: OpenClawChatSessionEntry, _ rhs: OpenClawChatSessionEntry) -> Bool {
-        var left = OpenClawChatSessionEntry.placeholder(key: "")
+        var left = OpenClawChatSessionEntry(key: "")
         var right = left
         self.copy(field, from: lhs, to: &left)
         self.copy(field, from: rhs, to: &right)

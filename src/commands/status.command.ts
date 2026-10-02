@@ -86,7 +86,6 @@ function resolveServiceWrapperContextHint(params: {
   return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
 }
 
-/** Runs `openclaw status`, including JSON/all routing and optional deep probes. */
 export async function statusCommand(
   opts: {
     json?: boolean;
