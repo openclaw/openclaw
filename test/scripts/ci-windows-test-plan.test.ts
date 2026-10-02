@@ -28,8 +28,8 @@ describe("Windows CI whole-file placement", () => {
     expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
       inventory.toSorted(compareFiles),
     );
-    // New Windows suspension/handoff fixtures round two shards (up to 419.4s raw) to 420s.
-    expect(shards.every((shard) => shard.predicted_seconds < 425)).toBe(true);
+    // The native package-swap fixture rounds four shards to 425s.
+    expect(shards.every((shard) => shard.predicted_seconds < 426)).toBe(true);
     expect(
       shards.filter(
         (shard) =>

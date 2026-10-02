@@ -3138,7 +3138,7 @@ describe("CLI attempt execution", () => {
         requireExplicitMessageTarget: requireExplicitMessageTarget === true,
         toolsAllow: expectedToolsAllow,
         disableTools: expectedDisableTools,
-        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "required",
       });
       expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
     },
@@ -3197,7 +3197,7 @@ describe("CLI attempt execution", () => {
         disableMessageTool: disableMessageTool || undefined,
         modelRun: modelRun || undefined,
         promptMode,
-        allowEmptyAssistantReplyAsSilent: true,
+        terminalReplyExpectation: "required",
       });
       expect(runCliAgentMock).not.toHaveBeenCalled();
     },
@@ -3269,7 +3269,7 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runCliAgentMock, {
       provider: "claude-cli",
       disableTools: true,
-      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "required",
     });
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
