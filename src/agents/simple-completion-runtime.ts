@@ -479,11 +479,23 @@ async function prepareSimpleCompletionModelCore(
           }),
           providerRuntimeHandle,
         );
+  const selectedCredential = auth.profileId ? authStore?.profiles[auth.profileId] : undefined;
+  const recordServiceTierObservation =
+    auth.profileId &&
+    selectedCredential?.type === "api_key" &&
+    model.provider === "openai" &&
+    model.api === "openai-responses"
+      ? context.preparedModelRuntime.accountCatalog?.prepareServiceTierObserver({
+          profileId: auth.profileId,
+          credential: selectedCredential,
+        })
+      : undefined;
 
   return {
     model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
+    ...(recordServiceTierObservation ? { recordServiceTierObservation } : {}),
   };
 }
 

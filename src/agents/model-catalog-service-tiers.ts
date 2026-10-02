@@ -1,6 +1,8 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { supportsOpenAIResponsesFastMode } from "../llm/providers/openai-fast-mode.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
+import type { PreparedAccountCatalogAccess } from "./prepared-model-runtime-auth.js";
 import { modelMatchesProviderModelRoute } from "./provider-model-route.js";
 
 /** Account observations are never model metadata donors or native-login readiness. */
@@ -9,18 +11,42 @@ export function resolveModelCatalogServiceTiers(params: {
   entry: Pick<ModelCatalogEntry, "provider" | "id">;
   evaluation: ModelAuthAvailabilityEvaluation;
   runtimeId?: string;
+  accountCatalog?: PreparedAccountCatalogAccess;
   isCurrent: () => boolean;
 }): string[] | undefined {
   const { snapshot, entry, evaluation, runtimeId } = params;
   const route = evaluation.selectedRoute;
   if (
     !params.isCurrent() ||
-    snapshot.refreshFailed ||
     evaluation.availability !== true ||
     !evaluation.selectedProfileId ||
     !route ||
+    !runtimeId
+  ) {
+    return undefined;
+  }
+  // API-key Responses tiers are a route contract; the ChatGPT catalog cannot describe them.
+  if (
+    runtimeId === "openclaw" &&
+    normalizeProviderId(entry.provider) === "openai" &&
+    evaluation.selectedAuthMode === "api_key" &&
+    route.authRequirement === "api-key" &&
+    route.api === "openai-responses" &&
+    supportsOpenAIResponsesFastMode({ provider: "openai", ...route })
+  ) {
+    return [
+      ...(params.accountCatalog?.readServiceTiers({
+        profileId: evaluation.selectedProfileId,
+        modelId: entry.id,
+        runtimeId,
+        api: route.api,
+        baseUrl: route.baseUrl,
+      }) ?? ["priority", "ultrafast"]),
+    ];
+  }
+  if (
     route.requestTransportOverrides === "present" ||
-    !runtimeId ||
+    snapshot.refreshFailed ||
     snapshot.pendingProviders?.some(
       (provider) => normalizeProviderId(provider) === normalizeProviderId(entry.provider),
     )
