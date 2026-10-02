@@ -5,6 +5,7 @@ import {
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { isNonProviderRuntimeCoordinationError } from "../failover-error.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
 import { isContextOverflowErrorFromTables } from "./context-overflow-tables.js";
 import {
@@ -50,6 +51,14 @@ const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
     "OpenClaw couldn't save your conversation. Check the storage on the computer running OpenClaw before continuing.",
   transcript_writer_fenced:
     "This conversation changed while OpenClaw was working. Check its latest messages before continuing.",
+};
+
+const RUNTIME_COORDINATION_FAILURE_CODE_COPY: Readonly<Record<string, string>> = {
+  codex_node_disconnected: "Codex execution node disconnected. Start a fresh attempt.",
+  node_runner_update_required:
+    "The device worker requires an update before it can host sessions. Run `openclaw update`, reconnect it, then run `openclaw node restart` on a headless node before trying again.",
+  "runner-offline":
+    "The device runner is offline. Reconnect it, retry later, or bring the session back to this gateway.",
 };
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
@@ -104,6 +113,17 @@ export function renderAssistantRequestFailureCopy(
     return undefined;
   }
   return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
+}
+
+export function renderRuntimeCoordinationFailureCopy(
+  error: unknown,
+  code: string | undefined,
+): string | undefined {
+  if (!code || !isNonProviderRuntimeCoordinationError(error)) {
+    return undefined;
+  }
+  const copy = RUNTIME_COORDINATION_FAILURE_CODE_COPY[code];
+  return copy ? `⚠️ ${copy}` : undefined;
 }
 
 /** Surface bounded rejection facts without arbitrary provider-controlled text. */
