@@ -652,9 +652,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           );
           // Child reports, registered tasks, and exact-incarnation grants own their completion.
           const replyMode =
-            requesterIsSubagent || skipTaskReplyFlow || expectedSessionId
+            requesterIsSubagent || skipTaskReplyFlow || expectedSessionId || isIsolatedCronRequester
               ? undefined
-              : targetIsSubagent && !isIsolatedCronRequester
+              : targetIsSubagent
                 ? "one-way"
                 : "peer";
 

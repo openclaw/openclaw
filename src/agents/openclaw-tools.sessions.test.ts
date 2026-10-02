@@ -50,7 +50,6 @@ import {
 } from "./openclaw-tools.sessions-timeout.test-support.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
-import { testing as agentStepTesting } from "./tools/agent-step.test-support.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -202,17 +201,11 @@ function agentParams(call: { params?: unknown }): AgentCallParams {
 }
 
 describe("sessions tools", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     resetGatewayWorkAdmission();
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     installMessagingTestRegistry();
-    await agentStepTesting.setDepsForTest({
-      agentCommandFromIngress: async () => ({
-        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
-        meta: { durationMs: 1 },
-      }),
-    });
   });
   afterEach(() =>
     runQaGatewayFixture(
@@ -220,7 +213,6 @@ describe("sessions tools", () => {
       resetGatewayWorkAdmission,
       resetSystemEventsForTest,
       resetAdjustedParamsByToolCallIdForTests,
-      () => agentStepTesting.setDepsForTest(),
     ),
   );
   afterAll(() =>
@@ -642,7 +634,7 @@ describe("sessions tools", () => {
       expect(result.details).toMatchObject({
         status: "accepted",
         targetDisposition: "queued",
-        delivery: { status: "skipped", mode: "announce" },
+        delivery: { status: "skipped" },
         watched: false,
       });
       expect(calls.map((call) => call.method)).toEqual(["agent"]);
@@ -672,99 +664,48 @@ describe("sessions tools", () => {
 
   it.each([
     {
-      name: "session-key target",
+      name: "ordinary peer",
       requesterKey: "agent:main:whatsapp:group:req",
       requesterChannel: "whatsapp",
       targetKey: "agent:director1:discord:group:target",
-      targetAgentId: "director1",
-      targetChannel: "discord",
-      to: "group:target",
-      hydrated: false,
     },
     {
-      name: "hydrated threaded target",
-      requesterKey: "discord:group:req",
-      requesterChannel: "discord",
-      targetKey: "agent:main:worker",
-      targetAgentId: "main",
-      targetChannel: "whatsapp",
-      to: "123@g.us",
-      hydrated: true,
+      name: "internal requester",
+      requesterKey: "agent:main:main",
+      requesterChannel: "webchat",
+      targetKey: "agent:director1:main",
     },
   ])(
-    "runs ping-pong then announces to the $name",
-    async ({
-      requesterKey,
-      requesterChannel,
-      targetKey,
-      targetAgentId,
-      targetChannel,
-      to,
-      hydrated,
-    }) => {
+    "returns an inline $name reply without starting a detached continuation",
+    async ({ requesterKey, requesterChannel, targetKey }) => {
       const calls: GatewayCall[] = [];
-      const replies = new Map<string, string>();
       callGatewayMock.mockImplementation(async (request: GatewayCall) => {
         calls.push(request);
         if (request.method === "agent") {
-          const runId = `run-${replies.size + 1}`;
-          const params = agentParams(request);
-          replies.set(
-            runId,
-            params.extraSystemPrompt?.includes("Agent-to-agent reply step")
-              ? params.sessionKey === requesterKey
-                ? "pong-1"
-                : "pong-2"
-              : "initial",
-          );
-          return { runId, status: "accepted" };
+          return { runId: "inline-result", status: "accepted" };
         }
         if (request.method === "agent.wait") {
-          return {
-            status: "ok",
-            terminalReply: {
-              disposition: "visible",
-              text: replies.get(String(request.params?.runId)),
-            },
-          };
-        }
-        if (request.method === "sessions.list" && hydrated) {
-          return {
-            sessions: [
-              {
-                key: targetKey,
-                agentId: "main",
-                deliveryContext: {
-                  channel: "whatsapp",
-                  to,
-                  accountId: "work",
-                  threadId: 99,
-                },
-              },
-            ],
-          };
+          return { status: "ok", terminalReply: { disposition: "visible", text: "initial" } };
         }
         return {};
-      });
-      await agentStepTesting.setDepsForTest({
-        agentCommandFromIngress: async () => ({
-          payloads: [{ text: "announce now", mediaUrl: null }],
-          meta: { durationMs: 1 },
-        }),
       });
       const tool = getSessionTool("sessions_send", {
         agentSessionKey: requesterKey,
         agentChannel: requesterChannel,
       });
-      const waited = await tool.execute("ping-pong", {
+      const waited = await tool.execute("inline-reply", {
         sessionKey: targetKey,
         message: "ping",
         timeoutSeconds: 1,
       });
+      await continuations.settle();
+      const agentCalls = calls.filter((call) => call.method === "agent");
+      expect(agentCalls).toHaveLength(1);
+      expect(calls.filter((call) => call.method === "send")).toHaveLength(0);
       expect(waited.details).toMatchObject({
         status: "ok",
         reply: "initial",
-        delivery: { status: "pending", mode: "announce" },
+        delivery: { status: "skipped" },
       });
       expect(Value.Check(tool.outputSchema!, waited.details)).toBe(true);
       expect(compactToolOutputHint(tool.outputSchema)).toBeUndefined();
@@ -779,56 +720,18 @@ describe("sessions tools", () => {
       ]) {
         expect(declaration).toContain(contract);
       }
-      await continuations.settle();
-      const agentCalls = calls.filter((call) => call.method === "agent");
-      expect(agentCalls).toHaveLength(6);
-      for (const call of agentCalls) {
-        const params = agentParams(call);
-        expect(params.message).toContain("[Inter-session message");
-        expect(params.message).toContain("isUser=false");
-        expect(params.lane).toMatch(/^nested(?::|$)/);
-        expect(params.channel).toBe("webchat");
-        expect(params.inputProvenance?.kind).toBe("inter_session");
-        expect(params.inputProvenance?.sourceRole).toBeUndefined();
-      }
-      const requesterStep = {
-        agentId: "main",
-        sessionKey: requesterKey,
-        inputProvenance: {
-          sourceSessionKey: targetKey,
-          sourceChannel: targetChannel,
-          sourceTool: "sessions_send",
-        },
-        extraSystemPrompt: expect.stringContaining("Current agent: Agent 1 (requester)."),
-      };
-      const targetStep = {
-        agentId: targetAgentId,
-        sessionKey: targetKey,
-        inputProvenance: {
-          sourceSessionKey: requesterKey,
-          sourceChannel: requesterChannel,
-          sourceTool: "sessions_send",
-        },
-        extraSystemPrompt: expect.stringContaining("Current agent: Agent 2 (target)."),
-      };
-      const repliesSent = agentCalls.filter((call) =>
-        agentParams(call).extraSystemPrompt?.includes("Agent-to-agent reply step"),
-      );
-      expect(repliesSent.map((step) => step.params)).toMatchObject([
-        { ...requesterStep, message: expect.stringContaining("initial") },
-        { ...targetStep, message: expect.stringContaining("pong-1") },
-        { ...requesterStep, message: expect.stringContaining("pong-2") },
-        { ...targetStep, message: expect.stringContaining("pong-1") },
-        { ...requesterStep, message: expect.stringContaining("pong-2") },
-      ]);
-      const announcements = calls.filter((call) => call.method === "send");
-      expect(announcements).toHaveLength(1);
-      expect(announcements[0]?.params).toMatchObject({
-        to,
-        channel: targetChannel,
-        message: "announce now",
-        ...(hydrated ? { accountId: "work", threadId: "99" } : {}),
+      const params = agentParams(agentCalls[0]!);
+      expect(params.message).toContain("[Inter-session message");
+      expect(params.message).toContain("isUser=false");
+      expect(params.lane).toMatch(/^nested(?::|$)/);
+      expect(params.channel).toBe("webchat");
+      expect(params.inputProvenance).toMatchObject({
+        kind: "inter_session",
+        sourceSessionKey: requesterKey,
+        sourceTool: "sessions_send",
       });
+      expect(params.inputProvenance?.sourceRole).toBeUndefined();
+      expect(params.extraSystemPrompt).toBeUndefined();
     },
   );
 
@@ -985,7 +888,7 @@ describe("sessions tools", () => {
                 status: "accepted",
                 sessionKey: targetKey,
                 targetDisposition: steered ? "steered" : "queued",
-                delivery: { status: steered ? "skipped" : "pending", mode: "announce" },
+                delivery: { status: steered ? "skipped" : "pending" },
               },
       );
       const attempts = steered || rejection ? 1 : 0;
@@ -1120,6 +1023,7 @@ describe("sessions tools", () => {
       status: "accepted",
       runId: "durable-fallback-run",
       sessionKey: runScopedCallerKey,
+      delivery: { status: "skipped" },
     });
     expect(queueMessage).not.toHaveBeenCalled();
     const agentCalls = calls.filter((call) => call.method === "agent");
@@ -1129,9 +1033,7 @@ describe("sessions tools", () => {
     expect(params.message).toContain("[Inter-session message]");
     expect(params.message).toContain("[TASK-COMPLETE] re-portal occupancy ready");
     await continuations.settle();
-    expect(calls.find((call) => call.method === "agent.wait")?.params).toMatchObject({
-      runId: "durable-fallback-run",
-    });
+    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);
     expect(calls.filter((call) => call.method === "chat.history")).toHaveLength(0);
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
     await runOpenClawAgentWriteAdmission(
