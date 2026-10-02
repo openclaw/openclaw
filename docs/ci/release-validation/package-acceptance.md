@@ -26,10 +26,11 @@ Use `Package Acceptance` when the question is "does this installable OpenClaw pa
 
 `scripts/check-openclaw-installed-package-budget.mts` measures the npm-installed
 package tree, including dependencies that the tarball check cannot see. It counts
-the root and every directory entry without following symlinks, and sums regular
-file sizes except npm's hidden `node_modules/.package-lock.json` files. Hardlinked
-paths count separately. The report lists the largest contributors by entry count
-and adds the totals to the GitHub step summary.
+the root and every directory entry without following symlinks, and sums every
+regular file's size, including npm's hidden `node_modules/.package-lock.json`
+files, because published updaters charge those bytes too. Hardlinked paths count
+separately. The report lists the largest contributors by entry count and adds the
+totals to the GitHub step summary.
 
 Published updaters freeze caps of **50,000 entries / 1 GiB**. The release budgets
 are **47,500 entries / 900 MiB**: the 2,500-entry reserve (5%) covers npm-version,

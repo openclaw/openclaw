@@ -10,7 +10,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("installed package tree budget", () => {
-  it("counts installed paths and bytes without following links or charging npm hidden locks", async () => {
+  // Published updaters (2026.9.3-2026.9.7) charge npm's hidden lockfile bytes too.
+  it("counts installed paths and every regular file's bytes without following links", async () => {
     const root = tempDirs.make("openclaw-installed-budget-");
     const outside = tempDirs.make("openclaw-installed-budget-external-");
     writeFileSync(path.join(outside, "not-in-package"), "outside bytes");
@@ -42,12 +43,12 @@ describe("installed package tree budget", () => {
       name: "openclaw",
       version: "1.2.3",
       entries: 25,
-      bytes: Buffer.byteLength(manifest) + 126,
+      bytes: Buffer.byteLength(manifest) + 327,
       // Container directories own one entry; package buckets include their nested dependencies.
       // dist itself owns one entry, while direct files and links share dist/*.
       contributors: [
         { bucket: "node_modules/@scope/pkg", entries: 5, bytes: 52 },
-        { bucket: "node_modules/x", entries: 4, bytes: 19 },
+        { bucket: "node_modules/x", entries: 4, bytes: 120 },
         { bucket: "docs", entries: 3, bytes: 18 },
         { bucket: "dist/*", entries: 2, bytes: 17 },
         { bucket: "dist/chunks", entries: 2, bytes: 13 },
@@ -55,7 +56,7 @@ describe("installed package tree budget", () => {
         { bucket: ".package-lock.json", entries: 1, bytes: 7 },
         { bucket: "dist", entries: 1, bytes: 0 },
         { bucket: "node_modules", entries: 1, bytes: 0 },
-        { bucket: "node_modules/.package-lock.json", entries: 1, bytes: 0 },
+        { bucket: "node_modules/.package-lock.json", entries: 1, bytes: 100 },
         { bucket: "node_modules/@scope", entries: 1, bytes: 0 },
         { bucket: "package.json", entries: 1, bytes: Buffer.byteLength(manifest) },
       ],
