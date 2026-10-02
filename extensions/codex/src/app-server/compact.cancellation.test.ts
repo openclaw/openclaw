@@ -21,6 +21,7 @@ import {
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
+import type { CodexServerNotification } from "./protocol.js";
 import { resolveCodexSessionBinding } from "./session-binding.js";
 import {
   createCodexTestBindingStore,
@@ -76,6 +77,17 @@ function compactionParams(sessionFile: string, abortSignal?: AbortSignal) {
   };
 }
 
+function turnEvent(
+  threadId: string,
+  id: string,
+  status: "inProgress" | "completed" | "interrupted",
+): CodexServerNotification {
+  return {
+    method: status === "inProgress" ? "turn/started" : "turn/completed",
+    params: { threadId, turn: { id, status, ...(status === "inProgress" ? {} : { items: [] }) } },
+  };
+}
+
 function settleCompactionHarnessAfterAssertions(harness: ReturnType<typeof createClientHarness>) {
   // A failed admission assertion can leave an unexpected physical request pending.
   for (const line of harness.writes) {
@@ -84,20 +96,8 @@ function settleCompactionHarnessAfterAssertions(harness: ReturnType<typeof creat
       harness.send({ id: request.id, result: {} });
     }
   }
-  harness.send({
-    method: "turn/started",
-    params: {
-      threadId: "thread-1",
-      turn: { id: "cleanup-turn", status: "inProgress" },
-    },
-  });
-  harness.send({
-    method: "turn/completed",
-    params: {
-      threadId: "thread-1",
-      turn: { id: "cleanup-turn", status: "interrupted", items: [] },
-    },
-  });
+  harness.send(turnEvent("thread-1", "cleanup-turn", "inProgress"));
+  harness.send(turnEvent("thread-1", "cleanup-turn", "interrupted"));
 }
 
 describe("maybeCompactCodexAppServerSession", () => {
@@ -284,20 +284,8 @@ describe("maybeCompactCodexAppServerSession", () => {
         connectionScope: "supervision",
       });
     } finally {
-      fake.emit({
-        method: "turn/started",
-        params: {
-          threadId: "thread-stuck-supervision",
-          turn: { id: "supervised-terminal", status: "inProgress" },
-        },
-      });
-      fake.emit({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-stuck-supervision",
-          turn: { id: "supervised-terminal", status: "interrupted", items: [] },
-        },
-      });
+      fake.emit(turnEvent("thread-stuck-supervision", "supervised-terminal", "inProgress"));
+      fake.emit(turnEvent("thread-stuck-supervision", "supervised-terminal", "interrupted"));
       await pendingResult.finally(() => fake.client.close());
     }
     await expect(pendingResult).resolves.toMatchObject({ ok: false, compacted: false });
@@ -382,13 +370,7 @@ describe("maybeCompactCodexAppServerSession", () => {
     );
     try {
       const requestId = await compactWritten.promise;
-      harness.send({
-        method: "turn/started",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "completed-turn", status: "inProgress" },
-        },
-      });
+      harness.send(turnEvent("thread-1", "completed-turn", "inProgress"));
       const unrelatedCapture = codexNativeSubagentMonitorRuntime.captureModelSource({
         client: harness.client,
         threadId: "thread-1",
@@ -420,13 +402,7 @@ describe("maybeCompactCodexAppServerSession", () => {
           }
         }
       }
-      harness.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "completed-turn", status: "completed", items: [] },
-        },
-      });
+      harness.send(turnEvent("thread-1", "completed-turn", "completed"));
       abortController.abort();
       harness.send({ id: requestId, result: {} });
 
