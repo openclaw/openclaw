@@ -1,5 +1,4 @@
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../../state/openclaw-agent-db-registry-listing.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -12,6 +11,7 @@ import type {
   SessionProviderReviewComparison,
 } from "./provider-review.types.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
+import { publishSessionEntryWorkerMetadataInvalidation } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { assertSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
@@ -131,7 +131,7 @@ export async function compareSessionProviderReview(
         assertHeld();
       };
       try {
-        const entry = await runOpenClawAgentWorkerWrite(options, () =>
+        const result = await runOpenClawAgentWorkerWrite(options, () =>
           execution.runExisting(
             {
               assertCurrent,
@@ -148,19 +148,27 @@ export async function compareSessionProviderReview(
                 });
               },
             },
-            (worker) => worker.execute({ type: "session.providerReview.compare", input }),
+            async (worker) => {
+              const databaseIdentity = execution.fileIdentity?.physicalIdentity;
+              if (!databaseIdentity) {
+                throw new Error("Provider review has no prepared native database identity");
+              }
+              const entry = await worker.execute({ type: "session.providerReview.compare", input });
+              return { entry, databaseIdentity };
+            },
           ),
         );
-        if (!entry) {
+        if (!result) {
           throw new Error("Session disappeared before provider review update");
         }
-        // The worker owns the commit; the host publishes only its acknowledged result.
-        sessionChanges.emit({
-          agentId: capturedTarget.agentId,
+        // Review metadata changes preserve the session's current sharing authority.
+        publishSessionEntryWorkerMetadataInvalidation({
+          agentId: execution.agentId,
           storePath: execution.path,
+          databaseIdentity: result.databaseIdentity,
           sessionKey,
         });
-        return entry;
+        return result.entry;
       } finally {
         await execution.release();
       }
