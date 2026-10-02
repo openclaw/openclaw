@@ -210,7 +210,7 @@ test("sessions.create rejects a replaced required spawn parent before child crea
   const { createGatewaySession } = await import("./session-create-service.js");
   const parentMutationStarted = createDeferredCore();
   const replaceParent = createDeferredCore();
-  const replacing = runExclusiveSessionLifecycleMutation({
+  const replacing = runExclusiveSessionLifecycleMutation("create", {
     scope: storePath,
     identities: [parentSessionKey, parent.sessionId],
     run: async () => {

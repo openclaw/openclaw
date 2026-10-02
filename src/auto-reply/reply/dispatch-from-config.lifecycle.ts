@@ -114,7 +114,7 @@ async function restoreArchivedDispatchSession(params: {
       return false;
     }
   };
-  return await runExclusiveSessionLifecycleMutation({
+  return await runExclusiveSessionLifecycleMutation("restore", {
     scope: storePath,
     identities: [sessionKey, snapshotSessionId],
     run: async () => {

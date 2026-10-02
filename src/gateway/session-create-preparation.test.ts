@@ -229,7 +229,7 @@ describe("Gateway creation preparation", () => {
       const scope = { agentId: target.agentId, sessionKey: key, storePath: target.storePath };
       const entered = createDeferredCore();
       const rotate = createDeferredCore();
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("create", {
         scope: target.storePath,
         identities: [key, first.entry.sessionId],
         run: async () => {

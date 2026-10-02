@@ -408,7 +408,7 @@ test("sessions.reset rejects an active lifecycle mutation without interrupting a
   });
   let releaseMutation = () => {};
   const { promise: mutationStarted, resolve: markMutationStarted } = createDeferred();
-  const blocker = runExclusiveSessionLifecycleMutation({
+  const blocker = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: ["agent:main:main", "sess-main"],
     run: async () => {
@@ -632,7 +632,7 @@ test("sessions.patch rejects an archive queued behind a rotated session", async 
     },
   });
   await blockerStarted;
-  const queuedReset = runExclusiveSessionLifecycleMutation({
+  const queuedReset = runExclusiveSessionLifecycleMutation("reset", {
     scope: storePath,
     identities: [sessionKey, initialSessionId],
     run: async () => {

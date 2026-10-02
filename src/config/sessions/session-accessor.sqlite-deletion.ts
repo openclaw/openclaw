@@ -435,7 +435,7 @@ async function withSqliteSessionMutations<T>(
         },
       );
     };
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("delete-prepare", {
       scope: ownerStorePath,
       identities: [
         ...targets.flatMap((target) => [target.sessionKey, target.sessionId]),

@@ -111,10 +111,9 @@ import { loadSessionLifecycleRuntime } from "./session-lifecycle-runtime-loader.
 import { resolvePluginSessionOwnershipError } from "./session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { invalidSessionRequest, sessionCreationFailure } from "./session-request-error.js";
-import {
-  loadGatewaySessionEntryReadOnly,
-  resolveGatewaySessionStoreTarget,
-} from "./session-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
+import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 
@@ -263,7 +262,7 @@ export async function createGatewaySession(
   let canonicalParentSessionKey: string | undefined;
   let parentSessionEntry: SessionEntry | undefined;
   let parentSelectedAgentId: string | undefined;
-  let parentSessionTarget: ReturnType<typeof resolveGatewaySessionStoreTarget> | undefined;
+  let parentSessionTarget: GatewaySessionStoreTarget | undefined;
   if (parentSessionKey) {
     const parentRequestedAgent = resolveRequestedSessionAgentId(
       params.cfg,
@@ -294,11 +293,14 @@ export async function createGatewaySession(
     params.activeParentFork &&
     (params.fork !== true ||
       parentSelectedAgentId !== agentId ||
-      resolveGatewaySessionStoreTarget({
-        cfg: params.cfg,
-        key: params.activeParentFork.requesterSessionKey,
-        agentId,
-      }).canonicalKey !== canonicalParentSessionKey)
+      (
+        await resolveGatewaySessionStoreTargetInWorker({
+          cfg: params.cfg,
+          key: params.activeParentFork.requesterSessionKey,
+          agentId,
+          assertActive: commitGuard,
+        })
+      ).canonicalKey !== canonicalParentSessionKey)
   ) {
     return invalidSessionRequest("active fork parent must match the same-agent requester");
   }
@@ -316,21 +318,16 @@ export async function createGatewaySession(
     return { ok: false, error: incognitoIntentError };
   }
 
-  if (
-    canonicalParentSessionKey &&
-    explicitTargetKey &&
-    resolveGatewaySessionStoreTarget({ cfg: params.cfg, key: explicitTargetKey, agentId })
-      .canonicalKey === canonicalParentSessionKey
-  ) {
-    return invalidSessionRequest("sessions.create key must differ from parentSessionKey");
-  }
-
   const targetSessionKey = explicitTargetKey ?? buildDashboardSessionKey(agentId, { incognito });
-  const creationTarget = resolveGatewaySessionStoreTarget({
+  const creationTarget = await resolveGatewaySessionStoreTargetInWorker({
     cfg: params.cfg,
     key: targetSessionKey,
     agentId,
+    assertActive: commitGuard,
   });
+  if (explicitTargetKey && creationTarget.canonicalKey === canonicalParentSessionKey) {
+    return invalidSessionRequest("sessions.create key must differ from parentSessionKey");
+  }
   const initialTargetEntry = explicitTargetKey
     ? resolveSessionEntryAccessTarget({
         cfg: params.cfg,
@@ -1255,7 +1252,7 @@ export async function createGatewaySession(
   // Generated, keyed, same-store, and cross-agent creations all share the
   // lifecycle owner's canonical identity order and one active mutation fence.
   onPhase?.("lifecycleAdmission");
-  const result = await runExclusiveSessionLifecycleMutation({
+  const result = await runExclusiveSessionLifecycleMutation("create", {
     targets: lifecycleTargets,
     run: createChildSession,
     finalize: async () => {

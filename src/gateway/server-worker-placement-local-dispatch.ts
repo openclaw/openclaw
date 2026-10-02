@@ -51,7 +51,7 @@ export function createGatewayWorkerPlacementLocalDispatchBarrier(params: {
     });
     const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
     let placement: Awaited<ReturnType<typeof startDispatch>> | undefined;
-    return await runExclusiveSessionLifecycleMutation({
+    return await runExclusiveSessionLifecycleMutation("placement-dispatch", {
       scope: target.storePath,
       identities: lifecycleIdentities,
       signal,

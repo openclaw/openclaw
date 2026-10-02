@@ -839,7 +839,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
 
   const mutationEntered = createDeferredCore();
   const releaseMutation = createDeferredCore();
-  const heldMutation = runExclusiveSessionLifecycleMutation({
+  const heldMutation = runExclusiveSessionLifecycleMutation("recover", {
     scope: scope.storePath,
     identities: [sourceKey, sourceSessionId],
     run: async () => {

@@ -592,7 +592,7 @@ it.each([
         await awaitProgress(grandchildCancelled.promise, "grandchild cancellation publication");
         // Publication precedes G's abort-marker write. Join its mutation from
         // outside the observer's reentrant context before arming the next fault.
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("subagent-kill", {
           scope: storePath,
           identities: [gKey, "g-session"],
           run: async () => {},
