@@ -16,6 +16,12 @@ export type SessionActor = {
 export type SessionCreatedActor = SessionActor &
   ({ type: "human"; source: "profile" | "channel" | "unknown" } | { type: "agent" | "system" });
 
+/** Creation policy; the session's existing managed-worktree binding owns its concrete checkout. */
+export type RequiredSessionWorkspace = {
+  projectId: string;
+  worktreeBaseRef: string;
+};
+
 export function sessionCreatorProfileId(
   actor: (SessionActor & { source?: unknown }) | undefined,
 ): string | undefined {
@@ -129,6 +135,7 @@ export function buildSessionCreationStamp(params: {
   actor?: SessionCreatedActor;
   now?: number;
   sandbox?: "required";
+  requiredWorkspace?: RequiredSessionWorkspace;
   incognito?: boolean;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
@@ -137,6 +144,7 @@ export function buildSessionCreationStamp(params: {
   createdActor?: SessionCreatedActor;
   createdAt: number;
   sandbox?: "required";
+  requiredWorkspace?: RequiredSessionWorkspace;
   skillLibrarySelections?: SkillLibrarySelection[];
   inheritedGitContributorProfileIds?: string[];
 } {
@@ -145,6 +153,7 @@ export function buildSessionCreationStamp(params: {
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
     ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
+    ...(params.requiredWorkspace ? { requiredWorkspace: { ...params.requiredWorkspace } } : {}),
     ...(params.via === "spawn" && !params.incognito && params.inheritedGitContributorProfileIds
       ? { inheritedGitContributorProfileIds: [...params.inheritedGitContributorProfileIds] }
       : {}),
@@ -169,6 +178,7 @@ export function preserveCreationStamp<
         createdActor: authoritative.createdActor,
         createdAt: authoritative.createdAt,
         inheritedGitContributorProfileIds: authoritative.inheritedGitContributorProfileIds,
+        requiredWorkspace: authoritative.requiredWorkspace,
         ...(authoritative.sandbox === "required" ? { sandbox: authoritative.sandbox } : {}),
       }
     : entry;
@@ -180,6 +190,7 @@ export function inheritSessionCreationPolicy(
     | {
         createdActor?: SessionCreatedActor;
         sandbox?: "required";
+        requiredWorkspace?: RequiredSessionWorkspace;
         skillLibrarySelections?: SkillLibrarySelection[];
       }
     | undefined,
@@ -187,9 +198,11 @@ export function inheritSessionCreationPolicy(
 ): {
   actor?: SessionCreatedActor;
   sandbox?: "required";
+  requiredWorkspace?: RequiredSessionWorkspace;
   skillLibrarySelections?: SkillLibrarySelection[];
 } {
   return {
+    ...(source?.requiredWorkspace ? { requiredWorkspace: { ...source.requiredWorkspace } } : {}),
     ...(source?.sandbox === "required"
       ? { actor: source.createdActor, sandbox: "required" as const }
       : { actor }),

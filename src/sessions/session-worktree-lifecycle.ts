@@ -35,11 +35,31 @@ function belongsToSession(record: ManagedWorktreeRecord, sessionKey: string) {
   return record.ownerKind === "session" && record.ownerId === sessionKey;
 }
 
+/** Hidden children retain run custody, while cleanup belongs exclusively to the registry owner. */
+function borrowsRequiredWorktree(
+  entry: SessionEntry | undefined,
+  record: ManagedWorktreeRecord,
+  sessionKey: string,
+) {
+  return Boolean(
+    entry?.requiredWorkspace &&
+    entry.createdVia === "spawn" &&
+    entry.parentSessionKey &&
+    entry.parentSessionId &&
+    entry.parentLifecycleRevision &&
+    record.ownerKind === "session" &&
+    record.ownerId !== sessionKey &&
+    record.id === entry.worktree?.id &&
+    record.path === entry.sessionRoot,
+  );
+}
+
 /** The session lifecycle fence remains held until this exact bound checkout finishes cleanup. */
 export async function removeSessionWorktree(params: {
   id?: string;
   sessionKey: string;
   reason: string;
+  entry?: SessionEntry;
   commitGuard?: () => void;
   env?: NodeJS.ProcessEnv;
 }): Promise<PreservedSessionWorktree | undefined> {
@@ -49,6 +69,10 @@ export async function removeSessionWorktree(params: {
   const env = params.env ?? process.env;
   const record = getRegistryWorktree(env, params.id);
   if (!record || record.removedAt !== undefined) {
+    return undefined;
+  }
+  if (borrowsRequiredWorktree(params.entry, record, params.sessionKey)) {
+    params.commitGuard?.();
     return undefined;
   }
   const assertCurrent = () => {
@@ -101,6 +125,13 @@ export async function synchronizeSessionWorktreeArchive(params: {
   if (!id) {
     return () => params.commitGuard?.();
   }
+  const initialRecord = getRegistryWorktree(scope.env ?? process.env, id);
+  if (initialRecord && borrowsRequiredWorktree(entry, initialRecord, scope.sessionKey)) {
+    // Archiving a joined child changes only that child's conversation state.
+    // Its parent remains the only owner allowed to archive or restore the checkout.
+    params.commitGuard?.();
+    return () => params.commitGuard?.();
+  }
   const assertCurrent = () => {
     params.commitGuard?.();
     const current = loadSessionEntry(scope);
@@ -129,6 +160,7 @@ export async function synchronizeSessionWorktreeArchive(params: {
       id,
       sessionKey: scope.sessionKey,
       reason: "session-archive",
+      entry,
       env: scope.env,
       commitGuard: assertCurrent,
     });

@@ -273,6 +273,27 @@ export function authorizeGatewaySessionCreation(
   );
 }
 
+/** Implicit creation cannot satisfy an explicit workspace selection and allocation contract. */
+export function authorizeGatewayUnpreparedSessionCreation(
+  params: GatewaySessionAgentAuthorization,
+): ErrorShape | undefined {
+  const role =
+    "client" in params
+      ? resolveOperatorRolePolicy(params.client ?? null, params.cfg)
+      : params.actor?.kind === "system"
+        ? undefined
+        : resolveOperatorRolePolicyForProfile(
+            params.actor?.profileId ?? params.profileId,
+            params.cfg,
+          );
+  return role?.sessions.workspace
+    ? errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Select an authorized workspace and create a new thread before sending a message. This role requires a fresh managed worktree.",
+      )
+    : authorizeGatewaySessionCreation(params);
+}
+
 /** Leave ordinary creation attribution unchanged unless the authenticated person requires isolation. */
 export function resolveSandboxedSessionCreation(
   client: Parameters<typeof resolveOperatorSessionCreation>[0],

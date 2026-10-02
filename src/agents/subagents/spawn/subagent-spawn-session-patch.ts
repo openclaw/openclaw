@@ -13,6 +13,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { sharesRequiredSessionWorkspace } from "../../worktrees/required-session-binding.js";
 import { type resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
   loadSessionEntry,
@@ -130,6 +131,33 @@ export async function createInitialSubagentSession(params: {
       },
     );
     params.assertActive?.();
+    if (parentEntry?.requiredWorkspace) {
+      if (
+        params.incognito ||
+        !parentEntry.worktree ||
+        !parentEntry.sessionRoot ||
+        !parentEntry.lifecycleRevision ||
+        (params.spawnedCwd && resolveUserPath(params.spawnedCwd) !== parentEntry.spawnedCwd) ||
+        (params.spawnedWorkspaceDir &&
+          resolveUserPath(params.spawnedWorkspaceDir) !== parentEntry.spawnedWorkspaceDir) ||
+        (params.sessionPermissionPolicy &&
+          resolveUserPath(params.sessionPermissionPolicy.root) !== parentEntry.sessionRoot)
+      ) {
+        throw new Error(
+          "A child of this thread must share its parent's exact authorized workspace.",
+        );
+      }
+      Object.assign(initialChildSessionPatch, {
+        requiredWorkspace: { ...parentEntry.requiredWorkspace },
+        projectId: parentEntry.projectId,
+        worktree: { ...parentEntry.worktree },
+        parentSessionId: parentEntry.sessionId,
+        parentLifecycleRevision: parentEntry.lifecycleRevision,
+        sessionRoot: parentEntry.sessionRoot,
+        spawnedCwd: parentEntry.spawnedCwd,
+        spawnedWorkspaceDir: parentEntry.spawnedWorkspaceDir,
+      });
+    }
     // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
     // launch so it cannot delete a reset successor that reuses the session id.
     const childSessionIdentity = {
@@ -177,6 +205,9 @@ export async function createInitialSubagentSession(params: {
         ...buildSessionCreationStamp({
           via: "spawn",
           ...params.creationPolicy,
+          ...(parentEntry?.requiredWorkspace
+            ? { requiredWorkspace: parentEntry.requiredWorkspace }
+            : {}),
           ...(!params.incognito
             ? {
                 inheritedGitContributorProfileIds:
@@ -188,7 +219,7 @@ export async function createInitialSubagentSession(params: {
       {
         assertCommitAllowed: () => {
           params.assertActive?.();
-          if (parentEntry?.skillLibrarySelections) {
+          if (parentEntry?.skillLibrarySelections || parentEntry?.requiredWorkspace) {
             const latest = loadSessionEntry({
               storePath: parentStorePath,
               sessionKey: parentTarget.canonicalKey,
@@ -197,10 +228,20 @@ export async function createInitialSubagentSession(params: {
               latest?.sessionId !== parentEntry.sessionId ||
               latest.lifecycleRevision !== parentEntry.lifecycleRevision ||
               JSON.stringify(latest.skillLibrarySelections) !==
-                JSON.stringify(parentEntry.skillLibrarySelections)
+                JSON.stringify(parentEntry.skillLibrarySelections) ||
+              (parentEntry.requiredWorkspace &&
+                !sharesRequiredSessionWorkspace(
+                  {
+                    ...initialChildSessionPatch,
+                    ...childSessionIdentity,
+                    createdVia: "spawn",
+                    updatedAt: 0,
+                  },
+                  latest,
+                ))
             ) {
               throw new Error(
-                "Parent skill selection changed before spawn; retry from the current turn.",
+                "Parent session or inherited policy changed before spawn; retry from the current turn.",
               );
             }
           }

@@ -39,6 +39,7 @@ import type {
   SessionEntryProvenance,
   SessionOwnerAssignment,
   SessionParticipant,
+  RequiredSessionWorkspace,
 } from "./session-entry-provenance.js";
 import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.js";
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
@@ -359,12 +360,16 @@ type SessionEntryCore = SessionRestartRecoveryState &
     parentSessionKey?: string;
     /** Exact parent incarnation captured when this child was created. */
     parentSessionId?: string;
+    /** Exact parent generation for a hidden child borrowing its required workspace. */
+    parentLifecycleRevision?: string;
     /** How this session node came to exist; written once and retained across sessionId rotations. */
     createdVia?: SessionCreatedVia;
     /** Actor that caused node creation, with an optional profile, session, or sender id; written once. */
     createdActor?: SessionCreatedActor;
     /** Creation-only sandbox requirement; existing unstamped sessions always remain unstamped. */
     sandbox?: "required";
+    /** Immutable selected-project/worktree requirement, retained across role changes and resets. */
+    requiredWorkspace?: RequiredSessionWorkspace;
     /** Mutable responsibility, projected from SQLite; absent means createdActor owns the session. */
     owner?: SessionOwnerAssignment;
     /** Retained identities, projected from the participant table before display truncation. */
@@ -778,6 +783,20 @@ function mergeSessionEntryWithPolicy(
     next.createdActor = existing.createdActor;
   }
   next.inheritedGitContributorProfileIds = existing.inheritedGitContributorProfileIds;
+  next.requiredWorkspace = existing.requiredWorkspace;
+  if (existing.requiredWorkspace) {
+    next.worktree = existing.worktree;
+    next.sessionRoot = existing.sessionRoot;
+    next.spawnedCwd = existing.spawnedCwd;
+    next.spawnedWorkspaceDir = existing.spawnedWorkspaceDir;
+    next.execNode = existing.execNode;
+    next.execCwd = existing.execCwd;
+    next.execHost = existing.execHost;
+    next.parentSessionKey = existing.parentSessionKey;
+    next.parentSessionId = existing.parentSessionId;
+    next.parentLifecycleRevision = existing.parentLifecycleRevision;
+    next.repositoryWorkspaceId = existing.repositoryWorkspaceId;
+  }
   if (existing.sandbox === "required") {
     next.sandbox = existing.sandbox;
   } else {

@@ -56,6 +56,10 @@ import { normalizeSpawnedRunMetadata } from "../spawned-context.js";
 import { resolveEffectiveAgentRuntime } from "../thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../timeout.js";
 import { ensureAgentWorkspace } from "../workspace.js";
+import {
+  assertRequiredSessionWorktreeCheckout,
+  REQUIRED_WORKTREE_UNAVAILABLE,
+} from "../worktrees/required-session-binding.js";
 import { acquireWorktreeRunLease, resolveWorktreeIdForPath } from "../worktrees/run-lease.js";
 import { resolveExplicitAgentCommandSessionKey } from "./explicit-session-key.js";
 import { loadAcpManagerRuntime } from "./runtime-loaders.js";
@@ -238,6 +242,14 @@ export async function prepareAgentCommandExecution(
   }
   const sessionStore: Record<string, InternalSessionEntry> =
     sessionKey && sessionEntryRaw ? { [sessionKey]: sessionEntryRaw } : {};
+  const requiredWorkspacePolicy = opts.operatorAuthority?.rolePolicy?.workspace;
+  if (
+    requiredWorkspacePolicy &&
+    (!sessionEntryRaw?.requiredWorkspace ||
+      !requiredWorkspacePolicy.projects.includes(sessionEntryRaw.requiredWorkspace.projectId))
+  ) {
+    throw new Error(REQUIRED_WORKTREE_UNAVAILABLE);
+  }
   assertAgentDatabaseAdmitted(sessionAgentId);
   const outboundSession = buildOutboundSessionContext({
     cfg,
@@ -245,7 +257,10 @@ export async function prepareAgentCommandExecution(
     sessionKey,
   });
   const agentWorkspaceDir = resolveAgentWorkspaceDir(cfg, sessionAgentId);
-  const workspaceDirRaw = normalizedSpawned.workspaceDir ?? agentWorkspaceDir;
+  const workspaceDirRaw =
+    normalizedSpawned.workspaceDir ??
+    (sessionEntryRaw?.requiredWorkspace ? sessionEntryRaw.spawnedWorkspaceDir : undefined) ??
+    agentWorkspaceDir;
   const workspaceDir = resolveUserPath(workspaceDirRaw);
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
@@ -351,9 +366,26 @@ export async function prepareAgentCommandExecution(
   const resolvedCwd = cwd ? resolveUserPath(cwd) : undefined;
   const worktreeId = await resolveWorktreeIdForPath({
     sessionEntry: sessionEntryRaw,
+    sessionKey: sessionKey ?? undefined,
+    cfg,
+    assertCurrent: assertAcpPreparationCurrent,
     candidatePaths: [resolvedCwd ?? workspaceDir, workspaceDir],
   });
-  const runLease = worktreeId ? await acquireWorktreeRunLease(worktreeId) : undefined;
+  const runLease = worktreeId
+    ? await acquireWorktreeRunLease(
+        worktreeId,
+        sessionEntryRaw?.requiredWorkspace
+          ? {
+              validateCheckout: async (record, assertLeaseCurrent) => {
+                await assertRequiredSessionWorktreeCheckout(record, () => {
+                  assertLeaseCurrent();
+                  assertAcpPreparationCurrent();
+                });
+              },
+            }
+          : {},
+      )
+    : undefined;
   try {
     const { resolveAcpAgentWorkspaceProvisioningForTurn } =
       await import("../acp-workspace-provisioning.js");

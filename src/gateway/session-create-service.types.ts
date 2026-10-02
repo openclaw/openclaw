@@ -12,6 +12,7 @@ import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions
 import type {
   SessionCreatedActor,
   SessionCreatedVia,
+  RequiredSessionWorkspace,
 } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
@@ -196,6 +197,7 @@ export type CreateGatewaySessionParams = {
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
     sandbox?: "required";
+    requiredWorkspace?: RequiredSessionWorkspace;
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     /** Trusted config-resolved spawn model provenance for the `model` field. */
     spawnModelAutoSelection?: AgentRuntimeSpawnModelAutoSelection;

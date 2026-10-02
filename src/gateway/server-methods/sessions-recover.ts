@@ -36,6 +36,7 @@ export const sessionRecoverHandlers: GatewayRequestHandlers = {
         : undefined;
     const creation = resolveOperatorSessionCreation(client);
     const recovered = await recoverGatewaySession({
+      getCurrentConfig: () => context.getRuntimeConfig(),
       cfg: context.getRuntimeConfig(),
       key: params.key,
       ...(params.agentId ? { agentId: params.agentId } : {}),

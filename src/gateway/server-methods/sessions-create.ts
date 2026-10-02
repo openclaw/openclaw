@@ -23,6 +23,7 @@ import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js"
 import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { startSessionCreateDiagnostics } from "../session-create-diagnostics.js";
 import { buildDashboardSessionKey } from "../session-create-key.js";
@@ -34,6 +35,7 @@ import {
   loadGatewaySessionEntryReadOnly,
   resolveGatewaySessionStoreTarget,
 } from "../session-utils.js";
+import { validateRequiredWorkspaceSelectors } from "../session-workspace-policy.js";
 import {
   prepareSessionWorktreeCreation,
   validateSessionWorktreeSelection,
@@ -143,6 +145,18 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     }
     const { personalModelSelection, personalAccountDefaults } = personalAccounts;
     const cfg = getCurrentConfig();
+    const workspacePolicy =
+      resolveOperatorRolePolicy(client, cfg)?.sessions.workspace ??
+      ((p.fork || spawnRequesterSessionKey === parentSessionKey) && parentSessionKey
+        ? loadGatewaySessionEntryReadOnly(parentSessionKey).entry?.requiredWorkspace
+        : undefined);
+    if (workspacePolicy) {
+      const selectionError = validateRequiredWorkspaceSelectors(p, workspacePolicy);
+      if (selectionError) {
+        respond(false, undefined, selectionError);
+        return;
+      }
+    }
     const authority = createAgentRuntimeAuthorityGuard(client, context, respond);
     // Both uncommitted selections must remain authorized after awaited preparation.
     const commitGuard = () => {
@@ -348,7 +362,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     const deferWorktree =
       p.worktree === true && !emptyWorkspace && hasInitialTurn && !existingTargetEntry;
     let projectRoot: string | undefined;
-    if (requestedProjectId) {
+    if (requestedProjectId && !workspacePolicy) {
       const project = await resolveProjectRegistry(cfg, requestedProjectId);
       if (!project) {
         respond(
@@ -388,7 +402,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     let sessionCwd = requestedExecNode ? undefined : (projectRoot ?? requestedCwd);
     let prepareLifecycle: Parameters<typeof createGatewaySession>[0]["prepareLifecycle"];
     const preparedRoot =
-      repository || emptyWorkspace
+      repository || emptyWorkspace || workspacePolicy
         ? undefined
         : prepareSessionCreateFilesystemRoot({
             cfg,
@@ -412,7 +426,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         assertCurrent: commitGuard,
       });
     }
-    if (p.worktree === true) {
+    if (p.worktree === true && !workspacePolicy) {
       // Raw cwd authorization and project-registry selection have already been checked.
       const agentId = explicitlyRequestedAgent.agentId;
       let targetKey = sessionKey;
@@ -632,11 +646,12 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (created.postCommit.status === "failed") {
       runError = errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(created.postCommit.error));
     }
-    const createdWorktree = preparedWorktree?.worktree
+    const responseWorktree = preparedWorktree?.worktree ?? created.entry.worktree;
+    const createdWorktree = responseWorktree
       ? {
-          id: preparedWorktree.worktree.id,
-          path: preparedWorktree.sessionRoot,
-          branch: preparedWorktree.worktree.branch,
+          id: responseWorktree.id,
+          path: preparedWorktree?.sessionRoot ?? created.entry.sessionRoot,
+          branch: responseWorktree.branch,
         }
       : undefined;
     const responseEntry = sessionEntryForkedFromParent(created.entry)

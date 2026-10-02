@@ -91,7 +91,10 @@ import {
 } from "../sessions/session-state-events.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
+import {
+  authorizeGatewayUnpreparedSessionCreation,
+  resolveCreatorSandbox,
+} from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import type * as SessionLifecycle from "./session-create-service.types.js";
@@ -569,7 +572,7 @@ export async function performGatewaySessionReset(params: {
     return resetTarget;
   }
   const authorizeResetCreation = () =>
-    authorizeGatewaySessionCreation({
+    authorizeGatewayUnpreparedSessionCreation({
       cfg: resetTarget.cfg,
       agentId: resetTarget.target.agentId,
       ...(params.operatorRoleActor
@@ -640,6 +643,21 @@ export async function performGatewaySessionReset(params: {
     params.workerPlacementContext ??
     (await import("./session-worker-placement-context.js")).resolveSessionWorkerPlacementContext();
   const resolveResetEntryStateError = (entry: SessionEntry | undefined, canonicalKey: string) => {
+    if (
+      entry?.requiredWorkspace &&
+      (params.prepareLifecycle ||
+        params.clearSpawnedCwd ||
+        params.clearExecBinding ||
+        (params.spawnedCwd !== undefined && params.spawnedCwd !== entry.spawnedCwd) ||
+        (params.sessionRoot !== undefined && params.sessionRoot !== entry.sessionRoot) ||
+        params.execNode ||
+        params.execCwd)
+    ) {
+      return errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Reset must retain this thread's managed workspace. Select a workspace in a new thread to change it.",
+      );
+    }
     const placementError = resolveSessionWorkerPlacementMutationError({
       action: "reset",
       context: workerPlacementContext,

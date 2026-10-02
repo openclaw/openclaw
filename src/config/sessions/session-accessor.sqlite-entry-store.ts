@@ -490,8 +490,33 @@ export function writeSessionEntry(
   // Doctor/import owners validate and select a whole creator stamp across aliases.
   // Preserve their selection unless this canonical node already owns required isolation;
   // ordinary writes cannot restamp a logical node's creator.
-  if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
+  if (
+    !options.allowStoredAliases ||
+    canonicalPreviousEntry?.sandbox === "required" ||
+    canonicalPreviousEntry?.requiredWorkspace
+  ) {
     normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
+  }
+  if (canonicalPreviousEntry?.requiredWorkspace) {
+    // The logical thread keeps its admitted checkout even when a later writer
+    // has broader authority. Reset and stale snapshots cannot detach it.
+    normalizedEntry = {
+      ...normalizedEntry,
+      projectId: canonicalPreviousEntry.projectId,
+      worktree: canonicalPreviousEntry.worktree,
+      sessionRoot: canonicalPreviousEntry.sessionRoot,
+      spawnedCwd: canonicalPreviousEntry.spawnedCwd,
+      spawnedWorkspaceDir: canonicalPreviousEntry.spawnedWorkspaceDir,
+      execNode: canonicalPreviousEntry.execNode,
+      execCwd: canonicalPreviousEntry.execCwd,
+      execHost: canonicalPreviousEntry.execHost,
+      parentSessionKey: canonicalPreviousEntry.parentSessionKey,
+      parentSessionId: canonicalPreviousEntry.parentSessionId,
+      parentLifecycleRevision: canonicalPreviousEntry.parentLifecycleRevision,
+      repositoryWorkspaceId: canonicalPreviousEntry.repositoryWorkspaceId,
+      pendingWorktree: canonicalPreviousEntry.pendingWorktree,
+      pendingProjectGitUrl: canonicalPreviousEntry.pendingProjectGitUrl,
+    };
   }
   if (isIncognitoSessionKey(sessionKey) && normalizedEntry.createdAt === undefined) {
     // Pin timestamp-less creation once at the writer, never independently in

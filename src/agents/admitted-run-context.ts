@@ -55,6 +55,10 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   rolePolicy?: Readonly<{
     sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
     sandboxRequired: boolean;
+    workspace?: Readonly<{
+      projects: readonly string[];
+      worktreeBaseRef: string;
+    }>;
     agents: "*" | readonly string[];
   }>;
   modelPolicy?: PreparedOperatorModelPolicy;
@@ -109,6 +113,14 @@ export function createAdmittedRunOperatorAuthority(
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
+          ...(source.rolePolicy.workspace
+            ? {
+                workspace: Object.freeze({
+                  ...source.rolePolicy.workspace,
+                  projects: Object.freeze([...source.rolePolicy.workspace.projects]),
+                }),
+              }
+            : {}),
           agents:
             source.rolePolicy.agents === "*"
               ? "*"

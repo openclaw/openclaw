@@ -12,7 +12,10 @@ import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-sele
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
-import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import {
+  authorizeGatewayUnpreparedSessionCreation,
+  resolveCreatorSandbox,
+} from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
@@ -152,7 +155,8 @@ export async function executeSessionPatchMutations(params: {
       continue;
     }
     const creationError =
-      !initialEntry && authorizeGatewaySessionCreation({ cfg, client, agentId: resolved.agentId });
+      !initialEntry &&
+      authorizeGatewayUnpreparedSessionCreation({ cfg, client, agentId: resolved.agentId });
     if (creationError) {
       outcomes[index] = { ok: false, error: creationError };
       continue;
@@ -381,7 +385,7 @@ export async function executeSessionPatchMutations(params: {
                         });
                         const creationError =
                           !existingEntry &&
-                          authorizeGatewaySessionCreation({
+                          authorizeGatewayUnpreparedSessionCreation({
                             cfg,
                             client,
                             agentId: target.targetAgentId,

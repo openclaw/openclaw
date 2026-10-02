@@ -9,7 +9,14 @@ import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.
 export function buildRestartRecoverySuccessorEntry(params: {
   sessionId: string;
   source: InternalSessionEntry;
-  creation: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
+  creation: Pick<
+    Parameters<typeof buildSessionCreationStamp>[0],
+    "actor" | "sandbox" | "requiredWorkspace"
+  >;
+  workspace?: Pick<
+    InternalSessionEntry,
+    "projectId" | "worktree" | "sessionRoot" | "spawnedCwd" | "spawnedWorkspaceDir"
+  >;
 }): InternalSessionEntry & { sessionId: string } {
   const source = params.source;
   const entry = mergeSessionEntry(undefined, {
@@ -27,6 +34,7 @@ export function buildRestartRecoverySuccessorEntry(params: {
     ...(source.execHost ? { execHost: source.execHost } : {}),
     ...(source.execNode ? { execNode: source.execNode } : {}),
     ...(source.execCwd ? { execCwd: source.execCwd } : {}),
+    ...params.workspace,
   });
   return { ...entry, ...buildMainSessionRecoveryClearPatch(entry), sessionId: params.sessionId };
 }

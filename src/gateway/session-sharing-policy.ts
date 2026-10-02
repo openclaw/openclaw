@@ -403,7 +403,7 @@ export function authorizeSessionAgentRun(
     cfg: OpenClawConfig;
     client: GatewayClient | null;
     target: Pick<SessionSharingTarget, "agentId" | "canonicalKey"> & {
-      entry?: Pick<SessionEntry, "sandbox">;
+      entry?: Pick<SessionEntry, "sandbox" | "requiredWorkspace" | "projectId">;
     };
   },
   prepared?: { policy: GatewayOperatorRoleDefinition | undefined },
@@ -414,6 +414,20 @@ export function authorizeSessionAgentRun(
   );
   if (agentError) {
     return agentError;
+  }
+  const workspacePolicy = (
+    prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg)
+  )?.sessions.workspace;
+  if (
+    workspacePolicy &&
+    (!params.target.entry?.requiredWorkspace ||
+      params.target.entry.requiredWorkspace.projectId !== params.target.entry.projectId ||
+      !workspacePolicy.projects.includes(params.target.entry.requiredWorkspace.projectId))
+  ) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Your operator role requires an authorized workspace. Select a workspace and create a new thread instead of continuing this session.",
+    );
   }
   if (
     params.cfg.gateway?.roles &&
