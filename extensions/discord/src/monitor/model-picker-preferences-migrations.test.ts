@@ -1,4 +1,5 @@
 // Discord tests cover model picker preferences migrations plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { buildLegacyMigrationPreview } from "openclaw/plugin-sdk/runtime-doctor-migrations";
