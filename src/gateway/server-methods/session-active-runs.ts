@@ -211,7 +211,11 @@ export function resolveVisibleActiveSessionRunState(params: {
   const runIds = matchingTrackedRuns
     .filter((active) => !active.terminalPersistence)
     .map((active) => active.runId);
-  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(params.canonicalKey);
+  const directSubagent = getLatestLiveSubagentRunByChildSessionKey(
+    params.canonicalKey,
+    undefined,
+    resolvedAgentId,
+  );
   const matchesDirectSubagentSession = Boolean(
     directSubagent &&
     isTrackedActiveSessionRunForKey(

@@ -389,7 +389,7 @@ describe("legacy state migration caller storage", () => {
 
   it("binds WAL-backed shared-auth and meeting-transcript inputs as SQLite", async () => {
     const fixture = await makeFixture();
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     const agentDatabasePath = path.join(
       fixture.stateDir,

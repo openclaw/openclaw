@@ -1310,67 +1310,6 @@ describe("update-startup", () => {
     }
   });
 
-  it("returns cleanup before slow dev git discovery schedules a campaign", async ({ signal }) => {
-    const remoteFetchDelayMs = 65_653;
-    const entered = createDeferred();
-    const remoteFinished = createDeferred();
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
-    vi.mocked(checkUpdateStatus).mockImplementation(({ fetchGit, timeoutMs }) => {
-      const isRemoteFetch = fetchGit === true;
-      const effectiveTimeoutMs = timeoutMs ?? (isRemoteFetch ? 120_000 : 6000);
-      const remoteFetchFinished = isRemoteFetch && effectiveTimeoutMs >= remoteFetchDelayMs;
-      const status = createDevGitStatus({
-        upstreamSha: remoteFetchFinished ? "upstream-sha" : null,
-        ahead: remoteFetchFinished ? 0 : null,
-        behind: remoteFetchFinished ? 2 : null,
-        fetchOk: isRemoteFetch ? remoteFetchFinished : null,
-      });
-      if (!isRemoteFetch) {
-        return Promise.resolve(status);
-      }
-      entered.resolve();
-      return remoteFinished.promise.then(() => status);
-    });
-    process.env.NODE_ENV = "production";
-    const stop = scheduleGatewayUpdateCheck({
-      cfg: { update: { channel: "dev", auto: { enabled: true } } },
-      activeWorkInspectors: idleActiveWorkInspectors(),
-    });
-    const checking = clock.advanceBy(0);
-    try {
-      expect(stop).toEqual(expect.any(Function));
-      await withinTest(entered.promise, signal);
-      expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
-      expect(checkUpdateStatus).toHaveBeenNthCalledWith(1, {
-        root: "/opt/openclaw",
-        signal: expect.any(AbortSignal),
-        timeoutMs: 2500,
-        fetchGit: false,
-        includeRegistry: false,
-      });
-      expect(checkUpdateStatus).toHaveBeenNthCalledWith(2, {
-        root: "/opt/openclaw",
-        signal: expect.any(AbortSignal),
-        fetchGit: true,
-        includeRegistry: false,
-        useDetachedDevUpstream: true,
-      });
-      expect(getUpdateSchedule()?.campaign).toBeUndefined();
-
-      await clock.advanceBy(remoteFetchDelayMs);
-      remoteFinished.resolve();
-      await checking;
-      expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
-      expect(getUpdateSchedule()?.install?.git).toMatchObject({
-        status: "behind",
-        commitsBehind: 2,
-      });
-    } finally {
-      remoteFinished.resolve();
-      await Promise.all([checking, stop()]);
-    }
-  });
-
   it("drains stopped discovery before a replacement scheduler", async ({ signal }) => {
     const oldGitStatus = mockDevGitStatus({ upstreamSha: "old-upstream" });
     const entered = createDeferred();

@@ -245,7 +245,8 @@ describe("memory command failures at the root JSON boundary", () => {
           });
           expect(beforeRemovalSettled).toBe("");
           expect(cleanupAttempts).toBe(1);
-          expect(stderr()).toContain(cleanupError.message);
+          expect(stderr()).toContain("[openclaw] The CLI command failed.");
+          expect(stderr()).not.toContain(cleanupError.message);
           expect(process.exitCode).toBe(1);
           expect(await fs.readFile(historyPath, "utf8")).toBe(history);
         } finally {

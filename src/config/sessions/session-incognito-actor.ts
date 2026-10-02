@@ -19,10 +19,15 @@ import type {
   IncognitoSessionRead,
   IncognitoSessionOperations,
 } from "./session-incognito-contract.js";
+import type { IncognitoOutboxOperations } from "./session-incognito-outbox-contract.js";
 import {
   isIncognitoSideDataWrite,
   type IncognitoSideDataOperations,
 } from "./session-incognito-side-data-contract.js";
+import {
+  isIncognitoTranscriptWrite,
+  type IncognitoTranscriptOperations,
+} from "./session-incognito-transcript-contract.js";
 
 type Scope = Pick<SqliteWorkerStore<AgentDatabaseIncognitoOperations>, "execute">;
 export type IncognitoSessionRunner = <T>(
@@ -318,6 +323,24 @@ export function createIncognitoSessionFacts(
             (result) => result.value,
             signal,
           ),
+        transcript: <Key extends keyof IncognitoTranscriptOperations>(
+          authority: IncognitoSessionAuthority,
+          command: { type: Key; input: IncognitoTranscriptOperations[Key]["input"] },
+          signal?: AbortSignal,
+        ): Promise<IncognitoTranscriptOperations[Key]["output"]> =>
+          perform(
+            authority,
+            command,
+            isIncognitoTranscriptWrite(command.type),
+            (result) => result.value,
+            signal,
+          ),
+        outbox: <Key extends keyof IncognitoOutboxOperations>(
+          authority: IncognitoSessionAuthority,
+          command: { type: Key; input: IncognitoOutboxOperations[Key]["input"] },
+          signal?: AbortSignal,
+        ): Promise<IncognitoOutboxOperations[Key]["output"]> =>
+          perform(authority, command, true, (result) => result.value, signal),
         captureCurrent(sessionKey: string) {
           assertBorrowed();
           return claim(sessionKey, assertBorrowed);

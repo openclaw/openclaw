@@ -17,7 +17,7 @@ import type { InternalSessionEntry as SessionEntry } from "./types.js";
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export function readSessionEntryStore(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   options: {
     allowCanonicalRepair?: boolean;
     includeArchived?: boolean;

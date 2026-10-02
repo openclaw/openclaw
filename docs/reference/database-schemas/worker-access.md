@@ -117,6 +117,29 @@ callers together and deletes the host incognito routes. The existing 24-hour,
 nonrenewing session deadline and restart loss remain unchanged. P1 and P2 have no update
 behavior, schema change, migration, or operator action because it is inactive.
 
+### Incognito reports and closed-turn outbox (P4a, inactive)
+
+Report preparation, custom/assistant report appends, aborted partials, and latest
+custom-report reads can use the actor's retained connection. Custom selection
+returns its transcript version; append rechecks that version and binds the
+existing report domain for preparation and commit. A concurrent message append
+refuses the stale selection without writing. Message appends and closed-turn
+range reads share the actor's FIFO and current-session checks.
+
+The closed-turn outbox binds its existing domain backend to that same connection.
+Publish and recovery retain their existing idempotency and range-validation
+rules. Actor adapters constrain every operation, including drain acknowledgment,
+to its current session and reject foreign transcript anchors and advancement
+keys. Transaction and pre-commit grants use the existing committed-facts owner;
+host grant callbacks cannot query the actor. Worker loss ends affected sessions
+with `INCOGNITO_SESSION_ENDED`, including accepted outbox work.
+
+These adapters remain inactive in production until P7. They do not change durable
+outbox behavior, schema, retention, the SessionManager API, or update behavior.
+Reset, deletion, reclamation, parent-fork callbacks, and native companion
+settlement remain P4b work. The 18 outbox/range inventory sites are prepared for
+cutover; none is retired from main-thread exposure in this stage.
+
 ### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name
@@ -986,6 +1009,17 @@ unknown or unavailable facts leave publication recovery pending until preparatio
 succeeds. Incognito sessions retain facts from their existing in-memory writer
 lifetime. The requester evaluates these facts with the current role and profile
 aliases before and after policy callbacks.
+
+Session owner assignments and suggestion add, claim, release, and finalization use
+the existing collaboration writer. Queued requests recheck their original target,
+current caller, and committed sharing policy at transaction and commit admission.
+Suggestion dispatch carries that authority into chat input acceptance. A rejected
+request releases its exact claim; accepted input retains settlement custody after
+a later profile change, while subsequent effects still require the original host.
+Edit and dismiss resolutions retain caller authority through finalization. These
+guards reuse committed in-memory facts for process-held incognito sessions without
+adding native SQL reads. Stored formats, schemas, retention, and update behavior
+are unchanged.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results
