@@ -190,21 +190,6 @@ export function resolveDiscordNativeCommandChannelAccessContext(params: {
         scope: params.isThreadChannel ? "thread" : "channel",
       })
     : null;
-  return { commandsAllowFromAccess, guildInfo, channelConfig } as const;
-}
-
-export async function resolveDiscordGuildNativeCommandAuthorized(params: {
-  cfg: OpenClawConfig;
-  discordConfig: DiscordConfig;
-  commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
-  guildInfo?: ReturnType<typeof resolveDiscordGuildEntry> | null;
-  channelConfig?: ReturnType<typeof resolveDiscordChannelConfigWithFallback> | null;
-  memberRoleIds: string[];
-  sender: { id: string; name?: string; tag?: string };
-  allowNameMatching: boolean;
-  ownerAllowListConfigured: boolean;
-  ownerAllowed: boolean;
-}) {
   const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: params.cfg.channels?.discord !== undefined,
     groupPolicy: params.discordConfig?.groupPolicy,
@@ -212,9 +197,30 @@ export async function resolveDiscordGuildNativeCommandAuthorized(params: {
   });
   const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
     groupPolicy,
-    guildInfo: params.guildInfo,
-    channelConfig: params.channelConfig,
+    guildInfo,
+    channelConfig,
   });
+  const channelDenial =
+    channelConfig?.enabled === false
+      ? "disabled"
+      : guild && (channelConfig?.allowed === false || !policyAuthorizer.allowed)
+        ? "not-allowed"
+        : undefined;
+  return { commandsAllowFromAccess, guildInfo, channelConfig, policyAuthorizer, channelDenial };
+}
+
+export async function resolveDiscordGuildNativeCommandAuthorized(params: {
+  commandsAllowFromAccess: ReturnType<typeof resolveDiscordNativeCommandAllowlistAccess>;
+  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
+  channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+  policyAuthorizer: ReturnType<typeof resolveDiscordChannelPolicyCommandAuthorizer>;
+  memberRoleIds: string[];
+  sender: { id: string; name?: string; tag?: string };
+  allowNameMatching: boolean;
+  ownerAllowListConfigured: boolean;
+  ownerAllowed: boolean;
+}) {
+  const { policyAuthorizer } = params;
   if (!policyAuthorizer.allowed) {
     return false;
   }
@@ -325,34 +331,16 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
     sender,
     allowNameMatching,
   });
-  const { commandsAllowFromAccess, guildInfo, channelConfig } =
-    resolveDiscordNativeCommandChannelAccessContext({
-      cfg,
-      discordConfig,
-      sender,
-      ...channelContext,
-      guild: interaction.guild ?? null,
-    });
-  if (channelConfig?.enabled === false) {
+  const channelAccess = resolveDiscordNativeCommandChannelAccessContext({
+    cfg,
+    discordConfig,
+    sender,
+    ...channelContext,
+    guild: interaction.guild ?? null,
+  });
+  const { commandsAllowFromAccess, guildInfo, channelConfig } = channelAccess;
+  if (channelAccess.channelDenial) {
     return false;
-  }
-  if (interaction.guild && channelConfig?.allowed === false) {
-    return false;
-  }
-  if (interaction.guild) {
-    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
-      providerConfigPresent: cfg.channels?.discord !== undefined,
-      groupPolicy: discordConfig?.groupPolicy,
-      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
-    });
-    const policyAuthorizer = resolveDiscordChannelPolicyCommandAuthorizer({
-      groupPolicy,
-      guildInfo,
-      channelConfig,
-    });
-    if (!policyAuthorizer.allowed) {
-      return false;
-    }
   }
   const dmEnabled = discordConfig?.dm?.enabled ?? true;
   const dmPolicy = resolveDiscordAccountDmPolicy({ cfg, accountId }) ?? "pairing";
@@ -386,11 +374,7 @@ export async function resolveDiscordNativeAutocompleteAuthorized(params: {
   }
   if (!isDirectMessage) {
     const authorized = await resolveDiscordGuildNativeCommandAuthorized({
-      cfg,
-      discordConfig,
-      commandsAllowFromAccess,
-      guildInfo,
-      channelConfig,
+      ...channelAccess,
       memberRoleIds,
       sender,
       allowNameMatching,

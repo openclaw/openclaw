@@ -363,6 +363,10 @@ async function inspectMemorySearchHealthForAgent(
   const hasRemoteApiKey = hasConfiguredMemorySecretInput(resolved.remote?.apiKey);
 
   const backendConfig = resolveActiveMemoryBackendConfig({ cfg, agentId });
+  // A provider-runtime owner does not use Memory Core's embedding configuration.
+  if (backendConfig?.backend === "provider-runtime") {
+    return;
+  }
   if (!backendConfig) {
     if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;

@@ -267,13 +267,12 @@ export function parsePersistedCacheValue(key: string, value: unknown) {
       : undefined;
   const resolvedMedia = parseTelegramResolvedMedia(value.resolvedMedia);
   return normalizeMessageNodes(value.sourceMessage, {
-    ...(threadId !== undefined ? { threadId } : {}),
-    ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
-    ...(threadBinding ? { threadBinding } : {}),
-    ...(resolvedMedia ? { resolvedMedia } : {}),
-    ...(value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION && value.historyEligible === true
-      ? { historyEligible: true }
-      : {}),
+    threadId,
+    promptContextProjectionMarker,
+    threadBinding,
+    resolvedMedia,
+    historyEligible:
+      value.version === TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION && value.historyEligible === true,
   }).map(({ node, mode }) => ({
     key: `${key.slice(0, separatorIndex + 1)}${node.messageId}`,
     node,
@@ -335,11 +334,11 @@ export function mergeCachedMessageNode(
         ? other.resolvedMedia
         : undefined;
   return normalizeMessageNode(sourceMessage, {
-    ...(threadId !== undefined ? { threadId } : {}),
-    ...(promptContextProjectionMarker ? { promptContextProjectionMarker } : {}),
-    ...(threadBinding ? { threadBinding } : {}),
-    ...(resolvedMedia ? { resolvedMedia } : {}),
-    ...(existing.historyEligible || incoming.historyEligible ? { historyEligible: true } : {}),
+    threadId,
+    promptContextProjectionMarker,
+    threadBinding,
+    resolvedMedia,
+    historyEligible: existing.historyEligible || incoming.historyEligible,
   });
 }
 

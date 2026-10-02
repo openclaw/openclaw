@@ -345,6 +345,33 @@ paths and V8-specific weak/ephemeron semantics; the script is a strong-edge grap
 summary. `--json` produces machine-readable output. Treat diff output as sensitive
 too: it contains unredacted heap names.
 
+Add `--top 40 --max-depth 60` to include named strong retaining paths and
+dominator chains for the largest growers. `--node <id>` selects a particular
+object in the later snapshot. A shortest root path shows reachability;
+the separate dominator chain identifies exclusive retention in that graph.
+
+From a built source checkout, an isolated synthetic workload can collect a
+comparable pair without connecting to an existing Gateway:
+
+```bash
+node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
+```
+
+Run this on a dedicated host with enough memory for snapshots. It starts the
+dist Gateway and local mock model servers on loopback ports 19548–19550,
+seeds 2,000 sessions across two agents, and drives ten reconnecting Control UI
+WebSocket clients plus mock model, Code Mode, and subagent turns. A synthetic
+catalog plugin exercises Gateway projection and publication ownership; it does
+not emulate a native provider's caches or remote-node transport.
+The root must be new. All state, logs, minute samples, and snapshots stay there.
+The rig stops its children on completion or interruption and retains evidence.
+Successful RPC counts and any retried refusals are recorded separately. If
+`projects.list` refuses a read because access facts changed, the rig retries it
+once; a second refusal or another error stops the run.
+Use the same script and settings with another Node binary for a runtime control;
+choose another root and three-port block for each run. Raw minute samples include
+allocation churn; compare the snapshot `heapUsedAfter` anchors for post-GC growth.
+
 ## Sampling heap profile
 
 An operator with `operator.admin` can sample allocations in the Gateway's main

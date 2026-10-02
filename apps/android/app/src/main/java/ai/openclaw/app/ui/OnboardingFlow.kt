@@ -10,6 +10,7 @@ import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
 import ai.openclaw.app.gatewayConnectionStatusForDisplay
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
@@ -29,8 +30,6 @@ import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.design.MascotMood
 import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -494,7 +493,7 @@ fun OnboardingFlow(
     OpenClawSystemBarAppearance(lightAppearance = !onboardingDark)
 
     var cameraPermissionGranted by rememberSaveable {
-      mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
+      mutableStateOf(context.hasPermission(Manifest.permission.CAMERA))
     }
     val setupBarcodeScannerOptions =
       remember {
@@ -1016,7 +1015,7 @@ fun OnboardingFlow(
           checkRequested = nodeApprovalCheckRequested,
           ready = ready,
           onBack = ::goBack,
-          onCopyCommand = { command -> copyOnboardingText(context, "OpenClaw pairing approval command", command, nativeText("Approval command copied")) },
+          onCopyCommand = { command -> context.copyTextWithConfirmation("OpenClaw pairing approval command", command, nativeText("Approval command copied").resolveNativeText()) },
           onCheckApproval = ::checkNodeApproval,
           onApprove = { requestId ->
             nodeApprovalCheckRequested = false
@@ -2044,7 +2043,7 @@ private fun GatewayRecoveryScreen(
     GatewayRecoveryDiagnosticDialog(
       diagnosticText = diagnosticText,
       onDismiss = { diagnosticDialogVisible = false },
-      onCopy = { copyOnboardingText(context, "OpenClaw gateway diagnostic", diagnosticText, nativeText("Details copied")) },
+      onCopy = { context.copyTextWithConfirmation("OpenClaw gateway diagnostic", diagnosticText, nativeText("Details copied").resolveNativeText()) },
     )
   }
 
@@ -2087,7 +2086,7 @@ private fun GatewayRecoveryScreen(
         )
         approvalCommand?.let { command ->
           Spacer(modifier = Modifier.height(18.dp))
-          ApprovalCommandBlock(command = command, onCopy = { copyOnboardingText(context, "OpenClaw pairing approval command", command, nativeText("Approval command copied")) })
+          ApprovalCommandBlock(command = command, onCopy = { context.copyTextWithConfirmation("OpenClaw pairing approval command", command, nativeText("Approval command copied").resolveNativeText()) })
         }
         protocolUpdateCommand?.let { command ->
           Spacer(modifier = Modifier.height(18.dp))
@@ -2097,7 +2096,7 @@ private fun GatewayRecoveryScreen(
             color = ClawTheme.colors.textMuted,
           )
           Spacer(modifier = Modifier.height(8.dp))
-          ApprovalCommandBlock(command = command, onCopy = { copyOnboardingText(context, "OpenClaw gateway command", command, nativeText("Command copied")) })
+          ApprovalCommandBlock(command = command, onCopy = { context.copyTextWithConfirmation("OpenClaw gateway command", command, nativeText("Command copied").resolveNativeText()) })
         }
         if (recoveryProgressItems.isNotEmpty()) {
           Spacer(modifier = Modifier.height(20.dp))
@@ -2165,17 +2164,6 @@ private fun GatewayRecoveryDiagnosticDialog(
       }
     },
   )
-}
-
-private fun copyOnboardingText(
-  context: Context,
-  label: String,
-  text: String,
-  confirmation: NativeText,
-) {
-  val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-  clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
-  Toast.makeText(context, confirmation.resolveNativeText(), Toast.LENGTH_SHORT).show()
 }
 
 @Composable
@@ -3234,13 +3222,13 @@ private fun rememberPermissionState(
 ): PermissionState {
   val currentCameraEnabled by viewModel.cameraEnabled.collectAsState()
   val currentLocationMode by viewModel.locationMode.collectAsState()
-  var microphoneGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.RECORD_AUDIO)) }
-  var cameraPermissionGranted by remember { mutableStateOf(hasPermission(context, Manifest.permission.CAMERA)) }
+  var microphoneGranted by rememberSaveable { mutableStateOf(context.hasPermission(Manifest.permission.RECORD_AUDIO)) }
+  var cameraPermissionGranted by remember { mutableStateOf(context.hasPermission(Manifest.permission.CAMERA)) }
   var cameraGranted by rememberSaveable { mutableStateOf(initialDeviceCapabilityEnabled(currentCameraEnabled, cameraPermissionGranted)) }
 
   fun hasLocationPermission(): Boolean =
-    hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
-      hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+    context.hasPermission(Manifest.permission.ACCESS_FINE_LOCATION) ||
+      context.hasPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
 
   var locationPermissionGranted by remember { mutableStateOf(hasLocationPermission()) }
   var locationGranted by rememberSaveable {
@@ -3249,13 +3237,13 @@ private fun rememberPermissionState(
   val photosPermissions = photoReadPermissionsForRequest()
   var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
   var contactsGranted by rememberSaveable {
-    mutableStateOf(requiredContactPermissions.all { permission -> hasPermission(context, permission) })
+    mutableStateOf(requiredContactPermissions.all { permission -> context.hasPermission(permission) })
   }
   var calendarGranted by rememberSaveable {
-    mutableStateOf(requiredCalendarPermissions.all { permission -> hasPermission(context, permission) })
+    mutableStateOf(requiredCalendarPermissions.all { permission -> context.hasPermission(permission) })
   }
   var notificationsGranted by rememberSaveable {
-    mutableStateOf(Build.VERSION.SDK_INT < 33 || hasPermission(context, Manifest.permission.POST_NOTIFICATIONS))
+    mutableStateOf(Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS))
   }
   var notificationListenerGranted by rememberSaveable { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
   val photosAvailable = SensitiveFeatureConfig.photosEnabled
@@ -3268,15 +3256,15 @@ private fun rememberPermissionState(
   val currentSmsGranted =
     !smsAvailable ||
       (
-        hasPermission(context, Manifest.permission.SEND_SMS) &&
-          hasPermission(context, Manifest.permission.READ_SMS)
+        context.hasPermission(Manifest.permission.SEND_SMS) &&
+          context.hasPermission(Manifest.permission.READ_SMS)
       )
   val callLogAvailable = SensitiveFeatureConfig.callLogEnabled
-  var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)) }
-  var smsReadGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.READ_SMS)) }
-  var smsSendGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.SEND_SMS)) }
+  var motionGranted by rememberSaveable { mutableStateOf(!motionAvailable || context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)) }
+  var smsReadGranted by rememberSaveable { mutableStateOf(context.hasPermission(Manifest.permission.READ_SMS)) }
+  var smsSendGranted by rememberSaveable { mutableStateOf(context.hasPermission(Manifest.permission.SEND_SMS)) }
   val smsGranted = !smsAvailable || (smsReadGranted && smsSendGranted)
-  var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)) }
+  var callLogGranted by rememberSaveable { mutableStateOf(!callLogAvailable || context.hasPermission(Manifest.permission.READ_CALL_LOG)) }
   val lifecycleOwner = LocalLifecycleOwner.current
   val requestScope = rememberCoroutineScope()
   val requester = (context.applicationContext as NodeApp).permissionRequester
@@ -3287,20 +3275,20 @@ private fun rememberPermissionState(
     val observer =
       LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_RESUME) {
-          microphoneGranted = hasPermission(context, Manifest.permission.RECORD_AUDIO)
-          cameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA)
+          microphoneGranted = context.hasPermission(Manifest.permission.RECORD_AUDIO)
+          cameraPermissionGranted = context.hasPermission(Manifest.permission.CAMERA)
           locationPermissionGranted = hasLocationPermission()
           cameraGranted = cameraGranted && cameraPermissionGranted
           locationGranted = locationGranted && locationPermissionGranted
           photosGranted = hasPhotoReadPermission(context)
-          contactsGranted = requiredContactPermissions.all { hasPermission(context, it) }
-          calendarGranted = requiredCalendarPermissions.all { hasPermission(context, it) }
-          notificationsGranted = Build.VERSION.SDK_INT < 33 || hasPermission(context, Manifest.permission.POST_NOTIFICATIONS)
+          contactsGranted = requiredContactPermissions.all { context.hasPermission(it) }
+          calendarGranted = requiredCalendarPermissions.all { context.hasPermission(it) }
+          notificationsGranted = Build.VERSION.SDK_INT < 33 || context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
           notificationListenerGranted = DeviceNotificationListenerService.isAccessEnabled(context)
-          motionGranted = !motionAvailable || hasPermission(context, Manifest.permission.ACTIVITY_RECOGNITION)
-          smsReadGranted = hasPermission(context, Manifest.permission.READ_SMS)
-          smsSendGranted = hasPermission(context, Manifest.permission.SEND_SMS)
-          callLogGranted = !callLogAvailable || hasPermission(context, Manifest.permission.READ_CALL_LOG)
+          motionGranted = !motionAvailable || context.hasPermission(Manifest.permission.ACTIVITY_RECOGNITION)
+          smsReadGranted = context.hasPermission(Manifest.permission.READ_SMS)
+          smsSendGranted = context.hasPermission(Manifest.permission.SEND_SMS)
+          callLogGranted = !callLogAvailable || context.hasPermission(Manifest.permission.READ_CALL_LOG)
         }
       }
     lifecycleOwner.lifecycle.addObserver(observer)
@@ -3311,7 +3299,7 @@ private fun rememberPermissionState(
     permissions: Map<String, Boolean>,
     isBatch: Boolean,
   ) {
-    cameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA)
+    cameraPermissionGranted = context.hasPermission(Manifest.permission.CAMERA)
     locationPermissionGranted = hasLocationPermission()
     microphoneGranted = permissions[Manifest.permission.RECORD_AUDIO] ?: microphoneGranted
     if (!isBatch) {
@@ -3328,13 +3316,13 @@ private fun rememberPermissionState(
       mergedRequiredPermissionGrantState(
         permissions = permissions,
         requiredPermissions = requiredContactPermissions,
-        currentlyGranted = { permission -> hasPermission(context, permission) },
+        currentlyGranted = { permission -> context.hasPermission(permission) },
       )
     calendarGranted =
       mergedRequiredPermissionGrantState(
         permissions = permissions,
         requiredPermissions = requiredCalendarPermissions,
-        currentlyGranted = { permission -> hasPermission(context, permission) },
+        currentlyGranted = { permission -> context.hasPermission(permission) },
       )
     notificationsGranted =
       if (Build.VERSION.SDK_INT >= 33) {
@@ -3343,8 +3331,8 @@ private fun rememberPermissionState(
         true
       }
     motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
-    smsReadGranted = permissions[Manifest.permission.READ_SMS] ?: hasPermission(context, Manifest.permission.READ_SMS)
-    smsSendGranted = permissions[Manifest.permission.SEND_SMS] ?: hasPermission(context, Manifest.permission.SEND_SMS)
+    smsReadGranted = permissions[Manifest.permission.READ_SMS] ?: context.hasPermission(Manifest.permission.READ_SMS)
+    smsSendGranted = permissions[Manifest.permission.SEND_SMS] ?: context.hasPermission(Manifest.permission.SEND_SMS)
     callLogGranted = permissions[Manifest.permission.READ_CALL_LOG] ?: callLogGranted
   }
 
@@ -3379,7 +3367,7 @@ private fun rememberPermissionState(
     val nextCapabilityEnabled =
       deviceCapabilityAfterRowTap(
         currentCapabilityEnabled = cameraGranted,
-        androidPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
+        androidPermissionGranted = context.hasPermission(Manifest.permission.CAMERA),
       )
     if (nextCapabilityEnabled != null) {
       cameraGranted = nextCapabilityEnabled
@@ -3480,7 +3468,7 @@ private fun rememberPermissionState(
       backgroundGranted =
         currentLocationMode == LocationMode.Always &&
           SensitiveFeatureConfig.backgroundLocationEnabled &&
-          hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+          context.hasPermission(Manifest.permission.ACCESS_BACKGROUND_LOCATION),
     )
 
   val batchPermissions =
@@ -3531,11 +3519,6 @@ internal fun nearbyGatewayManualTls(endpoint: GatewayEndpoint): Boolean =
   endpoint.tlsEnabled ||
     !endpoint.tlsFingerprintSha256.isNullOrBlank() ||
     !isLocalCleartextGatewayHost(endpoint.host)
-
-private fun hasPermission(
-  context: Context,
-  permission: String,
-): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
 
 /** Returns true when Android exposes any motion sensor that can back node motion commands. */
 private fun hasMotionCapabilities(context: Context): Boolean {

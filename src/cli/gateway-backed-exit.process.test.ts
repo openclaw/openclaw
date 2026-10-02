@@ -102,7 +102,10 @@ describe("gateway-backed CLI process exit", () => {
         expect(gateway.connectionCount).toBeGreaterThan(0);
         expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
       } else {
-        expect(result.stderr).toContain("Invalid --timeout");
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { message: expect.stringContaining("Invalid --timeout") },
+        });
         expect(gateway.connectionCount).toBe(0);
         expect(gateway.calls).toEqual([]);
       }
@@ -494,10 +497,8 @@ describe("gateway-backed CLI process exit", () => {
       } else {
         expect(result.stdout).toBe("");
       }
-      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
-      expect(result.stderr).toContain(
-        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
-      );
+      expect(result.stderr).toContain("Couldn't connect to OpenClaw.");
+      expect(result.stderr).toContain("openclaw gateway status");
       expect(result.stderr).not.toContain("The CLI command failed");
       expect(result.stderr).not.toContain("Could not start the CLI");
       expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
@@ -879,7 +880,10 @@ describe("gateway-backed CLI process exit", () => {
     if (valid) {
       expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
     } else {
-      expect(result.stderr).toContain("Invalid --timeout");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { message: expect.stringContaining("Invalid --timeout") },
+      });
     }
   });
 });

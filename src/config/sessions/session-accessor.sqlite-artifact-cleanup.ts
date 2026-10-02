@@ -31,6 +31,8 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export async function cleanupSessionLifecycleArtifactsCore(
   params: SessionLifecycleArtifactCleanupParams,
@@ -95,10 +97,6 @@ export async function cleanupSessionLifecycleArtifactsCore(
         }
         const continuation = opened ? captureCanonicalSessionReaderContinuation(opened) : undefined;
         try {
-          const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-            import("./session-transcript-worker-runtime.js"),
-            import("./session-transcript-worker-resources.js"),
-          ]);
           assertSourceCurrent();
           const result = await withSessionHistoryWorkerDatabase(
             databaseOptions,

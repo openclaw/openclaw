@@ -9,6 +9,17 @@ title: "Integrity, troubleshooting, and recovery"
 
 ## Integrity checks
 
+Gateway agent inspections share a five-second foreground wait. Unfinished stores
+remain unavailable while the startup admission owner completes their inspection
+and session/model preparation after the listener is ready. Other agents and the
+Control UI can start in the meantime. Readiness reports pending required stores in
+`agentDatabases` without failing the Gateway probe; confirmed database failures
+still fail readiness. The full validation deadlines, dirty-close checks, and
+clean-close receipt requirements are unchanged; a deferred store is never
+admitted for writes merely because the foreground wait expired.
+Update canaries retain foreground inspection and strict database readiness because
+they do not activate background agent preparation.
+
 For current-schema writable agent admission, the gate runs `quick_check` on
 `transcript_events` and per-table `integrity_check` on every other discovered
 table, including shadow tables and `sqlite_schema`. Asynchronous admission uses
@@ -128,7 +139,11 @@ versions do not change. An update to a different OpenClaw version runs the admis
 gate, and older builds ignore the new table and retain their full checks. Pending
 migrations, index repairs, shared-state readiness, and explicit copied-file
 preflight still perform their existing full checks. Snapshot-based agent
-readiness also conservatively retains its full gate.
+readiness also conservatively retains its full gate. For a clean closed WAL store,
+startup uses a locked read-only source transaction instead of copying the entire
+database. SQLite may create empty WAL/SHM sidecars; the inspection rechecks the
+receipt inside that transaction before skipping the scan. Missing or dirty proof
+and incomplete WAL families retain the private-recovery path.
 
 Startup certifies each database without a canonical-validation receipt once,
 including an empty session source with an empty pending-validation queue.

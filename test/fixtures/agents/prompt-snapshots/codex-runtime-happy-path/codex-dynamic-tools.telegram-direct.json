@@ -1332,7 +1332,9 @@
               "type": "integer"
             },
             "query": {
+              "description": "Required non-empty keywords to match in past user and assistant text.",
               "maxLength": 4096,
+              "minLength": 1,
               "type": "string"
             },
             "sessionKey": {

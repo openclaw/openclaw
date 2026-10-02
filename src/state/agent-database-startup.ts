@@ -75,6 +75,8 @@ const startupAdmission = new AsyncLocalStorage<AgentDatabaseStartupAdmission>();
 
 /** Startup owns readers until the Gateway adopts them; only the Gateway activates agents. */
 class AgentDatabaseStartupAdmission {
+  constructor(private readonly deferInspections = true) {}
+
   private readonly controller = new AbortController();
   private readonly activation = createDeferredCore<Activation | undefined>();
   private readonly work = new Set<Promise<unknown>>();
@@ -142,7 +144,8 @@ class AgentDatabaseStartupAdmission {
   scheduling(env: NodeJS.ProcessEnv) {
     return {
       signal: this.signal,
-      path: (target: PendingInspection["target"]) => target.path,
+      canDefer: (target: PendingInspection["target"]) =>
+        this.deferInspections && target.agentId !== undefined,
       track: (work: Promise<unknown>) => this.track(work),
       defer: (inspections: PendingInspection[], reason: string) =>
         this.defer({ env, inspections, reason }),
@@ -364,8 +367,11 @@ export function getAgentDatabaseStartupAdmission(): AgentDatabaseStartupAdmissio
 
 export async function withAgentDatabaseStartupAdmission<T>(
   run: (admission: AgentDatabaseStartupAdmission) => Promise<T>,
+  options: { deferInspections?: boolean } = {},
 ): Promise<T> {
-  const admission = getAgentDatabaseStartupAdmission() ?? new AgentDatabaseStartupAdmission();
+  const admission =
+    getAgentDatabaseStartupAdmission() ??
+    new AgentDatabaseStartupAdmission(options.deferInspections);
   try {
     return await startupAdmission.run(admission, () => run(admission));
   } finally {

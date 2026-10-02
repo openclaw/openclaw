@@ -629,7 +629,7 @@ final class DashboardManager {
             // This also invalidates a handoff still suspended in show(atPath:).
             self.retireNavigation(for: target)
         }
-        NSApp.activate(ignoringOtherApps: true)
+        AppActivation.shared.activate()
         if let source {
             // Admit once to the native window; replacements transfer its ordered queue before loading.
             let needsRecovery = !source.isWindowOpen || !source.canDeliverNativeCommands
@@ -1437,7 +1437,7 @@ extension DashboardManager {
         if available.count == 1 {
             return .profile(available[0].id)
         }
-        switch WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
+        switch await WebChatManager.promptForGatewayProfile(profiles: available, preferredID: nil) {
         case let .profile(profile): return .profile(profile.id)
         case .local: return .local
         case .manage:

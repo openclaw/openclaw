@@ -278,22 +278,23 @@ enum ApplicationRelocator {
         case let .handOff(destination):
             return relaunchAndTerminate(at: destination)
         case let .offerInstall(destination, replacing):
-            guard confirmInstall(replacing: replacing) else {
-                return .continueLaunch(startUpdater: false)
+            var disposition = LaunchDisposition.continueLaunch(startUpdater: false)
+            confirmInstall(replacing: replacing) { approved in
+                guard approved else { return }
+                do {
+                    try install(
+                        source: environment.bundleURL,
+                        destination: destination,
+                        replacing: replacing,
+                        fileManager: fileManager)
+                    disposition = relaunchAndTerminate(at: destination)
+                } catch {
+                    self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
+                    showFailure(
+                        "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
+                }
             }
-            do {
-                try install(
-                    source: environment.bundleURL,
-                    destination: destination,
-                    replacing: replacing,
-                    fileManager: fileManager)
-                return relaunchAndTerminate(at: destination)
-            } catch {
-                self.logger.error("Could not install app: \(error.localizedDescription, privacy: .public)")
-                showFailure(
-                    "OpenClaw couldn’t be installed in Applications. Move it there manually, then open that copy.")
-                return .continueLaunch(startUpdater: false)
-            }
+            return disposition
         case .cannotInstall:
             let message =
                 "OpenClaw is running from a temporary location. " +
@@ -1007,7 +1008,7 @@ extension ApplicationRelocator {
         }
     }
 
-    private static func confirmInstall(replacing: Bool) -> Bool {
+    private static func confirmInstall(replacing: Bool, completion: @escaping (Bool) -> Void) {
         let alert = NSAlert()
         alert.messageText = replacing
             ? "Replace the older OpenClaw in Applications?"
@@ -1019,8 +1020,10 @@ extension ApplicationRelocator {
         alert.addButton(withTitle: replacing ? "Replace and Relaunch" : "Install and Relaunch")
         let cancel = alert.addButton(withTitle: "Not Now")
         cancel.keyEquivalent = "\u{1b}"
-        NSApp.activate(ignoringOtherApps: true)
-        return alert.runModal() == .alertFirstButtonReturn
+        AppActivation.shared.activate()
+        AppActivation.shared.presentAlert(alert) { response in
+            completion(response == .alertFirstButtonReturn)
+        }
     }
 
     private static func relaunchAndTerminate(at destination: URL) -> LaunchDisposition {
@@ -1029,13 +1032,15 @@ extension ApplicationRelocator {
         let processInfo = ProcessInfo.processInfo
         helper.arguments = [
             "-c",
-            "while /bin/kill -0 \"$2\" 2>/dev/null; do /bin/sleep 0.1; done; " +
-                "exec /usr/bin/open -n \"$1\" --args \"$3\"",
+            "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.1; done; " +
+                "shift; exec /usr/bin/open \"$@\"",
             "openclaw-relocation",
-            destination.path,
             String(processInfo.processIdentifier),
-            self.relocationRelaunchArgument,
+            "-n",
         ]
+        if !AppLaunchRuntimePlan.current.allowsActivation { helper.arguments?.append("-g") }
+        helper.arguments?.append(contentsOf: [destination.path, "--args", self.relocationRelaunchArgument])
+        if !AppLaunchRuntimePlan.current.allowsActivation { helper.arguments?.append("--no-activate") }
         do {
             try helper.run()
             TerminationSignalWatcher.scheduleExitFailsafe()
@@ -1377,7 +1382,7 @@ extension ApplicationRelocator {
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     private static func compareBuild(_ lhs: String, _ rhs: String) -> ComparisonResult {

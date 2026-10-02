@@ -144,6 +144,12 @@ export type PluginRuntime = PluginRuntimeCore & {
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
+    /** Open this plugin's native panel in the requesting Control UI, preserving caller authority. */
+    openPluginPanel: (params: {
+      panelId: string;
+      sessionKey: string;
+      agentId?: string;
+    }) => Promise<{ ok: true }>;
     /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
     readSessionFacts: (params: {
       sessionKeys: readonly string[];

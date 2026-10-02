@@ -5,8 +5,10 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import * as reclamationRun from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -262,13 +264,25 @@ describe("worker placement session maintenance ownership", () => {
           await patchSessionEntryCore(
             sessionScope("agent:main:explicit:maintenance-trigger"),
             () => triggerEntry,
-            { fallbackEntry: triggerEntry, maintenanceConfig },
+            { fallbackEntry: triggerEntry, replaceEntry: true, maintenanceConfig },
           );
+        const agePublished = createDeferredCore();
+        const reclaim = reclamationRun.runSqliteSessionReclamation;
+        const ageObserver = vi
+          .spyOn(reclamationRun, "runSqliteSessionReclamation")
+          .mockImplementation(async (params) => {
+            const result = await reclaim(params);
+            if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+              agePublished.resolve();
+            }
+            return result;
+          });
 
         try {
           const sentinelArchived = observeSessionMaintenanceChanges(storePath, sentinelKey);
           await triggerMaintenance();
           await sentinelArchived;
+          await agePublished.promise;
           await vi.waitFor(() => {
             expect(loadSessionEntry(sessionScope(sentinelKey))).toMatchObject({
               sessionId: sentinelEntry.sessionId,
@@ -284,25 +298,19 @@ describe("worker placement session maintenance ownership", () => {
 
           await sidecar.stop();
           expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
-          // Released age protection is reconsidered at the periodic deadline; caps remain due.
-          const recheckClock =
-            maintenance === "entry capping"
-              ? undefined
-              : vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30 * 60 * 1_000);
-          try {
-            const placementArchived = observeSessionMaintenanceChanges(storePath, sessionKey);
-            await triggerMaintenance();
-            await placementArchived;
-            await vi.waitFor(() => {
-              expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
-                sessionId: placement.sessionId,
-                archivedAt: expect.any(Number),
-              });
+          // A managed backdate invalidates the age fact held by the native worker.
+          triggerEntry.updatedAt -= 1;
+          const placementArchived = observeSessionMaintenanceChanges(storePath, sessionKey);
+          await triggerMaintenance();
+          await placementArchived;
+          await vi.waitFor(() => {
+            expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
+              sessionId: placement.sessionId,
+              archivedAt: expect.any(Number),
             });
-          } finally {
-            recheckClock?.mockRestore();
-          }
+          });
         } finally {
+          ageObserver.mockRestore();
           await sidecar.stop();
         }
       });

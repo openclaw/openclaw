@@ -35,6 +35,12 @@ final class ScreenRecordService {
         includeAudio: Bool?,
         outPath: String?) async throws -> (path: String, hasAudio: Bool)
     {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw ScreenRecordError.writeFailed(
+                "Screen Recording permission required; relaunch without --no-activate and retry")
+        }
         let durationMs = CaptureRateLimits.clampDurationMs(durationMs)
         let fps = CaptureRateLimits.clampFps(fps, maxFps: 60)
         let includeAudio = includeAudio ?? false

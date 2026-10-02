@@ -176,6 +176,13 @@ actor CameraCaptureService {
     }
 
     private func ensureAccess(for mediaType: AVMediaType) async throws {
+        if !AppLaunchRuntimePlan.current.allowsActivation {
+            guard AVCaptureDevice.authorizationStatus(for: mediaType) == .authorized else {
+                PermissionManager.reportDeferredRequest()
+                throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
+            }
+            return
+        }
         if await !(CameraAuthorization.isAuthorized(for: mediaType)) {
             throw CameraError.permissionDenied(kind: mediaType == .video ? "Camera" : "Microphone")
         }

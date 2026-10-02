@@ -931,6 +931,15 @@ sizes. Budget violations do not prevent artifact generation. The separate
 `control-ui-performance` job enforces the budgets without blocking other jobs
 from building or testing the same source.
 
+The report counts retained identity bytes: asset-manifest entries minus `.br`/`.gz`
+sidecars, which the Gateway keeps for already-open tabs after an update. The limit
+is 48 MiB, half the 96 MiB retention budget in
+`src/gateway/control-ui-asset-manifest.ts`, so the current and previous builds
+stay retained. Like the other size limits, it fails locally and warns in GitHub
+Actions; `--base-dist` reports the delta. Exceeding it means shrinking retained
+assets (locale catalogs are the largest share) or deliberately changing the
+retention budget.
+
 Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
 1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest
 CSS file fails the comparison. The existing largest-file, JavaScript, request-count,
