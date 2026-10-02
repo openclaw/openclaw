@@ -215,9 +215,9 @@ it("fills the remaining viewport with card-sized placeholders across resizes", a
         })
         .toBe(true);
     }
-    await new Promise<void>((resolve) =>
-      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
-    );
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
     expect(errors).toEqual([]);
   } finally {
     window.removeEventListener("error", onError);
