@@ -441,15 +441,15 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     const repairedTarget = await withSessionManagerWrite(sessionManager, async () => {
       input.abortSignal?.throwIfAborted();
       if (orphanRepair.messageEntry.parentId) {
-        sessionManager.branch(orphanRepair.messageEntry.parentId);
+        await sessionManager.branchAsync(orphanRepair.messageEntry.parentId);
       } else {
-        sessionManager.resetLeaf();
+        await sessionManager.resetLeafAsync();
       }
       const target = sessionManager.getSessionTarget();
       if (target) {
         // Commit the repaired cursor even when no metadata follows the orphan.
         // Its owning attempt must settle the projection before the next append adopts it.
-        sessionManager.appendLeafControl({
+        await sessionManager.appendLeafControlAsync({
           targetId: sessionManager.getLeafId(),
           appendParentId: sessionManager.getAppendParentId(),
         });

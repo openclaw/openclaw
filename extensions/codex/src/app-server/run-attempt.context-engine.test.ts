@@ -221,7 +221,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       );
       const sessionFile = path.join(tempDir, "session-current-request.jsonl");
       const workspaceDir = path.join(tempDir, "workspace-current-request");
-      const { harness, params, currentUserMessageId } = createCurrentInputContinuityHarness(
+      const { harness, params, currentUserMessageId } = await createCurrentInputContinuityHarness(
         sessionFile,
         workspaceDir,
         scenario,

@@ -715,13 +715,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: 1,
       };
       const { activeSession } = createActiveSession([currentUser]);
-      const branch = vi.fn();
-      const resetLeaf = vi.fn();
+      const branchAsync = vi.fn(async () => undefined);
+      const resetLeafAsync = vi.fn(async () => undefined);
       const clearNextUserMessagePersistenceSuppression = vi.fn();
       const onUserMessagePersistenceInvalidated = vi.fn();
       const sessionManager = createSessionManager({
-        branch,
-        resetLeaf,
+        branchAsync,
+        resetLeafAsync,
         clearNextUserMessagePersistenceSuppression,
         getLeafEntry: () => ({
           id: "current-user",
@@ -757,8 +757,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
       expect(boundary.orphanRepair).toBeUndefined();
       expect(activeSession.agent.state.messages).toEqual([]);
-      expect(branch).not.toHaveBeenCalled();
-      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(branchAsync).not.toHaveBeenCalled();
+      expect(resetLeafAsync).not.toHaveBeenCalled();
       expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
       expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
     },
@@ -788,13 +788,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: 1,
       };
       const { activeSession } = createActiveSession([]);
-      const branch = vi.fn();
-      const resetLeaf = vi.fn();
+      const branchAsync = vi.fn(async () => undefined);
+      const resetLeafAsync = vi.fn(async () => undefined);
       const clearNextUserMessagePersistenceSuppression = vi.fn();
       const onUserMessagePersistenceInvalidated = vi.fn();
       const sessionManager = createSessionManager({
-        branch,
-        resetLeaf,
+        branchAsync,
+        resetLeafAsync,
         clearNextUserMessagePersistenceSuppression,
         getLeafEntry: () => ({
           id: "current-user",
@@ -828,8 +828,8 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       });
       expect(boundary.orphanRepair).toBeUndefined();
       expect(activeSession.agent.state.messages).toEqual([]);
-      expect(branch).not.toHaveBeenCalled();
-      expect(resetLeaf).not.toHaveBeenCalled();
+      expect(branchAsync).not.toHaveBeenCalled();
+      expect(resetLeafAsync).not.toHaveBeenCalled();
       expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
       expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
     },
@@ -847,7 +847,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       };
       const repairedMessages: AgentMessage[] = [currentUser];
       const { activeSession } = createActiveSession([]);
-      const branch = vi.fn();
+      const branchAsync = vi.fn(async () => undefined);
       const clearNextUserMessagePersistenceSuppression = vi.fn();
       const onUserMessagePersistenceInvalidated = vi.fn();
       const sessionManager = createSessionManager({
@@ -863,7 +863,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
             timestamp: 1,
           },
         }),
-        branch,
+        branchAsync,
         clearNextUserMessagePersistenceSuppression,
         buildSessionContext: () => ({ messages: repairedMessages }),
       });
@@ -893,13 +893,13 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
 
       if (excludeFromContext) {
         expect(boundary.orphanRepair).toBeUndefined();
-        expect(branch).not.toHaveBeenCalled();
+        expect(branchAsync).not.toHaveBeenCalled();
         expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
         expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
         expect(activeSession.agent.state.messages).toEqual([]);
       } else {
         expect(boundary.orphanRepair?.removeLeaf).toBe(true);
-        expect(branch).toHaveBeenCalledWith("previous-assistant");
+        expect(branchAsync).toHaveBeenCalledWith("previous-assistant");
         expect(clearNextUserMessagePersistenceSuppression).toHaveBeenCalledOnce();
         expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
         expect(activeSession.agent.state.messages).toEqual(repairedMessages);
@@ -921,7 +921,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       },
     ];
     const { activeSession } = createActiveSession([...contextMessages]);
-    const branch = vi.fn();
+    const branchAsync = vi.fn(async () => undefined);
     const clearNextUserMessagePersistenceSuppression = vi.fn();
     const onUserMessagePersistenceInvalidated = vi.fn();
     const sessionManager = createSessionManager({
@@ -932,7 +932,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         timestamp: "2026-07-13T00:00:00.000Z",
         message: { role: "user", content: "old" },
       }),
-      branch,
+      branchAsync,
       clearNextUserMessagePersistenceSuppression,
       buildSessionContext: () => ({ messages: contextMessages }),
     });
@@ -957,7 +957,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     });
 
     expect(boundary.orphanRepair?.removeLeaf).toBe(false);
-    expect(branch).not.toHaveBeenCalled();
+    expect(branchAsync).not.toHaveBeenCalled();
     expect(clearNextUserMessagePersistenceSuppression).not.toHaveBeenCalled();
     expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
     expect(activeSession.agent.state.messages).toMatchObject([

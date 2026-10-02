@@ -59,7 +59,32 @@ describe("Gateway catalog worker agent database readers", () => {
         await closeDeletedAgentDatabases(fixture.agentIds[0]!, [deleted!]);
 
         expect(leaveWalMode(deleted!)).toBe("delete");
-        expect(() => leaveWalMode(survivor!)).toThrow(/locked/);
+        const survivorProfileId = `fleet:${fixture.agentIds[1]!}`;
+        const survivorProfile = {
+          type: "api_key",
+          provider: "fleet-proof",
+          key: "synthetic-survivor-after-deletion",
+        };
+        const writer = new DatabaseSync(survivor!, { timeout: 0 });
+        try {
+          // A foreign commit must remain readable by the survivor's existing worker.
+          writer.exec("BEGIN IMMEDIATE");
+          expect(
+            writer
+              .prepare("UPDATE auth_profile_store SET store_json = ? WHERE store_key = ?")
+              .run(
+                JSON.stringify({ version: 1, profiles: { [survivorProfileId]: survivorProfile } }),
+                "primary",
+              ).changes,
+          ).toBe(1);
+          writer.exec("COMMIT");
+        } finally {
+          writer.close();
+        }
+        const survivorAuth = await loadPreparedModelRuntimeAuth(fixture.snapshots[1]!, {
+          providerIds: [survivorProfile.provider],
+        });
+        expect(survivorAuth?.authStore.profiles[survivorProfileId]).toEqual(survivorProfile);
         expect(spawned).toHaveLength(1);
         expect(spawned[0]!.threadId).not.toBe(-1);
       } finally {

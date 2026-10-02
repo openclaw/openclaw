@@ -11,7 +11,6 @@ import {
   overlayConfiguredModelCatalog,
 } from "../../agents/model-catalog.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
-import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
@@ -23,18 +22,14 @@ import {
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
-import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import { createWorkerBrowserToolDefinition } from "../../worker/browser-runtime.js";
 import { createWorkerComputerTool } from "../../worker/computer-runtime.js";
 import { parseWorkerLaunchPlan } from "../../worker/launch-descriptor.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
-import {
-  STALE_WORKER_BUILD_REASON,
-  StaleWorkerBuildError,
-  supportsCurrentWorkerLaunch,
-} from "./admission.js";
+import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
+import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   bindWorkerTurnToolSurface,
@@ -60,6 +55,7 @@ import {
   windowInitialMessages,
 } from "./worker-turn-payload.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
+import { persistWorkerTurnUserMessage } from "./worker-turn-user-message.js";
 import {
   type executeRemoteExecTurn,
   reconcileWorkspaceAfterTurn,
@@ -75,36 +71,27 @@ export async function executeWorkerTurn(
 ) {
   const { placement, turn } = params;
   const modelRef = assertSupportedTurn(turn);
-  const environment = params.environments.get(placement.environmentId);
-  const bootstrapReceipt = environment?.bootstrapReceipt;
-  // Provider reconciliation records current-build teardown before placement repair. Consume
-  // that fact before launch so canonical reconciliation can persist the same cause.
-  if (environment?.error === STALE_WORKER_BUILD_REASON) {
-    throw new StaleWorkerBuildError();
-  }
-  if (
-    !environment ||
-    environment.state !== "attached" ||
-    environment.ownerEpoch !== placement.activeOwnerEpoch ||
-    !bootstrapReceipt ||
-    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
-    environment.attachedSessionIds.length !== 1 ||
-    environment.attachedSessionIds[0] !== placement.sessionId
-  ) {
-    throw new Error("Active worker placement does not match its attached environment");
-  }
-  if (!supportsCurrentWorkerLaunch(bootstrapReceipt)) {
-    throw new Error(
-      "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
-    );
-  }
-  await recoverWorkspaceBeforeTurn(params);
-  const github = await prepareWorkerGitHubBinding({
-    sessionId: placement.sessionId,
-    sessionKey: placement.sessionKey,
-    agentId: placement.agentId,
-    assertCurrent: () => params.placements.validateTurnClaim(params.turnClaim),
+  const { environment, bootstrapReceipt } = requireCurrentWorkerTurnEnvironment({
+    environments: params.environments,
+    placement,
   });
+  await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
+  // Shared account refresh and repository lookup own their own lifetime. A
+  // cancelled turn may stop waiting, but cannot consume a late binding.
+  const github = await raceNodeWorkerOperation(
+    prepareWorkerGitHubBinding({
+      sessionId: placement.sessionId,
+      sessionKey: placement.sessionKey,
+      agentId: placement.agentId,
+      assertCurrent: () =>
+        !turn.abortSignal?.aborted && params.placements.validateTurnClaim(params.turnClaim),
+    }),
+    turn.abortSignal,
+  );
+  params.assertRunCurrent?.();
+  turn.abortSignal?.throwIfAborted();
 
   const startedAt = Date.now();
   await turn.onExecutionStarted?.({ lifecycleGeneration: turn.lifecycleGeneration });
@@ -455,39 +442,14 @@ export async function executeWorkerTurn(
       throw new StaleWorkerBuildError();
     }
     if (!userMessageAlreadyPersisted && !recorder) {
-      const canonical = buildPersistedUserTurnMessage({
-        text: turn.transcriptPrompt ?? turn.prompt,
-        media: turn.media,
-        mediaImageLayout: {
-          slots: media.imageFactIndexes.map((factIndex) => ({
-            kind: "inline" as const,
-            ...(factIndex === null ? {} : { factIndex }),
-          })),
-        },
+      baseLeafId = await persistWorkerTurnUserMessage({
+        turn,
+        manager,
+        transcriptTarget,
+        media,
+        assertRunCurrent: params.assertRunCurrent,
+        isAuthorized,
       });
-      const message = {
-        ...canonical,
-        content: [
-          { type: "text" as const, text: turn.transcriptPrompt ?? turn.prompt },
-          ...media.images,
-        ],
-        __openclaw: {
-          ...canonical["__openclaw"],
-          mediaImageBlockFactIndexes: media.imageFactIndexes,
-        },
-      };
-      baseLeafId = await withSessionManagerWrite(manager, () => {
-        params.assertRunCurrent?.();
-        if (!isAuthorized()) {
-          throw new Error("Worker turn authority changed before transcript write");
-        }
-        resolveWorkerTurnTranscriptTarget({
-          ...transcriptTarget,
-          sessionTarget: transcriptTarget,
-        });
-        return manager.appendMessage(message);
-      });
-      turn.onUserMessagePersisted?.(message);
     }
     const initialMessagePlan = windowInitialMessages(media.history);
     if (initialMessagePlan.kind === "provider-replay-unavailable") {
@@ -590,7 +552,11 @@ export async function executeWorkerTurn(
         return;
       }
       dispatchReady = true;
-      params.onHandoff();
+      params.onHandoff(
+        environment.nodeDeviceId && environment.sshEndpoint === null
+          ? { requiresTerminalReceipt: true }
+          : undefined,
+      );
       turn.onExecutionPhase?.({ phase: "process_spawned", backend: "cloud-worker" });
       handoffPending = (async () => {
         try {

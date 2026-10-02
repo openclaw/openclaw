@@ -292,6 +292,12 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readMaintenance: reader(
+      "transcript-maintenance",
+      "transcript maintenance facts",
+      (input) => ({ kind: "transcript-maintenance", ...input }),
+      (value) => value,
+    ),
     readCurrentTurnEntry: reader(
       "current-turn-entry",
       "a current-turn entry",
@@ -333,6 +339,12 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readSuggestions: reader(
+      "session-suggestions",
+      "suggestions",
+      (input) => ({ kind: "session-suggestions", ...input }),
+      (value) => value.suggestions,
+    ),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(

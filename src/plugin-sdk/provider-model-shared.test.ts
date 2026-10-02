@@ -314,7 +314,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           expect(policy).not.toHaveProperty(key);
         }
       }
-      expect(Boolean(hooks.sanitizeReplayHistory)).toBe(testCase.hasSanitizeReplayHistory);
+      expect(Boolean(hooks.sanitizeReplayHistoryAsync)).toBe(testCase.hasSanitizeReplayHistory);
       expect(hooks.resolveReasoningOutputMode?.(testCase.ctx as never)).toBe(
         testCase.reasoningMode,
       );
@@ -326,7 +326,7 @@ describe("buildProviderReplayFamilyHooks", () => {
       family: "google-gemini",
     });
 
-    const sanitized = await hooks.sanitizeReplayHistory?.({
+    const sanitized = await hooks.sanitizeReplayHistoryAsync?.({
       provider: "google",
       modelApi: "google-generative-ai",
       modelId: "gemini-3.1-pro-preview",
@@ -339,7 +339,10 @@ describe("buildProviderReplayFamilyHooks", () => {
       ],
       sessionState: {
         getCustomEntries: () => [],
-        appendCustomEntry: () => {},
+        appendCustomEntry: () => {
+          throw new Error("legacy persistence used");
+        },
+        appendCustomEntryAsync: async () => "bootstrap",
       },
     } as never);
 

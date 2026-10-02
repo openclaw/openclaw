@@ -4,6 +4,7 @@ import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import type { PluginCompatRecord } from "./types.js";
 
 const ACTIVATION_HINT_METADATA = {
@@ -16,6 +17,7 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  ...SESSION_PERSISTENCE_COMPAT_RECORDS,
   {
     code: "memory-session-sync-inventory",
     status: "deprecated",

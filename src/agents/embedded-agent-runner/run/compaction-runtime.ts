@@ -420,17 +420,18 @@ export function createEmbeddedRunCompactionRuntime(input: {
       },
     };
   };
-  const prepareRecoverySession = (contextTokenBudget: number) => {
+  const prepareRecoverySession = async (contextTokenBudget: number) => {
     const owner = prepareRecoveryOwner();
     const sessionManager =
       memoryManager ??
       (detached
         ? undefined
-        : SessionManager.open(
+        : await SessionManager.openAsync(
             owner.session.target,
             params.workspaceDir,
             resolveEmbeddedSessionContextLimits(contextTokenBudget),
           ));
+    owner.assertActive();
     return {
       sessionManager,
       assertActive: owner.assertActive,
@@ -439,7 +440,8 @@ export function createEmbeddedRunCompactionRuntime(input: {
           if (!sessionManager) {
             throw new Error("detached recovery has no caller-owned transcript to rewrite");
           }
-          sessionManager.reloadPersistedTranscript();
+          await sessionManager.reloadPersistedTranscriptAsync();
+          owner.assertActive();
           return await operation();
         }),
     };
