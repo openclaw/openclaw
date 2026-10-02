@@ -144,9 +144,9 @@ describe("plugin module generations", () => {
       const first = load(root, entry).value as StartupPlugin;
       expect(first).toMatchObject(expected);
       expect(first.resolveThenRequire()).toBe(value);
-      expect(first.requireProperties()).toEqual(
-        process.versions.bun ? [true, true, true, false, true] : [true, true, true, true, true],
-      );
+      // Bun's lookup-path support follows its Jiti require, including native API improvements.
+      const lookupPaths = process.versions.bun ? legacy.requireProperties()[3] : true;
+      expect(first.requireProperties()).toEqual([true, true, true, lookupPaths, true]);
       expect(first.resolve()).toMatch(importOnly ? /import\.mjs$/ : /require\.cjs$/);
       if (importOnly) {
         expect(legacy.alias()).toBe(value);
