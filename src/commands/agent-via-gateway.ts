@@ -34,11 +34,6 @@ import {
   readGatewayDispatchConfig,
   readGatewayDispatchConfigWithShellEnvFallback,
 } from "../config/gateway-dispatch-config.js";
-import {
-  inheritLegacyDefaultAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "../config/legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -158,24 +153,15 @@ function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): bo
 }
 
 function resolveImplicitCliAgentId(cfg: OpenClawConfig, remote?: RemoteGatewayRoster): string {
-  const migratedConfig = remote
-    ? cfg
-    : (migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig);
-  const selectionCfg = remote
-    ? cfg
-    : inheritLegacyDefaultAgentId(
-        tryGetLegacyDefaultAgentId(cfg) ? cfg : migratedConfig,
-        migratedConfig,
-      );
   const selected = remote
     ? remote.selectionRequired
       ? undefined
       : remote.defaultId
-    : tryResolveAgentOperationAgentId(selectionCfg);
+    : tryResolveAgentOperationAgentId(cfg);
   if (selected) {
     return selected;
   }
-  const agentIds = remote?.agentIds ?? listAgentIds(selectionCfg);
+  const agentIds = remote?.agentIds ?? listAgentIds(cfg);
   throw new AgentSelectionRequiredError(agentIds, {
     surface: "agent turn",
     hint: `Pass --agent <id> to select one of: ${agentIds.join(", ")}.`,

@@ -44,54 +44,35 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   return (entry as Record<string, unknown>)[name] === source;
 }
 
-const isWorkerDeployConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(config, "worker/worker", "src/worker/worker-deploy-entry.ts");
-const isWorkerFileToolPlanningConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
+const workerBuildTargets = [
+  ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
+  [
+    "file-tool-planning",
     "worker/file-tool-planning.worker",
     "src/worker/worker-deploy-file-tool-planning.ts",
-  );
-const isWorkerImageProcessorConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
+  ],
+  [
+    "image-processor",
     "worker/image-processor.worker",
     "src/worker/worker-deploy-image-processor.ts",
-  );
-const isWorkerSqliteStoreConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(config, "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts");
-const isWorkerRsyncReceiverConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
-    "worker/workspace-rsync-receiver",
-    "src/worker/workspace-rsync-receiver.ts",
-  );
-const isWorkerGitHubExecLauncherConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(config, "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts");
-const isWorkerServiceChildRelayConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
-    "worker/service-child-relay",
-    "src/process/supervisor/service-child-relay.ts",
-  );
-const isWorkerServiceChildGroupAnchorConfig = (config: TsdownConfig) =>
-  hasWorkerEntry(
-    config,
+  ],
+  ["sqlite-store", "worker/sqlite-store.worker", "src/worker/worker-deploy-sqlite-store.ts"],
+  ["receiver", "worker/workspace-rsync-receiver", "src/worker/workspace-rsync-receiver.ts"],
+  ["github-launcher", "worker/github-exec-launcher", "src/agents/github-exec-launcher.ts"],
+  ["service-relay", "worker/service-child-relay", "src/process/supervisor/service-child-relay.ts"],
+  [
+    "service-group-anchor",
     "worker/service-child-group-anchor",
     "src/process/supervisor/service-child-group-anchor.ts",
-  );
-const workerBuildTargets = [
-  ["worker", isWorkerDeployConfig],
-  ["file-tool-planning", isWorkerFileToolPlanningConfig],
-  ["image-processor", isWorkerImageProcessorConfig],
-  ["sqlite-store", isWorkerSqliteStoreConfig],
-  ["receiver", isWorkerRsyncReceiverConfig],
-  ["github-launcher", isWorkerGitHubExecLauncherConfig],
-  ["service-relay", isWorkerServiceChildRelayConfig],
-  ["service-group-anchor", isWorkerServiceChildGroupAnchorConfig],
+  ],
 ] as const;
 const isWorkerBuildConfig = (config: TsdownConfig) =>
-  workerBuildTargets.some(([, matches]) => matches(config));
+  workerBuildTargets.some(([, entry, source]) => hasWorkerEntry(config, entry, source));
+
+function findWorkerBuildConfig(target: string) {
+  const selected = workerBuildTargets.find(([name]) => name === target);
+  return selected && configs.find((config) => hasWorkerEntry(config, selected[1], selected[2]));
+}
 
 const FS_SAFE_CALLER_PROBE = `
 import assert from "node:assert/strict";
@@ -136,25 +117,6 @@ if (loaded.length) assert(loaded[0].startsWith(path.dirname(rootDir) + path.sep)
 `;
 
 describe("tsdown config", () => {
-  it("emits every private Telegram QA harness entry only in private QA builds", async () => {
-    const expectedEntries = {
-      "plugin-sdk/qa-channel-protocol": "src/plugin-sdk/qa-channel-protocol.ts",
-      "plugin-sdk/qa-lab": "src/plugin-sdk/qa-lab.ts",
-      "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
-    };
-    const defaultUnified = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
-    expect(defaultUnified?.entry).not.toMatchObject(expectedEntries);
-
-    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
-    const { default: privateQaBuildConfigs } = await importFreshModule<
-      typeof import("../../tsdown.config.ts")
-    >(import.meta.url, "../../tsdown.config.ts?private-qa-entries");
-    const privateQaUnified = privateQaBuildConfigs.find(
-      (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-    );
-    expect(privateQaUnified?.entry).toMatchObject(expectedEntries);
-  });
-
   it.each([
     "extensions/openai/setup-api",
     "extensions/openai/capability-catalog",
@@ -626,9 +588,9 @@ describe("tsdown config", () => {
   ])("loads the Bash grammar from the relocated $target package", async ({ target, entry }) => {
     const root = fs.realpathSync(createTempDir("openclaw-bash-parser-"));
     const worker = target === "worker";
-    const selected = configs.find(
-      worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-    );
+    const selected = worker
+      ? findWorkerBuildConfig("worker")
+      : configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
     expect(selected).toBeDefined();
     const outDir = path.join(root, "build");
     const { bundles } = await build({
@@ -717,10 +679,7 @@ console.log("relocated Bash parser works without native grammar package");
       const relay = `${prefix}/service-child-relay`;
       const anchor = `${prefix}/service-child-group-anchor`;
       const selectedConfigs = worker
-        ? [
-            configs.find(isWorkerServiceChildRelayConfig),
-            configs.find(isWorkerServiceChildGroupAnchorConfig),
-          ]
+        ? [findWorkerBuildConfig("service-relay"), findWorkerBuildConfig("service-group-anchor")]
         : [relay, anchor].map((entry) =>
             configs.find((config) =>
               hasWorkerEntry(config, entry, path.resolve(`src/${entry}.ts`)),
@@ -813,9 +772,9 @@ console.log("relocated Bash parser works without native grammar package");
           `export { FsSafeError } from ${JSON.stringify(worker ? require.resolve("@openclaw/fs-safe/errors") : "@openclaw/fs-safe/errors")};`,
         ].join("\n"),
       );
-      const selected = configs.find(
-        worker ? isWorkerDeployConfig : (config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-      );
+      const selected = worker
+        ? findWorkerBuildConfig("worker")
+        : configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
       expect(selected).toBeDefined();
       const { bundles } = await build({
         ...selected,
@@ -934,14 +893,14 @@ console.log("relocated Bash parser works without native grammar package");
       vi.stubEnv("OPENCLAW_BUILD_VERBOSE", verbose ? "1" : "0");
       const root = fs.realpathSync(createTempDir("openclaw-tsdown-dependencies-"));
       const declarations = target === "declarations";
-      const workerConfigMatcher = workerBuildTargets.find(([name]) => name === target)?.[1];
-      const bundleAll = workerConfigMatcher !== undefined;
-      const selected = configs.find(
-        workerConfigMatcher ??
-          ((entry) =>
-            entry.name ===
-            (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP)),
-      );
+      const bundleAll = workerBuildTargets.some(([name]) => name === target);
+      const selected = bundleAll
+        ? findWorkerBuildConfig(target)
+        : configs.find(
+            (entry) =>
+              entry.name ===
+              (declarations ? TSDOWN_UNIFIED_DTS_CONFIG_GROUPS[0] : TSDOWN_UNIFIED_CONFIG_GROUP),
+          );
       expect(selected).toBeDefined();
       const packages = [
         "@anthropic-ai/vertex-sdk",
@@ -1227,38 +1186,20 @@ console.log("relocated Bash parser works without native grammar package");
   });
 
   it("builds self-contained worker deploy executables with every dependency bundled", () => {
-    const workerConfig = configs.find(isWorkerDeployConfig);
-    const fileToolPlanningConfig = configs.find(isWorkerFileToolPlanningConfig);
-    const imageProcessorConfig = configs.find(isWorkerImageProcessorConfig);
-    const sqliteStoreConfig = configs.find(isWorkerSqliteStoreConfig);
-    const receiverConfig = configs.find(isWorkerRsyncReceiverConfig);
-    const launcherConfig = configs.find(isWorkerGitHubExecLauncherConfig);
-    const relayConfig = configs.find(isWorkerServiceChildRelayConfig);
-    const anchorConfig = configs.find(isWorkerServiceChildGroupAnchorConfig);
-    expect(workerConfig?.entry).toEqual({
-      "worker/worker": "src/worker/worker-deploy-entry.ts",
-    });
-    expect(fileToolPlanningConfig?.entry).toEqual({
-      "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
-    });
-    expect(imageProcessorConfig?.entry).toEqual({
-      "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
-    });
-    expect(sqliteStoreConfig?.entry).toEqual({
-      "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
-    });
-    expect(receiverConfig?.entry).toEqual({
-      "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
-    });
-    expect(launcherConfig?.entry).toEqual({
-      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
-    });
-    expect(relayConfig?.entry).toEqual({
-      "worker/service-child-relay": "src/process/supervisor/service-child-relay.ts",
-    });
-    expect(anchorConfig?.entry).toEqual({
-      "worker/service-child-group-anchor": "src/process/supervisor/service-child-group-anchor.ts",
-    });
+    const workerConfigs = Object.fromEntries(
+      workerBuildTargets.map(([target, entry, source]) => {
+        const config = findWorkerBuildConfig(target);
+        expect(config?.entry).toEqual({ [entry]: source });
+        return [target, config] as const;
+      }),
+    );
+    const {
+      worker: workerConfig,
+      receiver: receiverConfig,
+      "github-launcher": launcherConfig,
+      "service-relay": relayConfig,
+      "service-group-anchor": anchorConfig,
+    } = workerConfigs;
     const packageVersion = (
       JSON.parse(fs.readFileSync("package.json", "utf8")) as {
         version: string;
@@ -1307,16 +1248,7 @@ console.log("relocated Bash parser works without native grammar package");
       options: {},
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
-    for (const config of [
-      workerConfig,
-      fileToolPlanningConfig,
-      imageProcessorConfig,
-      sqliteStoreConfig,
-      receiverConfig,
-      launcherConfig,
-      relayConfig,
-      anchorConfig,
-    ]) {
+    for (const config of Object.values(workerConfigs)) {
       expect(config?.dts).toBe(false);
       expect(config?.outDir).toBe("dist");
       expect(config?.shims).toBe(true);

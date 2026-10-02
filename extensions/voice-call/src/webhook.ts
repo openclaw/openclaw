@@ -102,18 +102,12 @@ function buildRequestUrl(requestUrl: string | undefined): URL {
 
 function resolveForwardedClientIp(
   request: http.IncomingMessage,
-  trustedProxyIPs: readonly string[],
+  normalizedTrustedProxyIps: ReadonlySet<string>,
 ): string | undefined {
-  const normalizedTrustedProxyIps = new Set(
-    trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
-  );
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
     const forwardedIps = normalizeStringEntries(forwardedFor.split(","));
     if (forwardedIps.length > 0) {
-      if (normalizedTrustedProxyIps.size === 0) {
-        return forwardedIps[0];
-      }
       for (let index = forwardedIps.length - 1; index >= 0; index -= 1) {
         const hop = forwardedIps[index];
         if (!normalizedTrustedProxyIps.has(normalizeProxyIp(hop) ?? "")) {
@@ -293,7 +287,7 @@ export class VoiceCallWebhookServer {
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 
     if (shouldTrustForwardingHeaders) {
-      const forwardedIp = resolveForwardedClientIp(request, trustedProxyIPs);
+      const forwardedIp = resolveForwardedClientIp(request, normalizedTrustedProxyIps);
       if (forwardedIp) {
         return forwardedIp;
       }

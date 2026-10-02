@@ -98,7 +98,8 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
-  const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  const primaryConversation = await resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  params.abortSignal?.throwIfAborted();
   return await compactEmbeddedAgentSession(
     {
       abortSignal: params.abortSignal,

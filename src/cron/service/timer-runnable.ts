@@ -1,4 +1,3 @@
-import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronJob, CronRunStatus } from "../types.js";
@@ -69,7 +68,6 @@ export function isRunnableJob(params: {
   skipAtIfAlreadyRan?: boolean;
   allowCronMissedRunByLastRun?: boolean;
   activeInProcess?: boolean;
-  legacyDefaultAgentId?: string;
 }): boolean {
   const { job, nowMs } = params;
   if (!job.state) {
@@ -77,8 +75,6 @@ export function isRunnableJob(params: {
   }
   if (
     !isJobEnabled(job) ||
-    (params.legacyDefaultAgentId !== undefined &&
-      !tryResolveCronJobEffectiveAgentId(job, undefined, params.legacyDefaultAgentId)) ||
     !hasCanonicalCronDeliveryMode(job.delivery) ||
     !isTimeScheduledJob(job)
   ) {
@@ -199,7 +195,6 @@ export function collectRunnableJobs(state: CronServiceState, nowMs: number): Cro
       isRunnableJob({
         job,
         nowMs,
-        legacyDefaultAgentId: state.deps.legacyDefaultAgentId,
       }),
     ) ?? []
   );

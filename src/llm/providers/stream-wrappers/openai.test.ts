@@ -74,26 +74,29 @@ afterEach(() => {
 });
 
 describe("createOpenAIFastModeWrapper", () => {
-  it("falls back from Ultrafast to priority on the direct API boundary", () => {
+  it("preserves Ultrafast on the direct API boundary", () => {
     const { baseStreamFn, payloads } = createPayloadCapture();
     const enabled = resolveOpenAIFastMode({ fastMode: "ultrafast" });
-    expect(enabled).toBe(true);
+    expect(enabled).toBe("ultrafast");
     const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
     void wrapped(openaiModel, { messages: [] }, {});
-    expect(payloads[0]?.service_tier).toBe("priority");
+    expect(payloads[0]?.service_tier).toBe("ultrafast");
   });
 
   it("resolves dynamic fast mode for each stream call", () => {
     const { baseStreamFn, payloads } = createPayloadCapture();
-    let enabled = true;
+    let enabled: boolean | "ultrafast" = true;
     const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
 
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = "ultrafast";
     void wrapped(openaiModel, { messages: [] }, {});
     enabled = false;
     void wrapped(openaiModel, { messages: [] }, {});
 
     expect(payloads[0]?.service_tier).toBe("priority");
-    expect(payloads[1]).not.toHaveProperty("service_tier");
+    expect(payloads[1]?.service_tier).toBe("ultrafast");
+    expect(payloads[2]).not.toHaveProperty("service_tier");
   });
 });
 

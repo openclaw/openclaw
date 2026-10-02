@@ -5,20 +5,11 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import {
-  createNpmTarget,
-  createRootRunner,
+  createNpmUpdateOptions,
+  stagedNpmPrefix,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
-
-function stagedPrefixFromArgs(argv: string[]): string {
-  const prefixIndex = argv.indexOf("--prefix");
-  const prefix = argv[prefixIndex + 1];
-  if (prefixIndex < 0 || !prefix) {
-    throw new Error("expected a production-created staged npm prefix");
-  }
-  return prefix;
-}
 
 // Package-owner boundary interleaving with injected package-manager steps;
 // this does not reproduce overlapping public CLI invocations or a triage incident.
@@ -45,12 +36,8 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
         await fs.writeFile(path.join(staleStage, "evidence"), "earlier candidate bytes\n");
         const originalBytes = await Promise.all(readPackageBytes(packageRoot));
         const params = {
-          installTarget: createNpmTarget(globalRoot),
-          installSpec: "openclaw@2.0.0",
-          packageName: "openclaw",
+          ...createNpmUpdateOptions(globalRoot),
           packageRoot,
-          runCommand: createRootRunner(globalRoot),
-          timeoutMs: 1000,
         };
         const aPrefixes: string[] = [];
         let candidateBytes: string[] = [];
@@ -59,7 +46,7 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
         const result = await runGlobalPackageUpdateSteps({
           ...params,
           runStep: async ({ name, argv, cwd }) => {
-            const stagePrefix = stagedPrefixFromArgs(argv);
+            const stagePrefix = stagedNpmPrefix(argv);
             expect((await fs.stat(stagePrefix)).isDirectory()).toBe(true);
             aPrefixes.push(stagePrefix);
             const stageLayout = resolveNpmGlobalPrefixLayoutFromPrefix(stagePrefix);
@@ -92,7 +79,7 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
             const stoppedB = await runGlobalPackageUpdateSteps({
               ...params,
               runStep: async ({ argv: bArgv }) => {
-                bPrefix = stagedPrefixFromArgs(bArgv);
+                bPrefix = stagedNpmPrefix(bArgv);
                 expect(bPrefix).not.toBe(stagePrefix);
                 expect((await fs.stat(bPrefix)).isDirectory()).toBe(true);
                 throw new Error("injected B stop before live mutation");

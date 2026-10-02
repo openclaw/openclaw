@@ -97,6 +97,7 @@ export function buildCodexAppServerInitializeParams(): CodexInitializeParams {
       extensions: {
         "openai/standard-form-input": {},
         "openai/form": {},
+        "openai/elicitation": { form: {} },
         "io.modelcontextprotocol/ui": {
           mimeTypes: ["text/html;profile=mcp-app"],
         },

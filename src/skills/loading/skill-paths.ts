@@ -9,9 +9,9 @@ import {
   resolveActivePluginInstallRoots,
 } from "../../plugins/install-root-context.js";
 import { CONFIG_DIR, resolveConfigDir } from "../../utils.js";
+import { copySkillFileHost } from "../skill-file-host.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import type { Skill } from "./skill-contract.js";
-import { copySkillFileHost } from "./skill-file-host.js";
 import { tryRealpath } from "./symlink-targets.js";
 
 export function resolvePluginSkillsDir(): string {

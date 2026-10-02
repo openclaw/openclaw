@@ -223,17 +223,21 @@ it.each([
     }),
   );
   const startupModule = pathToFileURL(path.resolve("src/config/sessions/startup-migration.ts"));
+  const legacyStoreModule = pathToFileURL(
+    path.resolve("src/config/sessions/legacy-store-inspection.ts"),
+  );
   writeFileSync(
     probePath,
     `import assert from "node:assert/strict";
 import fs from "node:fs";
 import path, { delimiter, join, resolve } from "node:path";
 import { assertSessionStoreMigrationComplete } from ${JSON.stringify(startupModule.href)};
+import { readLegacySessionStoreEntries } from ${JSON.stringify(legacyStoreModule.href)};
 const state = process.env.OPENCLAW_STATE_DIR;
 const volume = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO === "sqlite-volume";
 const stores = volume
   ? ["agents/main/sessions/sessions.json", "agents/ops/sessions/sessions.json"]
-  : ["sessions/sessions.json"];
+  : ["agents/main/sessions/sessions.json"];
 const checkStartup = () => assertSessionStoreMigrationComplete({
   cfg: {}, env: process.env, targets: stores.map(file => ({ storePath: path.join(state, file) })),
 });
@@ -251,9 +255,18 @@ if (process.argv[2] === "startup") {
     assert.equal(fs.existsSync(process.env.PROBE_LIVE), false, "baseline must be offline before specimens and initial update");
   }
   assert.throws(checkStartup, /Legacy session store requires migration/);
-  const rows = stores.flatMap(file => Object.values(JSON.parse(fs.readFileSync(path.join(state, file), "utf8"))));
+  const rows = stores.flatMap(file => {
+    const issues = [];
+    const { entries } = readLegacySessionStoreEntries({ storePath: path.join(state, file) }, issues);
+    assert.deepEqual(issues, []);
+    return entries.map(({ entry }) => entry);
+  });
   assert.equal(rows.length, volume ? 15 : 3);
   assert.equal(new Set(rows.map(row => row.sessionId)).size, rows.length);
+  for (const row of rows) {
+    assert.equal(row.modelProvider, "openai");
+    assert.equal(row.model, "gpt-5.5");
+  }
   for (const id of ["upgrade-main-session", "upgrade-direct-session", "upgrade-group-session"]) {
     const row = rows.find(row => row.sessionId === id);
     assert.ok(row, "missing original session " + id);

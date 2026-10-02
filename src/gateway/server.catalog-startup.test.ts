@@ -104,7 +104,7 @@ describe("Gateway provider settings startup", () => {
         try {
           const port = await getFreePort();
           await state.writeConfig({
-            agents: { entries: { main: { default: true } } },
+            agents: { entries: { main: {} } },
             models: { providers: { openai: { apiKey: "synthetic-provider-key" }, codex: {} } },
             channels: { telegram: { botToken: "123456:synthetic-test-token" } },
             gateway: { auth: { mode: "token", token } },

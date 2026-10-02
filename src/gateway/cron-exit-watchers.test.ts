@@ -94,6 +94,7 @@ function makeFakeSupervisor(opts: { deferSpawn?: boolean } = {}) {
 function onExitJob(id: string, command = "true", enabled = true): CronJob {
   return {
     id,
+    agentId: "main",
     name: id,
     enabled,
     createdAtMs: 1,
@@ -171,7 +172,6 @@ describe("createCronExitWatchers", () => {
     async (repair) => {
       const { supervisor, runs } = makeFakeSupervisor();
       const watchers = createWatcherFixture({
-        legacyDefaultAgentId: repair === "owner" ? "ops" : undefined,
         getProcessSupervisor: () => supervisor as never,
         reserveExit: vi.fn(async () => {}),
         fireOnExit: vi.fn(async () => {}),
@@ -180,6 +180,8 @@ describe("createCronExitWatchers", () => {
       const invalid = onExitJob("invalid-delivery");
       if (repair === "delivery") {
         Reflect.deleteProperty(invalid.delivery!, "mode");
+      } else {
+        delete invalid.agentId;
       }
       try {
         watchers.reconcile([invalid, { ...onExitJob("healthy-exit"), agentId: "ops" }]);
@@ -196,7 +198,38 @@ describe("createCronExitWatchers", () => {
     },
   );
 
-  it("arms a watcher and fires on exit after the creating request closes", async () => {
+  it("uses the current default when arming an ownerless exit job", async () => {
+    const { supervisor, runs } = makeFakeSupervisor();
+    const armed = createDeferred();
+    let defaultAgentId: string | undefined = "main";
+    const watchers = createWatcherFixture({
+      getDefaultAgentId: () => defaultAgentId,
+      getProcessSupervisor: () => supervisor as never,
+      reserveExit: vi.fn(async () => {}),
+      fireOnExit: vi.fn(async () => {}),
+      logger: { ...noopLogger, info: () => armed.resolve() },
+    });
+    const job = onExitJob("implicit-main");
+    delete job.agentId;
+    try {
+      defaultAgentId = undefined;
+      watchers.reconcile([job]);
+      expect(supervisor.spawn).not.toHaveBeenCalled();
+      defaultAgentId = "main";
+      watchers.reconcile([job]);
+      expect(supervisor.spawn).toHaveBeenCalledOnce();
+      await armed.promise;
+      expect(watchers.activeJobIds()).toEqual([job.id]);
+    } finally {
+      const settled = watchers.cancelAll();
+      for (const run of runs) {
+        run.deferred.resolve({ exitCode: 0, reason: "manual-cancel" });
+      }
+      await settled;
+    }
+  });
+
+  it("fires a historical owner's job after the creating request closes", async () => {
     const { supervisor, runs } = makeFakeSupervisor();
     const creatorContext = new AsyncLocalStorage<string>();
     const creatorWork = new AsyncWorkScope();
@@ -223,13 +256,14 @@ describe("createCronExitWatchers", () => {
       });
     });
     const w = createWatcherFixture({
+      getDefaultAgentId: () => "research",
       getProcessSupervisor: () => supervisor as never,
       reserveExit,
       fireOnExit,
       logger: noopLogger,
     });
 
-    inCreator(() => w.reconcile([onExitJob("job-a")]));
+    inCreator(() => w.reconcile([{ ...onExitJob("job-a"), agentId: "ops" }]));
     await creatorWork.drain();
     await flush();
     expect(supervisor.spawn).toHaveBeenCalledTimes(1);
@@ -244,6 +278,7 @@ describe("createCronExitWatchers", () => {
     await flush();
     expect(fireOnExit).toHaveBeenCalledTimes(1);
     expect(fireOnExit.mock.calls[0]?.[0].id).toBe("job-a");
+    expect(fireOnExit.mock.calls[0]?.[0].agentId).toBe("ops");
     expect(fireOnExit.mock.calls[0]?.[1]).toMatchObject({
       exitCode: 0,
       reason: "exit",

@@ -1,4 +1,3 @@
-import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   resolveCronJobEffectiveAgentId,
   tryResolveCronJobEffectiveAgentId,
@@ -126,7 +125,6 @@ export function resolveCronMutationCommitGuard(
           job,
           callerScope,
           defaultAgentId: context.cron.getDefaultAgentId(),
-          legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
           allowCurrentJob: jobScope.allowCurrentJob,
         })
       ) {
@@ -310,7 +308,6 @@ export function cronJobMatchesCallerScope(params: {
   job: CronJob;
   callerScope: CronCallerScope | undefined;
   defaultAgentId?: string;
-  legacyDefaultAgentId?: string;
   allowCurrentJob?: boolean;
 }): boolean {
   if (!params.callerScope) {
@@ -326,11 +323,7 @@ export function cronJobMatchesCallerScope(params: {
   if (isOperatorCommandCronJob(params.job)) {
     return false;
   }
-  const effectiveAgentId = tryResolveCronJobEffectiveAgentId(
-    params.job,
-    params.defaultAgentId,
-    params.legacyDefaultAgentId,
-  );
+  const effectiveAgentId = tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   const policy = params.job.scheduledToolPolicy;
   // A signed scheduled-run claim restores only the cron tool's historical
   // current-job surface. Callers must opt in per read/self-remove operation.
@@ -376,7 +369,6 @@ export function cronJobMatchesDeclarationScope(params: {
   input: CronJobCreate;
   callerScope: CronCallerScope | undefined;
   defaultAgentId?: string;
-  legacyDefaultAgentId?: string;
 }): boolean {
   if (params.callerScope) {
     return cronJobMatchesCallerScope(params);
@@ -399,11 +391,7 @@ export function cronJobMatchesDeclarationScope(params: {
     inputOwnerAgentId ?? resolveCronJobEffectiveAgentId(params.input, params.defaultAgentId);
   const jobAgentId =
     resolveCronJobOwnerAgentId(params.job) ??
-    tryResolveCronJobEffectiveAgentId(
-      params.job,
-      params.defaultAgentId,
-      params.legacyDefaultAgentId,
-    );
+    tryResolveCronJobEffectiveAgentId(params.job, params.defaultAgentId);
   return jobAgentId === inputAgentId;
 }
 

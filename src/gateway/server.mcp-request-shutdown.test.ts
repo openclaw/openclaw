@@ -16,6 +16,7 @@ import type { SessionMcpRuntime } from "../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../agents/mcp-ui-resource.js";
 import { writeConfigFile } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import type { OpenClawConfig } from "../config/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
@@ -104,25 +105,35 @@ describe("MCP App request shutdown", () => {
   input.on("close", () => process.exit(0));
   `,
         );
-        const sessionId = `mcp-shutdown-${randomUUID()}`;
-        const sessionKey = `agent:main:${sessionId}`;
+        const cfg: OpenClawConfig = {
+          mcp: {
+            apps: { enabled: true },
+            servers: {
+              shutdown: {
+                command: process.execPath,
+                args: [serverPath],
+                codex: { defaultToolsApprovalMode: "approve" },
+                // Existing supported operator setting; shutdown must cancel before this deadline.
+                requestTimeoutMs: 600_000,
+              },
+            },
+          },
+        };
+        await writeConfigFile(cfg);
+        ws = await gateway.openWs();
+        await connectOk(ws, { scopes: ["operator.admin"] });
+        const sessionKey = `agent:main:mcp-shutdown-${randomUUID()}`;
+        const created = await rpcReq<{ sessionId: string }>(ws, "sessions.create", {
+          agentId: "main",
+          key: sessionKey,
+        });
+        expect(created, JSON.stringify(created.error)).toMatchObject({ ok: true });
+        const sessionId = expectDefined(created.payload, "created shutdown session").sessionId;
         runtime = await getOrCreateSessionMcpRuntime({
           sessionId,
           sessionKey,
           workspaceDir: root,
-          cfg: {
-            mcp: {
-              apps: { enabled: true },
-              servers: {
-                shutdown: {
-                  command: process.execPath,
-                  args: [serverPath],
-                  // Existing supported operator setting; shutdown must cancel before this deadline.
-                  requestTimeoutMs: 600_000,
-                },
-              },
-            },
-          },
+          cfg,
         });
         const view = expectDefined(
           await fetchMcpAppView({
@@ -149,21 +160,22 @@ describe("MCP App request shutdown", () => {
         });
         restorers.push(() => call.mockRestore());
 
-        ws = await gateway.openWs();
-        await connectOk(ws, { scopes: ["operator.admin"] });
-        ws.send(
-          JSON.stringify({
-            type: "req",
-            id: "pending-app-tool",
-            method: "mcp.app.callTool",
-            params: { sessionKey, agentId: "main", viewId: view.viewId, toolName: "blocked_tool" },
-          }),
-        );
+        const response = rpcReq(ws, "mcp.app.callTool", {
+          sessionKey,
+          agentId: "main",
+          viewId: view.viewId,
+          toolName: "blocked_tool",
+        });
         // Receipt delivery is independent of the MCP transport. If the call settles
         // first, its durable marker decides whether the upstream operation entered.
         await withinTest(
           Promise.race([
             receipts.waitFor(enteredPath, "entered"),
+            response.then((reply) => {
+              throw new Error(
+                `MCP request settled before its upstream receipt: ${JSON.stringify(reply)}`,
+              );
+            }),
             callFinished.promise.then(async () => {
               expect(await fs.readFile(enteredPath, "utf8")).toBe("entered");
             }),

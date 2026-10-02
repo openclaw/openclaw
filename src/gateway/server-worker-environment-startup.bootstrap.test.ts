@@ -26,6 +26,7 @@ import {
   loadGatewayWorkerEnvironmentStartupState,
 } from "./server-worker-environment-startup.js";
 import { withGatewayWorkerEnvironmentStartupState } from "./server-worker-environment-startup.state.test-support.js";
+import type { NodeBootstrapArtifact } from "./worker-environments/node-bootstrap-artifact-contract.js";
 import * as artifactModule from "./worker-environments/node-bootstrap-artifact.js";
 import {
   buildId,
@@ -247,8 +248,8 @@ describe("cloud bootstrap plugin generations", () => {
     vi.spyOn(version, "resolveRuntimeServiceBuildId").mockReturnValue("gateway-source-build");
     const enrollmentFactory = vi.spyOn(enrollmentModule, "createWorkerNodeEnrollmentManager");
     const producers: Array<{
-      artifact: artifactModule.NodeBootstrapArtifact;
-      prepare: Mock<(signal?: AbortSignal) => Promise<artifactModule.NodeBootstrapArtifact>>;
+      artifact: NodeBootstrapArtifact;
+      prepare: Mock<(signal?: AbortSignal) => Promise<NodeBootstrapArtifact>>;
       close: Mock<() => Promise<void>>;
       closing: Promise<void>;
       release: () => void;
