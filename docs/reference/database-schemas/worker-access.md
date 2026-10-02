@@ -52,12 +52,14 @@ Maintainer decisions accepted for this staged migration:
   broker's finite worker capacity with durable actors; capacity exhaustion
   visibly refuses creation without evicting a live store.
 - Shared ACP metadata keeps its existing persistence and retention.
-- Bundled persistence callers will become asynchronous. Public synchronous
-  persistence remains supported through the current Plugin SDK major, with
-  documented deprecation and one warning per plugin. P7's compatibility bridge
-  must settle the committed actor write before returning, use a bounded wait,
-  require no host callback, and fail actionably on timeout or actor loss. Removal
-  belongs to the next SDK major. P1 does not implement or activate that bridge.
+- The separate SDK migration adds an awaited `*Async` twin for every
+  `SessionManager` persistence method, returning the committed result, and
+  migrates all bundled/internal callers. Synchronous methods receive `@deprecated`
+  JSDoc naming the async twin, an SDK compatibility record with removal at the
+  next Plugin SDK major, a docs migration note, and a once-per-method runtime
+  warning. After P7 activation, synchronous persistence targeting an incognito
+  session throws an actionable error naming the async replacement. Durable
+  targets keep working until the removal major.
 
 P2 adds session facts, creation, and authority; P3 adds side-data adapters;
 P4 migrates transcript mutation and lifecycle; P5 adds history and compute
