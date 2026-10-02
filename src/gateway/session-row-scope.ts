@@ -143,7 +143,7 @@ export function createSessionRowRegistryRead(owner: {
 }
 
 /** Early publications retain literal paths until topology has prepared their aliases. */
-export function createSessionRowScopeMatcher(
+function createSessionRowScopeMatcher(
   query: SessionRowScopeQuery,
   scope: SessionRowScope,
   logicalOwnerOnly = false,
