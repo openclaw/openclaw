@@ -313,6 +313,22 @@ export function prepareCodexAttemptResources(prompt: CodexAttemptPrompt) {
             identity: bindingIdentity,
             owner: historyOwner,
             assertLifecycleCurrent: () => submissionStore.assertCurrent(),
+            readParentSession: () => {
+              if (!sessionKey || !storePath) {
+                return undefined;
+              }
+              const currentSession = getSessionEntry({
+                agentId: sessionAgentId,
+                sessionKey,
+                storePath,
+                readConsistency: "latest",
+                hydrateSkillPromptRefs: false,
+              });
+              return {
+                sessionId: currentSession?.sessionId,
+                lifecycleRevision: currentSession?.lifecycleRevision,
+              };
+            },
           })
         : undefined;
     const assertRegistrationCurrent = () => {
