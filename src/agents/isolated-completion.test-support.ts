@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
+import { createEmptyPluginMetadataSnapshot } from "../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PreparedAgentRunAdmission } from "./admitted-run-context.js";
 import type { RunCliAgentParams } from "./cli-runner/types.js";
@@ -8,7 +9,6 @@ import type {
   AgentHarnessSelectionDecisionParams,
 } from "./harness/selection-decision.js";
 import type { AgentHarness } from "./harness/types.js";
-import { createEmptyPluginMetadataSnapshot } from "./test-helpers/embedded-agent-runner-e2e-mocks.js";
 
 export type IsolatedCliRunParams = RunCliAgentParams & {
   preparedRunAdmission: PreparedAgentRunAdmission;

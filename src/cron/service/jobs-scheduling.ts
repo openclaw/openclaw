@@ -23,6 +23,9 @@ import {
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
+/** Skip reason recorded when a main-session heartbeat run is disabled. */
+export const HEARTBEAT_SKIP_DISABLED = "disabled";
+
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 const TIME_SCHEDULE_STATE_FIELDS = [
@@ -79,6 +82,27 @@ function isFiniteTimestamp(value: unknown): value is number {
 /** Returns whether a stored next-run timestamp is finite and schedulable. */
 export function hasScheduledNextRunAtMs(value: unknown): value is number {
   return isFiniteTimestamp(value) && value > 0;
+}
+
+/** Rejects outcome-generated schedule timestamps before they can persist or arm a timer. */
+export function resolveNextRunAtMsOrDisable(params: {
+  state: CronJobPolicyContext;
+  job: CronJob;
+  candidate: unknown;
+  deferredNotifications: DeferredCronNotifications;
+}): number | undefined {
+  const nextRunAtMs = asDateTimestampMs(params.candidate);
+  if (nextRunAtMs !== undefined && nextRunAtMs > 0) {
+    return nextRunAtMs;
+  }
+  autoDisableCronJob({
+    job: params.job,
+    reason: "schedule-errors",
+    atMs: params.state.deps.nowMs(),
+    consecutiveErrors: 1,
+    deferredNotifications: params.deferredNotifications,
+  });
+  return undefined;
 }
 
 /** Resolves the newest persisted cron run status while older state is still readable. */

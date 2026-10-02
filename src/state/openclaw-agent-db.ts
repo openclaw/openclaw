@@ -564,6 +564,7 @@ function* openOpenClawAgentDatabaseSteps(
           path: pathname,
           walMaintenance: openedWalMaintenance ?? {
             checkpoint: () => false,
+            stop: async () => {},
             reclaimFreePages: createSqliteWalReclamationResult,
             close: () => false,
           },

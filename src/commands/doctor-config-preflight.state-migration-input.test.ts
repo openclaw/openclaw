@@ -114,23 +114,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
     readConfigFileSnapshot.mockReset();
   });
 
-  it("passes explicit corrupt-target recovery to state migrations", async () => {
-    await runDoctorConfigPreflight({
-      ...options,
-      recoverCorruptTargetStore: true,
-    });
-
-    expect(autoMigrateLegacyState).toHaveBeenCalledWith({
-      cfg: { gateway: { mode: "local", port: 19091 } },
-      configIncludedPaths: [],
-      env: process.env,
-      log: undefined,
-      recoverCorruptTargetStore: true,
-      doctorOnlyStateMigrations: undefined,
-      onStepReceipt: expect.any(Function),
-    });
-  });
-
   it("preserves a retired custom cron partition with invalid Gateway config", async () => {
     const sourceConfig = {
       gateway: { mode: "local", port: "not-a-port" },
@@ -211,7 +194,6 @@ describe("runDoctorConfigPreflight state migration input", () => {
       configIncludedPaths: includedPaths,
       env: process.env,
       log: undefined,
-      recoverCorruptTargetStore: undefined,
       doctorOnlyStateMigrations: undefined,
       onStepReceipt: expect.any(Function),
     });

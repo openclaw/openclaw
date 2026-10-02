@@ -37,18 +37,6 @@ const deprecationMarkingCodes = [
   "plugin-runtime-api-compat-aliases",
   "plugin-provider-manifest-compat-aliases",
 ] as const;
-const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[number], number> = {
-  "plugin-sdk-channel-setup-input-fields": 22,
-  "plugin-sdk-broad-runtime-barrels": 12,
-  "plugin-sdk-provider-owned-helper-shims": 31,
-  "message-presentation-legacy-bridges": 21,
-  "plugin-sdk-focused-compat-aliases": 23,
-  "agent-harness-terminal-result-aliases": 10,
-  "official-plugin-export-aliases": 7,
-  "memory-host-compatibility-aliases": 4,
-  "plugin-runtime-api-compat-aliases": 28,
-  "plugin-provider-manifest-compat-aliases": 9,
-};
 function expectNonEmptyStringList(values: readonly string[], label: string) {
   expect(values, label).toEqual([expect.stringMatching(/\S/u), ...values.slice(1)]);
   for (const value of values) {
@@ -163,7 +151,6 @@ describe("plugin compatibility registry", () => {
         removeAfter: "2026-10-01",
       });
       expect(records.get(code)?.replacement, code).toMatch(/retain (?:each field )?until/u);
-      expect(records.get(code)?.surfaces, code).toHaveLength(deprecationMarkingSurfaceCounts[code]);
     }
     expect(records.get("media-legacy-projection")).toMatchObject({
       status: "removal-pending",

@@ -327,7 +327,10 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
 }
 
 /** Dispose only this publication; a later admission at the same path is independent. */
-export function closeMaintenanceAgentDatabase(database: OpenClawAgentDatabase): void {
+export async function closeMaintenanceAgentDatabase(
+  database: OpenClawAgentDatabase,
+): Promise<void> {
+  await database.walMaintenance.stop();
   if (cache.databases.get(database.path) !== database) {
     return;
   }
@@ -571,6 +574,11 @@ export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promi
   }
   await drainAgentDatabaseResources({ rootPath }, async () => {
     await drainPendingAgentDatabaseOpens({ rootPath });
+    await Promise.all(
+      [...cache.databases.values()]
+        .filter((database) => rootPath === undefined || isPathInside(rootPath, database.path))
+        .map((database) => database.walMaintenance.stop()),
+    );
     closeOpenClawAgentDatabases(rootPath);
   });
 }
@@ -584,6 +592,10 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
   revokePendingAgentDatabaseOpen(selection.path, expectedAgentId);
   return drainAgentDatabaseResources(selection, async () => {
     await drainPendingAgentDatabaseOpens(selection);
+    const database = cache.databases.get(selection.path);
+    if (database && (expectedAgentId === undefined || database.agentId === expectedAgentId)) {
+      await database.walMaintenance.stop();
+    }
     return closeOpenClawAgentDatabaseByPath(selection.path, expectedAgentId);
   });
 }

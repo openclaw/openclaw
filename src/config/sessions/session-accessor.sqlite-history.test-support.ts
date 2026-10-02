@@ -3,10 +3,7 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import type { TranscriptAnchorPageOptions } from "../../sessions/transcript-anchor-page.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import {
-  withRecentSessionTranscriptActiveEventsInSnapshot,
-  type SessionTranscriptMessageAnchorPage,
-} from "./session-accessor.sqlite-active-events.js";
+import { withRecentSessionTranscriptActiveEventsInSnapshot } from "./session-accessor.sqlite-active-events-read.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
   SessionTranscriptReadScope,
@@ -19,7 +16,10 @@ import {
   readSessionTranscriptHistoryAnchorPageFromProjection,
   type SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
-import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
+import type {
+  SessionTranscriptMessageEvent,
+  SessionTranscriptMessageAnchorPage,
+} from "./session-accessor.sqlite-projection-read.js";
 import { readVisibleTranscriptStats } from "./session-accessor.sqlite-reset-window.js";
 
 export function readActiveTranscriptStats(scope: SessionTranscriptReadScope) {

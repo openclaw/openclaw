@@ -51,7 +51,7 @@ private struct ChatSessionSidebarRowMenu: View {
     let inspect: () -> Void
     let rename: () -> Void
     let delete: () -> Void
-    let present: (ChatSessionIconPicker) -> Void
+    let present: (ChatSessionMenuPresentation) -> Void
 
     var body: some View {
         Group {
@@ -115,10 +115,7 @@ private struct ChatSessionSidebarRowMenu: View {
             }
             Divider()
             self.button(String(localized: "Icon & color…"), "paintpalette", key: "i") {
-                if let connection = self.actions.connection { self.present(.init(
-                    session: self.session,
-                    connection: connection,
-                    viewModel: self.viewModel)) }
+                if let connection = self.actions.connection { self.present(.appearance(self.session, connection)) }
             }.disabled(self.actions.connection?.allows("sessions.patch") != true)
             if ChatSessionSidebarActions.canMoveToGroup(
                 self.session,
@@ -139,7 +136,7 @@ private struct ChatSessionSidebarRowMenu: View {
                     agentID: self.session.agentId) }
             }
             self.copyMenu
-            self.openMenu
+            ChatSidebarPullRequestMenu(session: self.session, viewModel: self.viewModel) { self.openMenu }
             Divider()
             Button(role: .destructive, action: self.delete) { Label("Delete…", systemImage: "trash") }
                 .keyboardShortcut("d", modifiers: [])

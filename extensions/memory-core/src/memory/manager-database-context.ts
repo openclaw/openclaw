@@ -7,6 +7,7 @@ import {
   resolveStateDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { stopMemorySqliteWalMaintenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
@@ -526,6 +527,7 @@ export class MemoryIndexDatabase {
   closeShadow(): Promise<void> {
     this.closed = true;
     this.shadowClose ??= (async () => {
+      await stopMemorySqliteWalMaintenance(this.db);
       await this.drainPrivateAccess();
       await this.closePublicationWorker();
       // Each accepted pool task has closed its native database or joined Worker

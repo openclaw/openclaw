@@ -1553,7 +1553,6 @@ src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-restore.ts	1
-src/agents/subagents/registry/subagent-registry.store.sqlite.ts	2
 src/agents/subagents/registry/subagent-registry.ts	2
 src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
@@ -2026,7 +2025,6 @@ src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
 src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
-src/config/sessions/session-accessor.sqlite-active-events.ts	1
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-entry-availability.ts	1
@@ -2411,7 +2409,7 @@ src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	8
 src/infra/sqlite-snapshot.ts	2
 src/infra/sqlite-strict.ts	6
-src/infra/sqlite-wal.ts	4
+src/infra/sqlite-wal.ts	3
 src/infra/state-migrations.acp-replay.ts	1
 src/infra/state-migrations.audit-backup.ts	1
 src/infra/state-migrations.audit-records.ts	4
@@ -2424,7 +2422,7 @@ src/infra/state-migrations.doctor.ts	3
 src/infra/state-migrations.exec-approvals.ts	1
 src/infra/state-migrations.fs.ts	1
 src/infra/state-migrations.legacy-session-store.ts	3
-src/infra/state-migrations.legacy-sessions.ts	2
+src/infra/state-migrations.legacy-sessions.ts	1
 src/infra/state-migrations.mcp-oauth.ts	2
 src/infra/state-migrations.meeting-transcripts-detection.ts	4
 src/infra/state-migrations.meeting-transcripts-files.ts	5
@@ -2432,7 +2430,7 @@ src/infra/state-migrations.meeting-transcripts-verify.ts	2
 src/infra/state-migrations.meeting-transcripts.ts	2
 src/infra/state-migrations.node-host.ts	2
 src/infra/state-migrations.runtime-state.ts	1
-src/infra/state-migrations.session-store.ts	9
+src/infra/state-migrations.session-store.ts	6
 src/infra/state-migrations.shared-auth-store.ts	1
 src/infra/state-migrations.state-dir.ts	1
 src/infra/state-migrations.storage.ts	2

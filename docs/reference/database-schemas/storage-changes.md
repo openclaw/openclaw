@@ -2128,6 +2128,17 @@ maintenance still refuses busy truncation before compaction or recovery proceeds
 The read cache's version-gated `NOOP` probe remains a freshness observation.
 This ownership cut changes no schema, stored bytes, admission, or update behavior.
 
+Each WAL connection owns a scheduler scope for checkpoint ticks and bounded
+reclamation. Orderly database retirement stops timer admission and joins accepted
+maintenance before the final checkpoint and native close. Shared connections
+retire maintenance only when their final native reference is released; closing
+one worker actor does not stop a sibling's maintenance. Synchronous exit and
+failed-open cleanup remain best-effort cancellation paths. The deprecated
+synchronous debug-capture store keeps that same close contract.
+Checkpoint modes, write admission, stored bytes, and reclamation limits are
+unchanged. Updates require no schema or configuration migration; the new process
+reconstructs its connection-owned schedules from the existing database owners.
+
 SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
 databases, WAL maintenance, integrity checks, and backup operations remain
 SQLite capabilities. Keep their implementation behind the memory or database

@@ -122,8 +122,7 @@ async function runApprovalStoreOperation<T>(
 
 function execute<Key extends Operation>(
   type: Key,
-  input: OperatorApprovalWorkerOperations[Key]["input"],
-  { databaseOptions, assertCurrent, guard }: Options,
+  { databaseOptions, assertCurrent, guard, ...input }: Input<Key>,
   onCommitted?: (resolutionKey: string) => void,
 ): Promise<OperatorApprovalWorkerOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext({
@@ -190,16 +189,13 @@ function execute<Key extends Operation>(
 }
 
 export function insertOperatorApproval(params: Input<"operatorApprovals.insert">) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.insert", input, { databaseOptions, assertCurrent, guard });
+  return execute("operatorApprovals.insert", params);
 }
 export function getOperatorApprovalDetailed(params: Input<"operatorApprovals.get">) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.get", input, { databaseOptions, assertCurrent, guard });
+  return execute("operatorApprovals.get", params);
 }
 export function listPendingOperatorApprovals(params: Input<"operatorApprovals.pending"> = {}) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.pending", input, { databaseOptions, assertCurrent, guard });
+  return execute("operatorApprovals.pending", params);
 }
 export function resolveOperatorApproval(
   params: Input<"operatorApprovals.resolve"> & {
@@ -207,25 +203,17 @@ export function resolveOperatorApproval(
     onCommitted?: (resolutionKey: string) => void;
   },
 ) {
-  const { databaseOptions, assertCurrent, guard, onCommitted, ...input } = params;
-  return execute(
-    "operatorApprovals.resolve",
-    input,
-    { databaseOptions, assertCurrent, guard },
-    onCommitted,
-  );
+  const { onCommitted, ...input } = params;
+  return execute("operatorApprovals.resolve", input, onCommitted);
 }
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.deny", input, { databaseOptions, assertCurrent, guard });
+  return execute("operatorApprovals.deny", params);
 }
 export function expireDueOperatorApprovals(params: Input<"operatorApprovals.expire">) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.expire", input, { databaseOptions, assertCurrent, guard });
+  return execute("operatorApprovals.expire", params);
 }
 export function consumeOperatorApprovalAllowOnce(params: Input<"operatorApprovals.consume">) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.consume", input, { databaseOptions, assertCurrent, guard });
+  return execute("operatorApprovals.consume", params);
 }
 
 async function readApprovalStore<T>(
@@ -291,10 +279,5 @@ export function listCronStandingGrants(params: { limit?: number } & Options = {}
 }
 
 export function revokeCronStandingGrant(params: Input<"operatorApprovals.revokeCronGrant">) {
-  const { databaseOptions, assertCurrent, guard, ...input } = params;
-  return execute("operatorApprovals.revokeCronGrant", input, {
-    databaseOptions,
-    assertCurrent,
-    guard,
-  });
+  return execute("operatorApprovals.revokeCronGrant", params);
 }
