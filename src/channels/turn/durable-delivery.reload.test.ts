@@ -7,6 +7,7 @@ import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pe
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TelegramAccountConfig } from "../../config/types.telegram.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   installDeliveryQueueTmpDirHooks,
   loadPendingDeliveries,
@@ -36,7 +37,11 @@ import {
 
 const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
 
-async function replacementFixture(options?: { newChannel?: boolean; sameGeneration?: boolean }) {
+async function replacementFixture(options?: {
+  newChannel?: boolean;
+  sameGeneration?: boolean;
+  distinctPluginIdentity?: boolean;
+}) {
   const retired = new PluginInstance("discord");
   const old = createTestRegistry([
     {
@@ -57,6 +62,8 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
   const current = createTestRegistry([
     {
       pluginId: "telegram",
+      pluginName: "Telegram (bundled)",
+      rootDir: "/test/bundled/telegram",
       source: "test",
       plugin: {
         ...createChannelTestPluginBase({ id: "telegram" }),
@@ -69,7 +76,14 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
     },
   ]);
   if (!options?.newChannel) {
-    old.channels.push(...current.channels);
+    old.channels.push(
+      ...(options?.distinctPluginIdentity
+        ? current.channels.map((entry) => ({
+            ...entry,
+            plugin: { ...entry.plugin },
+          }))
+        : current.channels),
+    );
   }
   const setConfig = (config: OpenClawConfig) =>
     setPluginRuntimeLoadContext(current, {
@@ -84,6 +98,16 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
   setConfig(cfg);
   const publication: { current: typeof current | undefined } = { current };
   const owner = { current: () => publication.current };
+  const admittedTelegramPlugin = old.channels.find(
+    (entry) => entry.pluginId === "telegram",
+  )?.plugin;
+  const currentTelegramPlugin = current.channels.find(
+    (entry) => entry.pluginId === "telegram",
+  )?.plugin;
+  const admittedTelegramRegistration = old.channels.find((entry) => entry.pluginId === "telegram");
+  const currentTelegramRegistration = current.channels.find(
+    (entry) => entry.pluginId === "telegram",
+  );
   bindPluginRegistryGatewayOwner(old, owner);
   bindPluginRegistryGatewayOwner(current, owner);
   // Agent-only registries inherit ingress identity even when they expose no channels.
@@ -123,6 +147,10 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
     old,
     turn,
     current,
+    admittedTelegramPlugin,
+    currentTelegramPlugin,
+    admittedTelegramRegistration,
+    currentTelegramRegistration,
     publication,
     setConfig,
     sendText,
@@ -220,8 +248,8 @@ describe("final delivery after plugin replacement", () => {
     "defaults-changed",
     "plugin-changed",
     "plugin-id-changed",
+    "token-changed",
     "new-channel",
-    "replaced-channel",
     "no-sender-preparation",
     "superseded-before-send",
     "superseded-live-send",
@@ -234,11 +262,10 @@ describe("final delivery after plugin replacement", () => {
         stateChange === "closed-prepared" || stateChange === "superseded-prepared-send",
     });
     setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
-    if (stateChange === "replaced-channel") {
-      fixture.current.channels = fixture.current.channels.map((entry) => ({
-        ...entry,
-        plugin: { ...entry.plugin },
-      }));
+    if (stateChange === "token-changed") {
+      fixture.setConfig({
+        channels: { telegram: { enabled: true, botToken: "999999:replaced-sender" } },
+      });
     }
     if (stateChange === "plugin-id-changed") {
       fixture.current.channels = fixture.current.channels.map((entry) => ({
@@ -285,6 +312,122 @@ describe("final delivery after plugin replacement", () => {
         ),
       },
     });
+    expect(fixture.sendText).not.toHaveBeenCalled();
+  });
+
+  it("starts final delivery when only plugin identity and unrelated config differ", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ distinctPluginIdentity: true });
+    const senderChannels = {
+      telegram: { enabled: true, botToken: "123456:admitted" },
+      defaults: { groupPolicy: "allowlist" as const },
+    };
+    const senderPlugins = { entries: { telegram: { enabled: true } } };
+    const turnCfg: OpenClawConfig = {
+      channels: {
+        telegram: { ...senderChannels.telegram },
+        defaults: { ...senderChannels.defaults },
+      },
+      plugins: { entries: { telegram: { ...senderPlugins.entries.telegram } } },
+      agents: { defaults: { model: { fallbacks: ["openai/gpt-before-reload"] } } },
+    };
+    const currentCfg: OpenClawConfig = {
+      channels: {
+        telegram: { ...senderChannels.telegram },
+        defaults: { ...senderChannels.defaults },
+      },
+      plugins: { entries: { telegram: { ...senderPlugins.entries.telegram } } },
+      agents: { defaults: { model: { fallbacks: ["openai/gpt-after-reload"] } } },
+    };
+    const prepareRuntimeHandoff = vi.fn((handoffCfg: OpenClawConfig) => handoffCfg);
+    fixture.request.cfg = turnCfg;
+    fixture.request.prepareRuntimeHandoff = prepareRuntimeHandoff;
+    fixture.setConfig(currentCfg);
+
+    expect(fixture.turn).not.toBe(fixture.current);
+    expect(fixture.admittedTelegramPlugin).toBeDefined();
+    expect(fixture.currentTelegramPlugin).toBeDefined();
+    expect(fixture.admittedTelegramPlugin).not.toBe(fixture.currentTelegramPlugin);
+    expect(fixture.admittedTelegramPlugin?.id).toBe(fixture.currentTelegramPlugin?.id);
+    // Provenance must be identical across reload for the same registration;
+    // otherwise the strengthened continuity predicate would refuse delivery.
+    expect(fixture.admittedTelegramRegistration).toBeDefined();
+    expect(fixture.currentTelegramRegistration).toBeDefined();
+    expect(fixture.admittedTelegramRegistration?.source).toBe(
+      fixture.currentTelegramRegistration?.source,
+    );
+    expect(fixture.admittedTelegramRegistration?.rootDir).toBe(
+      fixture.currentTelegramRegistration?.rootDir,
+    );
+    expect(fixture.admittedTelegramRegistration?.pluginName).toBe(
+      fixture.currentTelegramRegistration?.pluginName,
+    );
+    expect(turnCfg.channels?.telegram).toEqual(currentCfg.channels?.telegram);
+    expect(turnCfg.channels?.defaults).toEqual(currentCfg.channels?.defaults);
+    expect(turnCfg.plugins?.entries?.telegram).toEqual(currentCfg.plugins?.entries?.telegram);
+    expect(turnCfg.agents?.defaults?.model).not.toEqual(currentCfg.agents?.defaults?.model);
+
+    const result = await fixture.deliver();
+    expect(result).toMatchObject({
+      status: "handled_visible",
+      delivery: { visibleReplySent: true, messageIds: ["accepted-final"] },
+    });
+    expect(prepareRuntimeHandoff).toHaveBeenCalledExactlyOnceWith(currentCfg);
+    expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ to: "12345", text: "Saved final answer", accountId: "default" }),
+    );
+  });
+
+  it("refuses before send when the Telegram handoff reports a changed sender", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ distinctPluginIdentity: true });
+    const message = "The Telegram reply sender changed during this turn; delivery was not started.";
+    fixture.request.prepareRuntimeHandoff = () => {
+      throw new PlatformMessageNotDispatchedError(message, {
+        cause: new Error(message),
+        retryable: false,
+      });
+    };
+
+    const result = await fixture.deliver();
+    expect(result).toMatchObject({
+      status: "failed",
+      error: { message },
+    });
+    expect(result.status === "failed" ? result.error : undefined).toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
+    expect(fixture.sendText).not.toHaveBeenCalled();
+  });
+
+  it("refuses before send when the same-id registration has different owner provenance", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
+    const fixture = await replacementFixture({ distinctPluginIdentity: true });
+    // The successor registration keeps the id and sender config but comes from
+    // another owner provenance (e.g. a reinstalled or relocated plugin).
+    const admitted = fixture.admittedTelegramRegistration;
+    expect(admitted).toBeDefined();
+    fixture.current.channels = fixture.current.channels.map((entry) =>
+      entry.pluginId === "telegram"
+        ? { ...entry, source: "other", rootDir: "/other/telegram" }
+        : entry,
+    );
+    const successor = fixture.current.channels.find((entry) => entry.pluginId === "telegram");
+    expect(successor?.source).not.toBe(admitted?.source);
+    expect(successor?.rootDir).not.toBe(admitted?.rootDir);
+
+    const result = await fixture.deliver();
+    expect(result).toMatchObject({
+      status: "failed",
+      error: {
+        message: expect.stringContaining(
+          "The reply channel changed or cannot preserve its sender; delivery was not started.",
+        ),
+      },
+    });
+    expect(result.status === "failed" ? result.error : undefined).toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
     expect(fixture.sendText).not.toHaveBeenCalled();
   });
 });

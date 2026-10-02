@@ -42,7 +42,10 @@ type PluginRegistryLifecycleStore = {
   gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
   gatewayChannels?: WeakMap<
     PluginRegistry,
-    ReadonlyMap<string, Pick<PluginChannelRegistration, "pluginId" | "plugin">>
+    ReadonlyMap<
+      string,
+      Pick<PluginChannelRegistration, "pluginId" | "pluginName" | "source" | "rootDir" | "plugin">
+    >
   >;
   borrowedRecords?: WeakMap<PluginRegistry, WeakSet<PluginRecord>>;
 };
@@ -124,7 +127,12 @@ export function bindPluginRegistryGatewayOwner(
     } else {
       gatewayChannels.set(
         key,
-        new Map(registry.channels.map(({ pluginId, plugin }) => [plugin.id, { pluginId, plugin }])),
+        new Map(
+          registry.channels.map(({ pluginId, pluginName, source, rootDir, plugin }) => [
+            plugin.id,
+            { pluginId, pluginName, source, rootDir, plugin },
+          ]),
+        ),
       );
     }
   }
@@ -156,7 +164,9 @@ export function isPluginRegistryGatewayViewOf(
 export function getPluginRegistryGatewayChannelRegistration(
   registry: PluginRegistry,
   channel: string,
-): Pick<PluginChannelRegistration, "pluginId" | "plugin"> | undefined {
+):
+  | Pick<PluginChannelRegistration, "pluginId" | "pluginName" | "source" | "rootDir" | "plugin">
+  | undefined {
   return gatewayChannels.get(getPluginRegistryResourceOwner(registry))?.get(channel);
 }
 

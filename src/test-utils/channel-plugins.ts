@@ -13,6 +13,8 @@ import type { PluginRegistry } from "../plugins/registry.js";
 /** Registry entry shape used by channel tests without loading real plugins. */
 type TestChannelRegistration = {
   pluginId: string;
+  pluginName?: string;
+  rootDir?: string;
   plugin: unknown;
   source: string;
   origin?: "bundled" | "global" | "workspace" | "config";
