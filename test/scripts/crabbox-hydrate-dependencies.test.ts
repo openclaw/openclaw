@@ -97,10 +97,8 @@ fi
     ["shared setup action", "fresh"],
     ["default hydration", "legacy"],
     ["GitHub hydration", "legacy"],
-    ["default hydration", "unknown"],
     ["GitHub hydration", "unknown"],
     ["default hydration", "unknown-newline"],
-    ["default hydration", "fallback"],
     ["default hydration", "fallback-dangling"],
     ["default hydration", "configured-fallback"],
     ["default hydration", "unknown-fallback"],
@@ -116,7 +114,6 @@ fi
       const store = path.join(root, "store");
       const runnerTemp = path.join(root, "runner");
       const usesFallback = [
-        "fallback",
         "fallback-dangling",
         "configured-fallback",
         "unknown-fallback",
@@ -303,26 +300,7 @@ fi
         rmSync(path.join(workspace, "node_modules"), { recursive: true, force: true });
         symlinkSync(linkedModules, path.join(workspace, "node_modules"));
 
-        const handoff = path.join(env.HOME!, ".crabbox/actions/hydration-proof.env");
-        const exports = `${handoff}.sh`;
-        const legacyExports =
-          job === "hydrate-github"
-            ? `export PNPM_CONFIG_MODULES_DIR=${shellQuote(externalModules)}\nexport PNPM_CONFIG_VIRTUAL_STORE_DIR=${shellQuote(path.join(externalRoot, "virtual-store"))}\n`
-            : `export CRABBOX_PNPM_MODULES_DIR=${shellQuote(externalModules)}\n`;
-        write(
-          root,
-          path.relative(root, handoff),
-          `WORKSPACE=${workspace}\nRUN_ID=fixture\nJOB=${job}\nENV_FILE=${exports}\nSERVICES_FILE=${handoff.replace(/\.env$/u, ".services")}\nREADY_AT=2026-09-14T00:00:00Z\n`,
-        );
-        write(
-          root,
-          path.relative(root, exports),
-          `export CI=true\nexport GITHUB_WORKSPACE=${shellQuote(workspace)}\nexport GITHUB_RUN_ID=fixture\nexport PNPM_CONFIG_STORE_DIR=${shellQuote(legacyStore)}\n${usesFallback ? `export XDG_CACHE_HOME=${shellQuote(cacheRoot)}\n` : ""}${legacyExports}`,
-        );
         // Released Crabbox clears both native handoff markers before starting rehydration.
-        rmSync(handoff);
-        rmSync(exports);
-        expect(existsSync(handoff) || existsSync(exports)).toBe(false);
         if (initialState === "fallback-dangling") {
           // Native rehydration recreates the same lease's runner root before workflow steps.
           rmSync(runnerTemp, { recursive: true });

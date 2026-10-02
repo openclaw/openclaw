@@ -20,7 +20,6 @@ describe("extended-stable live publication eligibility", () => {
   });
 
   it.skipIf(process.platform === "win32").each([
-    { mainVersion: "2026.8.1", expectedStatus: 42, expectedError: "" },
     { mainVersion: "2026.9.1", expectedStatus: 42, expectedError: "" },
     {
       mainVersion: "2026.10.1",

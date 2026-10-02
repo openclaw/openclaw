@@ -226,7 +226,8 @@ vi.mock("../../../runtime.js", () => ({
   },
 }));
 
-vi.mock("../../../utils/delivery-context.shared.js", () => ({
+vi.mock("../../../utils/delivery-context.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../utils/delivery-context.shared.js")>()),
   normalizeDeliveryContext: (origin: unknown) => origin ?? "agent",
 }));
 
