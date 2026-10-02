@@ -99,6 +99,7 @@ export {
   getPluginStateCapacity,
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   pluginStateDeleteEntriesIfUnchanged,
+  repairPluginStateEntriesForDoctor,
   pluginStateDoctorEntriesInKeyRange,
 } from "./plugin-state-store.sqlite.js";
 

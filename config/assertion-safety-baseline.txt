@@ -971,7 +971,6 @@ extensions/telegram/src/telegram-ingress-supersede.ts	7
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	3
 extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
-extensions/telegram/src/update-offset-store.ts	1
 extensions/telegram/src/webhook.ts	1
 extensions/tencent/stream.ts	1
 extensions/tlon/src/channel.runtime.ts	3

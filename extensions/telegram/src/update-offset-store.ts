@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTelegramRuntime } from "./runtime.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import {
@@ -45,39 +46,24 @@ function fingerprintFromToken(token?: string): string | null {
   return fingerprintTelegramBotToken(trimmed);
 }
 
-function safeParseState(parsed: unknown): TelegramUpdateOffsetState | null {
-  try {
-    const state = parsed as {
-      version?: number;
-      lastUpdateId?: number | null;
-      botId?: string | null;
-      tokenFingerprint?: string | null;
-    };
-    if (state?.version !== STORE_VERSION && state?.version !== 2 && state?.version !== 1) {
-      return null;
-    }
-    if (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) {
-      return null;
-    }
-    if (state.version >= 2 && state.botId !== null && typeof state.botId !== "string") {
-      return null;
-    }
-    if (
-      state.version === STORE_VERSION &&
-      state.tokenFingerprint !== null &&
-      typeof state.tokenFingerprint !== "string"
-    ) {
-      return null;
-    }
-    return {
-      version: state.version,
-      lastUpdateId: state.lastUpdateId ?? null,
-      botId: state.version >= 2 ? (state.botId ?? null) : null,
-      tokenFingerprint: state.version === STORE_VERSION ? (state.tokenFingerprint ?? null) : null,
-    };
-  } catch {
-    return null;
+function safeParseState(state: unknown): TelegramUpdateOffsetState | null {
+  if (!isRecord(state)) return null;
+  if (state.version === 1 || state.version === 2) {
+    throw new Error("Telegram update offsets require migration; run openclaw doctor --fix.");
   }
+  if (
+    state.version !== STORE_VERSION ||
+    (state.lastUpdateId !== null && !isValidUpdateId(state.lastUpdateId)) ||
+    (state.botId !== null && typeof state.botId !== "string") ||
+    (state.tokenFingerprint !== null && typeof state.tokenFingerprint !== "string")
+  )
+    return null;
+  return {
+    version: STORE_VERSION,
+    lastUpdateId: state.lastUpdateId,
+    botId: state.botId,
+    tokenFingerprint: state.tokenFingerprint,
+  };
 }
 
 export type TelegramOffsetRotationReason = "bot-id-changed" | "token-rotated" | "legacy-state";

@@ -814,7 +814,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/telegram/src/probe.response-body-timeout.integration.test.ts",
   "extensions/telegram/src/send.telegram-http.test.ts",
   "extensions/telegram/src/send.transport-close-proof.test.ts",
-  "extensions/telegram/src/state-migrations.test.ts",
   "extensions/telegram/src/targets.test.ts",
   "extensions/telegram/src/telegram-ingress-callback.integration.test.ts",
   "extensions/telegram/src/update-offset-store.test.ts",

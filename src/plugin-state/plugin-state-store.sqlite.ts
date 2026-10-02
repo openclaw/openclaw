@@ -1,10 +1,18 @@
 // Plugin state SQLite helpers persist plugin state in the OpenClaw state database.
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type { ExpressionBuilder } from "kysely";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+} from "../infra/sqlite-worker-identity.js";
+import type { PluginDoctorRepairAuthority } from "../infra/state-migrations.types.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
@@ -49,6 +57,7 @@ import {
   type PluginStateEntry,
   type PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
+import { prepareRegisterParams, validateNamespace } from "./plugin-state-store.validation.js";
 
 export { MAX_PLUGIN_STATE_VALUE_BYTES } from "./plugin-state-store.kernel.js";
 export const MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES = 512;
@@ -308,6 +317,22 @@ export function pluginStateDeleteIf(params: {
   );
 }
 
+function observedPluginStateRow(
+  eb: ExpressionBuilder<Pick<DB, "plugin_state_entries">, "plugin_state_entries">,
+  scope: { pluginId: string; namespace: string },
+  entry: PluginDoctorRawStateEntry,
+) {
+  return eb
+    .and({
+      plugin_id: scope.pluginId,
+      namespace: scope.namespace,
+      entry_key: entry.key,
+      value_json: entry.valueJson,
+      created_at: entry.createdAt,
+    })
+    .and("expires_at", entry.expiresAt === null ? "is" : "=", entry.expiresAt);
+}
+
 /** Deletes one bounded set of exact observed rows in a single synchronous transaction. */
 export function pluginStateDeleteEntriesIfUnchanged(params: {
   pluginId: string;
@@ -332,23 +357,97 @@ export function pluginStateDeleteEntriesIfUnchanged(params: {
       params.assertOwnedInTransaction(db);
       let deleted = 0;
       for (const entry of observed) {
-        let query = getPluginStateKysely(db)
+        const query = getPluginStateKysely(db)
           .deleteFrom("plugin_state_entries")
-          .where("plugin_id", "=", params.pluginId)
-          .where("namespace", "=", params.namespace)
-          .where("entry_key", "=", entry.key)
-          .where("value_json", "=", entry.valueJson)
-          .where("created_at", "=", entry.createdAt);
-        query =
-          entry.expiresAt === null
-            ? query.where("expires_at", "is", null)
-            : query.where("expires_at", "=", entry.expiresAt);
+          .where((eb) => observedPluginStateRow(eb, params, entry));
         deleted += Number(executeSqliteQuerySync(db, query).numAffectedRows ?? 0);
       }
       return { deleted, changed: observed.length - deleted };
     },
     envOptions(params.env),
   );
+}
+
+/** Backed-up same-schema repair; source observations and replacement values freeze before yielding. */
+export async function repairPluginStateEntriesForDoctor(params: {
+  pluginId: string;
+  namespace: string;
+  replacements: readonly { entry: PluginDoctorRawStateEntry; value: unknown }[];
+  authority: PluginDoctorRepairAuthority;
+  env: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const { pluginId, authority } = params;
+  const env = { ...params.env };
+  const namespace = validateNamespace(params.namespace);
+  const rows = structuredClone(params.replacements).map(({ entry, value }) => ({
+    entry,
+    ...prepareRegisterParams(entry.key, value),
+  }));
+  if (
+    rows.length > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||
+    new Set(rows.map((row) => row.key)).size !== rows.length ||
+    rows.some(({ key, entry }) => key !== entry.key)
+  ) {
+    throw new Error("Plugin Doctor repair requires a bounded batch of distinct rows.");
+  }
+  if (!rows.length) return { changes: [], warnings: [] };
+  authority.assertCurrent();
+  const databasePath = resolveOpenClawStateSqlitePath(env);
+  const identity = readDatabasePathIdentitySync(databasePath);
+  const assertCurrent = () => {
+    authority.assertCurrent();
+    assertExistingDatabaseIdentity(databasePath, identity.key, identity.birthtime);
+  };
+  const validate = (db: DatabaseSync) => {
+    for (const { entry } of rows) {
+      const query = getPluginStateKysely(db)
+        .selectFrom("plugin_state_entries")
+        .select("entry_key")
+        .where((eb) => observedPluginStateRow(eb, { pluginId, namespace }, entry));
+      if (!executeSqliteQuerySync(db, query).rows.length) {
+        throw new Error(
+          "Plugin state changed during Doctor repair; inspect again before retrying.",
+        );
+      }
+    }
+  };
+  const { backupDoctorSqliteDatabases } = await import("../commands/doctor-migration-backup.js");
+  assertCurrent();
+  const backup = await backupDoctorSqliteDatabases({
+    env,
+    pendingDatabasePaths: [databasePath],
+    databasePaths: [databasePath],
+    authority: { assertCurrent },
+    repair: {
+      key: createHash("sha256")
+        .update(JSON.stringify([pluginId, namespace, rows]))
+        .digest("hex"),
+      validate,
+    },
+  });
+  assertCurrent();
+  runWriteTransaction(
+    "register",
+    ({ db }) => {
+      assertCurrent();
+      authority.assertOwnedInTransaction(db);
+      validate(db);
+      for (const { key, valueJson } of rows) {
+        executeSqliteQuerySync(
+          db,
+          getPluginStateKysely(db)
+            .updateTable("plugin_state_entries")
+            .set({ value_json: valueJson })
+            .where("plugin_id", "=", pluginId)
+            .where("namespace", "=", namespace)
+            .where("entry_key", "=", key),
+        );
+      }
+      authority.assertOwnedInTransaction(db);
+    },
+    { env },
+  );
+  return backup;
 }
 
 /** Doctor-only bounded raw read keeps malformed rows visible and preserves exact CAS bytes. */
@@ -361,7 +460,6 @@ export function pluginStateDoctorEntriesInKeyRange(params: {
   env?: NodeJS.ProcessEnv;
 }): PluginDoctorRawStateEntry[] {
   if (
-    !params.prefix ||
     !Number.isSafeInteger(params.limit) ||
     params.limit < 1 ||
     params.limit > MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES ||

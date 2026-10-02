@@ -533,3 +533,20 @@ Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
 the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
+
+### Doctor plugin-state repairs
+
+`PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
+is available during the offline `after-session-repair` phase. Each replacement
+contains an exact `PluginDoctorRawStateEntry` observation from
+`readPluginStateEntriesInKeyRange` and a JSON-compatible `value`. An empty read
+prefix scans the namespace in pages of at most 512 rows. The host binds plugin
+identity and the state location; plugins never supply database paths or SQL.
+
+The host freezes each batch, verifies a backup containing the original row bytes,
+and compares the complete observations under current maintenance authority before
+one transaction replaces their values. Keys, creation timestamps, and expiry
+remain unchanged. Any changed row or database generation refuses the whole batch.
+Plugins keep format interpretation in their Doctor contract and leave credential
+binding and runtime lifecycle decisions with their existing owners. Older hosts
+may omit this optional repair capability.

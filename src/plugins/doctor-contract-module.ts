@@ -83,6 +83,11 @@ export type PluginDoctorStateMigrationContext = {
     namespace: string,
     entries: readonly PluginDoctorRawStateEntry[],
   ) => { deleted: number; changed: number };
+  /** Offline repair only: verified backup, exact row comparison, and one atomic update. */
+  repairPluginStateEntries?: (
+    namespace: string,
+    replacements: readonly { entry: PluginDoctorRawStateEntry; value: unknown }[],
+  ) => Promise<{ changes: string[]; warnings: string[] }>;
   /** Owner-bound ingress queue access, one entry per manifest-declared channel;
    *  the host fixes the channel identity and doctor state directory. Older test
    *  hosts may omit it. */

@@ -26,6 +26,7 @@ import {
   getPluginStateCapacity,
   importPluginStateEntriesForDoctor,
   pluginStateDeleteEntriesIfUnchanged,
+  repairPluginStateEntriesForDoctor,
   pluginStateDoctorEntriesInKeyRange,
   type OpenKeyedStoreOptions,
 } from "../plugin-state/plugin-state-store.js";
@@ -355,6 +356,8 @@ export function createPluginDoctorStateMigrationContext(params: {
   }
   if (params.repairAuthority) {
     const authority = params.repairAuthority;
+    context.repairPluginStateEntries = (namespace, replacements) =>
+      repairPluginStateEntriesForDoctor({ pluginId, env, namespace, replacements, authority });
     context.updateAcpSessionIdentity = (input) =>
       updateAcpSessionIdentityForDoctor(params, authority, input);
     context.deletePluginStateEntriesIfUnchanged = (namespace, entries) => {
