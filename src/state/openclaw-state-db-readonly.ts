@@ -730,3 +730,12 @@ export function readCurrentOpenClawStateDatabaseContentVersion(
   const env = options.env ?? process.env;
   return stateSnapshotReads.exit(() => readAdmittedStateContentVersion(pathname, env));
 }
+
+/** Current guards leave discovery snapshots after validating their inherited read admission. */
+export function withCurrentOpenClawStateReadScope<T>(
+  options: OpenClawStateDatabaseOptions,
+  operation: (pathname: string) => T,
+): T {
+  const pathname = resolveReadOnlyPath(options);
+  return stateSnapshotReads.exit(() => operation(pathname));
+}
