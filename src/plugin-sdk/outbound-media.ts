@@ -1,6 +1,6 @@
 // Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
-import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
@@ -231,19 +231,10 @@ export function createHostedOutboundMediaStore(
   ) {
     throw new Error("hosted outbound media physical TTL must be a positive safe integer");
   }
-  let capacityMutation = Promise.resolve();
+  const withCapacityMutation = createAsyncLock();
   const activeReaders = new Map<string, number>();
   const deferredDeletes = new Set<string>();
   const deletingEntries = new Set<string>();
-
-  async function withCapacityMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = capacityMutation.then(operation, operation);
-    capacityMutation = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await result;
-  }
 
   async function deleteEntry(id: string): Promise<boolean> {
     // Deletion revokes the bearer capability immediately, even when an admitted
@@ -408,10 +399,7 @@ export function createHostedOutboundMediaStore(
       ) {
         break;
       }
-      const id = parseHostedOutboundMediaMetaKey(row.key);
-      if (!id) {
-        continue;
-      }
+      const id = row.value.id;
       // Capacity eviction is speculative until a candidate has no admitted
       // readers. Skip active capabilities instead of revoking them on failure.
       if ((activeReaders.get(id) ?? 0) > 0) {
@@ -601,8 +589,7 @@ export function buildHostedOutboundMediaResponseHeaders(
   metadata: Pick<HostedOutboundMediaMetadata, "byteLength" | "contentType" | "fileName">,
   options: { fallbackFileName?: string } = {},
 ): Record<string, string> {
-  const contentType =
-    normalizeMimeType(metadata.contentType?.split(";", 1)[0]?.trim()) ?? "application/octet-stream";
+  const contentType = normalizeMimeType(metadata.contentType) ?? "application/octet-stream";
   const fileName = sanitizeUntrustedFileName(
     metadata.fileName ?? options.fallbackFileName ?? "attachment.bin",
     "attachment.bin",

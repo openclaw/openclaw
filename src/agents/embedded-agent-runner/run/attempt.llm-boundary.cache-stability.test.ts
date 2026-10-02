@@ -1,9 +1,7 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { streamOpenAICompletions, streamOpenAIResponses } from "@openclaw/ai/internal/openai";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { resolveResponsesContinuationRequest } from "../../../../packages/ai/src/transports/openai-responses-continuation.js";
 import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -15,6 +13,7 @@ import {
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
 import { persistUserTurnTranscript } from "../../../sessions/user-turn-transcript.test-support.js";
+import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -26,6 +25,7 @@ import { convertToLlm } from "../../sessions/messages.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-99495-boundary-");
 const TS = 1717570800000;
 const options = { timezone: "UTC" };
 const user = (text: string, timestamp = TS): UserMessage => ({
@@ -147,7 +147,7 @@ describe("prompt-cache boundary regressions", () => {
   });
 
   it("keeps every sent fingerprint stable and appends one late-media turn", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-99495-boundary-"));
+    const dir = sessionDirs.make();
     const target = {
       agentId: "main",
       cwd: dir,
@@ -165,47 +165,43 @@ describe("prompt-cache boundary regressions", () => {
     const media = new Promise<UserTurnInput>((resolve) => {
       resolveMedia = resolve;
     });
-    try {
-      const recorder = createUserTurnTranscriptRecorder({
-        input,
-        target,
-        resolveInput: async () => {
-          markStarted();
-          return await media;
-        },
-      });
-      const persistence = recorder.persistFallback();
-      await started;
-      await persistUserTurnTranscript({ ...target, input });
-      recorder.markRuntimePersisted(recorder.message);
-      const runtimeMessage = mergePreparedUserTurnMessageForRuntime({
-        runtimeMessage: user(input.text),
-        preparedMessage: recorder.message,
-      });
-      const sent = normalizeMessagesForLlmBoundary([runtimeMessage], options);
-      recorder.markSentToProvider?.();
-      const mediaPath = path.join(dir, "image.png");
-      resolveMedia({ ...input, media: [{ path: mediaPath, contentType: "image/png" }] });
-      await persistence;
-      const persisted = (await loadTranscriptEvents(target))
-        .map((entry) => entry as { message?: AgentMessage })
-        .flatMap((entry) => (entry.message ? [entry.message] : []));
-      const next = normalizeMessagesForLlmBoundary(persisted, options);
-      const late = expectDefined(persisted.at(-1), "persisted late-media turn");
-      expect(next).toHaveLength(sent.length + 1);
-      expect(next.slice(0, sent.length)).toEqual(sent);
-      expect(late).toMatchObject({ content: "", __openclaw: { lateMedia: true } });
-      expect(next.at(-1)).toMatchObject({
-        content: `${buildTimestampPrefix(new Date(TS), options)}[media attached: ${mediaPath}]`,
-      });
-      const projection = buildLateMediaAttachedProjection(late);
-      expect(projection.text).toBe(`[media attached: ${mediaPath}]`);
-      expect(projection.media).toEqual([
-        expect.objectContaining({ path: mediaPath, contentType: "image/png", kind: "image" }),
-      ]);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    const recorder = createUserTurnTranscriptRecorder({
+      input,
+      target,
+      resolveInput: async () => {
+        markStarted();
+        return await media;
+      },
+    });
+    const persistence = recorder.persistFallback();
+    await started;
+    await persistUserTurnTranscript({ ...target, input });
+    recorder.markRuntimePersisted(recorder.message);
+    const runtimeMessage = mergePreparedUserTurnMessageForRuntime({
+      runtimeMessage: user(input.text),
+      preparedMessage: recorder.message,
+    });
+    const sent = normalizeMessagesForLlmBoundary([runtimeMessage], options);
+    recorder.markSentToProvider?.();
+    const mediaPath = path.join(dir, "image.png");
+    resolveMedia({ ...input, media: [{ path: mediaPath, contentType: "image/png" }] });
+    await persistence;
+    const persisted = (await loadTranscriptEvents(target))
+      .map((entry) => entry as { message?: AgentMessage })
+      .flatMap((entry) => (entry.message ? [entry.message] : []));
+    const next = normalizeMessagesForLlmBoundary(persisted, options);
+    const late = expectDefined(persisted.at(-1), "persisted late-media turn");
+    expect(next).toHaveLength(sent.length + 1);
+    expect(next.slice(0, sent.length)).toEqual(sent);
+    expect(late).toMatchObject({ content: "", __openclaw: { lateMedia: true } });
+    expect(next.at(-1)).toMatchObject({
+      content: `${buildTimestampPrefix(new Date(TS), options)}[media attached: ${mediaPath}]`,
+    });
+    const projection = buildLateMediaAttachedProjection(late);
+    expect(projection.text).toBe(`[media attached: ${mediaPath}]`);
+    expect(projection.media).toEqual([
+      expect.objectContaining({ path: mediaPath, contentType: "image/png", kind: "image" }),
+    ]);
   });
 
   it.each(["openai-completions", "openai-responses"] as const)(

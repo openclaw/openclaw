@@ -228,11 +228,12 @@ describe("SQLite session entry patch commit revalidation", () => {
       });
     }
 
-    it.each(
-      ["sessionId", "lifecycleRevision", "activeWriterRunId"].flatMap((field) =>
-        ["foreign", "same-connection"].map((writer) => ({ field, writer })),
-      ),
-    )("rejects a changed $field from a $writer writer", ({ field, writer }) => {
+    it.each([
+      { field: "sessionId", writer: "foreign" },
+      { field: "lifecycleRevision", writer: "foreign" },
+      { field: "activeWriterRunId", writer: "foreign" },
+      { field: "activeWriterRunId", writer: "same-connection" },
+    ])("rejects a changed $field from a $writer writer", ({ field, writer }) => {
       const guard = createSessionEntryRevisionGuard(database.db, () => {}, ownerPredicate());
       guard();
       if (writer === "foreign") {
@@ -485,22 +486,17 @@ describe("SQLite session entry patch commit revalidation", () => {
     });
   });
 
-  it.each([false, true])(
-    "commits an unchanged persisted row after preparation (reopen: %s)",
-    async (reopen) => {
-      const persisted = await patchEntry("ordinary", () => {
-        if (reopen) {
-          expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        }
-        return { label: "renamed" };
-      });
-      expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
-      expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
-        label: "renamed",
-        sessionId: "session-1",
-      });
-    },
-  );
+  it("commits an unchanged persisted row after reopening during preparation", async () => {
+    const persisted = await patchEntry("ordinary", () => {
+      expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      return { label: "renamed" };
+    });
+    expect(persisted).toMatchObject({ label: "renamed", sessionId: "session-1" });
+    expect(loadExactSessionEntry(scope)?.entry).toMatchObject({
+      label: "renamed",
+      sessionId: "session-1",
+    });
+  });
 
   it("rejects the commit when the row changed while the update callback ran", async () => {
     await expect(

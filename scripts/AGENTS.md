@@ -59,7 +59,10 @@ without changing the receipt or substituting today's main or the check's base.
 `OPENCLAW_PR_TOOLING_ROOT` selects a full checkout of the same repository for
 materialized wrappers' third-party dependencies; otherwise `openclaw.pr.toolingRoot` in the
 canonical checkout's Git config applies, then the canonical checkout itself.
-The standalone CI watcher resolves missing packages from the same tooling root when its checkout has no `node_modules`, with the same explicit-root identity checks and exact package versions.
+The standalone CI watcher and Crabbox entrypoint resolve missing third-party
+packages from the same tooling root when their checkout has no `node_modules`,
+with the same explicit-root identity checks and exact package versions. They
+never link an installation or resolve workspace packages from another checkout.
 The wrapper still selects and verifies code against the existing trust anchor.
 Installed package versions must exactly match the anchor manifest. On mismatch,
 an explicitly selected, separate, clean `main` checkout is fetched, fast-forwarded,
@@ -155,7 +158,11 @@ pending/skipped `openclaw/ci-gate`. An explicitly approved `pre-existing-failure
 attribution instead binds the current failed attempt, effective gate check-run,
 tested merge/base, unchanged failure inputs, and inspected qualification artifacts.
 Every failed job and fail-fast cancellation must be accounted for; cancelled
-coverage stays unrun. An independently attributed cancelled Node test,
+coverage stays unrun. Current `openclaw/openclaw` PR reruns let every Node matrix
+leg finish; only PRs in other workflow repositories use native matrix fail-fast.
+Historical runs retain their tested workflow's cancellation policy, so the matrix
+attribution route still verifies that exact expression and run context.
+An independently attributed cancelled Node test,
 `check-prod-types`, or real-Gateway UI root can use
 `failures[].failedStep: { number, workflowJob }`, with
 `checks-node-core-test-nondist-shard`, `check-shard`, or

@@ -1838,10 +1838,7 @@ describe("gateway agent handler", () => {
         { reqId: "provider-owned-daily-boundary" },
       );
 
-      const call = await waitForAgentCommandCall<{
-        sessionId?: string;
-        sessionKey?: string;
-      }>();
+      const call = await waitForAgentCommandCall();
       expect(call.sessionKey).toBe("agent:main:main");
       expect(call.sessionId).toBe("provider-owned-session-id");
       expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
@@ -2128,6 +2125,7 @@ describe("gateway agent handler", () => {
           storePath: "/tmp/sessions.json",
           nextSessionId: "caller-selected-session-id",
           nextSessionKey: "agent:main:main",
+          endedTranscript: expect.objectContaining({ available: true }),
         },
       );
       expect(mocks.emitGatewaySessionStartPluginHook).toHaveBeenCalledTimes(1);

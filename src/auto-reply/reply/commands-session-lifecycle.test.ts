@@ -1,9 +1,10 @@
 // Tests conversation binding lifecycle updates and non-destructive detach.
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ChannelConversationBindingSupport } from "../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
+import { handleSessionCommand } from "./commands-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 
@@ -201,7 +202,6 @@ vi.mock("../../infra/outbound/session-binding-service.js", () => {
   };
 });
 
-let handleSessionCommand: (typeof import("./commands-session.js"))["handleSessionCommand"];
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
 } satisfies OpenClawConfig;
@@ -381,10 +381,6 @@ function expectIdleTimeoutSetReply(
 }
 
 describe("/session conversation bindings", () => {
-  beforeAll(async () => {
-    ({ handleSessionCommand } = await import("./commands-session.js"));
-  });
-
   beforeEach(() => {
     hoisted.setThreadBindingIdleTimeoutBySessionKeyMock.mockReset();
     hoisted.setThreadBindingMaxAgeBySessionKeyMock.mockReset();

@@ -1,25 +1,4 @@
 import type {
-  AcpSessionEntryMutationInput,
-  AcpSessionEntryMutationResult,
-} from "../acp/runtime/session-meta-entry.types.js";
-import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
-import type {
-  TranscriptArchivePublishPlan,
-  TranscriptArchivePublishResult,
-} from "../config/sessions/session-accessor.sqlite-archive-types.js";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import type {
-  SessionEntryReplacementCommit,
-  SessionEntryReplacementCommitted,
-} from "../config/sessions/session-accessor.sqlite-replacement-types.js";
-import type {
-  PublishedSessionTranscriptArchive,
-  SessionLegacyArchiveRemovalResult,
-} from "../config/sessions/session-history-archive-pruning.types.js";
-import type { SessionPendingInputWithdrawal } from "../config/sessions/session-pending-input-withdrawal.worker.js";
-import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
-import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
-import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
@@ -29,12 +8,12 @@ import type {
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import type { SqliteTrajectoryRuntimeAppend } from "../trajectory/runtime-store.sqlite.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
+import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
-export type AgentDatabaseExecutionIdentity = {
+export type AgentDatabaseFileExecutionIdentity = {
   kind: "file";
   physicalIdentity: string;
   birthtime?: string;
@@ -43,7 +22,7 @@ export type AgentDatabaseExecutionIdentity = {
 };
 
 export type AgentDatabaseExecutionFileIdentity = Pick<
-  AgentDatabaseExecutionIdentity,
+  AgentDatabaseFileExecutionIdentity,
   "kind" | "physicalIdentity" | "birthtime" | "nativeLocation"
 >;
 
@@ -54,7 +33,8 @@ export type AgentDatabaseGenerationClaim = {
   assertCurrent(): void;
 };
 
-export type AgentDatabaseExecutionOpen = {
+export type AgentDatabaseFileExecutionOpen = {
+  kind?: "file";
   leaseId: string;
   agentId: string;
   databasePath: string;
@@ -65,57 +45,54 @@ export type AgentDatabaseExecutionOpen = {
   creatingIdentity?: DatabasePathIdentity;
 };
 
-export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
-  "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
-  "trajectory.events.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
-  "session.archives.preparePublication": {
-    input: {
-      archiveDirectory: string;
-      requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
-    };
-    output: TranscriptArchivePublishPlan[];
-  };
-  "session.archives.recordPublication": {
-    input: { results: readonly TranscriptArchivePublishResult[]; nowMs: number };
-    output: void;
-  };
-  "session.transcript.initialize": {
-    input: { sessionKey: string; sessionId: string; cwd?: string };
-    output: SessionTranscriptInitializationPublication;
-  };
-  "database.prepareWrite": { input: undefined; output: void };
-  "session.entry.read": { input: { sessionKey: string }; output: InternalSessionEntry | undefined };
-  "session.entry.acp": {
-    input: AcpSessionEntryMutationInput;
-    output: AcpSessionEntryMutationResult;
-  };
-  "session.entries.replace": {
-    input: SessionEntryReplacementCommit & {
-      initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
-    };
-    output: SessionEntryReplacementCommitted;
-  };
-  "session.providerReview.compare": {
-    input: SessionProviderReviewComparison;
-    output: SessionEntry;
-  };
-  "session.pendingInputs.withdraw": {
-    input: SessionPendingInputWithdrawal;
-    output: boolean;
-  };
-  "session.archivePruning.deletePublished": {
-    input: PublishedSessionTranscriptArchive;
-    output: void;
-  };
-  "session.archivePruning.removeLegacy": {
-    input: { filePath: string };
-    output: SessionLegacyArchiveRemovalResult;
-  };
-  "session.archivePruning.reclaimPages": {
-    input: { maxPages?: number };
-    output: SqliteWalReclamationResult;
-  };
+/** Process-private locators; neither a handle nor its incarnation grants authority. */
+export type AgentDatabaseIncognitoIdentity = Readonly<{
+  kind: "ephemeral";
+  handle: string;
+  incarnation: string;
+}>;
+
+export type AgentDatabaseIncognitoOpen = {
+  kind: "ephemeral";
+  identity: AgentDatabaseIncognitoIdentity;
+  agentId: string;
+  databasePath: string;
+  environment: SqliteWorkerStateContext["environment"];
 };
+
+export type AgentDatabaseExecutionOpen =
+  | AgentDatabaseFileExecutionOpen
+  | AgentDatabaseIncognitoOpen;
+
+type AgentDatabaseIncognitoMemory = {
+  agentId: string;
+  /** SQLite page allocation only, excluding allocator, decoded results, and transport memory. */
+  databaseBytes: number;
+  pageCount: number;
+  pageSize: number;
+};
+
+/** P1 deliberately admits no session-domain operation before its complete caller cutover. */
+export type AgentDatabaseIncognitoOperations = {
+  "database.incognito.memory": { input: undefined; output: AgentDatabaseIncognitoMemory };
+};
+
+export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
+
+export class IncognitoSessionEndedError extends Error {
+  readonly code = "INCOGNITO_SESSION_ENDED";
+
+  constructor(options?: ErrorOptions) {
+    super("Incognito session ended. Create a new incognito session to continue.", options);
+    this.name = "IncognitoSessionEndedError";
+  }
+}
+
+export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
+  RegisteredAgentWorkerOperations & {
+    "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "database.prepareWrite": { input: undefined; output: void };
+  };
 
 /** A request owner composes its retained admission with the native owner's validation. */
 export type AgentDatabaseRequestExecutionSource = {

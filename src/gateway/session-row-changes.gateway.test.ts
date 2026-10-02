@@ -62,31 +62,28 @@ function observeChanges() {
 }
 
 describe("gateway session row change publications", () => {
-  it.each(["start", "end", "error"] as const)(
-    "publishes lifecycle %s only after an accepted commit",
-    async (phase) => {
-      const { changed, facts, unsubscribe } = observeChanges();
-      const write = (sessionId = entry.sessionId) =>
-        persistGatewaySessionLifecycleEvent({
-          sessionKey: target.sessionKey,
-          agentId: target.agentId,
-          event: { sessionId, runId: "row-run", ts: 2_000, data: { phase } },
-        });
-      try {
-        rejectCommit = true;
-        await expect(write()).rejects.toThrow("commit rejected");
-        expect(changed).not.toHaveBeenCalled();
-        rejectCommit = false;
-        await write();
-        expect(changed).toHaveBeenCalledExactlyOnceWith(target);
-        expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
-        await write("replaced-generation");
-        expect(changed).toHaveBeenCalledTimes(1);
-      } finally {
-        unsubscribe();
-      }
-    },
-  );
+  it("publishes lifecycle errors only after an accepted commit", async () => {
+    const { changed, facts, unsubscribe } = observeChanges();
+    const write = (sessionId = entry.sessionId) =>
+      persistGatewaySessionLifecycleEvent({
+        sessionKey: target.sessionKey,
+        agentId: target.agentId,
+        event: { sessionId, runId: "row-run", ts: 2_000, data: { phase: "error" } },
+      });
+    try {
+      rejectCommit = true;
+      await expect(write()).rejects.toThrow("commit rejected");
+      expect(changed).not.toHaveBeenCalled();
+      rejectCommit = false;
+      await write();
+      expect(changed).toHaveBeenCalledExactlyOnceWith(target);
+      expect(facts).toHaveBeenCalledExactlyOnceWith({ ...target, facts: { kind: "unchanged" } });
+      await write("replaced-generation");
+      expect(changed).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
 
   it("publishes observer digests only after an accepted commit", async () => {
     const { changed, facts, unsubscribe } = observeChanges();

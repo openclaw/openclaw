@@ -179,7 +179,7 @@ export async function runGatewayLoop(params: {
     // Graceful signal/restart paths call process.exit(), which skips beforeExit.
     if (!foregroundUpdateClosed) {
       await eagerLifecycleRuntime
-        .stopGatewayManagedProviderLocalServices()
+        .stopActiveManagedProviderLocalServices()
         .catch((error: unknown) => {
           gatewayLog.warn(`managed local service shutdown failed: ${formatErrorMessage(error)}`);
         });
@@ -397,7 +397,7 @@ export async function runGatewayLoop(params: {
     if (foregroundHandoff) {
       // Finish lazy old-runtime cleanup while activation is still fenced by the helper.
       try {
-        await eagerLifecycleRuntime.stopGatewayManagedProviderLocalServices();
+        await eagerLifecycleRuntime.stopActiveManagedProviderLocalServices();
       } catch (error) {
         gatewayLog.error(
           `foreground update cancelled after provider cleanup failed: ${formatErrorMessage(error)}`,
@@ -1079,13 +1079,8 @@ export async function runGatewayLoop(params: {
       updateSuccessor.stop("SIGTERM");
       return;
     }
-    void (async () => {
-      const { consumeGatewayRestartIntentPayloadSync } = await gatewayLifecycleRuntimeLoader.load();
-      if (foregroundUpdateClosed) {
-        updateSuccessor.stop("SIGTERM");
-        return;
-      }
-      const restartIntent = consumeGatewayRestartIntentPayloadSync();
+    try {
+      const restartIntent = eagerLifecycleRuntime.consumeGatewayRestartIntentPayloadSync();
       // SIGTERM hands replacement to the caller (e.g. systemctl restart).
       // Drain as a restart, then exit even when in-process respawn is configured.
       request(
@@ -1094,10 +1089,10 @@ export async function runGatewayLoop(params: {
         restartIntent?.reason,
         restartIntent ?? undefined,
       );
-    })().catch((err: unknown) => {
+    } catch (err) {
       gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
       request("stop", "SIGTERM");
-    });
+    }
   };
   const onSigint = () => {
     observeSignal("SIGINT");
@@ -1110,7 +1105,7 @@ export async function runGatewayLoop(params: {
     if (foregroundUpdateClosed) {
       return;
     }
-    void (async () => {
+    try {
       const {
         abortPendingChannelReloads,
         consumeGatewayRestartIntentPayloadSync,
@@ -1120,10 +1115,7 @@ export async function runGatewayLoop(params: {
         markGatewayRestartHandled,
         peekGatewayRestartReason,
         scheduleGatewayRestart,
-      } = await gatewayLifecycleRuntimeLoader.load();
-      if (foregroundUpdateClosed) {
-        return;
-      }
+      } = eagerLifecycleRuntime;
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
         abortPendingChannelReloads();
@@ -1182,8 +1174,8 @@ export async function runGatewayLoop(params: {
         signalRestartIntent?.reason ?? restartReason,
         signalRestartIntent ?? undefined,
       );
-    })().catch((err: unknown) => {
-      // Defense in depth: if anything in the listener body rejects, the
+    } catch (err) {
+      // Defense in depth: if anything in the listener body throws, the
       // SIGUSR2 emit has already advanced emittedRestartToken but no one
       // called markGatewayRestartHandled. Without unsticking the
       // token here, every subsequent scheduleGatewayRestart() would
@@ -1203,7 +1195,7 @@ export async function runGatewayLoop(params: {
       } catch {
         // Keep admission recovery independent from restart-token recovery.
       }
-    });
+    }
   };
 
   process.on("SIGTERM", onSigterm);
@@ -1255,10 +1247,7 @@ export async function runGatewayLoop(params: {
       isFirstIteration = false;
       try {
         if (isRestartIteration) {
-          await prepareGatewayRestartIteration(
-            await gatewayLifecycleRuntimeLoader.load(),
-            gatewayLog,
-          );
+          await prepareGatewayRestartIteration(eagerLifecycleRuntime, gatewayLog);
         }
         if (installationReplacement) {
           await exitReplacedInstallation(installationReplacement);

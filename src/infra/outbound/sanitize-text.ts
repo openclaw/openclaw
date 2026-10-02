@@ -4,9 +4,6 @@ import { flattenMarkdownDetails } from "./markdown-details.js";
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripInternalRuntimeScaffolding } from "./protocol-scaffolding.js";
 
-// Retained for the deprecated plugin-sdk/infra-runtime compatibility barrel.
-export { stripInternalRuntimeScaffolding };
-
 // Preserve the existing tag grammar; only exclude unspaced comparison prose.
 const HTML_TAG_RE = /<\/?[a-z][a-z0-9_.:-]*(?=[\s/>])[^>]*>/gi;
 // Disjoint whitespace/prose branches avoid quadratic backtracking on malformed tags.

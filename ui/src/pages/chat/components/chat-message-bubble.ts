@@ -27,6 +27,7 @@ import {
   isToolCardError,
 } from "../../../lib/chat/tool-cards.ts";
 import { type EmbedSandboxMode, resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { presentedContent, type PresentationBinding } from "../../../lit/presentation-binding.ts";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
@@ -179,6 +180,7 @@ export function renderGroupedMessage(
     sessionKey?: string;
     presented?: boolean;
     transcriptVisible?: boolean;
+    transcriptPresentation?: PresentationBinding;
     boardProvider?: BoardProvider;
     agentId?: string;
     duplicateCount?: number;
@@ -562,7 +564,7 @@ export function renderGroupedMessage(
       videoPreviews.map(
         (item) => html`
           <div class="chat-image-frame chat-video-preview">
-            ${opts.transcriptVisible === false ? nothing : renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview")}
+            ${opts.transcriptVisible === false ? nothing : presentedContent(opts.transcriptPresentation ?? true, renderMessageAttachment(item, imageRenderOptions, onOpenSidebar, opts.onAssistantAttachmentLoaded, "preview"))}
           </div>
         `,
       ),

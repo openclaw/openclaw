@@ -61,6 +61,46 @@ describe("Codex app-server sandbox shell tools", () => {
     return { params, workspaceDir };
   }
 
+  it("keeps required-root Codex file tools confined without native or shell tools", async () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir);
+    const outside = path.join(tempDir, "outside.txt");
+    await fs.writeFile(outside, "outside");
+    await fs.symlink(outside, path.join(workspaceDir, "escape.txt"));
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.requireWorkspaceOnly = true;
+    params.sessionRoot = workspaceDir;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = { plugins: { enabled: false } };
+    params.agentDir = path.join(tempDir, "agent");
+    params.toolsAllow = ["read", "write", "edit", "exec", "process"];
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
+
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: false,
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "edit", "write"]);
+    const write = expectDefined(
+      tools.find((tool) => tool.name === "write"),
+      "rooted write",
+    );
+    const read = expectDefined(
+      tools.find((tool) => tool.name === "read"),
+      "rooted read",
+    );
+    await write.execute("inside", { path: "inside.txt", content: "inside" });
+    expect(await fs.readFile(path.join(workspaceDir, "inside.txt"), "utf8")).toBe("inside");
+    for (const file of [outside, "../outside.txt", "escape.txt"]) {
+      await expect(read.execute("outside-read", { path: file })).rejects.toThrow();
+      await expect(
+        write.execute("outside-write", { path: file, content: "changed" }),
+      ).rejects.toThrow();
+    }
+    expect(await fs.readFile(outside, "utf8")).toBe("outside");
+  });
+
   it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
     const execTool = expectDefined(
       createOpenClawCodingTools({ workspaceDir: tempDir }).find((tool) => tool.name === "exec"),

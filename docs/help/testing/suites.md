@@ -61,6 +61,11 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost).
     `runtime-api.js` fallback behavior with generated tiny plugin fixtures,
     not real bundled plugin source APIs. Real plugin API loads belong in
     plugin-owned contract/integration suites.
+  - Native plugin resolver suites run in `plugins-native-loader` on Node and Bun,
+    without shared source-loader overrides. A global Bun `--tsconfig-override`
+    can resolve denied fixture aliases into checkout source and bypass the
+    ownership boundary the suite is testing. Bun's native workers also disable
+    automatic package installation so missing fixture dependencies stay missing.
 
 Native dependency policy:
 

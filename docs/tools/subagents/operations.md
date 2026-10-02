@@ -129,6 +129,15 @@ collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
 
+For raw child session keys such as `global`, registration records the known
+owning agent as `childAgentId`. Child cancellation derives that agent's session
+store from current configuration, just as it does for agent-qualified keys,
+which need no recorded binding. Clearing the child's queued follow-ups and
+commands stays within that agent, even when another agent uses the same raw
+session key. Legacy runs without a recorded owner use current configuration to
+resolve one agent and clear only that agent's queues. The optional binding stays
+in `payload_json` when an older build rewrites the run.
+
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its
 matching child batch, so automatic delivery retries cannot start it again under
@@ -151,6 +160,8 @@ A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
 that branch check is present, `sessionId`. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
+The cancellation result waits for pending child-session metadata writes before
+checking that the original session still owns the outcome.
 
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
 reports actual stopped and failed child counts. A committed child cancellation

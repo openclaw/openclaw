@@ -136,6 +136,65 @@ describe("applyPluginAutoEnable providers", () => {
     });
   });
 
+  it("auto-enables the bundled owner selected by a storage location", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        storage: {
+          locations: {
+            archive: { provider: " ARCHIVE-OBJECTS ", settings: {}, encryption: "none" },
+          },
+        },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "storage-fixture",
+          channels: [],
+          contracts: { storageProviders: ["archive-objects"] },
+          origin: "bundled",
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["storage-fixture"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "storage-fixture"]);
+    expect(result.autoEnabledReasons).toEqual({
+      "storage-fixture": ["archive-objects storage provider selected"],
+    });
+  });
+
+  it.each([
+    { origin: "global" as const, plugins: {} },
+    { origin: "bundled" as const, plugins: { enabled: false } },
+    { origin: "bundled" as const, plugins: { entries: { "storage-fixture": { enabled: false } } } },
+    { origin: "bundled" as const, plugins: { deny: ["storage-fixture"] } },
+  ])(
+    "does not auto-enable storage against external trust or explicit disablement: %j",
+    ({ origin, plugins }) => {
+      const result = applyPluginAutoEnable({
+        config: {
+          storage: {
+            locations: {
+              archive: { provider: "archive-objects", settings: {}, encryption: "none" },
+            },
+          },
+          plugins,
+        },
+        env,
+        manifestRegistry: makeRegistry([
+          {
+            id: "storage-fixture",
+            channels: [],
+            contracts: { storageProviders: ["archive-objects"] },
+            origin,
+          },
+        ]),
+      });
+      expect(result.config.plugins?.entries?.["storage-fixture"]?.enabled).not.toBe(true);
+      expect(result.changes).toEqual([]);
+    },
+  );
+
   it("requires explicit enablement for external worker providers", () => {
     const result = applyPluginAutoEnable({
       config: { cloudWorkers: { profiles: { production: { provider: "cloud-vendor" } } } },

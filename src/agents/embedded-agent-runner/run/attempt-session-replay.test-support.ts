@@ -83,14 +83,16 @@ export function appendCompletedToolWork(
   original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 4 });
 }
 
-export function appendOversizedCacheSnapshot(manager: SessionManager) {
+export async function appendOversizedCacheSnapshot(manager: SessionManager) {
   const state = createToolResultPromptProjectionState();
   state.frozen.add("prior-result");
   state.sourceHashByKey.set("prior-result", "synthetic-source");
   state.replacements.set("prior-result", {
     content: [{ type: "text", text: "x".repeat(64_000) }],
   });
-  persistToolResultProjections(state, (type, data) => manager.appendCustomEntry(type, data));
+  await persistToolResultProjections(state, (type, data) =>
+    manager.appendCustomEntryAsync(type, data),
+  );
 }
 
 export async function withInterruptedTurn(
@@ -109,6 +111,7 @@ export async function withInterruptedTurn(
     toolProgress?: boolean;
     settledPrefix?: boolean;
     oversizedMetadata?: boolean;
+    compactedInput?: boolean;
   } = {},
 ) {
   await withOpenClawTestState({ label: "interrupted-keyed-replay" }, async (state) => {
@@ -164,7 +167,11 @@ export async function withInterruptedTurn(
     }
     if (options.oversizedMetadata) {
       appendCompletedToolWork(original, runId, undefined, "-before-window");
-      appendOversizedCacheSnapshot(original);
+      await appendOversizedCacheSnapshot(original);
+    }
+    if (options.compactedInput) {
+      const firstKeptEntryId = original.appendCustomEntry("openclaw.cache-ttl", { timestamp: 2 });
+      original.appendCompaction("Continue the unfinished request", firstKeptEntryId, 9_000);
     }
     if (options.toolProgress) {
       appendCompletedToolWork(original, runId);

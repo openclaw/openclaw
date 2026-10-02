@@ -42,8 +42,10 @@ test.each(["sessions.reset", "sessions.delete"] as const)(
       import("./server-methods/sessions-mutations.js"),
       import("./server-methods/sessions-delete.js"),
     ]);
-    const { acquireSessionMcpRuntime, releaseSessionMcpRuntime, retireSessionMcpRuntime } =
+    const { acquireSessionMcpRuntime, retireSessionMcpRuntime } =
       await import("../agents/agent-bundle-mcp-manager-api.js");
+    const { releaseSessionMcpRuntime } =
+      await import("../agents/agent-bundle-mcp-manager-cleanup.js");
     const { createSessionMcpRuntimeManager } =
       await import("../agents/agent-bundle-mcp-manager.js");
     const { SESSION_MCP_RUNTIME_MANAGER_KEY } =

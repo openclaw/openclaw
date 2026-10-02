@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runExecMock = vi.hoisted(() => vi.fn());
@@ -218,6 +219,26 @@ describe("qa multipass runtime", () => {
     }
   });
 
+  it("accepts repo-local output directory names beginning with two dots", async () => {
+    await withTempWorkspace(
+      { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "qa-multipass-output-" },
+      async (workspace) => {
+        await workspace.writeText(
+          "package.json",
+          JSON.stringify({ packageManager: "pnpm@10.32.1" }),
+        );
+        const outputDir = workspace.path("..qa-artifacts");
+
+        await expect(
+          runQaMultipass({ repoRoot: workspace.dir, outputDir, providerMode: "mock-openai" }),
+        ).rejects.toThrow("Multipass is not installed on this host.");
+
+        const script = fs.readFileSync(path.join(outputDir, "multipass-guest-run.sh"), "utf8");
+        expect(script).toContain("'--output-dir' '/workspace/openclaw-host/..qa-artifacts'");
+      },
+    );
+  });
+
   it("rejects output directories outside the mounted repo root", async () => {
     await expect(
       runQaMultipass({
@@ -379,7 +400,7 @@ describe("qa multipass runtime", () => {
             BASH_ENV: shellEnvPath,
             TMPDIR: workspace.dir,
             QA_TEST_REPO_ROOT: process.cwd(),
-            QA_TEST_NODE_EXEC: process.execPath,
+            QA_TEST_NODE_EXEC: resolveTestNodeExecPath(),
             QA_TEST_NODE_PRELOAD: preloadPath,
             QA_TEST_NODE_VERSION: versionPath,
             QA_TEST_PNPM_SPEC: pnpmSpecPath,

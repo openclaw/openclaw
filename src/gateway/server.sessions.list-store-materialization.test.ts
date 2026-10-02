@@ -36,7 +36,7 @@ const LIST_PARAMS = {
   limit: 100,
 };
 
-test("sessions.list keeps roster enumeration bounded as ordinary rows grow", async () => {
+test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
   await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
   const rosterReads: number[] = [];
@@ -50,13 +50,11 @@ test("sessions.list keeps roster enumeration bounded as ordinary rows grow", asy
       });
     }
     await writeSessionStore({ entries });
-    expect((await directSessionReq("sessions.list", LIST_PARAMS)).ok).toBe(true);
+    const request = { ...LIST_PARAMS, limit: rows + 1 };
+    expect((await directSessionReq("sessions.list", request)).ok).toBe(true);
     const roster = vi.spyOn(agentScope, "listAgentIds");
     try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", {
-        ...LIST_PARAMS,
-        limit: rows + 1,
-      });
+      const result = await directSessionReq<SessionsListResult>("sessions.list", request);
       expect(result.ok).toBe(true);
       expect(result.payload?.totalCount).toBe(rows + 1);
       expect(result.payload?.sessions.map(({ key }) => key)).toEqual([

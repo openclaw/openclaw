@@ -11,7 +11,8 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as preferences from "../../state/user-preferences.js";
-import { ensureProfileForEmail, linkEmail, setAvatar } from "../../state/user-profiles.js";
+import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import {

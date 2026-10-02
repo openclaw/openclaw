@@ -5,12 +5,59 @@ import {
   createRuntimeConfigWriteApplication,
 } from "../config/runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import type { GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayCronState } from "./server-cron.js";
-import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
+import type {
+  GatewayPluginReloadResult,
+  ManagedGatewayConfigReloaderParams,
+} from "./server-reload-contracts.js";
+
+export function createMonitorPublicationFailure() {
+  const database = openOpenClawStateDatabase();
+  return {
+    install() {
+      // Persistent fault injection reaches cron workers; managed admission services
+      // outstanding grants instead of blocking the host needed to finish their write.
+      runOpenClawStateWriteTransaction(
+        ({ db }) =>
+          db.exec(`CREATE TRIGGER monitor_publication_failure BEFORE UPDATE ON cron_jobs
+          WHEN json_extract(NEW.job_json, '$.agentId') = 'second'
+            AND json_extract(NEW.job_json, '$.schedule.everyMs') = 7200000
+          BEGIN SELECT RAISE(FAIL, 'monitor write failed'); END`),
+        { database },
+      );
+    },
+    remove() {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => db.exec("DROP TRIGGER monitor_publication_failure"),
+        { database },
+      );
+    },
+    dispose() {
+      runOpenClawStateWriteTransaction(
+        ({ db }) => db.exec("DROP TRIGGER IF EXISTS monitor_publication_failure"),
+        { database },
+      );
+    },
+  };
+}
 
 type ConfigWriteListener = (event: ConfigWriteNotification) => void;
 type ConfigWriteListenerRef = { current: ConfigWriteListener | null };
+
+export function makePluginReloadResult(
+  overrides: Partial<GatewayPluginReloadResult> = {},
+): GatewayPluginReloadResult {
+  return {
+    runtime: { operationId: "test-reload", generation: 1, pluginIds: [] },
+    activeChannels: new Set(),
+    ...overrides,
+  };
+}
 
 export function enableChannelReloadsForTest() {
   const previousSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;

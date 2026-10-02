@@ -152,6 +152,7 @@ export function loadOpenClawPluginsCore(
   nativeBindings: NativePluginLoadBindings,
   overrides?: InternalPluginLoadOverrides,
   inspectionResources?: PluginRegistryInspectionResources,
+  trackActivationCleanup?: (completion: Promise<void>) => void,
 ): PluginRegistry {
   if (getPluginCache().retirement) {
     throw new Error("Plugin inventory has retired; begin a new plugin operation.");
@@ -168,6 +169,8 @@ export function loadOpenClawPluginsCore(
         `empty-plugin-scope::${runtimeSubagentMode}::${options.workspaceDir ?? ""}`,
         runtimeSubagentMode,
         options.workspaceDir,
+        undefined,
+        trackActivationCleanup,
       );
     }
     return emptyRegistry;
@@ -192,6 +195,8 @@ export function loadOpenClawPluginsCore(
           context.cacheKey,
           context.runtimeSubagentMode,
           options.workspaceDir,
+          undefined,
+          trackActivationCleanup,
         );
       }
       return cached;
@@ -563,6 +568,8 @@ export function loadOpenClawPluginsCore(
         context.cacheKey,
         context.runtimeSubagentMode,
         options.workspaceDir,
+        undefined,
+        trackActivationCleanup,
       );
     }
     // Publish only complete registries: failed activation restores the prior runtime selection,

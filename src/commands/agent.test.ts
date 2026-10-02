@@ -81,12 +81,12 @@ import { getAgentAttemptExecutionMocks } from "./agent-command-state.test-mocks.
 import {
   createDefaultAgentResult,
   expectOwnedCommandSession,
-  expectSqliteSessionFileMarker,
   readSessionStore,
   useRealCommandSessionPersistence,
   writeSessionStoreSeed,
 } from "./agent-session.test-support.js";
 import { agentCommand, agentCommandFromIngress } from "./agent.js";
+import { registerAgentReplyPolicyTests } from "./agent.reply-policy.test-support.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configIoMocks = vi.hoisted(() => ({
@@ -225,11 +225,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
       async (params: {
         cfg: OpenClawConfig;
         deps: {
-          sendMessageTelegram?: (
-            to: string,
-            text: string,
-            opts: Record<string, unknown>,
-          ) => Promise<unknown>;
+          telegram?: (to: string, text: string, opts: Record<string, unknown>) => Promise<unknown>;
         };
         runtime: RuntimeEnv;
         opts: {
@@ -249,7 +245,7 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
         }
         if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
           for (const payload of payloads) {
-            await params.deps.sendMessageTelegram?.(params.opts.to, payload.text ?? "", {
+            await params.deps.telegram?.(params.opts.to, payload.text ?? "", {
               ...(payload.mediaUrl ? { mediaUrl: payload.mediaUrl } : {}),
               accountId: undefined,
               verbose: false,
@@ -263,37 +259,6 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
           }
         }
         return deliveryResult;
-      },
-    ),
-  };
-});
-
-vi.mock("../config/sessions/transcript-resolve.runtime.js", () => {
-  return {
-    resolveSessionTranscriptFile: vi.fn(
-      async (params: {
-        sessionId: string;
-        sessionKey: string;
-        sessionEntry?: { sessionFile?: string; sessionId?: string };
-        sessionStore?: Record<string, { sessionFile?: string; sessionId?: string }>;
-        storePath?: string;
-        agentId: string;
-        threadId?: string | number;
-      }) => {
-        const sessionFile =
-          params.sessionEntry?.sessionFile ??
-          `sqlite:${params.agentId}:${params.sessionId}:${params.storePath ?? ""}`;
-        let sessionEntry = params.sessionEntry;
-        if (params.sessionStore && params.sessionKey) {
-          const existingEntry = params.sessionStore[params.sessionKey] ?? {};
-          sessionEntry = {
-            ...existingEntry,
-            sessionId: params.sessionId,
-            sessionFile,
-          };
-          params.sessionStore[params.sessionKey] = sessionEntry;
-        }
-        return { sessionFile, sessionEntry };
       },
     ),
   };
@@ -396,7 +361,6 @@ function expectLastRunProviderModel(provider: string, model: string): void {
   expect(callArgs?.provider).toBe(provider);
   expect(callArgs?.model).toBe(model);
 }
-
 async function runAgentWithSessionKey(sessionKey: string): Promise<void> {
   await agentCommand({ message: "hi", sessionKey }, runtime);
 }
@@ -1688,7 +1652,7 @@ describe("agentCommand", () => {
           sessionEffects: "internal",
         },
         runtime,
-        { sendMessageTelegram },
+        { telegram: sendMessageTelegram },
       );
 
       expect(sendMessageTelegram).toHaveBeenCalledWith("telegram:+1222", "assistant-visible", {
@@ -1899,62 +1863,9 @@ describe("agentCommand", () => {
     });
   });
 
-  it("keeps synthetic direct-DM delivery mode out of existing CLI binding facts", async () => {
-    await withTempHome(async (home) => {
-      const store = path.join(home, "sessions.json");
-      const sessionKey = "agent:main:discord:direct:requester";
-      await writeSessionStoreSeed(store, {
-        [sessionKey]: {
-          sessionId: "requester-session",
-          updatedAt: Date.now(),
-          chatType: "direct",
-          modelProvider: "anthropic",
-          model: "claude-opus-4-6",
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId: "native-claude-session",
-              messageToolPolicyHash: "automatic-policy-hash",
-            },
-          },
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "discord", to: "user:requester" },
-            origin: { provider: "discord", chatType: "direct", to: "user:requester" },
-          }),
-        },
-      });
-      const cfg = mockConfig(home, store, {
-        models: {
-          "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-        },
-      });
-      cfg.messages = { visibleReplies: "automatic" };
+  registerAgentReplyPolicyTests({ withTempHome, mockConfig, runtime });
 
-      const prepared = await prepareAgentCommandExecution(
-        {
-          message: "child completed",
-          sessionKey,
-          sourceReplyDeliveryMode: "message_tool_only",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceSessionKey: "agent:main:subagent:child",
-            sourceTool: "subagent_announce",
-          },
-        },
-        runtime,
-      );
-
-      expect(prepared.opts.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(prepared.opts.cliSessionBindingFacts).toEqual({
-        sourceReplyDeliveryMode: "automatic",
-      });
-      expect(prepared.sessionEntry?.cliSessionBindings?.["claude-cli"]).toMatchObject({
-        sessionId: "native-claude-session",
-        messageToolPolicyHash: "automatic-policy-hash",
-      });
-    });
-  });
-
-  it("passes resolved session-id resume files to embedded runs", async () => {
+  it("passes resolved session-id routing context to embedded runs", async () => {
     await withTempHome(async (home) => {
       const resumeStore = path.join(home, "sessions-resume.json");
       await writeSessionStoreSeed(resumeStore, {
@@ -1973,10 +1884,17 @@ describe("agentCommand", () => {
 
       const callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionId).toBe("session-123");
-      expectSqliteSessionFileMarker({
+      expect(callArgs).toMatchObject({
         agentId: "main",
-        sessionFile: callArgs?.sessionFile,
+        sessionKey: "agent:main:foo",
+        sessionFile: "agent:main:foo",
+      });
+      expect(
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+      ).toEqual({
+        agentId: "main",
         sessionId: "session-123",
+        sessionKey: "agent:main:foo",
         storePath: resumeStore,
       });
     });
@@ -2319,7 +2237,6 @@ describe("agentCommand", () => {
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
       ]);
-
       await runAgentWithSessionKey(sessionKey);
       expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
       expectLastRunProviderModel("anthropic", "claude-opus-4-6");
@@ -2520,9 +2437,17 @@ describe("agentCommand", () => {
       );
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.sessionKey).toBe("agent:ops:main");
-      expectSqliteSessionFileMarker({
+      expect(callArgs?.sessionId).toBeTruthy();
+      expect(callArgs).toMatchObject({
         agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
+        sessionFile: "agent:ops:main",
+      });
+      expect(
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+      ).toEqual({
+        agentId: "ops",
+        sessionId: callArgs?.sessionId,
+        sessionKey: "agent:ops:main",
         storePath: store,
       });
       expect(callArgs?.messageChannel).toBe("slack");
@@ -2636,9 +2561,14 @@ describe("agentCommand", () => {
       let callArgs = getLastEmbeddedCall();
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
-      expectSqliteSessionFileMarker({
+      expect(callArgs?.sessionId).toBeTruthy();
+      expect(callArgs?.sessionFile).toBe("agent:ops:incident-42");
+      expect(
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+      ).toEqual({
         agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
+        sessionId: callArgs?.sessionId,
+        sessionKey: "agent:ops:incident-42",
         storePath: store,
       });
 
@@ -2655,9 +2585,14 @@ describe("agentCommand", () => {
         const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
         expect(callArgs?.agentId).toBe("ops");
         expect(callArgs?.sessionKey).toBe(sessionKey);
-        expectSqliteSessionFileMarker({
+        expect(sessionId).toBeTruthy();
+        expect(callArgs?.sessionFile).toBe(sessionKey);
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+        ).toEqual({
           agentId: "ops",
-          sessionFile: callArgs?.sessionFile,
+          sessionId,
+          sessionKey,
           storePath: store,
         });
         expectOwnedCommandSession({
@@ -2720,7 +2655,6 @@ describe("agentCommand", () => {
           }),
         },
       ]);
-
       await agentCommand(
         { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
         runtime,
@@ -2755,9 +2689,14 @@ describe("agentCommand", () => {
         const sessionId = expectDefined(callArgs?.sessionId, "embedded session id");
         expect(callArgs?.agentId).toBe("ops");
         expect(callArgs?.sessionKey).toBe(sessionKey);
-        expectSqliteSessionFileMarker({
+        expect(sessionId).toBeTruthy();
+        expect(callArgs?.sessionFile).toBe(sessionKey);
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].sessionTarget,
+        ).toEqual({
           agentId: "ops",
-          sessionFile: callArgs?.sessionFile,
+          sessionId,
+          sessionKey,
           storePath: store,
         });
         expectOwnedCommandSession({

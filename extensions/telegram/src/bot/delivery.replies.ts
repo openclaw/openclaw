@@ -83,10 +83,6 @@ type TelegramReplyChannelData = {
 
 type ChunkTextFn = (text: string) => TelegramTextDeliveryPage[];
 
-function markDelivered(progress: DeliveryProgress): void {
-  progress.deliveredCount += 1;
-}
-
 function resolveReplyToForSend(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -189,7 +185,7 @@ async function deliverTextReply(params: TextReplyParams): Promise<number | undef
             params.progress,
             suppressReply && first ? params.replyToId : replyToMessageId,
           );
-          markDelivered(params.progress);
+          params.progress.deliveredCount += 1;
         },
       };
     },
@@ -265,7 +261,7 @@ async function deliverMediaReply(
       message,
       ...(plainText ? { text: plainText } : {}),
     });
-    markDelivered(params.progress);
+    params.progress.deliveredCount += 1;
   };
   const deliverAcceptedMedia = async (options: {
     sender: TelegramOutboundMediaSender;
@@ -431,7 +427,7 @@ async function deliverMediaReply(
           firstDeliveredMessageId ??= fallbackMessageId;
           visibleFallbackText = fallbackText;
           markReplyApplied(params.progress, voiceFallbackReplyTo);
-          markDelivered(params.progress);
+          params.progress.deliveredCount += 1;
           return;
         }
         if (isTelegramCaptionTooLongError(voiceErr)) {
@@ -802,7 +798,7 @@ async function deliverReplyPlan(
           verbose: false,
         });
         if (reactionResult.ok) {
-          markDelivered(progress);
+          progress.deliveredCount += 1;
         } else {
           params.runtime.error?.(danger(reactionResult.warning));
           continue;

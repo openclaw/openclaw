@@ -7,7 +7,6 @@ import {
 import {
   resolveConversation,
   resolveConversationRegistryScope,
-  runConversationDatabaseWrite,
 } from "../config/sessions/conversation-registry.js";
 import { resolveConversationRouteFingerprint } from "../config/sessions/conversation-route-fingerprint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -39,16 +38,13 @@ export async function runGatewayConversationSend(params: {
 }): Promise<ConversationSendResult> {
   const scope = resolveConversationRegistryScope(params);
   try {
-    const operation: ConversationDeliveryRecord | undefined = await runConversationDatabaseWrite(
-      scope,
-      (writeScope) =>
-        getConversationDeliveryOperation(writeScope, params.operationId, {
-          operationKind: "send",
-          conversationRef: params.conversationRef,
-          ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
-          message: params.message,
-        }),
-    );
+    const operation: ConversationDeliveryRecord | undefined =
+      await getConversationDeliveryOperation(scope, params.operationId, {
+        operationKind: "send",
+        conversationRef: params.conversationRef,
+        ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
+        message: params.message,
+      });
 
     const conversation = resolveConversation(scope, params.conversationRef);
     if (!conversation) {

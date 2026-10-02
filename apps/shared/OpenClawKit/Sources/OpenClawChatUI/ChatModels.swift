@@ -178,12 +178,12 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
 
     public init(
         type: String?,
-        text: String?,
+        text: String? = nil,
         textSignature: String? = nil,
         thinking: String? = nil,
         thinkingSignature: String? = nil,
-        mimeType: String?,
-        fileName: String?,
+        mimeType: String? = nil,
+        fileName: String? = nil,
         artifactId: String? = nil,
         url: String? = nil,
         openUrl: String? = nil,
@@ -193,7 +193,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         sizeBytes: Int? = nil,
         durationSeconds: Double? = nil,
         playback: OpenClawChatPlaybackMode? = nil,
-        content: AnyCodable?,
+        content: AnyCodable? = nil,
         preview: OpenClawChatCanvasPreview? = nil,
         id: String? = nil,
         name: String? = nil,
@@ -478,15 +478,13 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
             guard let source = self.path ?? self.url, !source.isEmpty else { return nil }
             return OpenClawChatMessageContent(
                 type: ["image", "audio", "video"].contains(self.kind ?? "") ? self.kind : "file",
-                text: nil,
                 mimeType: self.contentType,
                 fileName: self.fileName ?? URL(string: source)?.lastPathComponent,
                 url: source,
                 width: self.width,
                 height: self.height,
                 sizeBytes: self.sizeBytes,
-                durationSeconds: self.durationMs.map { $0 / 1000 },
-                content: nil)
+                durationSeconds: self.durationMs.map { $0 / 1000 })
         }
     }
 
@@ -707,12 +705,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         } else if let text = try? container.decode(String.self, forKey: .content) {
             // Some session log formats store `content` as a plain string.
             [
-                OpenClawChatMessageContent(
-                    type: "text",
-                    text: text,
-                    mimeType: nil,
-                    fileName: nil,
-                    content: nil),
+                OpenClawChatMessageContent(type: "text", text: text),
             ]
         } else {
             []
@@ -751,10 +744,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                 guard mimeType.lowercased().hasPrefix("audio/") else { return nil }
                 return OpenClawChatMessageContent(
                     type: "file",
-                    text: nil,
                     mimeType: mimeType,
-                    fileName: (mediaPath as NSString).lastPathComponent,
-                    content: nil)
+                    fileName: (mediaPath as NSString).lastPathComponent)
             }
         self.content = decodedContent + mediaAttachments + audioAttachments
         self.isTruncated = decodedOpenClaw?.truncated == true || decodedContent.contains { content in

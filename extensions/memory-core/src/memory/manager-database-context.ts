@@ -7,6 +7,7 @@ import {
   resolveStateDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { stopMemorySqliteWalMaintenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
@@ -359,6 +360,13 @@ export class MemoryIndexDatabase {
     return undefined;
   }
 
+  read<Key extends "source.hash" | "cache.read">(
+    command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
+    assertCurrent: () => void,
+  ): Promise<MemoryPublicationOperations[Key]["output"]> {
+    return this.runPublication((scope) => scope.execute(command), assertCurrent);
+  }
+
   async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
     assertCurrent();
     // Each failed BEGIN releases admission before retry; successful batches yield at the caller.
@@ -519,6 +527,7 @@ export class MemoryIndexDatabase {
   closeShadow(): Promise<void> {
     this.closed = true;
     this.shadowClose ??= (async () => {
+      await stopMemorySqliteWalMaintenance(this.db);
       await this.drainPrivateAccess();
       await this.closePublicationWorker();
       // Each accepted pool task has closed its native database or joined Worker

@@ -1,5 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
@@ -145,12 +148,15 @@ async function captureManagedUpdateRequester(
       return Object.freeze({
         requester: admittedRequester,
         isCurrent: () =>
-          withArtifactPreservingStateReads(() => {
-            const config = readCurrentConfig();
-            return authorizationSource === "configured-owner"
-              ? isConfiguredCommandOwner(config, admittedRequester)
-              : authority?.source === authorizationSource && authority.isCurrent(config);
-          }),
+          withSynchronousArtifactPreservingStateSnapshot(
+            () => {
+              const config = readCurrentConfig();
+              return authorizationSource === "configured-owner"
+                ? isConfiguredCommandOwner(config, admittedRequester)
+                : authority?.source === authorizationSource && authority.isCurrent(config);
+            },
+            { current: { env: authorityEnv } },
+          ),
       });
     });
   } catch (error) {

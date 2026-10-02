@@ -135,10 +135,7 @@ extension OpenClawChatViewModel {
         self.isCreatingSession = true
         defer { self.isCreatingSession = false }
         let initiatingSession = self.currentSessionSnapshot()
-        let normalizedAgentID = agentID?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-        let requestedAgentID = normalizedAgentID?.isEmpty == false ? normalizedAgentID : nil
+        let requestedAgentID = ChatPayloadDecoding.trimmedNonEmptyString(agentID)?.lowercased()
         let requested = self.generatedNewSessionKey(agentID: requestedAgentID)
         // Only authoritative identities decide agent ownership; scanning the roster
         // could adopt an unrelated agent and hand sessions.create a cross-agent parent.
@@ -305,8 +302,7 @@ extension OpenClawChatViewModel {
 
     public func setSessionGroup(key: String, group: String?, agentID: String? = nil) async throws {
         let target = self.sessionMutationTarget(key: key, agentID: agentID)
-        let normalized = group?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let nextGroup = normalized?.isEmpty == false ? normalized : nil
+        let nextGroup = ChatPayloadDecoding.trimmedNonEmptyString(group)
         let owner = self.sidebarData
         let row = self.rosterEntry(key: key, agentID: target.agentID ?? self.activeAgentId)
         let token = row
@@ -318,11 +314,7 @@ extension OpenClawChatViewModel {
         receipt = try await routeLease.patchSession(
             key: key,
             agentID: target.agentID,
-            label: nil,
-            category: .some(nextGroup),
-            pinned: nil,
-            archived: nil,
-            unread: nil)
+            category: .some(nextGroup))
         if owner == nil,
            let index = self.sessions.firstIndex(where: { self.sessionMatchesTarget($0, target: target) })
         {
@@ -383,11 +375,7 @@ extension OpenClawChatViewModel {
                 receipt = try await routeLease.patchSession(
                     key: key,
                     agentID: targets[key]?.agentID,
-                    label: nil,
-                    category: nil,
-                    pinned: action == .pin,
-                    archived: nil,
-                    unread: nil)
+                    pinned: action == .pin)
             case .archive:
                 guard let expectedSessionID = entries[key]?.sessionId?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -399,11 +387,7 @@ extension OpenClawChatViewModel {
                     key: key,
                     agentID: targets[key]?.agentID,
                     expectedSessionID: expectedSessionID,
-                    label: nil,
-                    category: nil,
-                    pinned: nil,
-                    archived: true,
-                    unread: nil)
+                    archived: true)
             case .delete:
                 try await routeLease.deleteSession(key: key, agentID: targets[key]?.agentID)
                 if owner?.scopeRevision == epoch, let row = entries[key] { owner?.remove(row) }
@@ -452,8 +436,7 @@ extension OpenClawChatViewModel {
 
     public func fetchSessionList(search: String?, archived: Bool) async -> [OpenClawChatSessionEntry] {
         let session = self.currentSessionSnapshot()
-        let normalizedSearch = search?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = normalizedSearch?.isEmpty == false ? normalizedSearch : nil
+        let query = ChatPayloadDecoding.trimmedNonEmptyString(search)
         do {
             let res = try await self.transport.listSessions(
                 limit: Self.sessionListFetchLimit,
@@ -490,11 +473,7 @@ extension OpenClawChatViewModel {
                     key: key,
                     agentID: target.agentID,
                     expectedSessionID: row?.sessionId,
-                    label: .some(nextLabel),
-                    category: nil,
-                    pinned: nil,
-                    archived: nil,
-                    unread: nil)
+                    label: .some(nextLabel))
             })
     }
 
@@ -855,8 +834,7 @@ extension OpenClawChatViewModel {
     private static func sessionMutationEntryID(for message: OpenClawChatMessage) -> String? {
         guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
         else { return nil }
-        let entryID = message.transcriptMessageID?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return entryID?.isEmpty == false ? entryID : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptMessageID)
     }
 
     public func setSessionUnread(key: String, unread: Bool, agentID: String? = nil) {
@@ -935,12 +913,7 @@ extension OpenClawChatViewModel {
             receipt = try await routeLease.patchSession(
                 key: key,
                 agentID: target.agentID,
-                label: nil,
-                category: nil,
-                color: .some(color),
-                pinned: nil,
-                archived: nil,
-                unread: nil)
+                color: .some(color))
             self.refreshSessions(limit: Self.sessionListFetchLimit)
         } catch {
             self.errorText = error.localizedDescription
@@ -956,17 +929,17 @@ extension OpenClawChatViewModel {
             field: .pinned,
             update: { $0.pinned = pinned
                 $0.pinnedAt = pinnedAt
+                if pinned {
+                    $0.snoozedUntil = nil
+                    $0.snoozedAt = nil
+                }
             },
             mutation: { routeLease in
                 try await routeLease.patchSession(
                     key: key,
                     agentID: target.agentID,
                     expectedSessionID: row?.sessionId,
-                    label: nil,
-                    category: nil,
-                    pinned: pinned,
-                    archived: nil,
-                    unread: nil)
+                    pinned: pinned)
             })
     }
 
@@ -985,17 +958,18 @@ extension OpenClawChatViewModel {
             target: target,
             field: .archived,
             incarnation: session.sessionId,
-            update: { $0.archived = true },
+            update: { $0.archived = true
+                $0.pinned = false
+                $0.pinnedAt = nil
+                $0.snoozedUntil = nil
+                $0.snoozedAt = nil
+            },
             mutation: { routeLease in
                 let receipt = try await routeLease.patchSession(
                     key: key,
                     agentID: target.agentID,
                     expectedSessionID: expectedSessionID,
-                    label: nil,
-                    category: nil,
-                    pinned: nil,
-                    archived: true,
-                    unread: nil)
+                    archived: true)
                 if self.matchesCurrentSessionKey(incoming: key, agentId: target.agentID, current: self.sessionKey) {
                     // The archived session rejects new sends; return to the main session.
                     self.switchSession(to: self.resolvedMainSessionKey)
@@ -1009,10 +983,7 @@ extension OpenClawChatViewModel {
     @discardableResult
     public func restoreSession(_ session: OpenClawChatSessionEntry) async -> Bool {
         let target = self.sessionMutationTarget(key: session.key, agentID: session.agentId)
-        guard let expectedSessionID = session.sessionId?
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-            !expectedSessionID.isEmpty
-        else {
+        guard let expectedSessionID = ChatPayloadDecoding.trimmedNonEmptyString(session.sessionId) else {
             self.errorText = "Session lifecycle action requires a durable session identity."
             return false
         }
@@ -1030,12 +1001,7 @@ extension OpenClawChatViewModel {
                 key: session.key,
                 agentID: target.agentID,
                 expectedSessionID: expectedSessionID,
-                label: nil,
-                category: nil,
-                color: nil,
-                pinned: nil,
-                archived: false,
-                unread: nil)
+                archived: false)
             self.refreshSessions()
             return true
         } catch {

@@ -13,9 +13,11 @@ auth health, sandbox images, and plugin installs.
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
-    Doctor can migrate older on-disk layouts into the current structure:
+    Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. Session rows that still need `provider`, `lastProvider`, or `room` converted to their current fields are refused without changing the original store. Preserve a backup and use an older OpenClaw release to migrate those rows before upgrading. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
 
-    - Session rows and transcripts: import legacy `sessions.json` and JSONL history from `~/.openclaw/sessions/` or per-agent `sessions/` directories into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+    Doctor can migrate supported on-disk layouts into the current structure:
+
+    - Session rows and transcripts: import legacy `sessions.json` and JSONL history from per-agent `sessions/` directories or explicitly configured stores into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
     - Agent dir: from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`
     - WhatsApp auth state (Baileys): from legacy `~/.openclaw/credentials/*.json` (except `oauth.json`) to `~/.openclaw/credentials/whatsapp/<accountId>/...` (default account id: `default`)
     - Signed device identity: from `~/.openclaw/identity/device.json` into the `primary` `device_identities` row in `state/openclaw.sqlite`; Doctor also owns repair of invalid canonical rows; Gateway and node-host startup refuse an unimported identity instead of creating a replacement, and leave the separate device-auth file untouched
@@ -28,11 +30,15 @@ auth health, sandbox images, and plugin installs.
 
     Historical inline assistant directives in SQLite transcripts and archives are normalized by Doctor, including plain `openclaw doctor --non-interactive`. Gateway and ordinary CLI startup leave those historical bytes untouched. When replacing a binary without the updater, stop the Gateway and run Doctor against the same state/config before restarting if old history still contains reply, audio, TTS, or reaction markers. The official [container image entrypoint](/install/docker#upgrading-container-images) runs Doctor automatically before Gateway activation. This normalization keeps its existing completion cursor and stopped-writer checks; it does not enable repair-only maintenance, service changes, or exec-approval migration.
 
+    Repair prepares retained archive media normalization from read-only database snapshots before stopping a managed Gateway. Unchanged archives require no archive write transaction. Doctor records verified content and file identities in existing migration metadata, so another run at the same version skips parsing and reading unchanged archive copies. Imports, restores, changed files, and new versions invalidate those facts; canonical blob digests are still checked. Actual repairs retain stopped-writer authority and source revalidation.
+
+    Automatic discovery no longer imports the pre-agent `~/.openclaw/sessions/` layout. An explicit session-store path remains supported, including a configured path at that location.
+
     Legacy session-file import and repair belong to Doctor. Gateway startup checks readiness without importing those files; runtime session access uses only SQLite. An unreadable legacy session index and its transcripts remain at their original paths, and repeated startups refuse readiness with the Doctor command for the active profile. Stop the Gateway, back up its state, repair the named source, and run `openclaw doctor --fix` before restarting it. The [targeted migration sequence](/cli/doctor#session-sqlite-migration) provides inspection and validation evidence. Current SQLite maintenance does not require legacy files to remain on disk.
 
     When an unavailable plugin still needs legacy session files, Doctor retains those originals after verifying the core import. Startup accepts the retained files only when their session owners have matching verified imports. An unused configured agent does not need an empty database for another agent's history. Changed, unassigned, or unimported source rows still require repair before startup.
 
-    Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. Gateway startup reports pending repairs without executing them.
+    Doctor retains one prepared plugin selection through planning and post-session repair. A deferred external plugin stays deferred while admitted plugins complete their repairs; changing maintenance scopes does not add unplanned actions or block an update with an action-order mismatch. When no plugin migration is deferred and no verified legacy session source is retained, the post-session plugin repair runs its detectors once and skips the completion certification pass. Gateway startup reports pending repairs without executing them.
 
     Before archiving retained originals, Doctor rechecks pending plugin migrations against the current publication transaction. If those obligations changed during repair, the originals remain protected and Doctor reports the conflict for a later repair.
 
@@ -105,6 +111,22 @@ auth health, sandbox images, and plugin installs.
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
+
+    Legacy default-agent ownership is repaired only by Doctor. Gateway startup
+    leaves stored cron ownership unchanged. An ownerless job whose config still
+    retains a legacy default marker waits for repair without consuming its due
+    occurrence or disabling a one-shot. Manual runs return `openclaw doctor --fix`
+    guidance; explicitly owned jobs continue normally. Doctor pins the historical
+    owner before removing that marker, preserving the job's definition and runtime
+    state. Unresolved historical jobs also require Doctor before updates or removal,
+    and the current system agent does not gain management access to them. Operator
+    inspection remains available. Current configurations without a legacy marker keep their dynamic
+    system-agent selection.
+
+    Missing interval anchors are repaired by Doctor. Runtime scheduling can
+    calculate the next run without writing an anchor into an old definition.
+    Schedule maintenance and run outcomes preserve stored ownership and authored
+    fields; intentional enable/disable transitions change only the enabled field.
 
     The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 

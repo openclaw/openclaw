@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
@@ -181,11 +182,10 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   const payloadOutcomes: NonNullable<
     RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
   >["payloadOutcomes"] = Array.isArray(rawPayloadOutcomes)
-    ? rawPayloadOutcomes.flatMap((outcome) => {
-        if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+    ? rawPayloadOutcomes.flatMap((record) => {
+        if (!isRecord(record)) {
           return [];
         }
-        const record = outcome as Record<string, unknown>;
         const outcomeStatus =
           record.status === "failed" || record.status === "sent" || record.status === "suppressed"
             ? record.status
@@ -222,11 +222,10 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
     : undefined;
   const messagingToolSentTargets: RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"] =
     rawMessagingToolSentTargets
-      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((target) => {
-          if (!target || typeof target !== "object" || Array.isArray(target)) {
+      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((record) => {
+          if (!isRecord(record)) {
             return [];
           }
-          const record = target as Record<string, unknown>;
           const mediaUrls = collectMessagingToolDeliveredMediaUrls({
             messagingToolSentTargets: [record],
           });

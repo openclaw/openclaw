@@ -508,7 +508,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
       : undefined;
   if (Value.Check(AgentActivityItemSchema, activityItem)) {
-    if (!acceptsToolStreamSession(host, payload)) {
+    // Analysis items (Codex reasoning, context compaction) are not tool calls;
+    // a tool card would show a fabricated empty input and a completion.
+    if (!acceptsToolStreamSession(host, payload) || activityItem.kind === "analysis") {
       return true;
     }
     const item = activityItem;

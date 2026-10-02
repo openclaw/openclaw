@@ -3,11 +3,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  toAgentRequestSessionKey,
-} from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
@@ -33,11 +29,7 @@ function sessionKeyMatchesAgent(sessionKey: string, agentId: string, cfg: OpenCl
   }
 }
 
-function resolveRunSessionKeyForCaller(storeKey: string) {
-  return toAgentRequestSessionKey(storeKey) ?? storeKey;
-}
-
-/** Resolves live runs or the resident current-session ID index without storage reads. */
+/** Resolves the exact stored key from live runs or the resident session ID index. */
 export function resolveSessionKeyForRun(
   runId: string,
   opts: { agentId?: string; projection?: Pick<SessionRowProjection, "findBySessionId"> } = {},
@@ -55,7 +47,7 @@ export function resolveSessionKeyForRun(
   const cfg = getRuntimeConfig();
   const requestedAgentId = explicitAgentId ?? normalizeAgentId(resolveDefaultAgentId(cfg));
   if (cached && sessionKeyMatchesAgent(cached, requestedAgentId, cfg)) {
-    return resolveRunSessionKeyForCaller(cached);
+    return cached;
   }
   // The projection owns both hits and absence. Committed identity publications
   // update its index, so orphan events need neither scans nor a timed miss cache.
@@ -70,6 +62,5 @@ export function resolveSessionKeyForRun(
       matches.push([row.key, entry]);
     }
   }
-  const storeKey = resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
-  return storeKey ? resolveRunSessionKeyForCaller(storeKey) : undefined;
+  return resolvePreferredSessionKeyForSessionIdMatches(matches, runId);
 }

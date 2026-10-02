@@ -8,7 +8,7 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-l
 import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 import "../../styles/apps.css";
 import "../../components/native-chrome-setup.ts";
-import { brandIcons } from "../about/brand-icons.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { appsBrandIcons } from "./brand-icons.ts";
 
 registerAppsEnglish();

@@ -1,4 +1,3 @@
-// Imessage plugin module classifies CLI and Messages database locality.
 import { constants, accessSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -95,11 +94,8 @@ function isProvenLocalIMessageCliPath(params: { cliPath: string; remoteHost?: st
   return local;
 }
 
-function isLikelyLocalIMessageCliPath(params: { cliPath: string; remoteHost?: string }): boolean {
-  if (params.remoteHost?.trim()) {
-    return false;
-  }
-  const cliPath = params.cliPath.trim();
+function isLikelyLocalIMessageCliPath(rawCliPath: string): boolean {
+  const cliPath = rawCliPath.trim();
   if (cliPath === "imsg") {
     return true;
   }
@@ -131,7 +127,7 @@ export function resolveIMessageChatDbLookupPath(params: {
     return expandIMessageUserPath(configured);
   }
   // Receipt recovery is best effort and preserves the shipped wrapper heuristic.
-  if (!isLikelyLocalIMessageCliPath({ cliPath: params.cliPath, remoteHost: params.remoteHost })) {
+  if (!isLikelyLocalIMessageCliPath(params.cliPath)) {
     return undefined;
   }
   return defaultMessagesDbPath();

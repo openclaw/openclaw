@@ -134,6 +134,77 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Opt-in compiler evidence
+
+Keep `pnpm check:timed` (or `check:changed --timed`) for stage timings and
+`pnpm tsgo:profile <graph> --deep` for deliberate multi-pass graph/pprof analysis.
+For evidence from the compiler invocation you are already running, set
+`OPENCLAW_TSGO_METRICS_DIR=.artifacts/tsgo-metrics`. Each `run-tsgo` invocation
+writes a separate JSON artifact on ordinary local developer machines; neither
+metrics nor `OPENCLAW_TSGO_PPROF_DIR` requires `OPENCLAW_LOCAL_CHECK_MODE=throttled`,
+CI, or a server-specific setup. Unset or blank metrics means no metrics imports, probes,
+files, or additional output on the normal path. This also works for test shards
+and compiler stages reached through the timed check wrappers. It does not add a
+compiler invocation or change the compiler arguments, limits, deadline, signals,
+or cleanup policy. Metrics write failures warn without replacing compiler results.
+
+Artifacts record the effective command and exit/error/signal, managed wall time
+(including cleanup, excluding evidence I/O and artifact-ownership admission),
+revision, tracked-dirty status, installed native compiler/Node versions, lockfile
+digest, OS, and effective Go limits. Unknown provenance is `null`; tracked-dirty
+status does not account for untracked inputs. Commands and paths can contain
+private local information: inspect and scrub artifacts before sharing them.
+
+On Linux, opt-in sampling reads the compiler process's `/proc` CPU counters
+(all threads) and RSS high-water mark every 100 ms. CPU and peak RSS are explicitly
+**sampled lower bounds**, not exact end-of-process totals or process-tree memory.
+They can miss the final interval; very short runs or restricted procfs can have no
+usable samples. Missing statistics are `null` with a reason, never zero-filled.
+macOS and Windows report unsupported resource sampling; wall time and provenance
+remain available. No wrapper process changes signal ownership.
+
+An explicit `--tsBuildInfoFile` supplies before/after SHA-256 evidence. Its presence
+is not a cache hit: `hit` stays `unknown`, and the OS page cache is `uncontrolled`.
+Changed, readable JSON build metadata supplies total, root, and non-root/transitive
+file counts, including library/declaration inputs. Unchanged, absent, oversized
+(over 32 MiB), or unsupported metadata leaves counts unavailable rather than
+attributing a stale graph to this run. Implicit cache paths and solution-build
+caches are not inferred. No `--listFiles`, `--showConfig`, or diagnostics pass is
+launched to fill a missing field. Use the existing `tsgo:profile` tool when you
+intentionally need those additional passes.
+
+For a bounded comparison, use the same frozen install, source revision, resource
+limits, machine, and project for three absent-build-info/reuse pairs:
+
+```bash
+mkdir -p .artifacts
+benchmark_dir=$(mktemp -d .artifacts/tsgo-benchmark.XXXXXX)
+for repeat in 1 2 3; do
+  pair="$benchmark_dir/$repeat"
+  mkdir -p "$pair"
+  OPENCLAW_TSGO_METRICS_DIR="$pair/cold" node scripts/run-tsgo.mjs \
+    -p tsconfig.ui.json --incremental --tsBuildInfoFile "$pair/cache.tsbuildinfo" || break
+  OPENCLAW_TSGO_METRICS_DIR="$pair/warm" node scripts/run-tsgo.mjs \
+    -p tsconfig.ui.json --incremental --tsBuildInfoFile "$pair/cache.tsbuildinfo" || break
+done
+```
+
+Honor the host's existing build lock and resource policy around this command tree;
+do not run the pairs concurrently. Stop and investigate any nonzero compiler exit
+before interpreting timing. “Cold” here means only that this pair's build-info file
+was absent; it does not mean cold OS/dependency caches. “Warm” means reuse was
+attempted with identical inputs, not a proven cache hit. Compare medians and the
+range, report all exits and missing fields, and keep before/after revisions and
+lockfile/toolchain digests beside the results. Do not delete shared caches, drop OS
+caches, or relax resource caps to manufacture a favorable comparison. The recipe
+creates only a new benchmark directory and leaves normal caches untouched.
+
+For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
+per measured invocation, or use `tsgo:profile --deep`. Profiling changes measurement
+overhead: enable it for both comparison sides or keep it outside timing pairs.
+The evidence records the effective `--pprofDir`; it does not manage or delete those
+profiles. These measurements are developer evidence, not a CI pass/fail threshold.
+
 The Gateway watch regression check starts its idle CPU window only after readiness
 and the settle period. Startup and early-exit failures still fail the check. Missing
 CPU samples from an otherwise valid window fail measurement; whole-run CPU is
@@ -229,9 +300,10 @@ the added cost. Do not trim coverage, disable rules, or raise thresholds just
 to silence a warning.
 
 Correctness checks stay blocking, including types, semantic lint, blanket lint
-disables, assertion safety, missing or malformed evidence, failed commands,
-forbidden eager imports, and exactly-once ownership. Public SDK inventories and
-generated configuration-schema baselines remain contract guards. Runner matrix
+disables, assertion safety, the test timeout race ratchet, missing or malformed
+evidence, failed commands, forbidden eager imports, and exactly-once ownership.
+Public SDK inventories and generated configuration-schema baselines remain
+contract guards. Runner matrix
 caps protect shared runner-registration capacity and remain blocking. Explicit
 benchmark qualification verdicts retain their requested acceptance criteria.
 
@@ -289,23 +361,34 @@ is not generic compute offload. `.crabbox.yaml` defaults remote proof to
 credentials, so untrusted contributor or fork code must use secretless fork CI
 or sanitized direct AWS Crabbox instead.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.67.0 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.69.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.67.0 release
+Testboxes alive. Missing or older binaries use a verified managed 0.69.0 release
 before provider discovery or lease work. The original binary stays untouched.
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Dispatched check leases request `blacksmith-32vcpu-ubuntu-2404`. A native capacity
-probe measured eight CPUs and 30.95 GiB of memory on that class, compared with
-15.42 GiB on the previous 16-class. This supplies headroom for isolated runtime
-validation without increasing the number of jobs or workers. Workloads still
-admit work from observed resources; the runner label is not a capacity guarantee.
-PR hydration checks remain on `ubuntu-24.04`.
-Its outer GitHub job defaults to 240 minutes. Manual dispatches can override
-`timeout_minutes`. Testbox idle timeouts and individual test deadlines remain
-separate limits.
+Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
+`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+gates. Select it only for a justified memory need, not merely for more time; see
+[Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
+A native capacity probe measured eight CPUs and 30.95 GiB of memory on the
+32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
+isolated runtime validation without increasing the number of jobs or workers.
+Workloads still admit work from observed resources; the runner label is not a
+capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
+
+The outer GitHub deadline can terminate active SSH commands. Both profiles have
+a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
+job deadline. Individual test deadlines also remain separate limits. The standard
+workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
+managed Crabbox 0.69.0 does not forward arbitrary workflow inputs, including
+`timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
+within its total-job budget rather than treating TTL or a larger runner as a
+deadline override.
 Sanitized AWS runs set `CRABBOX_ENV_ALLOW=CI`, pass
 `--no-hydrate`, and use a fresh temporary remote `HOME`; this prevents the repo
 `OPENCLAW_*` allowlist and existing auth profiles from reaching untrusted code.
@@ -448,7 +531,9 @@ A supported sibling or `PATH` binary can run directly. The wrapper automatically
 replaces an outdated selection with the plugin-managed binary; rebuilding the
 sibling checkout is no longer a prerequisite for proof.
 
-The `blacksmith:` block in `.crabbox.yaml` already pins the org, workflow, job, and ref defaults, so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
+The `blacksmith:` block in `.crabbox.yaml` pins the org, workflow, and job defaults.
+The wrapper enforces workflow ref `main` while syncing the selected local source,
+so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
 ```bash
 pnpm crabbox:run -- --provider blacksmith-testbox \

@@ -1,11 +1,11 @@
 // Exercises ordered provider faults through the embedded runner failover boundary.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -57,6 +57,7 @@ type ScenarioOutcome =
     }
   | { kind: "error"; error: Error & { attempts?: unknown[] } };
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-fault-sequences-");
 const runEmbeddedAttemptMock = vi.fn<(params: unknown) => Promise<EmbeddedRunAttemptResult>>();
 const { sleepWithAbortMock } = vi.hoisted(() => ({
   sleepWithAbortMock: vi.fn(async (_ms: number, _abortSignal?: AbortSignal) => undefined),
@@ -136,8 +137,7 @@ function makeProviderConfig(fallbacks: string[]): OpenClawConfig {
 async function withScenarioWorkspace<T>(
   run: (paths: { agentDir: string; workspaceDir: string }) => Promise<T>,
 ): Promise<T> {
-  const rawRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fault-sequences-"));
-  const root = await fs.realpath(rawRoot);
+  const root = sessionDirs.make();
   const agentDir = path.join(root, "agents", "test", "agent");
   const workspaceDir = path.join(root, "workspace");
   await Promise.all([
@@ -151,15 +151,12 @@ async function withScenarioWorkspace<T>(
     random.mockRestore();
     const { waitForSessionTranscriptIndexReconcile } =
       await import("../config/sessions/session-transcript-reconcile.js");
-    const { closeOpenClawAgentDatabaseByPath } = await import("../state/openclaw-agent-db.js");
     const { closeAuthProfileReadPool } = await import("./auth-profiles/sqlite.js");
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
     try {
       await waitForSessionTranscriptIndexReconcile({ agentId: "test", path: databasePath });
     } finally {
       closeAuthProfileReadPool({ kind: "database", databasePath });
-      closeOpenClawAgentDatabaseByPath(databasePath);
-      await fs.rm(root, { recursive: true, force: true });
     }
   }
 }

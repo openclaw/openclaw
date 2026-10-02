@@ -56,7 +56,7 @@ const gitToolingTargets = [
   "ci-workflow-guards",
 ].map((name) => `test/scripts/${name}.test.ts`);
 
-it("keeps ordinary activity unit changes with their UI unit owner", () => {
+it("keeps activity unit changes narrow alongside root package metadata", () => {
   expect(hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts"])).toBe(false);
   expect(
     hasUiE2eAffectingChange(["ui/src/pages/activity/activity-page.test.ts", "package.json"]),
@@ -294,7 +294,7 @@ describe("CI changed Node test plan", () => {
   });
 
   it("defers named process proofs without dropping mixed ordinary targets", () => {
-    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
     const shards = createChangedNodeTestShards([...CI_PROOF_TEST_FILES, ordinary]);
     expect(shards).not.toBeNull();
     const files = selectedFiles(shards);
@@ -322,7 +322,7 @@ describe("CI changed Node test plan", () => {
     const source = "src/infra/release-proof.ts";
     const helper = "src/infra/release-proof.test-support.ts";
     const deferred = "src/state/openclaw-database-preflight.lifecycle.test.ts";
-    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
     const unknown = "src/infra/unowned.ts";
     for (const [file, content] of [
       [source, "export {};\n"],
@@ -732,7 +732,7 @@ describe("CI changed Node test plan", () => {
     (runnerBackend) => {
       const targets = [
         "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
-        "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
+        "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts",
       ];
       const placement = vi.spyOn(testTimings, "readRuntimePlacementTimings").mockReturnValue([]);
       let full: CompactNodeTestShard[];
@@ -1010,8 +1010,9 @@ describe("CI changed Node test plan", () => {
   );
 
   it("retains ordinary and embedded targets beside a shared Git fixture's canonical family", () => {
-    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
-    const embedded = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
+    const ordinary = "src/plugin-sdk/plugin-config-runtime.test.ts";
+    const embedded =
+      "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts";
     const shards = createChangedNodeTestShards([
       "test/scripts/ci-git-owner.test-support.ts",
       ordinary,
@@ -1061,7 +1062,8 @@ describe("CI changed Node test plan", () => {
 
   it("does not borrow canonical embedded ownership for another checkout", () => {
     const cwd = argvTempDirs.make("openclaw-embedded-owner-");
-    const target = "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts";
+    const target =
+      "src/agents/embedded-agent-runner/run/attempt-transcript-helpers.presence.test.ts";
 
     mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
     writeFileSync(path.join(cwd, target), "export {};\n");

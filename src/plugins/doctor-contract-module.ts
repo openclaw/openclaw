@@ -1,5 +1,9 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import type {
+  ChannelIngressLegacyImport,
+  ChannelIngressLegacyImportResult,
+} from "../channels/message/ingress-queue.migration.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -103,6 +107,13 @@ export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unkn
  *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
 export type PluginDoctorChannelIngressQueueAccess = {
   channelId: string;
+  /** Offline migration authority, checked again immediately before filesystem effects. */
+  assertCurrent?: () => void;
+  /** Offline-only import with canonical IDs; terminal tombstones never become pending work. */
+  importLegacyEntries?: (params: {
+    accountId: string;
+    entries: readonly ChannelIngressLegacyImport[];
+  }) => ChannelIngressLegacyImportResult;
   /** Inspection-only access, available in every phase including detection. */
   openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
     accountId?: string;
@@ -209,6 +220,7 @@ export type PluginDoctorContractModule = {
 export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 };
 
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {

@@ -97,9 +97,6 @@ function isProviderAuthRelevantReloadPath(path: string): boolean {
   if (PROVIDER_AUTH_RELEVANT_CONFIG_ROOTS.has(head)) {
     return true;
   }
-  if (head === "agent" && second === "model") {
-    return true;
-  }
   if (head !== "agents") {
     return false;
   }

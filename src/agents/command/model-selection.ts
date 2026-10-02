@@ -69,9 +69,12 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../thinking-runtime.js";
 import { persistAgentSession } from "./attempt-execution.shared.js";
-import { normalizeAgentCommandModelRef, parseAgentCommandModelRef } from "./model-ref.js";
+import {
+  normalizeAgentCommandModelRef,
+  normalizeExplicitOverrideInput,
+  parseAgentCommandModelRef,
+} from "./model-ref.js";
 import { prepareCommandModelCatalog } from "./model-selection-catalog.js";
-import { normalizeExplicitOverrideInput } from "./prepare.js";
 import { loadTranscriptResolveRuntime } from "./runtime-loaders.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
@@ -453,19 +456,15 @@ export async function resolveEmbeddedModelSelection(params: {
       agentId: params.sessionAgentId,
       sessionKey: params.sessionKey,
     });
-    const authAliasLookupParams = params.pluginsEnabled
-      ? {
-          config: authConfig,
-          workspaceDir: params.workspaceDir,
-          ...(params.manifestMetadataSnapshot
-            ? { metadataSnapshot: params.manifestMetadataSnapshot }
-            : {}),
-        }
-      : {
-          config: authConfig,
-          workspaceDir: params.workspaceDir,
-          metadataSnapshot: { plugins: [] },
-        };
+    const authAliasLookupParams = {
+      config: authConfig,
+      workspaceDir: params.workspaceDir,
+      ...(params.pluginsEnabled
+        ? params.manifestMetadataSnapshot
+          ? { metadataSnapshot: params.manifestMetadataSnapshot }
+          : {}
+        : { metadataSnapshot: { plugins: [] } }),
+    };
     const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
       provider: providerForAuthProfileValidation,
       harnessRuntime: validationHarnessPolicy.runtime,
@@ -631,17 +630,12 @@ export async function resolveEmbeddedModelSelection(params: {
   // Fallback tokens must not adopt entries from a store without a nonempty session key.
   const hasKeyedSessionStore = Boolean(params.sessionStore && params.sessionKey);
   const resolvedSessionFile = await resolveSessionTranscriptFile({
-    sessionId: params.sessionId,
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionStore:
       hasKeyedSessionStore && !params.suppressVisibleSessionEffects
         ? params.sessionStore
         : undefined,
-    storePath:
-      hasKeyedSessionStore && params.suppressVisibleSessionEffects ? undefined : params.storePath,
     sessionEntry,
-    agentId: params.sessionAgentId,
-    threadId: params.opts.threadId,
   });
   const sessionFile = resolvedSessionFile.sessionFile;
   sessionEntry = resolvedSessionFile.sessionEntry;

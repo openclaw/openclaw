@@ -29,9 +29,6 @@ export function collectAllowedToolNames(params: {
   return names;
 }
 
-/**
- * Collect the exact tool names registered with the embedded agent for this session.
- */
 export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set<string> {
   const names = new Set<string>();
   for (const tool of tools) {

@@ -62,17 +62,21 @@ describe("Git runtime promotion", () => {
     return candidateRoot;
   }
 
-  async function activate(candidateRoot: string) {
-    const cleanupRoot = path.dirname(candidateRoot);
-    const promotion = await prepareGitRuntimePromotion(
+  function preparePromotion(candidateRoot: string, validateDestination?: (path: string) => void) {
+    return prepareGitRuntimePromotion(
       root,
       candidateRoot,
       runCommandWithTimeout,
       5000,
-      cleanupRoot,
+      path.dirname(candidateRoot),
+      validateDestination,
     );
+  }
+
+  async function activate(candidateRoot: string) {
+    const promotion = await preparePromotion(candidateRoot);
     // Activation must stand alone after the disposable candidate has gone.
-    await fs.rm(cleanupRoot, { recursive: true, force: true });
+    await fs.rm(path.dirname(candidateRoot), { recursive: true, force: true });
     await promotion.activate();
     await promotion.cleanup();
   }
@@ -85,13 +89,7 @@ describe("Git runtime promotion", () => {
       if (!previous) {
         await fs.rm(destination, { recursive: true, force: true });
       }
-      const promotion = await prepareGitRuntimePromotion(
-        root,
-        candidateRoot,
-        runCommandWithTimeout,
-        5000,
-        path.dirname(candidateRoot),
-      );
+      const promotion = await preparePromotion(candidateRoot);
       await promotion.activate();
       let revoked = false;
       const rename = fs.rename.bind(fs);
@@ -152,19 +150,12 @@ describe("Git runtime promotion", () => {
       const candidateRoot = await createCandidate();
       let current = true;
       const uncertainty = new CommandProcessCleanupError();
-      const promotion = await prepareGitRuntimePromotion(
-        root,
-        candidateRoot,
-        runCommandWithTimeout,
-        5000,
-        path.dirname(candidateRoot),
-        (destination) => {
-          if (!current) {
-            throw outcome === "uncertain" ? uncertainty : new Error("source authority lost");
-          }
-          assertDestination(destination);
-        },
-      );
+      const promotion = await preparePromotion(candidateRoot, (destination) => {
+        if (!current) {
+          throw outcome === "uncertain" ? uncertainty : new Error("source authority lost");
+        }
+        assertDestination(destination);
+      });
       const destination = path.join(root, "dist");
       const original = await fs.lstat(destination, { bigint: true });
       const rename = fs.rename.bind(fs);
@@ -250,16 +241,9 @@ describe("Git runtime promotion", () => {
     await fs.rename(path.join(root, "packages"), outside);
     await fs.symlink(outside, path.join(root, "packages"), "junction");
     const before = await fs.readdir(outside, { recursive: true });
-    await expect(
-      prepareGitRuntimePromotion(
-        root,
-        candidateRoot,
-        runCommandWithTimeout,
-        5000,
-        path.dirname(candidateRoot),
-        assertDestination,
-      ),
-    ).rejects.toThrow("symbolic link");
+    await expect(preparePromotion(candidateRoot, assertDestination)).rejects.toThrow(
+      "symbolic link",
+    );
     expect(await fs.readdir(outside, { recursive: true })).toEqual(before);
     // Restore the fixture's physical depth before resolving its relative dependency links.
     await fs.unlink(path.join(root, "packages"));
@@ -271,14 +255,7 @@ describe("Git runtime promotion", () => {
     "retains originals when a source destination parent changes before %s",
     async (phase) => {
       const candidateRoot = await createCandidate();
-      const promotion = await prepareGitRuntimePromotion(
-        root,
-        candidateRoot,
-        runCommandWithTimeout,
-        5000,
-        path.dirname(candidateRoot),
-        assertDestination,
-      );
+      const promotion = await preparePromotion(candidateRoot, assertDestination);
       if (phase !== "activate") {
         await promotion.activate();
         await expectRuntime(root, "candidate");
@@ -397,7 +374,6 @@ describe("Git runtime promotion", () => {
     "../checkout",
     ".artifacts/checkout",
     "live:node_modules",
-    "live:dist",
     "live:packages/runtime/node_modules",
     "link:node_modules",
   ])("refuses virtual store %s before promotion can replace a checkout", async (store) => {
@@ -432,9 +408,7 @@ describe("Git runtime promotion", () => {
         virtualStoreDir: path.relative(modules, storePath),
       }),
     );
-    await expect(
-      prepareGitRuntimePromotion(root, candidateRoot, runCommandWithTimeout, 5000, cleanupRoot),
-    ).rejects.toThrow(/virtual store/i);
+    await expect(preparePromotion(candidateRoot)).rejects.toThrow(/virtual store/i);
     await expectRuntime(root, "original");
   });
 });

@@ -38,12 +38,8 @@ import {
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  linkEmail,
-  setUserProfileRole,
-} from "../../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -60,6 +56,27 @@ import type { RespondFn } from "./types.js";
 installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
+
+function holdAssistantResponse(text: string) {
+  const response = createAssistantMessageEventStream();
+  let released = false;
+  return {
+    response,
+    isReleased: () => released,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      response.push({
+        type: "done",
+        reason: "stop",
+        message: createAssistant(testModel, [{ type: "text", text }]),
+      });
+      response.end();
+    },
+  };
+}
 
 describe("steering input custody", () => {
   it.each([
@@ -304,29 +321,18 @@ describe("steering input custody", () => {
         guardSessionManager(sessionManager, { ...fixture.scope, runId: "original-backing-run" });
         const { session } = await createTestSession({ sessionManager });
         const providerStarted = createDeferred();
-        const response = createAssistantMessageEventStream();
+        const provider = holdAssistantResponse("Original work");
         streamMocks.streamSimple
           .mockImplementationOnce(() => {
             providerStarted.resolve();
-            return response;
+            return provider.response;
           })
           .mockImplementation((model) =>
             createAssistantResultStream(
               createAssistant(model, [{ type: "text", text: "Steering consumed" }]),
             ),
           );
-        let released = false;
-        releaseProvider = () => {
-          if (!released) {
-            released = true;
-            response.push({
-              type: "done",
-              reason: "stop",
-              message: createAssistant(testModel, [{ type: "text", text: "Original work" }]),
-            });
-            response.end();
-          }
-        };
+        releaseProvider = provider.release;
         cleanupOwnerContext = installRuntimeContextMessageForPrompt({
           session,
           message: buildRuntimeContextCustomMessage(ownerContext?.text, ownerContext?.fragments),
@@ -613,48 +619,20 @@ describe("steering input custody", () => {
             terminals.push(event);
           }
         });
-        const firstResponse = createAssistantMessageEventStream();
-        const secondResponse = createAssistantMessageEventStream();
+        const backingProvider = holdAssistantResponse("backing answer");
+        const steeringProvider = holdAssistantResponse("accepted steering completed");
         streamMocks.streamSimple
-          .mockImplementationOnce(() => firstResponse)
+          .mockImplementationOnce(() => backingProvider.response)
           .mockImplementation((model) =>
             inputState === "native committed"
-              ? secondResponse
+              ? steeringProvider.response
               : createAssistantResultStream(
                   createAssistant(model, [{ type: "text", text: "accepted steering completed" }]),
                 ),
           );
-        let released = false;
-        const finishProvider = () => {
-          if (released) {
-            return;
-          }
-          released = true;
-          firstResponse.push({
-            type: "done",
-            reason: "stop",
-            message: createAssistant(testModel, [{ type: "text", text: "backing answer" }]),
-          });
-          firstResponse.end();
-        };
-        let secondReleased = false;
-        const finishSteeringProvider = () => {
-          if (secondReleased) {
-            return;
-          }
-          secondReleased = true;
-          secondResponse.push({
-            type: "done",
-            reason: "stop",
-            message: createAssistant(testModel, [
-              { type: "text", text: "accepted steering completed" },
-            ]),
-          });
-          secondResponse.end();
-        };
         releaseProviders = () => {
-          finishProvider();
-          finishSteeringProvider();
+          backingProvider.release();
+          steeringProvider.release();
         };
         backingRun = session.prompt("Continue the original backing work.");
         const cancel = vi.fn();
@@ -707,15 +685,21 @@ describe("steering input custody", () => {
           ),
         ).toHaveLength(inputState === "internal fresh" ? 0 : 1);
         fixture.beforeApprove.mockClear();
-        if (sharedProfileCustody || inputState === "native custody") {
+        if (
+          sharedProfileCustody ||
+          inputState === "native custody" ||
+          inputState === "browser custody lifecycle"
+        ) {
           expect(session.getSteeringMessages()).toEqual([fixture.params.message]);
           expect(session.isStreaming).toBe(true);
-          expect(released).toBe(false);
+          expect(backingProvider.isReleased()).toBe(false);
           expect(pending.items[0]).toMatchObject({
             runId: fixture.params.idempotencyKey,
             state: "queued",
             message: { idempotencyKey: inputKey, content: fixture.params.message },
           });
+        }
+        if (sharedProfileCustody || inputState === "native custody") {
           linkEmail(email, target.id);
           if (inputState === "browser custody session ACL") {
             const visibility = {
@@ -746,17 +730,9 @@ describe("steering input custody", () => {
               createdActor: { type: "human", source: "profile", id: creator!.id },
             });
             expect(operation.result).toBeNull();
-            expect(released).toBe(false);
+            expect(backingProvider.isReleased()).toBe(false);
           }
         } else if (inputState === "browser custody lifecycle") {
-          expect(session.getSteeringMessages()).toEqual([fixture.params.message]);
-          expect(session.isStreaming).toBe(true);
-          expect(released).toBe(false);
-          expect(pending.items[0]).toMatchObject({
-            runId: fixture.params.idempotencyKey,
-            state: "queued",
-            message: { idempotencyKey: inputKey, content: fixture.params.message },
-          });
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
           rotateAgentEventLifecycleGeneration();
           expect(cancel).toHaveBeenCalledExactlyOnceWith("restart");
@@ -767,7 +743,7 @@ describe("steering input custody", () => {
         } else if (inputState === "internal fresh") {
           fixture.beforeApprove.mockImplementation(() => linkEmail(email, target.id));
         }
-        finishProvider();
+        backingProvider.release();
         if (inputState === "native committed") {
           await vi.waitFor(() => expect(initialRuntimeReceipt).toBeDefined());
           // Source finalization confirms steering metadata after the runtime commit.
@@ -791,7 +767,7 @@ describe("steering input custody", () => {
           expect(recorder.getAdmissionReceipt()).toEqual(finalReceipt);
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(committedTranscript);
           expect(fixture.beforeApprove).not.toHaveBeenCalled();
-          finishSteeringProvider();
+          steeringProvider.release();
         }
         await backingRun;
         await fixture.finishDispatch();

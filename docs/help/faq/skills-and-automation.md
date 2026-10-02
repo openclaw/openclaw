@@ -87,7 +87,7 @@ read_when:
     - If the completion origin only carries a channel, OpenClaw falls back to the requester session's stored route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery can still succeed.
     - No bound route and no usable stored route: direct delivery can fail and the result falls back to queued session delivery instead of posting immediately.
     - Invalid or stale targets can also force queue fallback or final delivery failure.
-    - If the child's last visible assistant reply is exactly `NO_REPLY` / `no_reply` or `ANNOUNCE_SKIP`, OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
+    - For a completion-required child, `NO_REPLY` or empty output is a missing deliverable passed to the parent as `(no output)` for visible handling or retry. Optional, duplicate, or already-visible completion paths can use `NO_REPLY` for intentional silence; OpenClaw does not substitute stale earlier progress.
 
     Debug from the requester conversation with `/subagents list`, then `/subagents info <id|#>` and `/subagents log <id|#>`. Inspect Gateway logs for delivery failures; a finished execution does not by itself confirm that its completion was delivered.
 

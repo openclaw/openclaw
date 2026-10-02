@@ -11,7 +11,7 @@ export type SubagentRunSqliteRow = Selectable<SubagentRunsTable>;
 type CanonicalSubagentRunRecord = SubagentRunRecord &
   Required<Pick<SubagentRunRecord, "completion" | "delivery">>;
 const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split(" "));
-export const DELIVERY_STATUSES = new Set(
+const DELIVERY_STATUSES = new Set(
   "not_required pending in_progress delivered failed suspended discarded".split(" "),
 );
 

@@ -20,6 +20,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
+  type DeferredPluginMigration,
   assertDeferredPluginMigrationsCurrent,
   readDeferredPluginMigrationCompletions,
   readDeferredPluginMigrations,
@@ -47,6 +48,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 });
 
 describe("deferred configured-plugin migrations", () => {
+  const pending = {
+    pluginId: "fixture-plugin",
+    reason: "The configured plugin is not installed.",
+    command: "openclaw doctor --fix",
+  };
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
       closeOpenClawStateDatabaseForTest();
@@ -71,6 +77,21 @@ describe("deferred configured-plugin migrations", () => {
     database.exec("PRAGMA user_version = 7");
   }
 
+  function writePending(env: NodeJS.ProcessEnv, migration: DeferredPluginMigration) {
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        recordLegacyMigrationRun(db, {
+          runId: `deferred-plugin-migration:${migration.pluginId}`,
+          startedAt: 1,
+          finishedAt: null,
+          status: "pending",
+          reportJson: JSON.stringify(migration),
+          upsert: true,
+        }),
+      { env },
+    );
+  }
+
   it("reads absent migration state without creating a database", () => {
     const { env, stateDir } = fixture();
     expect(readDeferredPluginMigrations({ env })).toEqual([]);
@@ -82,11 +103,6 @@ describe("deferred configured-plugin migrations", () => {
     "rolls back deferred obligations when the requester is revoked at worker %s admission",
     async (stage) => {
       const { env } = fixture();
-      const pending = {
-        pluginId: "fixture",
-        reason: "Waiting for repair",
-        command: "openclaw doctor --fix",
-      };
       const revoked = new Error("Plugin repair requester revoked");
       let current = true;
       let observed = false;
@@ -186,27 +202,11 @@ describe("deferred configured-plugin migrations", () => {
 
   it("rechecks obligations created before missing-state publication acquires ownership", () => {
     const { env } = fixture();
-    const pending = {
-      pluginId: "fixture-plugin",
-      reason: "The configured plugin is not installed.",
-      command: "openclaw doctor --fix",
-    };
     const acquire = stateOwners.acquireStateDatabaseSchemaLease;
     const acquisition = vi
       .spyOn(stateOwners, "acquireStateDatabaseSchemaLease")
       .mockImplementationOnce((databasePath) => {
-        runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            recordLegacyMigrationRun(db, {
-              runId: `deferred-plugin-migration:${pending.pluginId}`,
-              startedAt: 1,
-              finishedAt: null,
-              status: "pending",
-              reportJson: JSON.stringify(pending),
-              upsert: true,
-            }),
-          { env },
-        );
+        writePending(env, pending);
         closeOpenClawStateDatabaseForTest();
         return acquire(databasePath);
       });
@@ -274,22 +274,7 @@ describe("deferred configured-plugin migrations", () => {
       openOpenClawStateDatabase({ env });
       const outputPath = path.join(path.dirname(stateDir), "published.txt");
       const publish = () => {
-        runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            recordLegacyMigrationRun(db, {
-              runId: "deferred-plugin-migration:sample",
-              startedAt: 1,
-              finishedAt: null,
-              status: "pending",
-              reportJson: JSON.stringify({
-                pluginId: "sample",
-                reason: "Missing package",
-                command: "openclaw doctor --fix",
-              }),
-              upsert: true,
-            }),
-          { env },
-        );
+        writePending(env, pending);
         expect(() =>
           withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, () => {
             fs.writeFileSync(outputPath, "published");
@@ -309,26 +294,10 @@ describe("deferred configured-plugin migrations", () => {
     "checks the %s pending generation against its publication transaction",
     async (generation) => {
       const { env } = fixture();
-      const pending = {
-        pluginId: "fixture-plugin",
-        reason: "The configured plugin is not installed.",
-        command: "openclaw doctor --fix",
-      };
       const current = { ...pending, requiresStateMigration: true as const };
       await recordDeferredPluginMigrations({ env, pending: [pending] });
       withDeferredPluginMigrationsCurrent({ env, expectedPending: [pending] }, () => {
-        runOpenClawStateWriteTransaction(
-          ({ db }) =>
-            recordLegacyMigrationRun(db, {
-              runId: `deferred-plugin-migration:${current.pluginId}`,
-              startedAt: 1,
-              finishedAt: null,
-              status: "pending",
-              reportJson: JSON.stringify(current),
-              upsert: true,
-            }),
-          { env },
-        );
+        writePending(env, current);
         // Discovery still observes committed rows; publication must see its own writes.
         expect(readDeferredPluginMigrations({ env })).toEqual([pending]);
         const check = () =>
@@ -350,11 +319,6 @@ describe("deferred configured-plugin migrations", () => {
     "resolves only the captured pending generation after an %s report",
     async (change) => {
       const { env } = fixture();
-      const pending = {
-        pluginId: "fixture-plugin",
-        reason: "The configured plugin is not installed.",
-        command: "openclaw doctor --fix",
-      };
       await recordDeferredPluginMigrations({ env, pending: [pending] });
       const expectedPending = readDeferredPluginMigrations({ env });
       await recordDeferredPluginMigrations({
@@ -420,13 +384,7 @@ describe("deferred configured-plugin migrations", () => {
     const unrelated = seeded.filter((row) => row.meta_key === "unrelated-metadata");
     await recordDeferredPluginMigrations({
       env,
-      pending: [
-        {
-          pluginId: "fixture-plugin",
-          reason: "The configured plugin is not installed.",
-          command: "openclaw doctor --fix",
-        },
-      ],
+      pending: [pending],
     });
     expect(readFixtureMetadata()).toEqual(unrelated);
     await recordDeferredPluginMigrations({

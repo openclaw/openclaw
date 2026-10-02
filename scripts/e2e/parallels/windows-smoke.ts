@@ -280,17 +280,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
           ),
       }),
     );
-    await this.phases.phase("fresh.onboard-ref", 720, () => this.runRefOnboard());
-    await this.phases.phase("fresh.gateway-restart", 420, () => this.gatewayAction("restart"));
-    await this.phases.phase("fresh.gateway-status", 420, () => this.verifyGatewayReachable());
-    this.status.freshGateway = "pass";
-    await this.phases.phase("fresh.gateway-stop-before-local-agent", 420, () =>
-      this.gatewayAction("stop"),
-    );
-    await this.phases.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () =>
-      this.verifyTurn(),
-    );
-    this.status.freshAgent = "pass";
+    await this.runGatewaySmoke("fresh");
   }
 
   protected async runUpgradeLane(): Promise<void> {
@@ -345,17 +335,21 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
     await this.phases.phase("upgrade.verify-dev-channel", 120, () => this.verifyDevChannelUpdate());
     await this.phases.phase("upgrade.gateway-stop", 420, () => this.gatewayAction("stop"));
-    await this.phases.phase("upgrade.onboard-ref", 720, () => this.runRefOnboard());
-    await this.phases.phase("upgrade.gateway-restart", 420, () => this.gatewayAction("restart"));
-    await this.phases.phase("upgrade.gateway-status", 420, () => this.verifyGatewayReachable());
-    this.status.upgradeGateway = "pass";
-    await this.phases.phase("upgrade.gateway-stop-before-local-agent", 420, () =>
+    await this.runGatewaySmoke("upgrade");
+  }
+
+  private async runGatewaySmoke(lane: "fresh" | "upgrade"): Promise<void> {
+    await this.phases.phase(`${lane}.onboard-ref`, 720, () => this.runRefOnboard());
+    await this.phases.phase(`${lane}.gateway-restart`, 420, () => this.gatewayAction("restart"));
+    await this.phases.phase(`${lane}.gateway-status`, 420, () => this.verifyGatewayReachable());
+    this.status[`${lane}Gateway`] = "pass";
+    await this.phases.phase(`${lane}.gateway-stop-before-local-agent`, 420, () =>
       this.gatewayAction("stop"),
     );
-    await this.phases.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () =>
+    await this.phases.phase(`${lane}.first-agent-turn`, this.agentTimeoutSeconds, () =>
       this.verifyTurn(),
     );
-    this.status.upgradeAgent = "pass";
+    this.status[`${lane}Agent`] = "pass";
   }
 
   private guestPowerShell(

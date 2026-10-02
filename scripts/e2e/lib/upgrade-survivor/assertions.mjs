@@ -13,6 +13,7 @@ import {
   inspectNpmPackageTarball,
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
 import {
@@ -78,10 +79,6 @@ function requireEnv(name) {
   return value;
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
 function readUpdateJson(file) {
   const raw = fs.readFileSync(file, "utf8");
   const jsonStart = raw.indexOf("{");
@@ -124,21 +121,6 @@ function isPathInsideManagedNpmProjectPackageRoot(params) {
     segments[1] === "node_modules" &&
     packageSegments.every((segment, index) => segments[index + 2] === segment)
   );
-}
-
-function write(file, contents) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-}
-
-function writeJson(file, value) {
-  write(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function assert(condition, message) {
-  if (!condition) {
-    throw new Error(message);
-  }
 }
 
 function seedLegacySessionMetadata(stateDir, perAgent) {
@@ -518,6 +500,20 @@ function assertConfigSurvived() {
         "Tool Search legacy timeout was not removed",
       );
     }
+  }
+
+  if (coverage && acceptsIntent(coverage, "silent-reply-internal-retirement")) {
+    const baseline = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE === "baseline";
+    assertStrict.deepEqual(
+      config.agents?.defaults?.silentReply,
+      baseline ? { group: "allow", internal: "allow" } : { group: "allow" },
+      "default silent-reply policy was not preserved or migrated",
+    );
+    assertStrict.deepEqual(
+      config.surfaces?.discord?.silentReply,
+      baseline ? { group: "disallow", internal: "disallow" } : { group: "disallow" },
+      "Discord silent-reply policy was not preserved or migrated",
+    );
   }
 
   if (acceptsIntent(coverage, "agents")) {

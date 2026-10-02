@@ -691,6 +691,7 @@ describe("scripts/changed-lanes", () => {
       "check:line-cap-ratchet",
       "check:max-lines-ratchet",
       "check:assertion-safety",
+      "check:test-timeout-race-ratchet",
     ]) {
       expect(checked.stderr).toContain(`${command} --staged --base ${base}`);
     }
@@ -918,6 +919,7 @@ describe("scripts/changed-lanes", () => {
     ["config/assertion-safety-baseline.txt", "check:assertion-safety"],
     ["config/env-var-count-budget.txt", "check:max-lines-ratchet"],
     ["config/max-lines-baseline.txt", "check:max-lines-ratchet"],
+    ["config/test-timeout-race-baseline.txt", "check:test-timeout-race-ratchet"],
   ])("targets mixed-owner lint while retaining the guard for %s", (baseline, guard) => {
     const result = detectChangedLanes([
       baseline,
@@ -1656,6 +1658,7 @@ describe("scripts/changed-lanes", () => {
         "check:line-cap-ratchet",
         "check:max-lines-ratchet",
         "check:assertion-safety",
+        "check:test-timeout-race-ratchet",
       ]) {
         expect(commands.find(({ args }) => args[0] === owner)?.args).toEqual([
           owner,

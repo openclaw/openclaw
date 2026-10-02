@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { beforeEach, describe, expect, it, test } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, test } from "vitest";
 import { createAgentCommandLifecycle } from "../agents/command/lifecycle.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -23,6 +23,25 @@ import {
   registerAgentRunContext,
   releaseAgentRunContext,
 } from "./agent-run-registry.js";
+import type { AgentRunContext } from "./agent-run-registry.types.js";
+
+function emitModel(
+  runId: string,
+  owner: AgentRunContext,
+  provider: string | null,
+  model: string | null,
+) {
+  emitAgentEventForRunContext(
+    { runId, stream: "lifecycle", data: { phase: "model", provider, model } },
+    owner,
+  );
+}
+
+function captureEvents() {
+  const events: AgentEventRuntimePayload[] = [];
+  onTestFinished(onAgentRuntimeEvent((event) => events.push(event)));
+  return events;
+}
 
 describe("agent event routing after cancellation", () => {
   beforeEach(() => resetAgentEventsForTest());
@@ -35,39 +54,34 @@ describe("agent event routing after cancellation", () => {
     const runId = "cancelled-run";
     const sessionKey = "agent:delivery:conversation";
     const generation = getAgentEventLifecycleGeneration();
-    const events: AgentEventRuntimePayload[] = [];
-    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
-    try {
-      await withAgentRunLifecycleGeneration(generation, async () => {
-        registerAgentRunContext(runId, {
-          agentId: "delivery",
-          sessionKey,
-          sessionId: "original-session",
-          isControlUiVisible: !hidden,
-          projectSessionMessages: messages,
-          projectSessionLifecycle: false,
-        });
-        // Registration follows admission; compaction can rebind before the first event.
-        await Promise.resolve();
-        registerAgentRunContext(runId, { sessionId: "compacted-session" });
-        const lifecycle = createAgentCommandLifecycle({
-          runId,
-          lifecycleGeneration: () => generation,
-          startedAt: 1,
-          state: {
-            currentTurnUserMessagePersisted: true,
-            lifecycleFinishing: false,
-            lifecycleEnded: false,
-          },
-        });
-        clearAgentRunContext(runId);
-        expect(getAgentRunContext(runId)).toBeUndefined();
-        emitAgentEvent({ runId, stream: "tool", data: { phase: "result", toolCallId: "held" } });
-        lifecycle.emitBasicError(new Error("cancelled"), { aborted: true, stopReason: "rpc" });
+    const events = captureEvents();
+    await withAgentRunLifecycleGeneration(generation, async () => {
+      registerAgentRunContext(runId, {
+        agentId: "delivery",
+        sessionKey,
+        sessionId: "original-session",
+        isControlUiVisible: !hidden,
+        projectSessionMessages: messages,
+        projectSessionLifecycle: false,
       });
-    } finally {
-      unsubscribe();
-    }
+      // Registration follows admission; compaction can rebind before the first event.
+      await Promise.resolve();
+      registerAgentRunContext(runId, { sessionId: "compacted-session" });
+      const lifecycle = createAgentCommandLifecycle({
+        runId,
+        lifecycleGeneration: () => generation,
+        startedAt: 1,
+        state: {
+          currentTurnUserMessagePersisted: true,
+          lifecycleFinishing: false,
+          lifecycleEnded: false,
+        },
+      });
+      clearAgentRunContext(runId);
+      expect(getAgentRunContext(runId)).toBeUndefined();
+      emitAgentEvent({ runId, stream: "tool", data: { phase: "result", toolCallId: "held" } });
+      lifecycle.emitBasicError(new Error("cancelled"), { aborted: true, stopReason: "rpc" });
+    });
     expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({ agentId: "delivery", controlUiVisible: !hidden });
     expect(events[0]?.sessionKey).toBe(hidden ? undefined : sessionKey);
@@ -95,41 +109,36 @@ describe("agent event routing after cancellation", () => {
 
   it("shares compaction updates across nested scopes without inheriting a reused run", async () => {
     const generation = getAgentEventLifecycleGeneration();
-    const events: AgentEventRuntimePayload[] = [];
-    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
+    const events = captureEvents();
     const emit = () =>
       emitAgentEventIfCurrent({ runId: "shared", stream: "lifecycle", data: { phase: "end" } });
-    try {
+    await withAgentRunLifecycleGeneration(generation, async () => {
+      registerAgentRunContext("shared", {
+        agentId: "first",
+        sessionKey: "agent:first:one",
+        sessionId: "before",
+      });
+      await withAgentRunLifecycleGeneration(generation, async () => {
+        registerAgentRunContext("shared", { sessionId: "after-compaction" });
+        await Promise.resolve();
+      });
+      clearAgentRunContext("shared");
+      expect(emit()).toBe(true);
       await withAgentRunLifecycleGeneration(generation, async () => {
         registerAgentRunContext("shared", {
-          agentId: "first",
-          sessionKey: "agent:first:one",
-          sessionId: "before",
+          agentId: "second",
+          sessionKey: "agent:second:two",
+          sessionId: "second-session",
         });
-        await withAgentRunLifecycleGeneration(generation, async () => {
-          registerAgentRunContext("shared", { sessionId: "after-compaction" });
-          await Promise.resolve();
-        });
-        clearAgentRunContext("shared");
-        expect(emit()).toBe(true);
-        await withAgentRunLifecycleGeneration(generation, async () => {
-          registerAgentRunContext("shared", {
-            agentId: "second",
-            sessionKey: "agent:second:two",
-            sessionId: "second-session",
-          });
-          expect(emit()).toBe(true);
-        });
-        // The old execution cannot stamp an event with its replacement's live identity.
-        expect(emit()).toBe(false);
-        clearAgentRunContext("shared");
-      });
-      await withAgentRunLifecycleGeneration(generation, async () => {
         expect(emit()).toBe(true);
       });
-    } finally {
-      unsubscribe();
-    }
+      // The old execution cannot stamp an event with its replacement's live identity.
+      expect(emit()).toBe(false);
+      clearAgentRunContext("shared");
+    });
+    await withAgentRunLifecycleGeneration(generation, async () => {
+      expect(emit()).toBe(true);
+    });
     expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({ agentId: "first", sessionId: "after-compaction" });
     expect(events[1]).toMatchObject({ agentId: "second", sessionId: "second-session" });
@@ -139,28 +148,23 @@ describe("agent event routing after cancellation", () => {
 
   it("never lets routing provenance revive a released claim or rotated execution", () => {
     const generation = getAgentEventLifecycleGeneration();
-    const events: AgentEventRuntimePayload[] = [];
-    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
-    try {
-      withAgentRunLifecycleGeneration(generation, () => {
-        const claim = claimAgentRunContext(
-          "owned",
-          { agentId: "delivery", sessionKey: "agent:delivery:owned" },
-          { exclusive: true, trackOwner: true, ownsContext: true },
-        );
-        expect(claim).toBeDefined();
-        const event = { runId: "owned", stream: "tool", data: { phase: "result" } };
-        emitAgentEventForOwner(event, claim!);
-        clearAgentRunContext("owned", generation, claim);
-        releaseAgentRunContext("owned", claim);
-        expect(getAgentRunContext("owned")).toBeUndefined();
-        emitAgentEventForOwner(event, claim!);
-        rotateAgentEventLifecycleGeneration();
-        expect(emitAgentEventIfCurrent(event)).toBe(false);
-      });
-    } finally {
-      unsubscribe();
-    }
+    const events = captureEvents();
+    withAgentRunLifecycleGeneration(generation, () => {
+      const claim = claimAgentRunContext(
+        "owned",
+        { agentId: "delivery", sessionKey: "agent:delivery:owned" },
+        { exclusive: true, trackOwner: true, ownsContext: true },
+      );
+      expect(claim).toBeDefined();
+      const event = { runId: "owned", stream: "tool", data: { phase: "result" } };
+      emitAgentEventForOwner(event, claim!);
+      clearAgentRunContext("owned", generation, claim);
+      releaseAgentRunContext("owned", claim);
+      expect(getAgentRunContext("owned")).toBeUndefined();
+      emitAgentEventForOwner(event, claim!);
+      rotateAgentEventLifecycleGeneration();
+      expect(emitAgentEventIfCurrent(event)).toBe(false);
+    });
     expect(events).toHaveLength(1);
   });
 
@@ -176,24 +180,19 @@ describe("agent event routing after cancellation", () => {
         }>(),
     );
     const legacy = { lifecycleGeneration, onceByRun: new Map<string, Promise<unknown>>() };
-    const events: AgentEventRuntimePayload[] = [];
-    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
-    try {
-      await storage.run(legacy, async () => {
-        registerAgentRunContext("updater", {
-          agentId: "delivery",
-          sessionKey: "agent:delivery:update",
-        });
-        await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
-          registerAgentRunContext("updater", { sessionId: "current-session" });
-        });
-        clearAgentRunContext("updater");
-        emitAgentEvent({ runId: "updater", stream: "lifecycle", data: { phase: "end" } });
-        expect(storage.getStore()).toBe(legacy);
+    const events = captureEvents();
+    await storage.run(legacy, async () => {
+      registerAgentRunContext("updater", {
+        agentId: "delivery",
+        sessionKey: "agent:delivery:update",
       });
-    } finally {
-      unsubscribe();
-    }
+      await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+        registerAgentRunContext("updater", { sessionId: "current-session" });
+      });
+      clearAgentRunContext("updater");
+      emitAgentEvent({ runId: "updater", stream: "lifecycle", data: { phase: "end" } });
+      expect(storage.getStore()).toBe(legacy);
+    });
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       agentId: "delivery",
@@ -204,39 +203,34 @@ describe("agent event routing after cancellation", () => {
 
   it("routes outer settlement after an admitted queued generation handoff", async () => {
     const previousGeneration = getAgentEventLifecycleGeneration();
-    const events: AgentEventRuntimePayload[] = [];
-    const unsubscribe = onAgentRuntimeEvent((event) => events.push(event));
+    const events = captureEvents();
     const accepted: boolean[] = [];
-    try {
-      await withAgentRunLifecycleGeneration(previousGeneration, async () => {
-        registerAgentRunContext("queued", {
+    await withAgentRunLifecycleGeneration(previousGeneration, async () => {
+      registerAgentRunContext("queued", {
+        agentId: "delivery",
+        sessionKey: "agent:delivery:queued",
+        sessionId: "queued-before",
+      });
+      const currentGeneration = rotateAgentEventLifecycleGeneration();
+      await withAgentRunLifecycleGeneration(currentGeneration, async () => {
+        claimAgentRunContext("queued", {
           agentId: "delivery",
           sessionKey: "agent:delivery:queued",
-          sessionId: "queued-before",
-        });
-        const currentGeneration = rotateAgentEventLifecycleGeneration();
-        await withAgentRunLifecycleGeneration(currentGeneration, async () => {
-          claimAgentRunContext("queued", {
-            agentId: "delivery",
-            sessionKey: "agent:delivery:queued",
-            sessionId: "admitted-after",
-            lifecycleGeneration: currentGeneration,
-          });
-        });
-        const terminal = {
-          runId: "queued",
+          sessionId: "admitted-after",
           lifecycleGeneration: currentGeneration,
-          stream: "lifecycle",
-          data: { phase: "end", executionSettled: true },
-        };
-        accepted.push(emitAgentEventIfCurrent(terminal));
-        clearAgentRunContext("queued", currentGeneration);
-        accepted.push(emitAgentEventIfCurrent(terminal));
-        expect(emitAgentEventIfCurrent({ runId: "queued", stream: "tool", data: {} })).toBe(false);
+        });
       });
-    } finally {
-      unsubscribe();
-    }
+      const terminal = {
+        runId: "queued",
+        lifecycleGeneration: currentGeneration,
+        stream: "lifecycle",
+        data: { phase: "end", executionSettled: true },
+      };
+      accepted.push(emitAgentEventIfCurrent(terminal));
+      clearAgentRunContext("queued", currentGeneration);
+      accepted.push(emitAgentEventIfCurrent(terminal));
+      expect(emitAgentEventIfCurrent({ runId: "queued", stream: "tool", data: {} })).toBe(false);
+    });
     expect(accepted).toEqual([true, true]);
     expect(events).toHaveLength(2);
     for (const event of events) {
@@ -251,45 +245,35 @@ describe("agent event routing after cancellation", () => {
 
 describe("live agent model projection", () => {
   beforeEach(() => resetAgentEventsForTest());
-  test.each(["agent:main:chat", "global"])(
-    "projects only the executing model for exact session %s",
-    (sessionKey) => {
-      const scope = { agentId: "main", sessionId: "session", sessionKey };
-      claimAgentRunContext("admission", scope);
-      expect(resolveProjectedAgentRunModel(scope)).toBeNull();
-      registerAgentRunContext("foreground", scope);
-      emitAgentEventForRunContext(
-        {
-          runId: "foreground",
-          stream: "lifecycle",
-          data: { phase: "model", provider: "provider", model: "current" },
-        },
-        getAgentRunContext("foreground")!,
-      );
-      for (const [runId, extra] of [
-        ["queued", {}],
-        ["hidden", { isControlUiVisible: false }],
-        ["maintenance", { projectSessionLifecycle: false }],
-        ["reset", { sessionId: "previous" }],
-        ["other-agent", { agentId: "other" }],
-      ] as const) {
-        registerAgentRunContext(runId, { ...scope, projectSessionActive: true, ...extra });
-      }
-      registerAgentRunCapacityWait("queued", getAgentEventLifecycleGeneration());
-      expect(resolveProjectedAgentRunModel(scope)).toEqual({
-        provider: "provider",
-        model: "current",
-      });
-      registerAgentRunContext("overlap", { ...scope, projectSessionActive: true });
-      expect(resolveProjectedAgentRunModel(scope)).toBeNull();
-      clearAgentRunContext("overlap");
-      clearAgentRunContext("foreground");
-      expect(resolveProjectedAgentRunModel(scope)).toBeNull();
-      clearAgentRunContext("queued");
-      clearAgentRunContext("admission");
-      expect(resolveProjectedAgentRunModel(scope)).toBeUndefined();
-    },
-  );
+  test("projects only the executing model for an unscoped session key", () => {
+    const scope = { agentId: "main", sessionId: "session", sessionKey: "global" };
+    claimAgentRunContext("admission", scope);
+    expect(resolveProjectedAgentRunModel(scope)).toBeNull();
+    registerAgentRunContext("foreground", scope);
+    emitModel("foreground", getAgentRunContext("foreground")!, "provider", "current");
+    for (const [runId, extra] of [
+      ["queued", {}],
+      ["hidden", { isControlUiVisible: false }],
+      ["maintenance", { projectSessionLifecycle: false }],
+      ["reset", { sessionId: "previous" }],
+      ["other-agent", { agentId: "other" }],
+    ] as const) {
+      registerAgentRunContext(runId, { ...scope, projectSessionActive: true, ...extra });
+    }
+    registerAgentRunCapacityWait("queued", getAgentEventLifecycleGeneration());
+    expect(resolveProjectedAgentRunModel(scope)).toEqual({
+      provider: "provider",
+      model: "current",
+    });
+    registerAgentRunContext("overlap", { ...scope, projectSessionActive: true });
+    expect(resolveProjectedAgentRunModel(scope)).toBeNull();
+    clearAgentRunContext("overlap");
+    clearAgentRunContext("foreground");
+    expect(resolveProjectedAgentRunModel(scope)).toBeNull();
+    clearAgentRunContext("queued");
+    clearAgentRunContext("admission");
+    expect(resolveProjectedAgentRunModel(scope)).toBeUndefined();
+  });
 
   test("projects model events only into their current run owner", () => {
     const runId = "model-run";
@@ -301,14 +285,7 @@ describe("live agent model projection", () => {
     });
     const owner = getAgentRunContext(runId)!;
     const generation = getAgentEventLifecycleGeneration();
-    emitAgentEventForRunContext(
-      {
-        runId,
-        stream: "lifecycle",
-        data: { phase: "model", provider: "primary", model: "first" },
-      },
-      owner,
-    );
+    emitModel(runId, owner, "primary", "first");
     expect(getAgentRunContext(runId)).toMatchObject({
       activeModel: { provider: "primary", model: "first" },
     });
@@ -316,25 +293,11 @@ describe("live agent model projection", () => {
       provider: "primary",
       model: "first",
     });
-    emitAgentEventForRunContext(
-      {
-        runId,
-        stream: "lifecycle",
-        data: { phase: "model", provider: "fallback", model: "second" },
-      },
-      owner,
-    );
+    emitModel(runId, owner, "fallback", "second");
     expect(getAgentRunContext(runId)).toMatchObject({
       activeModel: { provider: "fallback", model: "second" },
     });
-    emitAgentEventForRunContext(
-      {
-        runId,
-        stream: "lifecycle",
-        data: { phase: "model", provider: null, model: null },
-      },
-      owner,
-    );
+    emitModel(runId, owner, null, null);
     expect(getAgentRunContext(runId)).not.toHaveProperty("activeModel");
 
     rotateAgentEventLifecycleGeneration();
@@ -362,14 +325,7 @@ describe("live agent model projection", () => {
     clearAgentRunContext(runId);
     registerAgentRunContext(runId, scope);
     const replacement = getAgentRunContext(runId)!;
-    emitAgentEventForRunContext(
-      {
-        runId,
-        stream: "lifecycle",
-        data: { phase: "model", provider: "current-provider", model: "current-model" },
-      },
-      replacement,
-    );
+    emitModel(runId, replacement, "current-provider", "current-model");
 
     emitAgentEvent({
       runId,

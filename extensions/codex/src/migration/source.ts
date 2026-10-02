@@ -325,15 +325,9 @@ async function withPluginMigrationEligibility(params: {
   const appInfoById = new Map(snapshot.apps.map((app) => [app.id, app] as const));
   const installedAppsById = new Map(snapshot.installedApps.map((app) => [app.id, app] as const));
   for (const { plugin, apps: declaredApps } of pending) {
-    const apps = declaredApps
-      .map((app) =>
-        sourcePluginAppFactWithInventory(
-          app,
-          appInfoById.get(app.id),
-          installedAppsById.get(app.id),
-        ),
-      )
-      .toSorted((left, right) => left.id.localeCompare(right.id));
+    const apps = declaredApps.map((app) =>
+      sourcePluginAppFactWithInventory(app, appInfoById.get(app.id), installedAppsById.get(app.id)),
+    );
     const blockCode = migrationBlockCodeForApps(apps);
     if (!blockCode) {
       evaluated.push({ ...plugin, apps, migratable: true });

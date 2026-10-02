@@ -12,9 +12,13 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 afterEach(() => vi.restoreAllMocks());
 
 describe("session responsibility assignment in non-owner turns", () => {
-  it.each([false, undefined])(
-    "limits non-owner assignment without restricting senderless management (%s)",
-    async (senderIsOwner) => {
+  it.each([
+    { senderIsOwner: false, messageProvider: "webchat" },
+    { senderIsOwner: false, messageProvider: "test-channel" },
+    { senderIsOwner: undefined, messageProvider: undefined },
+  ])(
+    "limits assignment without channel policy or senderless management changes ($messageProvider)",
+    async ({ senderIsOwner, messageProvider }) => {
       const gateway = vi.spyOn(inProcessGateway, "callAgentToolGatewayRequest").mockResolvedValue({
         ok: true,
         key: "agent:main:main",
@@ -23,7 +27,7 @@ describe("session responsibility assignment in non-owner turns", () => {
       const tools = createOpenClawCodingTools({
         config: { tools: { allow: ["sessions"] } },
         sessionKey: "agent:main:main",
-        messageProvider: senderIsOwner === false ? "webchat" : undefined,
+        messageProvider,
         senderIsOwner,
         workspaceDir: process.cwd(),
       });

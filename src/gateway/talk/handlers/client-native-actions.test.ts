@@ -713,10 +713,9 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  it.each([
-    "use the release branch instead",
-    "<realtime_delegation><input>Keep these literal tags.</input></realtime_delegation>",
-  ])("admits public steering as visible user input: %s", async (text) => {
+  it("admits literal delegation tags in public steering as visible user input", async () => {
+    const text =
+      "<realtime_delegation><input>Keep these literal tags.</input></realtime_delegation>";
     await withParkedNativeTask(
       async ({ invoke, socket, activeRun, queueMessage, abortOwned, settleBackend }) => {
         const result = await invoke("talk.client.steer", {

@@ -32,7 +32,7 @@ import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { onSubagentRegistryPersisted } from "./subagent-registry-state.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { registerSubagentRun, replaceSubagentRunAfterSteerCore } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
@@ -332,7 +332,6 @@ it.each(["successor", "source retirement"] as const)(
             expected: previous,
             allowEndedSource: true,
             lifecycleGeneration: getAgentEventLifecycleGeneration(),
-            persistenceFailure: "return-false",
           }),
         )
         .toBe(false);
@@ -381,7 +380,7 @@ it("rearms native execution for an interrupted run's successor", async () => {
   expect(loadSubagentRegistryFromSqlite().get(previous.runId)).toEqual(previous);
 
   const observerSnapshots: Array<{ run?: string }> = [];
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     observerSnapshots.push({
       run: subagentRuns.get("interrupted-task-new")?.execution.status,
     });
@@ -393,7 +392,6 @@ it("rearms native execution for an interrupted run's successor", async () => {
         nextRunId: "interrupted-task-new",
         expected: previous,
         allowEndedSource: true,
-        persistenceFailure: "throw",
       }),
     ).toBe(true);
   } finally {
@@ -422,7 +420,6 @@ it("rearms native execution for an interrupted run's successor", async () => {
       previousRunId: successor.runId,
       nextRunId: "interrupted-task-newer",
       expected: successor,
-      persistenceFailure: "throw",
     }),
   ).toBe(true);
 });
@@ -586,7 +583,7 @@ it.each([
         return runWorker(context, operation, options);
       },
     );
-    await import("./subagent-registry-runtime.js");
+    await import("./subagent-registry.js");
     let hook = lateWrite ? undefined : cleanup.emitSubagentEndedHookForRun({ entry: original });
     let firstWrite: Promise<void> | undefined;
     let restoreWaitObserver: (() => void) | undefined;

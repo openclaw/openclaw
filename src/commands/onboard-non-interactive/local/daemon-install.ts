@@ -4,7 +4,6 @@ import { isSystemdUserServiceAvailable } from "../../../daemon/systemd.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { gatewayInstallErrorHint } from "../../daemon-install-helpers.js";
-import { DEFAULT_GATEWAY_DAEMON_RUNTIME, isGatewayDaemonRuntime } from "../../daemon-runtime.js";
 import { resolveGatewayInstallToken } from "../../gateway-install-token.js";
 import { prepareGatewayServiceInstall } from "../../gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "../../gateway-setup-runtime.js";
@@ -27,11 +26,6 @@ export async function installGatewayDaemonNonInteractive(params: {
     }
 > {
   const { opts, runtime, port } = params;
-  if (!opts.installDaemon) {
-    return { installed: false };
-  }
-
-  const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   const systemdAvailable =
     process.platform === "linux" ? await isSystemdUserServiceAvailable() : true;
   if (process.platform === "linux" && !systemdAvailable) {
@@ -41,12 +35,6 @@ export async function installGatewayDaemonNonInteractive(params: {
       "Systemd user services are unavailable; skipping service install. Use a direct shell run (`openclaw gateway run`) or rerun without --install-daemon on this session.",
     );
     return { installed: false, skippedReason: "systemd-user-unavailable" };
-  }
-
-  if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
-    runtime.error('Invalid --daemon-runtime. Use "node" or "bun".');
-    runtime.exit(1);
-    return { installed: false };
   }
 
   const service = resolveGatewayService();

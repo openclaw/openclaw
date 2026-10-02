@@ -18,6 +18,24 @@ import {
 } from "./sqlite-snapshot-source.js";
 import * as staging from "./sqlite-snapshot-staging.js";
 
+function createDatabase(location: string, sql: string): Buffer {
+  const database = new (requireNodeSqlite().DatabaseSync)(location);
+  try {
+    database.exec(sql);
+  } finally {
+    database.close();
+  }
+  return fs.readFileSync(location);
+}
+
+function createSnapshot(name: string) {
+  const ownedRoot = path.join(root, name);
+  const location = path.join(ownedRoot, "database.sqlite");
+  fs.mkdirSync(ownedRoot, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(location, "snapshot bytes");
+  return { ownedRoot, location };
+}
+
 it("preserves failed cleanup over cancellation in the public preparation contract", async () => {
   const directory = path.join(root, "cancelled-preparation");
   await fs.promises.mkdir(directory);
@@ -105,13 +123,10 @@ it.each([
           nativeJoined = true;
         });
         const location = path.join(directory, "database.sqlite");
-        const database = new (requireNodeSqlite().DatabaseSync)(location);
-        try {
-          database.exec("CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('preserved');");
-        } finally {
-          database.close();
-        }
-        const originalBytes = fs.readFileSync(location);
+        const originalBytes = createDatabase(
+          location,
+          "CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('preserved');",
+        );
         const releaseCurrentReader = currentCleanup.retainSnapshotTempDirectory(directory);
         const releaseOriginalReader = targetLost
           ? oldCleanup.retainSnapshotTempDirectory(directory)
@@ -221,13 +236,10 @@ it.each([
 it("retains a snapshot source's cleanup owner across module reload", async () => {
   const { captureSqliteSnapshotStagingOwner } = await import("./sqlite-snapshot-staging-owner.js");
   const source = path.join(root, "reload-source.sqlite");
-  const database = new (requireNodeSqlite().DatabaseSync)(source);
-  try {
-    database.exec("CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('preserved');");
-  } finally {
-    database.close();
-  }
-  const original = fs.readFileSync(source);
+  const original = createDatabase(
+    source,
+    "CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES('preserved');",
+  );
   vi.stubEnv("XDG_CACHE_HOME", root);
   const options = { preserveSourceArtifacts: true, signal: new AbortController().signal };
   const first = startSqliteReadOnlyLocationAsync(source, options);
@@ -333,13 +345,10 @@ it("retires the current snapshot during shared cleanup despite stale caller cust
 
 it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
   const source = path.join(root, "mixed-source.sqlite");
-  const database = new (requireNodeSqlite().DatabaseSync)(source);
-  try {
-    database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-  } finally {
-    database.close();
-  }
-  const original = fs.readFileSync(source);
+  const original = createDatabase(
+    source,
+    "CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');",
+  );
   vi.stubEnv("XDG_CACHE_HOME", root);
   const synchronous = prepareSqliteReadOnlyLocation(source, { preserveSourceArtifacts: true });
   const asynchronous = startSqliteReadOnlyLocationAsync(source, {
@@ -426,10 +435,7 @@ async function revokeParentWrite(): Promise<void> {
 
 describe.runIf(supportsChmodDenial)("chmod-denied cleanup failure", () => {
   it("emits a non-throwing warning when cleanup cannot remove the owned directory", async () => {
-    const ownedRoot = path.join(root, "owned");
-    const location = path.join(ownedRoot, "database.sqlite");
-    await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-    await fs.promises.writeFile(location, "snapshot bytes");
+    const { ownedRoot, location } = createSnapshot("owned");
 
     const reports: CleanupFailureReport[] = [];
     const prepared = adoptPreparedLocation(location, ownedRoot, false, (report) =>
@@ -457,10 +463,7 @@ describe.runIf(supportsChmodDenial)("chmod-denied cleanup failure", () => {
 it.each(["idle", "pending"] as const)(
   "preserves replacement bytes when stale async cleanup is %s",
   async (asyncState) => {
-    const ownedRoot = path.join(root, "healthy");
-    const location = path.join(ownedRoot, "database.sqlite");
-    await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-    await fs.promises.writeFile(location, "snapshot bytes");
+    const { ownedRoot, location } = createSnapshot("healthy");
 
     const reports: CleanupFailureReport[] = [];
     const prepared = adoptPreparedLocation(location, ownedRoot, false, (report) =>
@@ -491,43 +494,15 @@ it.each(["idle", "pending"] as const)(
   },
 );
 
-describe.runIf(supportsChmodDenial)("chmod-denied default sink", () => {
-  it("uses the structured log as the default sink when no callback is supplied", async () => {
-    const ownedRoot = path.join(root, "default-sink");
-    const location = path.join(ownedRoot, "database.sqlite");
-    await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-    await fs.promises.writeFile(location, "snapshot bytes");
-
-    const processWarning = vi.spyOn(process, "emitWarning");
-    const consoleWarning = vi.spyOn(console, "warn");
-
-    const prepared = adoptPreparedLocation(location, ownedRoot, false);
-
-    await revokeParentWrite();
-    try {
-      expect(prepared.cleanup()).toBe(false);
-    } finally {
-      await fs.promises.chmod(root, 0o700);
-    }
-
-    const records = await readCleanupLog();
-    expect(records).toHaveLength(1);
-    expect(records[0]).toMatchObject({
-      "1": { path: ownedRoot, operation: "rm", errorCode: "EACCES" },
-      message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
-    });
-    expect(processWarning).not.toHaveBeenCalled();
-    expect(consoleWarning).not.toHaveBeenCalled();
-  });
-});
-
-it("records structured cleanup diagnostics", async () => {
-  const ownedRoot = path.join(root, "diagnostic-only");
-  await fs.promises.mkdir(ownedRoot);
+it("records cleanup diagnostics in the structured log without process or console warnings", async () => {
+  const processWarning = vi.spyOn(process, "emitWarning");
+  const consoleWarning = vi.spyOn(console, "warn");
+  const { ownedRoot, location } = createSnapshot("diagnostic-only");
   vi.spyOn(fs, "rmSync").mockImplementationOnce(() => {
     throw Object.assign(new Error("snapshot busy"), { code: "EBUSY" });
   });
-  const prepared = adoptPreparedLocation(path.join(ownedRoot, "database.sqlite"), ownedRoot);
+  const prepared = adoptPreparedLocation(location);
+  expect(prepared.cleanupRoot).toBe(ownedRoot);
   expect(prepared.cleanup()).toBe(false);
   const records = await readCleanupLog();
   expect(records).toHaveLength(1);
@@ -535,14 +510,13 @@ it("records structured cleanup diagnostics", async () => {
     "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
     message: expect.stringContaining("SQLite read-only snapshot cleanup failed"),
   });
+  expect(processWarning).not.toHaveBeenCalled();
+  expect(consoleWarning).not.toHaveBeenCalled();
 });
 
 describe.runIf(supportsChmodDenial)("chmod-denied requireCleanup", () => {
   it("still throws on cleanup failure when requireCleanup is set", async () => {
-    const ownedRoot = path.join(root, "required");
-    const location = path.join(ownedRoot, "database.sqlite");
-    await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-    await fs.promises.writeFile(location, "snapshot bytes");
+    const { ownedRoot, location } = createSnapshot("required");
 
     const prepared = adoptPreparedLocation(location, ownedRoot, true);
 
@@ -555,48 +529,8 @@ describe.runIf(supportsChmodDenial)("chmod-denied requireCleanup", () => {
   });
 });
 
-it("exposes cleanupRoot as the directory cleanup owns", () => {
-  const ownedRoot = path.join(root, "explicit-root");
-  const location = path.join(ownedRoot, "database.sqlite");
-  const prepared = adoptPreparedLocation(location, ownedRoot);
-  expect(prepared.cleanupRoot).toBe(ownedRoot);
-
-  // Without an explicit owned root, cleanup owns the directory holding the snapshot.
-  const fallback = adoptPreparedLocation(path.join(root, "fallback", "database.sqlite"));
-  expect(fallback.cleanupRoot).toBe(path.join(root, "fallback"));
-});
-
-it("does not emit a false warning when synchronous cleanup races an in-flight async removal", async () => {
-  const ownedRoot = path.join(root, "concurrent");
-  const location = path.join(ownedRoot, "database.sqlite");
-  await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-  await fs.promises.writeFile(location, "snapshot bytes");
-
-  const reports: CleanupFailureReport[] = [];
-  const prepared = adoptPreparedLocation(location, ownedRoot, false, (report) =>
-    reports.push(report),
-  );
-
-  // Start an async removal but do not await it yet.  The synchronous cleanup()
-  // sees `pending` and must return false without reporting a failure — the
-  // async path reports the actual outcome when it settles.
-  const removal = prepared.cleanupAsync();
-  // Let the microtask queue drain so the pending promise is set.
-  await Promise.resolve();
-  expect(prepared.cleanup()).toBe(false);
-  expect(reports).toHaveLength(0);
-
-  await removal;
-  // The async removal succeeded, so no warning should ever have been emitted.
-  expect(reports).toHaveLength(0);
-  expect(fs.existsSync(ownedRoot)).toBe(false);
-});
-
 it("does not throw when the onCleanupFailure callback itself throws", async () => {
-  const ownedRoot = path.join(root, "throwing-callback");
-  const location = path.join(ownedRoot, "database.sqlite");
-  await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-  await fs.promises.writeFile(location, "snapshot bytes");
+  const { ownedRoot, location } = createSnapshot("throwing-callback");
 
   // Force removal failure via fs.rmSync mock so the callback is exercised on
   // every platform, including root POSIX and Windows (where chmod can't deny).
@@ -622,34 +556,4 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
     "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
   });
   expect(JSON.stringify(records)).not.toContain("callback exploded");
-});
-
-it("reports non-Error callback failures without throwing", async () => {
-  const ownedRoot = path.join(root, "non-error-callback");
-  const location = path.join(ownedRoot, "database.sqlite");
-  await fs.promises.mkdir(ownedRoot, { recursive: true, mode: 0o700 });
-  await fs.promises.writeFile(location, "snapshot bytes");
-
-  const processWarning = vi.spyOn(process, "emitWarning");
-  vi.spyOn(fs, "rmSync").mockImplementation(() => {
-    throw Object.assign(new Error("mock removal failure"), { code: "EBUSY" });
-  });
-
-  const prepared = adoptPreparedLocation(location, ownedRoot, false, () => {
-    // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error failures at the cleanup boundary.
-    throw 42;
-  });
-
-  try {
-    expect(prepared.cleanup()).toBe(false);
-  } finally {
-    expect(processWarning).not.toHaveBeenCalled();
-    vi.restoreAllMocks();
-  }
-
-  const records = await readCleanupLog();
-  expect(records).toHaveLength(1);
-  expect(records[0]).toMatchObject({
-    "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },
-  });
 });

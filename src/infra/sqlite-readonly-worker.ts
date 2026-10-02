@@ -1,4 +1,4 @@
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { performance } from "node:perf_hooks";
@@ -199,6 +199,30 @@ export function resolveSqliteInspectionSignal(signal?: AbortSignal): AbortSignal
     : signal;
 }
 
+/** Bind a one-shot inspection to the active scope's cancellation and close join. */
+export function runScopedSqliteInspection<T>(
+  signal: AbortSignal | undefined,
+  inspect: (signal: AbortSignal | undefined) => Promise<T>,
+): Promise<T> {
+  const scope = readOnlyWorkerScope.getStore();
+  if (!scope) {
+    return inspect(signal);
+  }
+  if (!scope.active) {
+    return Promise.reject(new Error("SQLite read-only worker scope closed"));
+  }
+  const scopedSignal = signal
+    ? AbortSignal.any([signal, scope.controller.signal])
+    : scope.controller.signal;
+  const operation = inspect(scopedSignal);
+  scope.pending.add(operation);
+  void operation.then(
+    () => scope.pending.delete(operation),
+    () => scope.pending.delete(operation),
+  );
+  return operation;
+}
+
 function sqliteReadOnlyWorkerArgv(pathname: string, options: SqliteReadOnlyWorkerOptions) {
   const { moduleUrl, runtimeGeneration } = captureRuntimeWorkerSource(
     resolveRuntimeWorkerUrl(
@@ -265,7 +289,11 @@ export function runSqliteReadOnlyWorker(
 ): Promise<SqliteAuthProfileRows>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
-  options: { mode: "sync" | "async"; stagingRoot?: string; signal?: AbortSignal },
+  options: {
+    mode: "sync" | "async";
+    stagingRoot?: string;
+    signal?: AbortSignal;
+  },
 ): Promise<string>;
 export function runSqliteReadOnlyWorker(
   pathname: string,
@@ -426,34 +454,79 @@ export function runSqliteReadOnlyWorkerOnce(
       captureSqliteReadOnlyWorkerLaunch(options.env, options.source),
     );
   }
-  return new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
-    const { timeoutMs, size } = readSqliteInspectionBudget("read-only snapshot", pathname);
+  const reclaim = options.mode === "reclaim";
+  const { argv, runtimeGeneration } = sqliteReadOnlyWorkerArgv(pathname, options);
+  return runOneShotSqliteInspection({
+    pathname,
+    operation: reclaim ? "reclamation" : "read-only snapshot",
+    argv,
+    runtimeGeneration,
+    signal: options.signal,
+    deadlineOwnedByCaller:
+      !reclaim && (launch?.deadlineOwnedByCaller ?? isSqliteInspectionDeadlineOwnedByCaller()),
+    deadlineStopsOwner: reclaim,
+    env: launch?.env,
+    cwd: launch?.cwd,
+    stoppedFailure: "snapshot owner stopped",
+    ...(reclaim ? { interrupt: (child: ChildProcess) => child.stdin?.end() } : {}),
+    read: (output, deadlineReached) => {
+      if (reclaim) {
+        const warnings = readSqliteReadOnlyWorkerValue(output, "reclaim");
+        if (deadlineReached) {
+          const { timeoutMs, size } = readSqliteInspectionBudget("reclamation", pathname);
+          warnings.push(
+            sqliteInspectionTimeoutError("reclamation", pathname, timeoutMs, size).message,
+          );
+        }
+        return warnings;
+      }
+      options.signal?.throwIfAborted();
+      return readSqliteReadOnlyWorkerValue(output, options.mode);
+    },
+  });
+}
+
+export function runOneShotSqliteInspection<T>(params: {
+  pathname: string;
+  operation: string;
+  argv: string[];
+  runtimeGeneration?: ReturnType<typeof captureRuntimeWorkerSource>["runtimeGeneration"];
+  signal?: AbortSignal;
+  deadlineOwnedByCaller?: boolean;
+  deadlineStopsOwner?: boolean;
+  env?: NodeJS.ProcessEnv;
+  cwd?: string;
+  stoppedFailure: string;
+  interrupt?: (child: ChildProcess) => void;
+  read: (output: SqliteReadOnlyWorkerOutput, deadlineReached: boolean) => T;
+}): Promise<T> {
+  const { timeoutMs, size } = readSqliteInspectionBudget(params.operation, params.pathname);
+  return new Promise<T>((resolve, reject) => {
     let output: SqliteReadOnlyWorkerOutput = { stderr: "", stdout: "" };
     let stopped = false;
-    let reclamationDeadline = false;
-    const reclaim = options.mode === "reclaim";
-    const { argv, runtimeGeneration } = sqliteReadOnlyWorkerArgv(pathname, options);
+    let deadlineReached = false;
     const child = execFile(
       process.execPath,
-      argv,
+      params.argv,
       {
         encoding: "utf8",
-        env: launch?.env ?? resolveNodeCompileCacheEnv(),
-        cwd: launch?.cwd,
+        env: params.env ?? resolveNodeCompileCacheEnv(),
+        cwd: params.cwd,
         maxBuffer: SQLITE_READONLY_WORKER_MAX_BUFFER,
-        timeout:
-          reclaim || (launch?.deadlineOwnedByCaller ?? isSqliteInspectionDeadlineOwnedByCaller())
-            ? undefined
-            : timeoutMs,
+        timeout: params.deadlineStopsOwner || params.deadlineOwnedByCaller ? undefined : timeoutMs,
         killSignal: "SIGKILL",
       },
       (error, stdout, stderr) => {
+        const timedOut = error?.killed && error.signal === "SIGKILL" && error.code == null;
+        if (timedOut) {
+          deadlineReached = true;
+        }
         output = {
           failure: error
             ? stopped
-              ? "snapshot owner stopped"
-              : error.killed && error.signal === "SIGKILL" && error.code == null
-                ? sqliteInspectionTimeoutError("read-only snapshot", pathname, timeoutMs, size)
+              ? params.stoppedFailure
+              : timedOut
+                ? sqliteInspectionTimeoutError(params.operation, params.pathname, timeoutMs, size)
                     .message
                 : `exited unsuccessfully: ${error.message}`
             : undefined,
@@ -462,23 +535,24 @@ export function runSqliteReadOnlyWorkerOnce(
         };
       },
     );
-    // execFile does not forward killSignal for AbortSignal cancellation.
-    const abort = () => {
-      if (stopped) {
-        return;
-      }
-      stopped = true;
-      if (reclaim) {
-        child.stdin?.end();
+    const interrupt = () => {
+      if (params.interrupt) {
+        params.interrupt(child);
       } else {
         child.kill("SIGKILL");
       }
     };
-    // Keep the existing budget, but settle reclamation at a directory boundary.
-    const timer = reclaim
+    const abort = () => {
+      if (!stopped) {
+        stopped = true;
+        interrupt();
+      }
+    };
+    const timer = params.deadlineStopsOwner
       ? setTimeout(() => {
-          reclamationDeadline = true;
-          abort();
+          deadlineReached = true;
+          stopped = true;
+          interrupt();
         }, timeoutMs)
       : undefined;
     const closed = retainSnapshotWork(
@@ -487,31 +561,20 @@ export function runSqliteReadOnlyWorkerOnce(
       }),
       abort,
     );
-    runtimeGeneration?.retain(child, async () => {
+    params.runtimeGeneration?.retain(child, async () => {
       await closed;
     });
-    options.signal?.addEventListener("abort", abort, { once: true });
-    if (options.signal?.aborted) {
+    params.signal?.addEventListener("abort", abort, { once: true });
+    if (params.signal?.aborted) {
       abort();
     }
     // execFile can report an abort/error before close. Ownership ends only
     // after the process and its pipes have closed, including failed launches.
     child.once("close", () => {
       clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abort);
+      params.signal?.removeEventListener("abort", abort);
       try {
-        if (options.mode === "reclaim") {
-          const warnings = readSqliteReadOnlyWorkerValue(output, "reclaim");
-          if (reclamationDeadline) {
-            warnings.push(
-              sqliteInspectionTimeoutError("reclamation", pathname, timeoutMs, size).message,
-            );
-          }
-          resolve(warnings);
-          return;
-        }
-        options.signal?.throwIfAborted();
-        resolve(readSqliteReadOnlyWorkerValue(output, options.mode));
+        resolve(params.read(output, deadlineReached));
       } catch (workerError) {
         reject(workerError instanceof Error ? workerError : new Error(String(workerError)));
       }

@@ -1,6 +1,7 @@
 // Channel outbound send tests cover CLI send runtime handoff to channel outbound adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createChannelOutboundRuntimeSend } from "./channel-outbound-send.js";
 
 const mocks = vi.hoisted(() => ({
   loadChannelOutboundAdapter: vi.fn(),
@@ -30,7 +31,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       mocks.loadChannelOutboundAdapter.mockResolvedValue(undefined);
       const unavailableMessage = `${channelId} outbound adapter is unavailable.`;
 
-      const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
       const runtimeSend = createChannelOutboundRuntimeSend({
         channelId,
         unavailableMessage,
@@ -57,7 +57,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendMedia,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,
@@ -99,7 +98,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendMedia: vi.fn(),
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,
       unavailableMessage: "unavailable",
@@ -132,7 +130,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "telegram" as never,
       unavailableMessage: "unavailable",
@@ -156,7 +153,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "slack" as never,
       unavailableMessage: "unavailable",
@@ -194,7 +190,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "matrix" as never,
       unavailableMessage: "unavailable",
@@ -220,7 +215,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "slack" as never,
       unavailableMessage: "unavailable",
@@ -244,7 +238,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "slack" as never,
       unavailableMessage: "unavailable",
@@ -271,7 +264,6 @@ describe("createChannelOutboundRuntimeSend", () => {
       sendText,
     });
 
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
     const mediaReadFile = vi.fn(async () => Buffer.from("pdf"));
     const runtimeSend = createChannelOutboundRuntimeSend({
       channelId: "whatsapp" as never,

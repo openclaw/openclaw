@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
-import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
+import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
@@ -78,10 +78,9 @@ export async function hasCompletedBootstrapTurn(
     return false;
   }
   try {
-    const records = readRecentSessionTranscriptActiveEvents(
-      { agentId, sessionId, sessionKey, storePath },
-      CONTINUATION_SCAN_MAX_RECORDS,
-    );
+    const reader = prepareSessionTranscriptHydration({ agentId, sessionId, sessionKey, storePath });
+    const records = await reader.readRecentActiveEvents(CONTINUATION_SCAN_MAX_RECORDS);
+    reader.assertCurrent();
     for (const entry of records.toReversed()) {
       const record = entry as { type?: string; customType?: string } | null | undefined;
       // Context before compaction/reset is not reusable on the active branch.

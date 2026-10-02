@@ -5,7 +5,7 @@ import WebKit
 @testable import OpenClaw
 
 /// WebKit fixtures are compiled locally and executed only in the disposable macOS runner.
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct NativeConversationBridgeTests {
     @Test func `Dashboard handoff removes exactly the document mount`() throws {
@@ -27,7 +27,7 @@ struct NativeConversationBridgeTests {
         defer { document.webView.stopLoading() }
         for path in ["/control/chat/main", "/outside"] {
             document.load(server.url(path))
-            try await Self.waitUntil {
+            try await TestWait.state("conversation page \(path)") {
                 let current = try? await document.webView.evaluateJavaScript(
                     "window.fixtureChrome ? location.pathname : null")
                 return current as? String == path
@@ -51,7 +51,7 @@ struct NativeConversationBridgeTests {
         handler.owner = bridge
         defer { bridge.close() }
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("current conversation document") { bridge.currentDocumentId != nil }
         let oldID = try #require(bridge.currentDocumentId)
         let accepted = try await Self.post("{type:'state', ...fixtureState(1, 'First')}", in: document.webView)
         #expect(accepted["ok"] as? Bool == true)
@@ -79,7 +79,9 @@ struct NativeConversationBridgeTests {
         #expect(bridge.state?.title == "First")
 
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil && bridge.currentDocumentId != oldID }
+        try await TestWait.observed("replacement conversation document") {
+            bridge.currentDocumentId != nil && bridge.currentDocumentId != oldID
+        }
         let oldLiteral = try String(decoding: JSONEncoder().encode(oldID), as: UTF8.self)
         let retired = try await Self.post(
             "{type:'state', ...fixtureState(99, 'Retired'), documentId:\(oldLiteral)}", in: document.webView)
@@ -91,10 +93,15 @@ struct NativeConversationBridgeTests {
         #expect(bridge.state == nil)
 
         var stopped = false
-        bridge.close { stopped = true }
+        let closed = AsyncTestGate()
+        bridge.close {
+            stopped = true
+            closed.open()
+        }
         // Initiating navigation is not proof that the old page stopped executing.
         #expect(!stopped)
-        try await Self.waitUntil { stopped }
+        await closed.wait()
+        try Task.checkCancellation()
         #expect(document.webView.url?.absoluteString == "about:blank")
     }
 
@@ -108,12 +115,12 @@ struct NativeConversationBridgeTests {
         handler.owner = bridge
         defer { bridge.close() }
         bridge.load(server.url("/control/chat/main"))
-        try await Self.waitUntil { bridge.currentDocumentId != nil }
+        try await TestWait.observed("current conversation document") { bridge.currentDocumentId != nil }
         let id = bridge.currentDocumentId
         let other = Self.document(server: server, handler: handler)
         defer { other.webView.stopLoading() }
         other.load(server.url("/control/chat/main"))
-        try await Self.waitUntil {
+        try await TestWait.state("other web view refusal") {
             await (try? other.webView.evaluateJavaScript("window.fixtureReadyReply?.ok === false")) as? Bool == true
         }
         #expect(bridge.currentDocumentId == id)
@@ -121,6 +128,70 @@ struct NativeConversationBridgeTests {
         #expect(result.ok)
         let count = try await document.webView.evaluateJavaScript("window.commandCount") as? Int
         #expect(count == 1)
+    }
+
+    @Test func `sidebar extensions require capability and retire with their document`() async throws {
+        let server = try await DashboardHTTPFixture.start(
+            html: Self.html, contentSecurityPolicy: "default-src 'self' 'unsafe-inline'")
+        defer { server.stop() }
+        let handler = NativeConversationMessageHandler()
+        let document = Self.document(server: server, handler: handler)
+        let bridge = NativeConversationBridge(document: document)
+        handler.owner = bridge
+        defer { bridge.close() }
+        let context = NativeConversationContext(agentId: "main", sessionKey: "agent:main:other")
+        let snapshot = """
+        {type:'session-facts', revision:1, sessions:[
+          {agentId:'main',sessionKey:'agent:main:other',hasComposerDraft:true,outboxAttentionCount:2}
+        ]}
+        """
+        bridge.load(server.url("/control/chat/main"))
+        try await TestWait.observed("featureless conversation document") { bridge.currentDocumentId != nil }
+        #expect(await bridge.request(.openSessionActions(context)).error == "unsupported")
+        #expect(try await Self.post(snapshot, in: document.webView)["ok"] as? Bool == false)
+        #expect(bridge.sessionFacts == nil)
+
+        bridge.load(server.url("/control/chat/main?features=1"))
+        try await TestWait.observed("sidebar-capable conversation document") { bridge.currentDocumentId != nil }
+        let documentID = try #require(bridge.currentDocumentId)
+        #expect(bridge.capabilities.contains("session-facts-v1"))
+        #expect(try await Self.post(snapshot, in: document.webView)["ok"] as? Bool == true)
+        #expect(bridge.sessionFacts?.sessions?.first?.context == context)
+        #expect(bridge.sessionFacts?.sessions?.first?.outboxAttentionCount == 2)
+        #expect(try await Self.post(snapshot, in: document.webView)["error"] as? String == "stale-state")
+        #expect(try await Self.post("""
+        {type:'session-facts', revision:2, sessions:Array.from({length:20},(_,i)=>({
+          agentId:'main',sessionKey:String(i).padEnd(4096,'x'),hasComposerDraft:false,outboxAttentionCount:0
+        }))}
+        """, in: document.webView)["ok"] as? Bool == false)
+        #expect(bridge.sessionFacts?.revision == 1)
+        #expect(try await Self.post("""
+        {type:'session-facts', revision:2, sessions:Array.from({length:15},(_,i)=>({
+          agentId:'main',sessionKey:`agent:main:${i}:`+'/'.repeat(4000),
+          hasComposerDraft:true,outboxAttentionCount:1
+        }))}
+        """, in: document.webView)["ok"] as? Bool == true)
+        #expect(bridge.sessionFacts?.revision == 2)
+        #expect(bridge.sessionFacts?.sessions?.count == 15)
+        #expect(try await Self.post(
+            "{type:'session-facts',revision:3,sessions:null}", in: document.webView)["ok"] as? Bool == true)
+        #expect(bridge.sessionFacts?.sessions == nil)
+        #expect(try await Self.post(
+            "{type:'ready',surface:'conversation',capabilities:[]}", in: document.webView)["ok"] as? Bool == true)
+        #expect(await bridge.request(.openSessionActions(context)).ok)
+        let command = try #require(
+            try await document.webView.evaluateJavaScript("window.lastCommand") as? [String: Any])
+        #expect(command["type"] as? String == "open-session-actions")
+        #expect((command["payload"] as? [String: String]) == ["agentId": "main", "sessionKey": context.sessionKey])
+
+        bridge.load(server.url("/control/chat/main"))
+        #expect(bridge.sessionFacts == nil)
+        #expect(bridge.capabilities.isEmpty)
+        try await TestWait.observed("replacement featureless conversation document") { bridge.currentDocumentId != nil }
+        let oldLiteral = try String(decoding: JSONEncoder().encode(documentID), as: UTF8.self)
+        #expect(try await Self.post(
+            "{...\(snapshot),documentId:\(oldLiteral)}", in: document.webView)["error"] as? String == "stale-document")
+        #expect(await bridge.request(.openSessionActions(context)).error == "unsupported")
     }
 
     private static func document(
@@ -152,14 +223,6 @@ struct NativeConversationBridgeTests {
         return try #require(result as? [String: Any])
     }
 
-    private static func waitUntil(_ condition: () async throws -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while try await !condition() {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-    }
-
     private static let html = """
     <!doctype html><html><head><script>
     window.fixtureChrome = {
@@ -180,10 +243,12 @@ struct NativeConversationBridgeTests {
     window.commandCount = 0;
     window.addEventListener('openclaw:native-conversation-command', event => {
       window.commandCount++;
+      window.lastCommand = event.detail;
       const result = {type:'command-result', requestId:event.detail.requestId, ok:true};
       fixturePost(result); fixturePost(result);
     });
-    fixturePost({type:'ready',surface:'conversation',capabilities:[]}).then(reply => window.fixtureReadyReply = reply);
+    fixturePost({type:'ready',surface:'conversation',capabilities:location.search.includes('features=1')
+      ? ['session-facts-v1','session-actions-v1'] : []}).then(reply => window.fixtureReadyReply = reply);
     </script></body></html>
     """
 }

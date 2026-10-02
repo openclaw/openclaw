@@ -85,6 +85,10 @@ export function renderAssistantRequestFailureCopy(
     facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500
       ? "server_error"
       : facts.reason;
+  // Failover statuses can be synthesized locally; a timeout does not prove an HTTP response.
+  if (normalizedReason === "timeout") {
+    return "⚠️ The request timed out. Please try again. If it keeps happening, try a shorter request or a different model.";
+  }
   const reason = normalizedReason ? ASSISTANT_REQUEST_FAILURE_REASON[normalizedReason] : undefined;
   const httpStatus = facts.status;
   const status =
@@ -105,7 +109,6 @@ export function renderAssistantRequestFailureCopy(
   if (
     normalizedReason === "overloaded" ||
     normalizedReason === "server_error" ||
-    normalizedReason === "timeout" ||
     normalizedReason === "rate_limit"
   ) {
     return `${summary} This is usually temporary — try again shortly.`;

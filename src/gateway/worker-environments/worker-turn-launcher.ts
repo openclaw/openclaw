@@ -12,13 +12,13 @@ import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admissi
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { WORKER_ADMISSION_DEADLINE_MS } from "../../worker/worker-connection-contract.js";
 import { StaleWorkerBuildError } from "./admission.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRecord,
   WorkerSessionPlacementStore,
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
+import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
@@ -457,11 +457,12 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
             throw new Error("Worker placement changed while loading turn execution");
           }
           if (!remoteExec) {
-            activeWorkerTurn = createWorkerTurnRunOwner({
+            activeWorkerTurn = await createWorkerTurnRunOwner({
               placements: options.placements,
               claim: turnClaim,
               sessionKey: placement.sessionKey,
               turn,
+              assertCurrent: assertAdmissionCurrent,
             });
             activeWorkerTurn.signal.throwIfAborted();
             turn = {

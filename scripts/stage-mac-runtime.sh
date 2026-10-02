@@ -117,6 +117,10 @@ JS
   fi
 done
 
+cat > "$STAGE/runtime/lib/node_modules/openclaw/openclaw-install-owner.json" <<'JSON'
+{"schemaVersion":1,"owner":"macos-app","displayName":"OpenClaw.app","updateHint":"Update OpenClaw.app to update this Gateway."}
+JSON
+
 /bin/bash "$ROOT_DIR/scripts/stage-openclaw-bun-macos.sh" "$STAGE/runtime" "$@"
 sqlite_arch="$1"
 [[ "$#" -eq 1 ]] || sqlite_arch=universal

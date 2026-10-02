@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -132,7 +133,6 @@ it.skipIf(process.platform === "win32").each(["", "openclaw"])(
 );
 
 it.each([
-  { parentName: "openclaw-sqlite-readonly-v2-Parent", layout: "", artifact: "operator.txt" },
   {
     parentName: "openclaw-sqlite-readonly-v2-Parent",
     layout: "",

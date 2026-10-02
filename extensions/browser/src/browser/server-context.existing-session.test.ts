@@ -64,10 +64,6 @@ const chromeMcpMock = vi.hoisted(() => ({
 
 vi.mock("./chrome-mcp.js", () => chromeMcpMock);
 
-vi.mock("./chrome-mcp.runtime.js", () => ({
-  getChromeMcpModule: vi.fn(async () => chromeMcpMock),
-}));
-
 const { createBrowserRouteContext } = await import("./server-context.js");
 const chromeMcp = chromeMcpMock;
 

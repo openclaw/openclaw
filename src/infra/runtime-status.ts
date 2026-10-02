@@ -7,7 +7,6 @@ type RuntimeStatusFormatInput = {
   details?: string[];
 };
 
-/** Formats runtime health/status text with optional pid, state, and extra diagnostic details. */
 export function formatRuntimeStatusWithDetails({
   status,
   pid,

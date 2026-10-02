@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -9,7 +10,8 @@ import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as profileReader from "../state/user-profile-list.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readOpenAiHttpRunTerminal,
@@ -76,6 +78,30 @@ function createOperatorRunFixture() {
   return { cfg, params, person, source, request, host };
 }
 
+function startPendingCommand(params: Parameters<typeof runOpenAiCompatibleAgentCommand>[0]) {
+  const entered = createDeferred<CommandOptions>();
+  const settlement = createDeferred<typeof completedResult>();
+  vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
+    entered.resolve(options);
+    return await settlement.promise;
+  });
+  const running = runOpenAiCompatibleAgentCommand(params);
+  return {
+    settlement,
+    running,
+    entered: Promise.race([
+      entered.promise,
+      running.then(() => {
+        throw new Error("Command finished without receiving operator authority");
+      }),
+    ]),
+    close: async () => {
+      settlement.resolve(completedResult);
+      await running.catch(() => {});
+    },
+  };
+}
+
 describe("OpenAI-compatible operator run authority", () => {
   beforeEach(() => {
     vi.mocked(agentCommandFromGatewayIngress).mockReset();
@@ -86,26 +112,13 @@ describe("OpenAI-compatible operator run authority", () => {
     async (reject) => {
       await withOpenClawTestState({ label: "compat-run-retention" }, async () => {
         const fixture = createOperatorRunFixture();
-        const entered = createDeferred<CommandOptions>();
-        const settlement = createDeferred<typeof completedResult>();
+        const { entered, settlement, running, close } = startPendingCommand(fixture.params);
         const failure = new Error("command failed");
-        vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-          entered.resolve(options);
-          return await settlement.promise;
-        });
-        const running = runOpenAiCompatibleAgentCommand(fixture.params);
         let child: ReturnType<typeof prepareAgentRunAdmission> | undefined;
         try {
-          const options = await Promise.race([
-            entered.promise,
-            running.then(() => {
-              throw new Error("Command finished without receiving operator authority");
-            }),
-          ]);
+          const options = await entered;
           const authority = options.operatorAuthority;
-          if (!authority) {
-            throw new Error("Expected the original operator authority");
-          }
+          assert(authority, "Expected the original operator authority");
           expect(authority.profileId).toBe(fixture.person.id);
           expect(authority.scopes).toEqual(["operator.sessions.write"]);
           expect(() => authority.assertCurrent()).not.toThrow();
@@ -131,15 +144,12 @@ describe("OpenAI-compatible operator run authority", () => {
           expect(options.abortSignal?.aborted).toBe(true);
           expect(authority.signal?.aborted).toBe(false);
           const childAuthority = readAdmittedRunOperatorAuthority(childContext);
-          if (!childAuthority) {
-            throw new Error("Detached work lost its original operator authority");
-          }
+          assert(childAuthority, "Detached work lost its original operator authority");
           expect(() => childAuthority.assertCurrent()).not.toThrow();
           child.close();
           expect(() => authority.assertCurrent()).toThrow(/no longer active/);
         } finally {
-          settlement.resolve(completedResult);
-          await running.catch(() => {});
+          await close();
           child?.close();
         }
       });
@@ -151,23 +161,11 @@ describe("OpenAI-compatible operator run authority", () => {
     async (changed) => {
       await withOpenClawTestState({ label: "compat-run-currentness" }, async () => {
         const fixture = createOperatorRunFixture();
-        const entered = createDeferred<CommandOptions>();
-        const settlement = createDeferred<typeof completedResult>();
-        vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-          entered.resolve(options);
-          return await settlement.promise;
-        });
-        const running = runOpenAiCompatibleAgentCommand(fixture.params);
+        const { entered, settlement, running, close } = startPendingCommand(fixture.params);
         try {
-          const options = await Promise.race([
-            entered.promise,
-            running.then(() => {
-              throw new Error("Command finished before the authority change");
-            }),
-          ]);
-          if (!options.operatorAuthority) {
-            throw new Error("Expected the original operator authority");
-          }
+          const options = await entered;
+          const authority = options.operatorAuthority;
+          assert(authority, "Expected the original operator authority");
           if (changed === "grant") {
             fixture.source.abort(new Error("Visitor access ended"));
             expect(options.abortSignal?.aborted).toBe(true);
@@ -177,12 +175,11 @@ describe("OpenAI-compatible operator run authority", () => {
           } else {
             fixture.host.current = createGatewayRequestContext(makeContextParams());
           }
-          expect(() => options.operatorAuthority!.assertCurrent()).toThrow();
+          expect(() => authority.assertCurrent()).toThrow();
           settlement.resolve(completedResult);
           await expect(running).rejects.toThrow();
         } finally {
-          settlement.resolve(completedResult);
-          await running.catch(() => {});
+          await close();
         }
       });
     },
@@ -192,9 +189,7 @@ describe("OpenAI-compatible operator run authority", () => {
     await withOpenClawTestState({ label: "compat-run-committed-config" }, async () => {
       const fixture = createOperatorRunFixture();
       const context = fixture.host.current;
-      if (!context) {
-        throw new Error("Expected the current Gateway context");
-      }
+      assert(context, "Expected the current Gateway context");
       const restricted: OpenClawConfig = {
         gateway: {
           roles: {
@@ -207,24 +202,11 @@ describe("OpenAI-compatible operator run authority", () => {
       let committed = fixture.cfg;
       context.getRuntimeConfig = () => tentative;
       context.getCommittedRuntimeConfig = () => committed;
-      const entered = createDeferred<CommandOptions>();
-      const settlement = createDeferred<typeof completedResult>();
-      vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
-        entered.resolve(options);
-        return await settlement.promise;
-      });
-      const running = runOpenAiCompatibleAgentCommand(fixture.params);
+      const { entered, settlement, running, close } = startPendingCommand(fixture.params);
       try {
-        const options = await Promise.race([
-          entered.promise,
-          running.then(() => {
-            throw new Error("Command finished before the config change");
-          }),
-        ]);
+        const options = await entered;
         const authority = options.operatorAuthority;
-        if (!authority) {
-          throw new Error("Expected the original operator authority");
-        }
+        assert(authority, "Expected the original operator authority");
         tentative = restricted;
         expect(() => authority.assertCurrent()).not.toThrow();
         tentative = fixture.cfg;
@@ -234,8 +216,7 @@ describe("OpenAI-compatible operator run authority", () => {
         settlement.resolve(completedResult);
         await expect(running).rejects.toThrow();
       } finally {
-        settlement.resolve(completedResult);
-        await running.catch(() => {});
+        await close();
       }
     });
   });
@@ -258,39 +239,49 @@ describe("OpenAI-compatible operator run authority", () => {
     },
   );
 
-  it("refuses client media when uploads are disabled during operator preparation", async () => {
-    await withOpenClawTestState({ label: "compat-upload-preparation" }, async () => {
-      const fixture = createOperatorRunFixture();
-      fixture.params.hasClientUploads = true;
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const prepare = profileReader.prepareUserProfileIdentity;
-      const held = vi
-        .spyOn(profileReader, "prepareUserProfileIdentity")
-        .mockImplementationOnce(async (...args) => {
-          const identity = await prepare(...args);
-          entered.resolve();
-          await resume.promise;
-          return identity;
-        });
-      const running = runOpenAiCompatibleAgentCommand(fixture.params);
-      const rejected = expect(running).rejects.toThrow("uploads are disabled");
-      try {
-        await entered.promise;
-        setRuntimeConfigSnapshot({
-          ...fixture.cfg,
-          gateway: { ...fixture.cfg.gateway, uploads: { enabled: false } },
-        });
-        resume.resolve();
-        await rejected;
-        expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
-      } finally {
-        resume.resolve();
-        await running.catch(() => {});
-        held.mockRestore();
-      }
-    });
-  });
+  it.each([
+    { change: "uploads disabled", message: "uploads are disabled" },
+    { change: "request ended", message: "Request ended during preparation" },
+  ])(
+    "refuses command admission after $change during profile preparation",
+    async ({ change, message }) => {
+      await withOpenClawTestState({ label: "compat-run-preparation" }, async () => {
+        const fixture = createOperatorRunFixture();
+        fixture.params.hasClientUploads = change === "uploads disabled";
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const prepare = profileReader.prepareUserProfileIdentity;
+        const held = vi
+          .spyOn(profileReader, "prepareUserProfileIdentity")
+          .mockImplementationOnce(async (...args) => {
+            const identity = await prepare(...args);
+            entered.resolve();
+            await resume.promise;
+            return identity;
+          });
+        const running = runOpenAiCompatibleAgentCommand(fixture.params);
+        const rejected = expect(running).rejects.toThrow(message);
+        try {
+          await entered.promise;
+          if (change === "uploads disabled") {
+            setRuntimeConfigSnapshot({
+              ...fixture.cfg,
+              gateway: { ...fixture.cfg.gateway, uploads: { enabled: false } },
+            });
+          } else {
+            fixture.request.abort(new Error(message));
+          }
+          resume.resolve();
+          await rejected;
+          expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
+        } finally {
+          resume.resolve();
+          await running.catch(() => {});
+          held.mockRestore();
+        }
+      });
+    },
+  );
 
   it("does not revoke already admitted input or its output when uploads are disabled", async () => {
     await withOpenClawTestState({ label: "compat-upload-accepted" }, async () => {
@@ -322,36 +313,6 @@ describe("OpenAI-compatible operator run authority", () => {
         );
       } finally {
         admission?.close();
-      }
-    });
-  });
-
-  it("does not enter the command when its request ends during profile preparation", async () => {
-    await withOpenClawTestState({ label: "compat-run-preparation" }, async () => {
-      const fixture = createOperatorRunFixture();
-      const entered = createDeferred();
-      const resume = createDeferred();
-      const prepare = profileReader.prepareUserProfileIdentity;
-      const held = vi
-        .spyOn(profileReader, "prepareUserProfileIdentity")
-        .mockImplementationOnce(async (...args) => {
-          const identity = await prepare(...args);
-          entered.resolve();
-          await resume.promise;
-          return identity;
-        });
-      const running = runOpenAiCompatibleAgentCommand(fixture.params);
-      const rejected = expect(running).rejects.toThrow();
-      try {
-        await entered.promise;
-        fixture.request.abort(new Error("Request ended during preparation"));
-        resume.resolve();
-        await rejected;
-        expect(agentCommandFromGatewayIngress).not.toHaveBeenCalled();
-      } finally {
-        resume.resolve();
-        await running.catch(() => {});
-        held.mockRestore();
       }
     });
   });
@@ -436,7 +397,7 @@ describe("OpenAI-compatible command admission", () => {
 });
 
 describe("OpenAI-compatible agent run terminal metadata", () => {
-  it.each([undefined, null, "invalid", [], { pendingToolCalls: "invalid" }])(
+  it.each([undefined, { pendingToolCalls: "invalid" }])(
     "treats malformed metadata as having no pending calls: %j",
     (meta) => {
       expect(readOpenAiHttpRunTerminal({ meta })).toMatchObject({

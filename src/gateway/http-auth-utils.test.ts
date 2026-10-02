@@ -7,7 +7,7 @@ import {
   createPluginRegistryFixture,
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -16,13 +16,15 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as schemaFacts from "../infra/sqlite-schema-facts.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
   linkCanonicalUserProfileEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { linkEmail, setDisplayName } from "../state/user-profile-writes.worker.js";
 import * as profileSchema from "../state/user-profiles-schema.js";
-import { getUserProfileListItem, linkEmail, setDisplayName } from "../state/user-profiles.js";
+import { getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -117,6 +119,8 @@ async function registerPersonAccessFixture() {
   };
   const email = "visitor@example.test";
   const person = await ensureCanonicalUserProfileForEmail(email);
+  const catalog = await prepareUserProfileCatalog();
+  onTestFinished(catalog.release);
   const access: { grant?: AbortController; inapplicable?: boolean; onAuthorize?: () => void } = {};
   registerVirtualTestPlugin({
     registry,
@@ -164,7 +168,13 @@ describe("HTTP gateway owner profiles", () => {
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
         for (let index = 0; index < 200; index += 1) {
-          const result = await authenticate("trusted-proxy", cfg, email);
+          authorize.mockResolvedValueOnce({ ok: true, method: "trusted-proxy", user: email });
+          const result = await checkGatewayHttpRequestAuth({
+            req,
+            auth: { mode: "none", allowTailscale: false },
+            cfg,
+            getRuntimeConfig: () => cfg,
+          });
           expect(result).toMatchObject({
             ok: true,
             requestAuth: { authenticatedUserProfile: { profileId: person.id } },

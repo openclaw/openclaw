@@ -6,8 +6,8 @@ import {
   formatReport,
   parseArgs,
   summarizeRawCopy,
-  type RawCopyBaselineEntry,
 } from "../../scripts/control-ui-i18n-report.ts";
+import type { RawCopyBaselineEntry } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 
 const entries: RawCopyBaselineEntry[] = [
   {

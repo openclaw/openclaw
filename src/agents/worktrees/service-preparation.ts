@@ -142,6 +142,9 @@ export async function resolveRepositoryFromRealPath(
   const sourceRoot = await resolveCheckoutRootFromRealPath(requested, requestedLabel);
   const { canonicalRoot, commonDir } = await resolveGitRepositoryPaths(sourceRoot);
   const origin = await runGit(canonicalRoot, ["config", "--get", "remote.origin.url"]);
+  if (origin.termination !== "exit" || (origin.code !== 0 && origin.code !== 1)) {
+    throw commandError("git config --get remote.origin.url", origin);
+  }
   const originUrl = origin.code === 0 ? origin.stdout.trim() : "";
   const fingerprint = createHash("sha256")
     .update(`${commonDir}\n${originUrl}`)
@@ -155,6 +158,16 @@ export async function resolveRepository(repoRoot: string): Promise<ResolvedRepos
     throw new Error(`repository does not exist: ${repoRoot}`);
   });
   return await resolveRepositoryFromRealPath(requested, repoRoot);
+}
+
+export async function resolveRepositoryIdentity(repoRoot: string) {
+  const resolved = await resolveRepository(repoRoot);
+  return {
+    checkoutRoot: resolved.sourceRoot,
+    repoRoot: resolved.repoRoot,
+    originUrl: resolved.originUrl,
+    fingerprint: resolved.fingerprint,
+  };
 }
 
 export async function cleanupFailedCreate(...args: Parameters<typeof removeFailedWorktree>) {

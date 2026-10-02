@@ -22,6 +22,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildOpenAIAccountOnlyModels, OPENAI_UNKNOWN_MODEL_COST } from "./account-models.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
@@ -100,7 +101,7 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.158.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.159.1";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
@@ -134,12 +135,6 @@ const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_54_MODEL_ID,
 ] as const;
 const OPENAI_GPT_56_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
-const OPENAI_UNKNOWN_MODEL_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-} satisfies ModelDefinitionConfig["cost"];
 
 const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
   providerId: PROVIDER_ID,
@@ -222,31 +217,35 @@ async function buildOpenAILiveProviderConfig(
       }),
     );
     const selectedIds = new Set<string>();
+    const catalogModels = [
+      ...models,
+      {
+        id: OPENAI_CHAT_LATEST_MODEL_ID,
+        name: "Chat Latest",
+        reasoning: false,
+        cost: OPENAI_CHAT_LATEST_COST,
+        contextWindow: 400_000,
+        api: "openai-responses",
+        baseUrl,
+        input: ["text", "image"],
+        maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+      } satisfies ModelDefinitionConfig,
+    ];
     // A successful account catalog is authoritative even when it has no
     // visible supported models; static rows cannot grant model access.
     return {
       provider: {
         ...fallback,
         models: [
-          ...models,
-          {
-            id: OPENAI_CHAT_LATEST_MODEL_ID,
-            name: "Chat Latest",
-            reasoning: false,
-            cost: OPENAI_CHAT_LATEST_COST,
-            contextWindow: 400_000,
-            api: "openai-responses",
-            baseUrl,
-            input: ["text", "image"],
-            maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-          } satisfies ModelDefinitionConfig,
-        ].filter((model) => {
-          if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
-            return false;
-          }
-          selectedIds.add(model.id);
-          return true;
-        }),
+          ...catalogModels.filter((model) => {
+            if (!discoveredIds.has(model.id) || selectedIds.has(model.id)) {
+              return false;
+            }
+            selectedIds.add(model.id);
+            return true;
+          }),
+          ...buildOpenAIAccountOnlyModels({ discoveredIds, catalogModels, baseUrl }),
+        ],
       },
       outcome: { provider: PROVIDER_ID, status: "ready" },
     };

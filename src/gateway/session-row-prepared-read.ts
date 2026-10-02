@@ -9,7 +9,17 @@ import * as records from "./session-row-projection-record.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 
-export type SessionRowPreparationOptions = { includeAncestors?: boolean };
+export type SessionRowPreparationOptions = {
+  includeAncestors?: boolean;
+  selection?: boolean;
+};
+
+/** Synchronous selection reenters through the existing exact worker preparation owner. */
+export class SessionRowFactsPending extends Error {
+  constructor(readonly queries: readonly records.Lookup[]) {
+    super("Session row facts require worker reconciliation");
+  }
+}
 
 export type SessionRowReadView = {
   describe(

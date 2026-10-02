@@ -161,6 +161,7 @@ export function createCronTestContext(
           return { ok: true, enqueued: true, runId: "run-1" };
         },
       ),
+      waitForManualRun: vi.fn(async () => false),
       getDefaultAgentId: vi.fn(() => "main"),
       getJob: vi.fn((id: string) => jobs.find((job) => job.id === id)),
       prepareWake: vi.fn(async () => undefined),
@@ -222,6 +223,18 @@ export function createCronTestContext(
     validateAgentRuntimeApprovalAuthority: undefined as
       | GatewayRequestContext["validateAgentRuntimeApprovalAuthority"]
       | undefined,
+  };
+}
+
+export function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
+  return {
+    name: "cron job",
+    enabled: true,
+    schedule: { kind: "every", everyMs: 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
+    ...overrides,
   };
 }
 

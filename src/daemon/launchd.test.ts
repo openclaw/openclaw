@@ -45,7 +45,6 @@ import {
   isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
   parseLaunchAgentEnabled,
-  parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
@@ -191,34 +190,6 @@ describe("launchd runtime parsing", () => {
     await expect(isLaunchAgentEnabled({ env: createDefaultLaunchdEnv() })).rejects.toThrow(
       "launchctl print-disabled failed: Operation not permitted",
     );
-  });
-
-  it("parses state, pid, and exit status", () => {
-    const output = [
-      "state = running",
-      "pid = 4242",
-      "last exit status = 1",
-      "last exit reason = exited",
-    ].join("\n");
-    expect(parseLaunchctlPrint(output)).toEqual({
-      state: "running",
-      pid: 4242,
-      lastExitStatus: 1,
-      lastExitReason: "exited",
-    });
-  });
-
-  it("rejects pid and exit status values with junk suffixes", () => {
-    const output = [
-      "state = waiting",
-      "pid = 123abc",
-      "last exit status = 7ms",
-      "last exit reason = exited",
-    ].join("\n");
-    expect(parseLaunchctlPrint(output)).toEqual({
-      state: "waiting",
-      lastExitReason: "exited",
-    });
   });
 });
 

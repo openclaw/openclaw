@@ -122,11 +122,7 @@ export function parseMattermostApiStatus(error: unknown): number | undefined {
   const message = "message" in error && typeof error.message === "string" ? error.message : "";
   // Read only the provider's status prefix; upstream details can mention other HTTP statuses.
   const match = /Mattermost API (\d{3})\b/.exec(message);
-  if (!match) {
-    return undefined;
-  }
-  const status = Number(match[1]);
-  return Number.isFinite(status) ? status : undefined;
+  return match ? Number(match[1]) : undefined;
 }
 
 export function normalizeMattermostBaseUrl(raw?: string | null): string | undefined {
@@ -559,7 +555,7 @@ export async function createMattermostDirectChannelWithRetry(
       minDelayMs: Math.min(initialDelayMs, maxDelayMs),
       maxDelayMs,
       // Full jitter (uniform [delay, 2*delay) with maxDelayMs applied after
-      // the draw) preserves the schedule pinned by client.retry.test.ts.
+      // the draw) preserves the schedule pinned by client.test.ts.
       jitter: "full",
       shouldRetry: (err) => isRetryableError(err as Error),
       onRetry: (info) => onRetry?.(info.attempt, info.delayMs, info.err as Error),
@@ -576,13 +572,9 @@ export function isRetryableError(error: Error): boolean {
     current.reason,
     ...(Array.isArray(current.errors) ? current.errors : []),
   ]);
-  const messages = candidates
-    .map((candidate) =>
-      normalizeLowercaseStringOrEmpty(
-        readStringField(asOptionalObjectRecord(candidate), "message"),
-      ),
-    )
-    .filter((message): message is string => Boolean(message));
+  const messages = candidates.map((candidate) =>
+    normalizeLowercaseStringOrEmpty(readStringField(asOptionalObjectRecord(candidate), "message")),
+  );
 
   // Provider status takes precedence over statuses mentioned in its details and network errors.
   // Require the API prefix so port numbers and IP octets cannot become HTTP statuses.

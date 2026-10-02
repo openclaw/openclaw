@@ -1,9 +1,5 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import {
-  FormatCapabilityProfile,
-  renderMarkdownWithMarkers,
-} from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readNextcloudTalkErrorBody } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
@@ -11,7 +7,7 @@ import {
   convertMarkdownTables,
   fetchWithSsrFGuard,
   generateNextcloudTalkSignature,
-  getNextcloudTalkRuntime,
+  getOptionalNextcloudTalkRuntime,
   requireRuntimeConfig,
   resolveMarkdownTableMode,
   resolveNextcloudTalkAccount,
@@ -21,19 +17,6 @@ import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;
 const NEXTCLOUD_TALK_SEND_TIMEOUT_MS = 30_000;
-
-const NEXTCLOUD_TALK_FORMAT_PROFILE = FormatCapabilityProfile.define({
-  mechanism: "markdown",
-  chunk: { limit: 4000, unit: "chars", hardCap: 32_000 },
-});
-
-function renderNextcloudTalkMarkdown(markdown: string): string {
-  return renderMarkdownWithMarkers(
-    { text: markdown, styles: [], links: [] },
-    { styleMarkers: {}, escapeText: (text) => text },
-    NEXTCLOUD_TALK_FORMAT_PROFILE,
-  );
-}
 
 /** Collapses and caps an already-redacted error body for display. */
 function collapseErrorSnippet(text: string): string {
@@ -84,20 +67,6 @@ function normalizeRoomToken(to: string): string {
   return normalized;
 }
 
-function recordNextcloudTalkOutboundActivity(accountId: string): void {
-  try {
-    getNextcloudTalkRuntime().channel.activity.record({
-      channel: "nextcloud-talk",
-      accountId,
-      direction: "outbound",
-    });
-  } catch (error) {
-    if (!(error instanceof Error) || error.message !== "Nextcloud Talk runtime not initialized") {
-      throw error;
-    }
-  }
-}
-
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
@@ -118,7 +87,7 @@ export async function sendMessageNextcloudTalk(
     channel: "nextcloud-talk",
     accountId: account.accountId,
   });
-  const message = convertMarkdownTables(renderNextcloudTalkMarkdown(text.trim()), tableMode);
+  const message = convertMarkdownTables(text.trim(), tableMode);
 
   const body: Record<string, unknown> = {
     message,
@@ -206,7 +175,11 @@ export async function sendMessageNextcloudTalk(
       console.log(`[nextcloud-talk] Sent message ${messageId} to room ${roomToken}`);
     }
 
-    recordNextcloudTalkOutboundActivity(account.accountId);
+    getOptionalNextcloudTalkRuntime()?.channel.activity.record({
+      channel: "nextcloud-talk",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
 
     const receiptMessageId = messageId.trim();
     return {

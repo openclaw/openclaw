@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadWorkerContext,
+  captureOpenClawStateWorkerContext,
+} from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   isCronSelfRemovalCurrent,
@@ -41,9 +44,12 @@ import { runsDetachedFromMainSession } from "./timer-execution-timeout.js";
 function resolveCronRunReceiptAgentId(state: CronServiceState, job: CronAgentScope): string {
   return resolveCronJobEffectiveAgentId(
     job,
-    state.deps.resolveDefaultAgentId
-      ? state.deps.resolveDefaultAgentId()
-      : state.deps.defaultAgentId,
+    state.deps.legacyDefaultAgentId
+      ? undefined
+      : state.deps.resolveDefaultAgentId
+        ? state.deps.resolveDefaultAgentId()
+        : state.deps.defaultAgentId,
+    state.deps.legacyDefaultAgentId,
   );
 }
 
@@ -93,6 +99,7 @@ export function markServiceCronJobActive(
 ): CronActiveJobMarker | undefined {
   return markCronJobActive(job.id, {
     agentId: runReceipt.agentId,
+    stateIdentityKey: captureOpenClawStateWorkerContext().admission.identity.key,
     declarationKey: job.declarationKey,
     preserveAcrossGenerationAdvance: !runsDetachedFromMainSession(job),
     isMessageActionAuthorityCurrent: createServiceCronRunMessageAuthorityChecker({

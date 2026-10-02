@@ -368,7 +368,7 @@ function renderWidgetContent(
       (error: unknown) => console.error("[openclaw] failed to load widget view", error),
     );
     return keyed(
-      `${preview.viewId}\0${getCanvasWidgetFrameConnectionGeneration()}`,
+      `${preview.viewId}\0${options?.sessionKey ?? ""}`,
       html`
         <openclaw-canvas-widget-view
           .docId=${preview.viewId!.trim()}

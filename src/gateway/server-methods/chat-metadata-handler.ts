@@ -28,17 +28,20 @@ import {
 } from "./chat-metadata-contract.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
-import { resolveAuthenticatedProfileId } from "./users-profile-access.js";
+import { prepareAuthenticatedProfile } from "./users-profile-access.js";
 import { assertValidParams } from "./validation.js";
 
 /** Resolve saved-session grants or capture a new draft's current human authority. */
-export function resolveChatMetadataReadParams(
-  options: Pick<GatewayRequestHandlerOptions, "respond" | "context" | "client" | "signal">,
+export async function resolveChatMetadataReadParams(
+  options: GatewayRequestHandlerOptions,
   params: ChatMetadataParams,
   draftAccountSelection?: UserModelAccountSelection,
-): ChatMetadataReadParams | undefined {
+): Promise<ChatMetadataReadParams | undefined> {
   const { respond, context, client, signal } = options;
   const cfg = context.getRuntimeConfig();
+  draftAccountSelection?.assertCurrent();
+  const requester = await prepareAuthenticatedProfile(options);
+  requester.assertCurrent();
   // Session mutations are checked against the retained target before publication.
   const roleRevision = readOperatorRolePolicyRevision();
   const aliasRevision = readUserProfileAliasRevision();
@@ -56,6 +59,8 @@ export function resolveChatMetadataReadParams(
         "Chat metadata access changed while preparing its metadata. Retry the request.",
       );
     }
+    requester.assertCurrent();
+    draftAccountSelection?.assertCurrent();
   };
   if (params.sessionKey) {
     const sessionKey = params.sessionKey;
@@ -69,7 +74,7 @@ export function resolveChatMetadataReadParams(
       return undefined;
     }
     // Persisted session state owns account pins; a caller cannot replace them with a draft id.
-    const requesterProfileId = resolveAuthenticatedProfileId(client);
+    const requesterProfileId = requester.profileId;
     const session = retainGatewaySessionEntryReadOnly(
       params.sessionKey,
       requested.agentId,
@@ -131,10 +136,9 @@ export function resolveChatMetadataReadParams(
     return undefined;
   }
   assertRequestCurrent();
-  draftAccountSelection?.assertCurrent();
   return {
     agentId: resolved.agentId,
-    requesterProfileId: draftAccountSelection?.owner ?? resolveAuthenticatedProfileId(client),
+    requesterProfileId: draftAccountSelection?.owner ?? requester.profileId,
     isCurrent: isRequestCurrent,
     assertCurrent: assertRequestCurrent,
     ...(draftAccountSelection ? { draftAccountSelection } : {}),
@@ -158,10 +162,11 @@ export async function handleChatMetadataRequest(
             SESSION_READ_SCOPE,
           )
         : undefined;
-    scope = resolveChatMetadataReadParams(options, params, draftAccountSelection);
+    scope = await resolveChatMetadataReadParams(options, params, draftAccountSelection);
     if (!scope) {
       return;
     }
+    scope.assertCurrent?.();
     const metadata = await context.readChatMetadata(scope);
     scope.draftAccountSelection?.assertCurrent();
     scope.assertCurrent?.();

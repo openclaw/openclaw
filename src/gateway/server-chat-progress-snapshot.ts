@@ -4,6 +4,7 @@ import { Value } from "typebox/value";
 import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { isCompleteAgentPreamble } from "../agents/agent-activity-presentation.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { deepFreezeDiagnosticValue } from "../infra/diagnostic-event-snapshot.js";
 import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 const CHAT_RUN_PROGRESS_MAX_EVENTS = 50;
@@ -76,16 +77,6 @@ function stringifyProgressEvent(event: AgentEventPayload): string {
   });
 }
 
-function freezeCapturedProgress(value: unknown): void {
-  if (value === null || typeof value !== "object") {
-    return;
-  }
-  for (const child of Object.values(value)) {
-    freezeCapturedProgress(child);
-  }
-  Object.freeze(value);
-}
-
 function captureProgressEvent(event: AgentEventPayload) {
   try {
     const json = stringifyProgressEvent(event);
@@ -96,7 +87,7 @@ function captureProgressEvent(event: AgentEventPayload) {
     // Own the wire representation; producers and replay readers cannot change
     // captured content or invalidate its size after this synchronous receipt.
     const captured: AgentEventPayload = JSON.parse(json);
-    freezeCapturedProgress(captured);
+    deepFreezeDiagnosticValue(captured);
     if (!asNullableRecord(captured.data)) {
       return undefined;
     }

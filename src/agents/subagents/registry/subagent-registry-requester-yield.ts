@@ -1,10 +1,8 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-/** Settles durable child ownership when the spawning requester turn ends. */
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
-  prepareRequesterCronAuthority,
   promoteRequesterCronAuthority,
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
@@ -228,18 +226,14 @@ export async function markRequesterTurnYieldedInRuns(params: {
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
   transfer: RequesterInitialTransfer;
-  preparedAuthority?: PreparedRequesterCronAuthority | null;
+  preparedAuthority: PreparedRequesterCronAuthority | null;
 }): Promise<number> {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
   if (!requesterSessionKey || !requesterTurnRunId) {
     return 0;
   }
-  const ownsPreparation = params.preparedAuthority === undefined;
-  const preparedAuthority =
-    params.preparedAuthority === undefined
-      ? prepareRequesterCronAuthority(params)
-      : params.preparedAuthority;
+  const { preparedAuthority } = params;
   let cronAuthority: Awaited<ReturnType<PreparedRequesterCronAuthority["bind"]>>;
   try {
     const entries = [...params.runs.values()].filter(
@@ -285,11 +279,6 @@ export async function markRequesterTurnYieldedInRuns(params: {
   } catch (error) {
     cronAuthority?.revoke();
     throw error;
-  } finally {
-    const release = ownsPreparation ? preparedAuthority?.release() : undefined;
-    if (release) {
-      await release;
-    }
   }
 }
 
@@ -350,10 +339,8 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     return false;
   }
   const requester = params.runs.get(requesterTurnRunId);
-  const pauseRequester =
-    params.requesterYielded &&
+  const eligibleRequester =
     requester?.childSessionKey === requesterSessionKey &&
-    requester.execution.status === "running" &&
     !requester.killIntent &&
     !requester.killReconciliation &&
     ![...params.runs.values()].some(
@@ -362,6 +349,10 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
         compareSubagentRunGeneration(entry, requester) > 0,
     )
       ? requester
+      : undefined;
+  const pauseRequester =
+    params.requesterYielded && eligibleRequester?.execution.status === "running"
+      ? eligibleRequester
       : undefined;
   const batchRunIds = entries.map((entry) => entry.runId).toSorted();
   const requesterAlreadyDeliveredFinal =
@@ -414,17 +405,8 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
   }
   const requesterOwner =
     pauseRequester ??
-    (preparedCohort &&
-    requester?.childSessionKey === requesterSessionKey &&
-    requester.pauseReason === "sessions_yield" &&
-    !requester.killIntent &&
-    !requester.killReconciliation &&
-    ![...params.runs.values()].some(
-      (entry) =>
-        entry.childSessionKey === requesterSessionKey &&
-        compareSubagentRunGeneration(entry, requester) > 0,
-    )
-      ? requester
+    (preparedCohort && eligibleRequester?.pauseReason === "sessions_yield"
+      ? eligibleRequester
       : undefined);
   const retired = new Set<SubagentRunRecord>();
   await params.transfer({
@@ -479,6 +461,9 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
             attemptCount: 0,
             batchRunIds,
             requesterYieldBatch: true,
+            // Written only by builds that let a yielded requester answer; released
+            // markerless private batches keep their admitted private policy.
+            yieldedFinalDeliverable: true,
             ...(completionEnded ? { afterRequesterYield: true } : {}),
             rearmGeneration,
             progressOperationId,

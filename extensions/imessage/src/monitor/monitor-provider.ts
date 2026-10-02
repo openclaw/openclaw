@@ -1464,6 +1464,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const retriable = isRetriableWatchSubscribeStartupError(err);
       const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
+      const failureParams = {
+        accountId: accountInfo.accountId,
+        attempt,
+        maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+        cliPath,
+        dbPath,
+        remoteHost,
+        includeAttachments,
+        probeTimeoutMs,
+        watchSinceRowid,
+        error: err,
+      };
       if (!shouldRetry) {
         opts.statusSink?.({
           connected: false,
@@ -1473,18 +1485,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         });
         runtime.error?.(
           danger(
-            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
-              accountId: accountInfo.accountId,
-              attempt,
-              maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-              cliPath,
-              dbPath,
-              remoteHost,
-              includeAttachments,
-              probeTimeoutMs,
-              watchSinceRowid,
-              error: err,
-            })}`,
+            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure(failureParams)}`,
           ),
         );
         throw err;
@@ -1497,16 +1498,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({
-            accountId: accountInfo.accountId,
-            attempt,
-            maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-            cliPath,
-            dbPath,
-            remoteHost,
-            includeAttachments,
-            probeTimeoutMs,
-            watchSinceRowid,
-            error: err,
+            ...failureParams,
             retryDelayMs: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
           }),
         ),

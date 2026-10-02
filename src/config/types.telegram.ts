@@ -6,7 +6,6 @@ import type {
 } from "./types.base.js";
 import type {
   ChannelExecApprovalConfig,
-  ChannelExecApprovalTarget,
   ChannelReactionConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
@@ -49,8 +48,6 @@ export type TelegramNetworkConfig = {
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
-export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
-export type TelegramExecApprovalTarget = ChannelExecApprovalTarget;
 
 export type TelegramPreviewStreamingConfig = ChannelPreviewStreamingConfig;
 
