@@ -9,7 +9,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 
-it("preserves NUL-bearing TEXT, storage classes, and source key order", async () => {
+it("preserves NUL-bearing TEXT, storage classes, source key order, and quoted DDL", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
@@ -21,6 +21,15 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
   try {
     const source = openOpenClawStateDatabase({ path: sourcePath });
     source.db.exec('CREATE TABLE text_values ("key" TEXT PRIMARY KEY, value ANY) STRICT');
+    source.db.exec(`
+      CREATE TABLE quoted_ddl (
+        "double;quote" TEXT PRIMARY KEY DEFAULT 'semi;''colon',
+        [bracket;quote] TEXT /* ; not a statement boundary */ DEFAULT 'bracket',
+        \`backtick;quote\` TEXT -- ; not a statement boundary
+          DEFAULT 'backtick'
+      ) STRICT;
+      INSERT INTO quoted_ddl DEFAULT VALUES;
+    `);
     const insert = source.db.prepare('INSERT INTO text_values ("key", value) VALUES (?, ?)');
     for (let index = keys.length - 1; index >= 0; index -= 1) {
       insert.run(keys[index]!, values[index]!);
@@ -56,6 +65,13 @@ it("preserves NUL-bearing TEXT, storage classes, and source key order", async ()
     const database = new DatabaseSync(targetPath, { readOnly: true });
     try {
       expect(database.prepare(byteQuery).all()).toEqual(expectedBytes);
+      expect(database.prepare("SELECT * FROM quoted_ddl").all()).toEqual([
+        {
+          "double;quote": "semi;'colon",
+          "bracket;quote": "bracket",
+          "backtick;quote": "backtick",
+        },
+      ]);
     } finally {
       database.close();
     }

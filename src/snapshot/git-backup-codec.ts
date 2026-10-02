@@ -10,7 +10,10 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "../infra/sqlite-private-directory.js";
-import { quoteSqliteIdentifier as quoteIdentifier } from "../infra/sqlite-schema-sql.js";
+import {
+  findSqlCharacter,
+  quoteSqliteIdentifier as quoteIdentifier,
+} from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
@@ -108,12 +111,6 @@ function readSchemaEntries(database: DatabaseSync): SchemaEntry[] {
     )
     .all()
     .map((row) => row as SchemaEntry);
-}
-
-function virtualTableNames(entries: SchemaEntry[]): string[] {
-  return entries
-    .filter((entry) => /^\s*CREATE\s+VIRTUAL\s+TABLE\b/iu.test(entry.sql))
-    .map((entry) => entry.name);
 }
 
 function isVirtualShadow(name: string, virtualTables: readonly string[]): boolean {
@@ -249,13 +246,6 @@ function schemaText(entries: SchemaEntry[], userVersion: number): string {
   return `${statements.join("\n\n")}\n-- PRAGMA user_version = ${userVersion}\n`;
 }
 
-function redactedSecretTables(identity: GitBackupIdentity, excludeSecrets: boolean): Set<string> {
-  if (!excludeSecrets) {
-    return new Set();
-  }
-  return new Set(identity.role === "global" ? STATE_SECRET_TABLE_NAMES : AGENT_SECRET_TABLE_NAMES);
-}
-
 /** Dump one verified SQLite copy into the deterministic Git repository layout. */
 export async function dumpGitBackupDatabase(params: {
   snapshotPath: string;
@@ -267,8 +257,15 @@ export async function dumpGitBackupDatabase(params: {
   const database = openNodeSqliteDatabase(params.snapshotPath, { readOnly: true });
   try {
     const entries = readSchemaEntries(database);
-    const virtualTables = virtualTableNames(entries);
-    const redacted = redactedSecretTables(identity, params.excludeSecrets === true);
+    const virtualTables = entries
+      .filter((entry) => /^\s*CREATE\s+VIRTUAL\s+TABLE\b/iu.test(entry.sql))
+      .map((entry) => entry.name);
+    const redacted =
+      params.excludeSecrets === true
+        ? identity.role === "global"
+          ? STATE_SECRET_TABLE_NAMES
+          : AGENT_SECRET_TABLE_NAMES
+        : [];
     const existingTables = new Set(
       entries.filter((entry) => entry.type === "table").map((entry) => entry.name),
     );
@@ -394,64 +391,21 @@ export function parseGitBackupManifest(value: string, source: string): GitBackup
 function splitSchemaStatements(schema: string): string[] {
   const statements: string[] = [];
   let start = 0;
-  let quote: "'" | '"' | "`" | "]" | undefined;
-  let lineComment = false;
-  let blockComment = false;
-  for (let index = 0; index < schema.length; index += 1) {
-    const character = schema[index]!;
-    const next = schema[index + 1];
-    if (lineComment) {
-      if (character === "\n") {
-        lineComment = false;
-      }
-      continue;
+  let cursor = 0;
+  while (cursor < schema.length) {
+    const end = findSqlCharacter(schema.slice(cursor), ";");
+    if (end === -1) {
+      break;
     }
-    if (blockComment) {
-      if (character === "*" && next === "/") {
-        blockComment = false;
-        index += 1;
-      }
-      continue;
-    }
-    if (quote) {
-      if (character === quote) {
-        if (quote !== "]" && next === quote) {
-          index += 1;
-        } else {
-          quote = undefined;
-        }
-      }
-      continue;
-    }
-    if (character === "-" && next === "-") {
-      lineComment = true;
-      index += 1;
-      continue;
-    }
-    if (character === "/" && next === "*") {
-      blockComment = true;
-      index += 1;
-      continue;
-    }
-    if (character === "'" || character === '"' || character === "`") {
-      quote = character;
-      continue;
-    }
-    if (character === "[") {
-      quote = "]";
-      continue;
-    }
-    if (character !== ";") {
-      continue;
-    }
-    const candidate = schema.slice(start, index + 1).trim();
+    cursor += end + 1;
+    const candidate = schema.slice(start, cursor).trim();
     if (/^CREATE\s+TRIGGER\b/iu.test(candidate) && !/\bEND\s*;$/iu.test(candidate)) {
       continue;
     }
     if (candidate && !candidate.startsWith("-- PRAGMA user_version")) {
       statements.push(candidate);
     }
-    start = index + 1;
+    start = cursor;
   }
   return statements;
 }

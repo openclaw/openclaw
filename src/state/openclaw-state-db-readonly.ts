@@ -45,7 +45,6 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerMayCopySourcesInProcess,
 } from "./openclaw-state-maintenance-context.js";
-import type { OpenClawStateReadReceipt } from "./openclaw-state-read-error.js";
 import {
   startOpenClawStateReadOperation,
   type OpenClawStateReadCompletion,
@@ -58,6 +57,7 @@ import {
   runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
 import type {
+  OpenClawStateReadReceipt,
   OpenClawStateReadOptions,
   OpenClawStateReadCommand,
   OpenClawStateReadReply,

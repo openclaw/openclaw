@@ -53,7 +53,6 @@ packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
 packages/memory-host-sdk/src/host/memory-schema-fts.ts
-packages/memory-host-sdk/src/host/memory-schema-migration.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
@@ -1571,7 +1570,6 @@ src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
 src/state/openclaw-state-ownership-worker.ts
-src/state/openclaw-state-read-error.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-request.ts
 src/state/openclaw-state-read-scope.ts
