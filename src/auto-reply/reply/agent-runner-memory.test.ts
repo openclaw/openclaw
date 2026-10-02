@@ -40,11 +40,10 @@ import {
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
-import * as activeTranscriptReads from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
-import * as transcriptStats from "../../config/sessions/session-accessor.sqlite-reset-window.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import {
@@ -619,14 +618,12 @@ describe("runMemoryFlushIfNeeded", () => {
       const { sessionKey, storePath } = scope;
       await seedMemoryAccountingTranscript(scope, rootDir, { customTail, newUser });
       const sessionEntry = createFlushSessionEntry({ totalTokensFresh: customTail > 0 });
-      const hostStats = vi.spyOn(transcriptStats, "readVisibleTranscriptStats");
-      const hostTail = vi.spyOn(
-        activeTranscriptReads,
-        "withRecentSessionTranscriptActiveEventsInSnapshot",
+      const hostAccounting = vi.spyOn(
+        transcriptAccounting,
+        "readSessionTranscriptAccountingFromProjection",
       );
       onTestFinished(() => {
-        hostStats.mockRestore();
-        hostTail.mockRestore();
+        hostAccounting.mockRestore();
       });
 
       await runDefaultMemoryFlush(sessionEntry, {
@@ -643,8 +640,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({ initialTurnTainted: tainted }),
       );
-      expect(hostStats).not.toHaveBeenCalled();
-      expect(hostTail).not.toHaveBeenCalled();
+      expect(hostAccounting).not.toHaveBeenCalled();
       if (customTail === 0) {
         expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeGreaterThanOrEqual(
           78_000,
