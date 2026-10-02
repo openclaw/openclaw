@@ -5,7 +5,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
-import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
@@ -718,8 +717,6 @@ export function summarizeCronJobSchedule(state: CronServiceState) {
     }
     if (
       (rawEnabled ?? true) &&
-      (!state.deps.legacyDefaultAgentId ||
-        tryResolveCronJobEffectiveAgentId(job, undefined, state.deps.legacyDefaultAgentId)) &&
       hasCanonicalCronDeliveryMode(job.delivery) &&
       isTimeScheduledJob(job) &&
       hasNextRun
@@ -745,24 +742,5 @@ export function hasActiveCronRun(job: Pick<CronJob, "id" | "state">, activeInPro
     typeof job.state.queuedAtMs === "number" ||
     typeof job.state.runningAtMs === "number" ||
     (activeInProcess ?? isCronJobActive(job.id))
-  );
-}
-
-/** Returns whether a cron job should execute at `nowMs`, honoring force mode and active runs. */
-export function isJobDue(job: CronJob, nowMs: number, opts: { forced: boolean }) {
-  if (!job.state) {
-    job.state = {};
-  }
-  if (hasActiveCronRun(job)) {
-    return false;
-  }
-  if (opts.forced) {
-    return true;
-  }
-  return (
-    isJobEnabled(job) &&
-    isTimeScheduledJob(job) &&
-    hasScheduledNextRunAtMs(job.state.nextRunAtMs) &&
-    nowMs >= job.state.nextRunAtMs
   );
 }

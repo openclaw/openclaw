@@ -72,11 +72,15 @@ function formatTicket(binding: StandaloneTicketBinding, secret: Buffer): Standal
 
 export function createMcpAppStandaloneTicket(params: {
   sessionKey: string;
-  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs">;
+  view: Pick<McpAppViewLease, "viewId" | "sessionId" | "expiresAtMs" | "requesterId">;
   toolOperationsAuthorized: boolean;
   nowMs?: number;
   secret?: Buffer;
 }): StandaloneTicket | undefined {
+  // A bearer-only window cannot establish a named requester’s live authority.
+  if (params.view.requesterId) {
+    return undefined;
+  }
   const nowMs = params.nowMs ?? Date.now();
   if (!Number.isSafeInteger(nowMs) || params.view.expiresAtMs <= nowMs) {
     return undefined;
@@ -184,6 +188,7 @@ function resolveTicketActiveView(
   const view = getMcpAppViewLease(binding.viewId, runtime);
   if (
     !view ||
+    view.requesterId !== undefined ||
     view.viewId !== binding.viewId ||
     view.sessionId !== binding.sessionId ||
     view.expiresAtMs <= nowMs ||
@@ -405,6 +410,8 @@ export async function handleMcpAppStandaloneHttpRequest(
         ...(view.csp ? { csp: view.csp } : {}),
         toolInput: view.toolInput,
         toolResult: view.toolResult,
+        ...(view.displayModes ? { displayModes: view.displayModes } : {}),
+        ...(view.deepLink ? { hostContext: { "openai/deepLink": view.deepLink } } : {}),
         serverTools: supportsStandaloneToolOperations(active),
         serverResources,
       });

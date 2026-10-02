@@ -4,6 +4,7 @@ import { replaceTranscriptEvents } from "../config/sessions/session-accessor.js"
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createResetBoundaryTranscriptSource } from "./session-end-transcript-reader.js";
+import { visitSessionMessagesAsync } from "./session-transcript-native.test-support.js";
 import {
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
@@ -12,7 +13,6 @@ import {
   readSessionMessagesAroundIdWithStatsAsync,
   readSessionMessagesMatchingIdAsync,
   readSessionMessagesPageWithStatsAsync,
-  visitSessionMessagesAsync,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
 

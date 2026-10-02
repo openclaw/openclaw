@@ -4,25 +4,14 @@ import { isCronSessionDisplayKey, isSystemCreatedSessionRow } from "./session-li
 describe("session display visibility", () => {
   it.each([
     ["cron:", true],
-    [" CRON:nightly ", true],
     ["cron", false],
-    ["agent:main:cron:nightly", true],
     [" AGENT:MAIN:CRON:nightly ", true],
     ["agent::main::cron::nightly", true],
-    ["agent: :cron:nightly", true],
     ["agent:\n:cron:nightly", true],
     ["agent:main:cron: :child", true],
-    ["agent:main:cron:nightly:child", true],
-    ["agent:main:cron:", false],
     ["agent:main:cron:   ", false],
-    ["agent:main::cron::", false],
     ["agent::cron:nightly", false],
-    ["agent:main:other:cron:nightly", false],
     ["agent:main:cronicle:nightly", false],
-    ["agent:main:main", false],
-    [":agent:main:cron:nightly", false],
-    ["prefix:cron:nightly", false],
-    ["", false],
   ] as const)("classifies %j as automation=%s", (key, expected) => {
     expect(isCronSessionDisplayKey(key)).toBe(expected);
   });

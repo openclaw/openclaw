@@ -1,12 +1,12 @@
 import { performance } from "node:perf_hooks";
 import { listAgentIds, withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
-import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import { readCommittedSessionEntryCache } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { readExactSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { resolveSessionKeyBySessionId } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { readCommittedIncognitoSessionSharing } from "../config/sessions/session-accessor.sqlite-incognito-sharing.js";
 import { projectSqliteSessionParticipants } from "../config/sessions/session-accessor.sqlite-participant-projection.js";
 import { listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -14,14 +14,16 @@ import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
-import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
+import {
+  getOpenClawAgentDatabaseIfOpen,
+  listOpenIncognitoAgentDatabases,
+} from "../state/openclaw-agent-db.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.paths.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
-import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import * as records from "./session-row-projection-record.js";
@@ -421,25 +423,29 @@ export function readResidentSessionRow(
   activitySummaryEnabledByAgent?: Map<string, boolean>,
 ) {
   const { row, cfg, context } = params;
-  const source = isIncognitoSessionKey(row.key)
-    ? resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: row.key,
-        agentId: row.agentId,
-        exactRead: true,
-        projection: "list",
-        includeStoreChildEntries: true,
-      })
-    : undefined;
+  row.privateSource?.assertCurrent();
+  const prepared = row.preparedPrivate;
+  const databaseFacts = params.databaseFacts ?? prepared?.databaseFacts;
+  const source =
+    isIncognitoSessionKey(row.key) && !prepared
+      ? resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key: row.key,
+          agentId: row.agentId,
+          exactRead: true,
+          projection: "list",
+          includeStoreChildEntries: true,
+        })
+      : undefined;
   const { inputs, presentation } = readSessionRowInputs({
     ...row,
     cfg,
-    preparedAcpMeta: params.databaseFacts ? params.databaseFacts.acpMeta : row.preparedAcpMeta,
-    preparedRepositoryWorkspace: params.databaseFacts
-      ? params.databaseFacts.repositoryWorkspace
+    preparedAcpMeta: databaseFacts ? databaseFacts.acpMeta : row.preparedAcpMeta,
+    preparedRepositoryWorkspace: databaseFacts
+      ? databaseFacts.repositoryWorkspace
       : params.repositoryWorkspace,
     configuredAgentIds: params.configuredAgentIds,
-    store: source?.store ?? {},
+    store: prepared?.entries ?? source?.store ?? {},
     storePath: row.storeTarget.storePath,
     storeAgentId: row.storeTarget.agentId,
     // Cache stored fallback facts independently of the live activity chosen at presentation.
@@ -448,9 +454,11 @@ export function readResidentSessionRow(
     modelCatalog: params.modelCatalog,
     modelSource: {
       entry: row.storedEntry,
-      readSourceEntry: source
-        ? createGatewaySessionEntryReader({ cfg, ...source })
-        : params.readSourceEntry,
+      readSourceEntry: prepared
+        ? (key) => prepared.entries[key]
+        : source
+          ? createGatewaySessionEntryReader({ cfg, ...source })
+          : params.readSourceEntry,
     },
     rowContext: context,
     // Incognito rows are transient exact reads and never enter the resident backfill queue.
@@ -458,7 +466,8 @@ export function readResidentSessionRow(
     includeLastMessage: Boolean(source),
     skipTranscriptUsageFallback: true,
     includeSwarmChildren: true,
-    storeChildSessionLinksByKey: source ? undefined : new Map([[row.key, params.links]]),
+    storeChildSessionLinksByKey:
+      source || prepared ? undefined : new Map([[row.key, params.links]]),
   });
   if (!source) {
     inputs.derivedTitle = deriveSessionTitle(row.entry, undefined, inputs.displayName);
@@ -484,8 +493,9 @@ export function readResidentSessionRow(
     context: params.gatewayContext,
     placementFactsReader: params.placementFactsReader,
     activitySummaryEnabled,
-    databaseFacts: params.databaseFacts,
+    databaseFacts,
   });
+  row.privateSource?.assertCurrent();
   return {
     materialized,
     preparedAcpMeta: materialized.source.thinkingProjection.acpMeta ?? null,
@@ -505,15 +515,36 @@ export function readResidentSessionRow(
 export function readSessionRowEntry(row: records.Row) {
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => {
-      if (isIncognitoSessionKey(row.key)) {
-        row.generation = readOpenClawAgentDatabaseIdentity(database).identity;
-      }
       const cache = readCommittedSessionEntryCache(database.db);
-      if (cache) {
-        const entry = cache.get(row.key);
-        return entry ? projectSqliteSessionParticipants(database.db, row.key, entry) : undefined;
+      const cached = cache?.get(row.key);
+      const entry = cache
+        ? cached && projectSqliteSessionParticipants(database.db, row.key, cached)
+        : readExactSessionEntryRow(database, row.key, "list")?.entry;
+      if (entry && isIncognitoSessionKey(row.key)) {
+        row.generation = readOpenClawAgentDatabaseIdentity(database).identity;
+        row.privateSource = {
+          identity: row.generation,
+          assertCurrent() {
+            if (
+              !database.db.isOpen ||
+              getOpenClawAgentDatabaseIfOpen({
+                agentId: database.agentId,
+                path: database.path,
+              })?.db !== database.db
+            ) {
+              throw new Error("Private session database changed during its read");
+            }
+            const current = readCommittedIncognitoSessionSharing(database.db, row.key)?.entry;
+            if (
+              current?.sessionId !== entry.sessionId ||
+              current.lifecycleRevision !== entry.lifecycleRevision
+            ) {
+              throw new Error("Private session changed during its read");
+            }
+          },
+        };
       }
-      return readExactSessionEntryRow(database, row.key, "list")?.entry;
+      return entry;
     },
     { agentId: row.storeTarget.agentId, path: row.storeTarget.storePath },
   );
@@ -533,14 +564,16 @@ function readIncognitoSessionRow(params: {
   }
   const row = records.create({ key, agentId, storeTarget: { agentId, storePath: ephemeralPath } });
   const storedEntry = readSessionRowEntry(row);
-  if (!storedEntry) {
+  if (!storedEntry || !row.privateSource) {
     return undefined;
   }
-  const entry = projectGatewaySessionEntry(cfg, storedEntry);
-  return Object.assign(row, {
-    storedEntry,
-    entry,
-    selection: readSessionListSelectionFacts(key, entry),
+  return records.createIncognitoSessionRow({
+    cfg,
+    key,
+    agentId,
+    storePath: ephemeralPath,
+    entry: storedEntry,
+    source: row.privateSource,
   });
 }
 

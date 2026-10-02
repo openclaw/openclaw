@@ -44,7 +44,7 @@ type CacheRetention = "short" | "long";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 type GooglePromptCacheSessionManager = {
-  appendCustomEntry(customType: string, data?: unknown): void | Promise<void>;
+  appendCustomEntryAsync(customType: string, data?: unknown): Promise<void>;
   getEntries(): CustomEntryLike[];
 };
 type GooglePromptCacheContext = Parameters<StreamFn>[1];
@@ -155,7 +155,7 @@ async function appendGooglePromptCacheEntry(
   entry: GooglePromptCacheEntry,
 ): Promise<void> {
   try {
-    await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
+    await sessionManager.appendCustomEntryAsync(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
   } catch (err) {
     if (err instanceof SessionTranscriptWriterClaimReboundError) {
       throw err;

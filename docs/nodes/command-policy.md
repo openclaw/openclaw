@@ -118,7 +118,6 @@ Per-agent exec node override:
   agents: {
     entries: {
       main: {
-        default: true,
         tools: { exec: { node: "build-node" } },
       },
     },

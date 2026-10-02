@@ -22,7 +22,7 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
-const runExec = vi.hoisted(() => vi.fn());
+const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec,
@@ -710,7 +710,7 @@ describe("maybeRepairGatewayDaemon", () => {
       const recordedPath = `/opt/recorded/bin/${recorded}`;
       if (!supported) {
         const probeRuntime = runExec.getMockImplementation()!;
-        runExec.mockImplementation((executable: string, ...args: unknown[]) => {
+        runExec.mockImplementation((executable, ...args) => {
           if (executable === recordedPath) {
             return Promise.reject(new Error("missing runtime"));
           }

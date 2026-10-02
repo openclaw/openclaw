@@ -74,7 +74,6 @@ vi.mock("./update-command-package.js", () => ({
     await params.beforeActivate?.();
     return { status: "ok", mode: "npm", root: params.root, steps: [], durationMs: 0 };
   },
-  preparePackageDoctorContext: () => undefined,
 }));
 vi.mock("../../infra/update-global.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-global.js")>()),

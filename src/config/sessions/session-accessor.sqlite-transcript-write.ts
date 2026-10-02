@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   openOpenClawAgentDatabase,
@@ -139,7 +140,6 @@ export async function replaceSessionWithBranchedTranscript(
     resolved.sessionKey,
   )?.entry.lifecycleRevision;
   const nextScope = { ...fencedScope, sessionId: branch.sessionId };
-  const nextResolved = { ...resolved, sessionId: branch.sessionId };
   await runExclusiveSqliteSessionWrite(
     resolved,
     async () => {
@@ -147,39 +147,21 @@ export async function replaceSessionWithBranchedTranscript(
       const committed = runOpenClawAgentWriteTransaction(
         (database) => {
           assertActive?.();
-          const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-          if (
-            fresh?.sessionId !== resolved.sessionId ||
-            fresh.lifecycleRevision !== expectedLifecycleRevision
-          ) {
-            const cause = {
-              ...(fresh
-                ? { actualSessionId: fresh.sessionId, code: "session-rebound" as const }
-                : { code: "session-entry-missing" as const }),
-              expectedSessionId: resolved.sessionId,
-              sessionKey: scope.sessionKey,
-            };
-            throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
-          }
-          assertLockedTranscriptWriteAllowed(database, resolved, fencedScope);
-          const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
-          const previous = readSessionIdentitySnapshot(database, identityKeys);
-          writeSessionEntry(database, resolved.sessionKey, {
-            ...projectCanonicalSessionEntryShape({ ...fresh }),
-            sessionId: branch.sessionId,
-            updatedAt: Date.now(),
-          });
-          assertLockedTranscriptWriteAllowed(database, nextResolved, nextScope);
-          replaceSqliteTranscriptEventsInTransaction(database, nextResolved, branch.events);
-          assertActive?.();
+          const result = replaceSessionWithBranchedTranscriptInTransaction(
+            database,
+            fencedScope,
+            branch,
+            expectedLifecycleRevision,
+            assertActive,
+          );
           return {
+            version: result.version,
             publish: prepareSessionIdentityPublication(
               database,
               resolved.agentId,
-              previous,
-              readSessionIdentitySnapshot(database, identityKeys),
+              result.identity.previous,
+              result.identity.current,
             ),
-            version: readTranscriptContextVersionInTransaction(database, nextResolved.sessionId),
           };
         },
         databaseOptions,
@@ -193,6 +175,50 @@ export async function replaceSessionWithBranchedTranscript(
     },
     "session.transcript.branch",
   );
+}
+
+/** One transaction kernel for the retained adapter and the canonical worker. */
+export function replaceSessionWithBranchedTranscriptInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: SessionTranscriptWriteScope,
+  branch: { sessionId: string; events: TranscriptEvent[] },
+  expectedLifecycleRevision: SessionTranscriptWriteScope["expectedLifecycleRevision"],
+  assertActive?: () => void,
+  projection?: { scheduleProjectionReconcile?: boolean; onProjectionReconcileNeeded?: () => void },
+) {
+  const fencedScope = withOwnedSessionTranscriptWriterFence(scope);
+  const resolved = resolveSqliteTranscriptScope(fencedScope);
+  const nextScope = { ...fencedScope, sessionId: branch.sessionId };
+  const nextResolved = { ...resolved, sessionId: branch.sessionId };
+  const fresh = readSessionEntryRow(database, resolved.sessionKey)?.entry;
+  if (
+    fresh?.sessionId !== resolved.sessionId ||
+    fresh.lifecycleRevision !== expectedLifecycleRevision
+  ) {
+    const cause = {
+      ...(fresh
+        ? { actualSessionId: fresh.sessionId, code: "session-rebound" as const }
+        : { code: "session-entry-missing" as const }),
+      expectedSessionId: resolved.sessionId,
+      sessionKey: scope.sessionKey,
+    };
+    throw new Error(`Branched session was not persisted: ${cause.code}`, { cause });
+  }
+  assertLockedTranscriptWriteAllowed(database, resolved, fencedScope);
+  const identityKeys = collectSessionEntryLookupKeys(resolved.sessionKey);
+  const previous = readSessionIdentitySnapshot(database, identityKeys);
+  writeSessionEntry(database, resolved.sessionKey, {
+    ...projectCanonicalSessionEntryShape({ ...fresh }),
+    sessionId: branch.sessionId,
+    updatedAt: Date.now(),
+  });
+  assertLockedTranscriptWriteAllowed(database, nextResolved, nextScope);
+  replaceSqliteTranscriptEventsInTransaction(database, nextResolved, branch.events, projection);
+  assertActive?.();
+  return {
+    identity: { previous, current: readSessionIdentitySnapshot(database, identityKeys) },
+    version: readTranscriptContextVersionInTransaction(database, nextResolved.sessionId),
+  };
 }
 
 /** Rewrites exact transcript rows after atomically validating their generation and bytes. */
@@ -420,6 +446,7 @@ export function appendTranscriptEventSnapshotSync(
     options.beforeCommitInTransaction,
     options.expectedMutationAt,
     view,
+    { eventType: isRecord(event) && typeof event.type === "string" ? event.type : "unknown" },
   );
 }
 
@@ -487,6 +514,13 @@ export function appendTranscriptMessageSnapshotSync<TMessage>(
     undefined,
     options.expectedMutationAt,
     view,
+    {
+      eventType: "message",
+      messageRole:
+        isRecord(options.message) && typeof options.message.role === "string"
+          ? options.message.role
+          : "unknown",
+    },
   );
   if (!snapshot.ok) {
     return snapshot;

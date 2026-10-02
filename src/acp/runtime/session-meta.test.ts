@@ -4,7 +4,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -81,7 +80,7 @@ describe("ACP session metadata SQLite store", () => {
       const storePath = path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite");
       const sessionKey = "agent:main:proof";
       await replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey },
+        { agentId: "main", storePath, sessionKey, env },
         { sessionId: "proof-session", updatedAt: 100 },
       );
       await upsertAcpSessionMeta({
@@ -91,6 +90,7 @@ describe("ACP session metadata SQLite store", () => {
         sessionKey,
         mutate: () => createMeta("proof-runtime", { lastActivityAt: 100 }),
       });
+      await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       claimOpenClawStateOwnership("test-supervisor", { env: externalEnv });
       await closeOpenClawStateDatabaseAsync();
@@ -148,7 +148,7 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it.each(["persisted", "sole", "retained"] as const)(
+  it.each(["persisted", "sole", "persisted-with-different-system"] as const)(
     "batch-loads legacy bare metadata without rekeying during a read (%s owner)",
     async (ownerKind) => {
       await withTestDir({ prefix: "openclaw-acp-batch-owner-" }, async (dir) => {
@@ -160,13 +160,15 @@ describe("ACP session metadata SQLite store", () => {
             defaults:
               ownerKind === "persisted"
                 ? { sessionStore: { agentId: "ops" } }
-                : ownerKind === "retained"
-                  ? { systemAgent: { agentId: "research" } }
+                : ownerKind === "persisted-with-different-system"
+                  ? {
+                      sessionStore: { agentId: "ops" },
+                      systemAgent: { agentId: "research" },
+                    }
                   : undefined,
             entries: ownerKind === "sole" ? { ops: {} } : { ops: {}, research: {} },
           },
         };
-        retainLegacyDefaultAgentId(cfg, ownerKind === "retained" ? "ops" : undefined);
         const entry: SessionEntry = {
           sessionId: "ops-global",
           lifecycleRevision: "ops-revision",

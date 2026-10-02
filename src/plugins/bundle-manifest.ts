@@ -41,6 +41,7 @@ type BundlePluginManifest = {
   version?: string;
   skills: string[];
   settingsFiles?: string[];
+  onboardingSkill?: string;
   // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
   hooks: string[];
   bundleFormat: PluginBundleFormat;
@@ -316,6 +317,29 @@ export function loadBundleManifest(params: {
       manifest.capabilities = buildCursorCapabilities(raw, params.rootDir);
     } else {
       Object.assign(manifest, resolveClaudeComponents(raw, params.rootDir));
+    }
+  }
+  const extensions = isRecord(raw.extensions) ? raw.extensions : undefined;
+  const openai = isRecord(extensions?.["com.openai"]) ? extensions["com.openai"] : undefined;
+  const onboardingSkill = normalizeOptionalString(openai?.onboardingSkill);
+  if (onboardingSkill) {
+    const relative = path.normalize(onboardingSkill);
+    const packaged =
+      !path.isAbsolute(relative) &&
+      relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      path.basename(relative) === "SKILL.md" &&
+      manifest.skills.some((root) => {
+        const fromRoot = path.relative(
+          path.resolve(params.rootDir, root),
+          path.resolve(params.rootDir, relative),
+        );
+        return (
+          fromRoot !== ".." && !fromRoot.startsWith(`..${path.sep}`) && !path.isAbsolute(fromRoot)
+        );
+      });
+    if (packaged) {
+      manifest.onboardingSkill = relative;
     }
   }
   return { ok: true, manifest, manifestPath: loaded.manifestPath };

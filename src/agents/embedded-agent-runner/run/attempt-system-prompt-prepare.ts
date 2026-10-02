@@ -33,7 +33,7 @@ import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import type { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { resolvePromptModeForSession } from "./attempt-prompt-helpers.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
-import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
+import { buildAttemptSystemPrompt, type SystemPromptRefresh } from "./attempt-system-prompt.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PreparedBootstrap = Awaited<ReturnType<typeof prepareEmbeddedAttemptBootstrap>>;
@@ -304,7 +304,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       context: buildProviderPromptContext(),
     },
   };
-  const attemptSystemPrompt = buildAttemptSystemPrompt(promptInputs);
+  const attemptSystemPrompt = await buildAttemptSystemPrompt(promptInputs);
   policyPreparation.signal?.throwIfAborted();
   policyPreparation.assertCurrent?.();
   const reportInputs: Parameters<typeof buildSystemPromptReport>[0] = {
@@ -325,7 +325,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     sandbox: params.setup.sandboxReport,
     systemPrompt: attemptSystemPrompt.systemPrompt,
     injectedWorkspaceFiles: params.bootstrap.bootstrapInjectionStats,
-    skillsPrompt: params.skillsPrompt,
+    skillsPrompt: attemptSystemPrompt.skillsPrompt,
     tools: params.effectiveTools,
   };
   const systemPromptReport = buildSystemPromptReport(reportInputs);
@@ -337,7 +337,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     capabilities: string[];
     catalogEntries: NonNullable<ToolSearchCatalogRef["current"]>["entries"] | undefined;
     permissionChanged: boolean;
-    promise: Promise<(currentSystemPrompt: string) => string>;
+    promise: Promise<SystemPromptRefresh>;
   } = {
     mode: attempt.permissionMode,
     tools: [...params.effectiveTools],
@@ -355,7 +355,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     prepareToolPrompt: (
       effectiveTools: PromptTools = params.effectiveTools,
       { permissionChanged = false }: { permissionChanged?: boolean } = {},
-    ) => {
+    ): Promise<SystemPromptRefresh> => {
       const mode = attempt.permissionMode;
       const capabilities = [...params.capabilityToolNames].toSorted();
       const catalogEntries = params.toolSearchCatalogRef?.current?.entries;
@@ -392,14 +392,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
             refreshedSandboxInfo?.enabled === true,
           ),
         );
-        const nextSystemPrompt = buildAttemptSystemPrompt({
+        const nextSystemPrompt = await buildAttemptSystemPrompt({
           ...promptInputs,
           embeddedSystemPrompt,
         });
         const permissionNotice = permissionChanged
           ? `## Permission change\nThe operator changed workspace permissions to ${mode ?? "configured defaults"}. Continue the current task with the updated tools and permissions. Inspect interrupted actions before retrying; do not repeat completed actions.`
           : undefined;
-        return (currentSystemPrompt: string) => {
+        const refresh: SystemPromptRefresh = (currentSystemPrompt) => {
           if (params.isRawModelRun) {
             return currentSystemPrompt;
           }
@@ -415,11 +415,14 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
               ...reportInputs,
               generatedAt: Date.now(),
               systemPrompt,
+              skillsPrompt: nextSystemPrompt.skillsPrompt,
               tools,
             }),
           );
           return systemPrompt;
         };
+        refresh.freshlyRendered = !params.isRawModelRun;
+        return refresh;
       })();
       toolPromptPreparation = {
         mode,

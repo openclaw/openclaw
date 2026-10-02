@@ -70,6 +70,33 @@ function source(
   };
 }
 
+it("exposes a prepared generation only after registration publication and keeps its borrower live", async () => {
+  const options = fixture();
+  readOpenClawAgentDatabaseRegistryToken({ env: options.env });
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  let observedUnpublishedIdentity = false;
+  const requestSource = source();
+  requestSource.onRegistryChange = () => {
+    // Registration publishes after the native identity is accepted. Neither boundary
+    // alone permits another borrower to skip the remaining preparation.
+    observedUnpublishedIdentity ||= execution.fileIdentity !== undefined;
+    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+  };
+  try {
+    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+    await execution.prepare(requestSource);
+    expect(observedUnpublishedIdentity).toBe(true);
+    const claim = execution.capturePreparedGenerationClaim();
+    expect(claim).toBeDefined();
+    claim!.assertCurrent();
+    await execution.release();
+    expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
+    expect(() => claim!.assertCurrent()).toThrow(/released/);
+  } finally {
+    await execution.release();
+  }
+});
+
 it("shares an execution owner across directory aliases, later turns, and cleanup", async () => {
   const { options, aliased } = aliasedFixture();
   const creator = captureOpenClawAgentDatabaseExecution(aliased, {
@@ -139,6 +166,39 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     }
   } finally {
     await Promise.allSettled([creator.release(), sibling.release()]);
+  }
+});
+
+it("retains every execution alias until the shared maintenance scope closes", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "maintenance-alias");
+  fs.symlinkSync(
+    path.dirname(options.path),
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const captured = child.run(() =>
+    captureOpenClawAgentDatabaseExecution({
+      ...options,
+      path: path.join(alias, path.basename(options.path)),
+    }),
+  );
+  const retained = parent.run(() => captureOpenClawAgentDatabaseExecution(options));
+  try {
+    await child.close();
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await parent.close();
+    expect(() => retained.assertCurrent()).toThrow(/closed/);
+  } finally {
+    await Promise.allSettled([
+      captured.release(),
+      retained.release(),
+      child.close(),
+      parent.close(),
+    ]);
   }
 });
 
@@ -472,6 +532,59 @@ it("joins native creating admission before releasing its original reservation", 
   }
 });
 
+it("keeps another captured borrower live after a caller-specific native open refusal", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  const physical = readDatabasePathIdentitySync(options.path);
+  expect(physical.key).toMatch(/^file:/);
+  const rejected = captureOpenClawAgentDatabaseExecution(options);
+  const retained = captureOpenClawAgentDatabaseExecution(options, {
+    expectedIdentity: {
+      kind: "file",
+      physicalIdentity: physical.key.slice("file:".length),
+      birthtime: physical.birthtime,
+      nativeLocation: physical.canonicalPath,
+    },
+  });
+  const refusal = new Error("Original caller revoked at native open admission");
+  let current = true;
+  let reachedNativeOpen = false;
+  const revoked = source((request) => {
+    if (request.stage === "open") {
+      reachedNativeOpen = true;
+      current = false;
+    }
+  });
+  revoked.assertCurrent = () => {
+    if (!current) {
+      throw refusal;
+    }
+  };
+  try {
+    await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(
+      refusal,
+    );
+    expect(reachedNativeOpen).toBe(true);
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await expect(
+      retained.runExisting(source(), (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: "agent:main:after-open-refusal", sessionId: "retained-borrower" },
+        }),
+      ),
+    ).resolves.toEqual({
+      kind: "session-transcript-initialized",
+      sessionKey: "agent:main:after-open-refusal",
+      placeholder: { sessionId: "retained-borrower" },
+    });
+    expect(readDatabasePathIdentitySync(options.path)).toEqual(physical);
+  } finally {
+    await Promise.allSettled([rejected.release(), retained.release()]);
+  }
+});
+
 it("rechecks source authority after registration notification before authorizing native open", async () => {
   const options = fixture();
   readOpenClawAgentDatabaseRegistryToken({ env: options.env });
@@ -638,6 +751,7 @@ it("retains canonical borrowers and rejects the changed alias before caller cont
     fs.symlinkSync(successorDirectory, alias, linkType);
     expect(() => creator.assertCurrent()).toThrow(/identity|observed target/);
     expect(() => creator.fileIdentity).toThrow(/identity|observed target/);
+    expect(() => creator.capturePreparedGenerationClaim()).toThrow(/identity|observed target/);
     await expect(creator.runExisting(source(), operation)).rejects.toThrow(
       /identity|observed target/,
     );

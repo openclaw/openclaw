@@ -20,6 +20,7 @@ import {
   getUpdateRun,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -47,10 +48,14 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.runExec,
   runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
-    ...(await mocks.runExec(command, args, options)),
+    ...(await mocks.runExec(command, args, options).catch((error: unknown) => {
+      // This caller fixture has no native child; the rejection belongs to its command adapter.
+      throw recordCommandProcessFailure(error, { code: 1, cleanup: "normal", termination: "exit" });
+    })),
     code: 0,
     signal: null,
     killed: false,
+    cleanup: "normal",
     termination: "exit",
   }),
 }));

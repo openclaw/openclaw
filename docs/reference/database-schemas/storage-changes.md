@@ -472,6 +472,14 @@ outcomes fence affected rows until canonical restore; they never authorize repla
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
 
+An ordinary follow-up to a completed child creates a new task and execution while
+retaining the completed row's pending parent delivery and receipt. The same row
+transaction fences the predecessor's session effects; its exact execution and
+requester custody still own announcement retries. Each turn reads its own transcript
+result and uses its own announcement idempotency key. Paused continuation and steer
+replacement retain their same-task adoption semantics. No schema migration or
+updater change is required.
+
 Provisional cancellation claims keep registration pending until their owner releases
 or confirms them. Existing persistence notifications wake the wait; work cancellation,
 Gateway drain, and database retirement dispose its subscriptions. A released claim
@@ -994,6 +1002,19 @@ requests never rebuild the combined store or reload the subagent registry.
 External workers publish committed changes through their owning bridge. After
 projection readiness, selection, authorization, and presentation use the current
 caller identity in one synchronous boundary.
+
+Native agent registration joins worker settlement before publishing topology.
+A witnessed commit invalidates retained discovery even after a temporary schema
+scope ends, while publication still checks the original physical database owner.
+An unknown outcome invalidates pending facts without inventing a commit receipt
+or replaying registration.
+
+MCP catalogs prepare required session metadata before deciding whether a session
+preview is available. The preview pairs committed model-lock metadata with the
+current sharing identity. Grant, execution, and Gateway checks run again after
+awaited work, including when returning a cached catalog. These changes require no
+schema, configuration, retention, or update migration.
+
 Cold compact subagent inventory loads through the shared-state read-only worker
 before projection readiness. Its resident snapshot belongs to the physical
 database generation, so publications from temporary maintenance scopes do not
@@ -1053,9 +1074,12 @@ Gateway user-preference RPCs and Talk appearance reads resolve merged profile ID
 and access preferences in the shared-state worker. Preference writes keep profile
 resolution, quota validation, and mutation in one synchronous write transaction;
 Gateway replies and changed events follow completion. Profile merge and consent
-updates retain their connection-bound kernels. Push preference and notification
-callers still use the synchronous facade until their preparation and publication
-owners migrate together.
+updates retain their connection-bound kernels. Web Push browser settings use the
+same preference workers while holding subscription snapshot custody through
+preference completion. Request and profile authority are rechecked after awaits
+and at transaction and commit admission; replies and preference-change events
+follow guarded completion. Device subscription mutations keep their deferred
+start after snapshot preparation.
 
 Fleet registry reads use a separate read-only worker and remain noncreating;
 listing cells does not join Gateway writable lifecycle admission. The existing
@@ -1701,9 +1725,19 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
-Automatic entry maintenance captures its policy at writer admission, then plans
-on the existing reclamation worker. Only a pass with retention candidates requests
-protected session identities, after rolling back candidate discovery and before
+Subagent cancellation preparation can reuse a borrowed native database generation
+after its initialization and registration publication finish. It retains the exact
+physical source and live owner while reading session facts, without queuing an
+empty write behind unrelated sessions. Pending publication for the selected
+session still settles before its generation is checked. Cold preparation and
+terminal publication keep their existing writer admission; this changes no
+schema, stored data, retention, or update behavior.
+
+Automatic entry maintenance captures its policy at writer admission. Metadata
+planning and planner statistics updates use the existing agent database executor;
+after cold native admission, row preparation runs outside the writer and archive
+queues. Only a pass with retention candidates requests protected session identities,
+after rolling back candidate discovery and before
 a fresh planning transaction. The parent captures those identities under the
 writer. Protection includes runtime providers, active work, and active lifecycle
 mutations. At write admission, the parent refreshes active keys and live protection
@@ -1711,9 +1745,8 @@ without discarding the prepared candidates. The write transaction rereads select
 rows, transcript versions, and active ancestry, then rejects only candidates that
 changed or became protected. The parent still rejects policy or protection changes
 after admission and before commit. Unrelated activity during planning can therefore
-commit without another planning pass. No schema, retention, or update migration changes
-are required.
-Changed inputs roll back that planning pass before a fresh pass begins. Bounded
+commit without another planning pass; unrelated writes invalidate stale age hints.
+Changed candidates roll back that planning pass before a fresh pass begins. Bounded
 finalization preserves changed entries and publishes removals only for committed
 entries. Transcript sizing and empty-transcript validation run on archive workers;
 planner statistics retain the existing deletion threshold and bounded analysis.

@@ -8,6 +8,7 @@ import {
   resolveExecutableFromPathEnv,
   resolveExecutablePath,
 } from "./executable-path.js";
+import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import type { RespawnSupervisor } from "./supervisor-markers.js";
 
 const RUNTIME_RECOVERY_ACTION =
@@ -124,16 +125,20 @@ export function prepareManagedHandoffCliRuntime(
   const nodeCommand =
     commandArgv[0] === handoffNodeExecutable ||
     /^(?:node|bun)(?:\.exe)?$/iu.test(path.basename(commandArgv[0] ?? ""));
+  // Respawn policy consumes process.argv, where runtime flags have already been removed.
+  const cliArgv = nodeCommand
+    ? [commandArgv[0]!, ...commandArgv.slice(1 + resolveRuntimeArgs(commandArgv[0]).length)]
+    : commandArgv;
   const startup = nodeCommand
     ? buildCliRespawnPlan({
-        argv: commandArgv,
+        argv: cliArgv,
         env,
         execArgv: [],
         execPath: commandArgv[0],
       })
     : null;
   const nodeExecArgv = nodeCommand
-    ? (startup?.argv.slice(0, startup.argv.length - commandArgv.length + 1) ?? [])
+    ? (startup?.argv.slice(0, startup.argv.length - cliArgv.length + 1) ?? [])
     : undefined;
   if (startup) {
     commandArgv[0] = startup.command;

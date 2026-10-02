@@ -5,11 +5,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { listSecretStoreEntries, readSecretStoreValue } from "../secrets/store/secret-store.js";
-import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import {
   describeSystemAgentPersistentOperation,
   executeSystemAgentOperation,
@@ -103,37 +102,6 @@ const mockScheduleGatewayRestart = vi.hoisted(() =>
     emitHooksQueued: false,
   })),
 );
-// Unit threads have no host broker; run the secret-store worker commands inline,
-// admitting their transaction and commit through the requester's guard.
-vi.mock("../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const kernel = await import("../secrets/store/secret-store-config-ref.kernel.js");
-  const execute = async (
-    command: SqliteWorkerCommand<OpenClawStateWorkerOperations>,
-    assertCurrent?: () => void,
-  ) => {
-    if (command.type === "secrets.writeForConfigRef") {
-      return kernel.writeSecretStoreEntryForConfigRefInDatabase(command.input, undefined, () =>
-        assertCurrent?.(),
-      );
-    }
-    throw new Error(`unexpected state worker command ${command.type}`);
-  };
-  return {
-    ...(await importOriginal<typeof import("../state/openclaw-state-worker-store.js")>()),
-    runOpenClawStateWorkerOperation: async (
-      _context: unknown,
-      operation: (scope: {
-        execute: (command: SqliteWorkerCommand<OpenClawStateWorkerOperations>) => unknown;
-      }) => Promise<unknown>,
-      options?: { assertCurrent?: () => void },
-    ) => {
-      options?.assertCurrent?.();
-      return await operation({
-        execute: (command) => execute(command, options?.assertCurrent),
-      });
-    },
-  };
-});
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({
   runDaemonStart: vi.fn(async () => {}),
   runDaemonStop: vi.fn(async () => {}),
@@ -175,7 +143,8 @@ describe("system agent operations", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     resetPluginStateStoreForTests();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();

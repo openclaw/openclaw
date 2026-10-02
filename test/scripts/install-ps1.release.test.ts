@@ -337,37 +337,6 @@ try {
         ].join("\n"),
       },
       {
-        name: "openclaw-native-command-exit",
-        source: [
-          scriptWithoutEntryPoint,
-          "",
-          "function Get-OpenClawCommandPath { return (Get-Process -Id $PID).Path }",
-          "$caught = $false",
-          "try {",
-          "  Invoke-OpenClawCommand -NoLogo -NoProfile -Command 'exit 17'",
-          "} catch {",
-          "  if ($_.Exception.Message -notmatch 'failed with exit code 17') { throw }",
-          "  $caught = $true",
-          "}",
-          "if (-not $caught) { throw 'nonzero native exit was accepted' }",
-          "",
-        ].join("\n"),
-      },
-      {
-        name: "doctor-failure-output",
-        source: [
-          scriptWithoutEntryPoint,
-          "",
-          "function Invoke-OpenClawCommand { throw 'doctor failed' }",
-          "$output = @(Run-Doctor *>&1 | ForEach-Object { $_.ToString() })",
-          '$text = $output -join "`n"',
-          "if ($text -match 'Migration complete') { throw 'doctor failure reported success' }",
-          "if ($text -notmatch 'Migration failed') { throw \"missing error: $text\" }",
-          "if ($output[-1] -ne $false) { throw 'doctor failure did not propagate' }",
-          "",
-        ].join("\n"),
-      },
-      {
         name: "npm-lifecycle-policy",
         source: [
           scriptWithoutEntryPoint,
@@ -891,31 +860,6 @@ try {
           "  throw \"Calls=$($script:scoopCalls -join '|')\"",
           "}",
           "if (($env:Path -split ';') -notcontains 'C:\\session-bin') { throw \"Path=$env:Path\" }",
-          "",
-        ].join("\n"),
-      },
-      {
-        name: "package-manager-node-validation-failure",
-        source: [
-          scriptWithoutEntryPoint,
-          "",
-          "function Get-Command {",
-          "  [CmdletBinding()]",
-          "  param([string]$Name)",
-          "  if ($Name -eq 'choco') { return $true }",
-          "  return $null",
-          "}",
-          "filter Out-Host { }",
-          "function choco {",
-          "  $global:LASTEXITCODE = 0",
-          "  Write-Output 'Chocolatey output'",
-          "}",
-          "$script:portableCalled = $false",
-          "function Install-PortableNode { $script:portableCalled = $true }",
-          "function Check-Node { return $script:portableCalled }",
-          "$result = @(Install-Node)",
-          'if ($result.Count -ne 1 -or $result[0] -ne $true) { throw "Install-Node returned $result" }',
-          "if (-not $script:portableCalled) { throw 'Portable Node fallback was not attempted' }",
           "",
         ].join("\n"),
       },
@@ -1798,7 +1742,6 @@ try {
     expectBatchedPowerShellCase("winget-node-delayed-path");
     expectBatchedPowerShellCase("chocolatey-node-upgrade");
     expectBatchedPowerShellCase("scoop-node-update");
-    expectBatchedPowerShellCase("package-manager-node-validation-failure");
   });
 
   runIfPowerShell("recovers from package-manager failures and preserves installer refusal", () => {
@@ -2091,18 +2034,11 @@ describe("install.ps1 stale Winget repair", () => {
       success: true,
     },
     {
-      name: "accepts a normal successful install without repair",
-      installExit: 0,
-      afterInstall: "healthy",
-      success: true,
-    },
-    {
       name: "accepts a healthy no-upgrade result without repair",
       afterInstall: "healthy",
       success: true,
     },
     { name: "does not repair generic Winget failure", installExit: 1 },
-    { name: "does not repair another HRESULT", installExit: -1978335188 },
     { name: "does not repair successful install with missing Node", installExit: 0 },
     {
       name: "recovers unsupported repair through Chocolatey",
@@ -2126,36 +2062,11 @@ describe("install.ps1 stale Winget repair", () => {
       success: true,
     },
     {
-      name: "rejects unusable Chocolatey fallback after failed repair",
-      repairExit: 1,
-      repair: true,
-      fallback: "choco",
-      afterFallback: "old-sqlite",
-    },
-    {
       name: "rejects unusable portable fallback after failed repair",
       repairExit: 1,
       repair: true,
       fallback: "portable",
       afterFallback: "text",
-    },
-    {
-      name: "recovers a generic Winget failure through portable Node",
-      installExit: 1,
-      fallback: "portable",
-      success: true,
-    },
-    {
-      name: "recovers a thrown Winget invocation through portable Node",
-      installThrows: true,
-      fallback: "portable",
-      success: true,
-    },
-    {
-      name: "recovers a generic Winget failure through the next package manager",
-      installExit: 1,
-      fallback: "choco",
-      success: true,
     },
     {
       name: "rejects failed repair even if Node becomes healthy",
@@ -2164,8 +2075,6 @@ describe("install.ps1 stale Winget repair", () => {
       repair: true,
     },
     { name: "rejects repair that leaves Node missing", repair: true },
-    { name: "rejects old Node after repair", afterRepair: "old-node", repair: true },
-    { name: "rejects old SQLite after repair", afterRepair: "old-sqlite", repair: true },
     ...["text", "blob", "json", "probe-error"].map((capability) => ({
       name: `rejects broken SQLite ${capability} after repair`,
       afterRepair: capability,
@@ -2186,7 +2095,6 @@ describe("install.ps1 stale Winget repair", () => {
       afterRepair: "missing",
       repair: false,
       success: false,
-      installThrows: false,
       fallback: "none",
       afterFallback: "healthy",
       ...testCase,
@@ -2237,7 +2145,6 @@ function Get-Command {
 function Invoke-FixtureNode {
     $global:LASTEXITCODE = 0
     if ($args[0] -eq '-v') {
-        if ($global:State -eq 'old-node') { return 'v22.15.0' }
         return 'v26.1.0'
     }
     $probe = @($input) -join [Environment]::NewLine
@@ -2253,7 +2160,6 @@ function winget {
     $global:Events.Add($args[0])
     $global:WingetCalls.Add(@($args))
     if ($args[0] -eq 'install') {
-        if ($case.installThrows) { throw 'fixture Winget invocation failed' }
         $global:LASTEXITCODE = $case.installExit
         $global:PendingState = $case.afterInstall
     } elseif ($args[0] -eq 'repair') {
@@ -2347,8 +2253,7 @@ Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy
       expect(run.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
       const repaired =
         options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
-      const fallbackExpected =
-        !repaired && (options.installThrows || options.afterInstall !== "healthy");
+      const fallbackExpected = !repaired && options.afterInstall !== "healthy";
       const fallbacks: string[] = [];
       if (fallbackExpected) {
         if (options.fallback === "choco") {

@@ -157,6 +157,8 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
   );
   @consume({ context: applicationContext, subscribe: true })
   protected context!: ApplicationContext;
+  @property({ attribute: false })
+  mcpAppLaunch?: import("../../components/mcp-app-launch.ts").McpAppOpenDetail;
   @property({ attribute: false }) paneId = "single";
   @property({ attribute: false }) paneLabel?: string;
   @property({ attribute: false }) presentationId = "single";

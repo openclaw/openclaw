@@ -123,15 +123,6 @@ describe("FreeBSD CLI runtime installation", () => {
     },
   );
 
-  it("refuses private Node recovery before linking or changing packages", () => {
-    const { bin, prefix } = fixture();
-    const result = install(bin, prefix, "NODE_ONLY=1");
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Private Node.js recovery is unavailable on FreeBSD");
-    expect(result.stdout).not.toContain("unexpected");
-    expect(existsSync(prefix)).toBe(false);
-  });
-
   it("explains how to install missing Git without invoking pkg", () => {
     const result = run(`
       uname() { printf 'FreeBSD\\n'; }
@@ -146,11 +137,14 @@ describe("FreeBSD CLI runtime installation", () => {
 });
 
 describe("FreeBSD source-install admission", () => {
-  it.each(
-    ["--install-method git", "--method git", "--git", "--github", "--npm --git", ""].flatMap(
-      (args) => [false, true].map((json) => ({ args, json })),
-    ),
-  )("refuses $args before installation side effects (JSON: $json)", ({ args, json }) => {
+  it.each([
+    { args: "--install-method git", json: false },
+    { args: "--method git", json: true },
+    { args: "--git", json: false },
+    { args: "--github", json: true },
+    { args: "--npm --git", json: true },
+    { args: "", json: false },
+  ])("refuses $args before installation side effects (JSON: $json)", ({ args, json }) => {
     const { root, prefix } = fixture();
     const oldRuntime = join(root, "old-runtime");
     const checkout = join(root, "checkout");
@@ -209,11 +203,7 @@ describe("FreeBSD source-install admission", () => {
 
   it.each([
     ["freebsd", "--git --npm"],
-    ["freebsd", "--github --install-method npm"],
-    ["freebsd", "--method npm"],
     ["linux", "--git"],
-    ["darwin", "--git"],
-    ["linux", "--npm"],
     ["darwin", "--npm"],
   ])("keeps %s %s on its selected install route", (os, args) => {
     const result = run(

@@ -7,7 +7,6 @@ import {
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRetainedLegacyDefaultAgentId } from "../config/legacy.default-agent-owner-state.js";
 import { hasExplicitModelPolicyAllow } from "../config/model-policy-allowlist-migration.js";
 import { resolveStateDir } from "../config/paths.js";
 import type {
@@ -157,10 +156,7 @@ type AgentRosterFactsBatch = {
 };
 
 let activeAgentRosterFactsBatch: AgentRosterFactsBatch | undefined;
-const immutableAgentRosterFacts = new WeakMap<
-  OpenClawConfig,
-  { legacyOwner: string | undefined; facts: AgentRosterFacts }
->();
+const immutableAgentRosterFacts = new WeakMap<OpenClawConfig, AgentRosterFacts>();
 
 /**
  * Runs a read-only callback with batch-scoped roster memoization.
@@ -187,14 +183,12 @@ function readAgentRosterFacts(cfg: OpenClawConfig): AgentRosterFacts | undefined
   if (!isDeeplyFrozenPlainData(cfg)) {
     return undefined;
   }
-  // Migration provenance lives outside the immutable config and can still change.
-  const legacyOwner = getRetainedLegacyDefaultAgentId(cfg);
   let cached = immutableAgentRosterFacts.get(cfg);
-  if (!cached || cached.legacyOwner !== legacyOwner) {
-    cached = { legacyOwner, facts: {} };
+  if (!cached) {
+    cached = {};
     immutableAgentRosterFacts.set(cfg, cached);
   }
-  return cached.facts;
+  return cached;
 }
 
 /** Converts either supported roster representation into the canonical keyed shape. */

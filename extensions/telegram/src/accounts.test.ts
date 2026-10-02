@@ -4,7 +4,11 @@ import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readConfigFileSnapshotForWrite } from "openclaw/plugin-sdk/config-mutation";
-import { withEnv, withTempHome } from "openclaw/plugin-sdk/test-env";
+import {
+  createCanonicalAgentConfigFixture,
+  withEnv,
+  withTempHome,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   listEnabledTelegramAccounts,
@@ -183,7 +187,7 @@ describe("resolveDefaultTelegramAccountId", () => {
     expect(resolveDefaultTelegramAccountId(cfg)).toBe("work");
   });
 
-  it("preserves a loaded legacy owner's account until explicit fleet ownership is applied", async () => {
+  it("uses explicit channel defaults after Doctor repairs a loaded legacy roster", async () => {
     await withTempHome(
       async (home) => {
         const config: OpenClawConfig = {
@@ -196,13 +200,25 @@ describe("resolveDefaultTelegramAccountId", () => {
           },
           bindings: [{ agentId: "main", match: { channel: "telegram", accountId: "work" } }],
         };
-        await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(config));
+        const configPath = path.join(home, ".openclaw", "openclaw.json");
+        const original = JSON.stringify(config);
+        await fs.writeFile(configPath, original);
         const { snapshot } = await readConfigFileSnapshotForWrite();
 
-        expect(snapshot.valid).toBe(true);
-        expect(resolveDefaultTelegramAccountId(snapshot.config)).toBe("work");
-        snapshot.config.agents!.ownership = "explicit";
-        expect(resolveDefaultTelegramAccountId(snapshot.config)).toBe("alerts");
+        expect(snapshot.valid).toBe(false);
+        expect(snapshot.sourceConfig.agents?.entries?.main?.default).toBe(true);
+        expect(snapshot.sourceConfig.bindings).toEqual(config.bindings);
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
+
+        const { config: repaired } = createCanonicalAgentConfigFixture(snapshot.sourceConfig, {
+          homedir: () => home,
+        });
+        expect(repaired.agents?.ownership).toBe("explicit");
+        expect(repaired.agents?.entries?.main).not.toHaveProperty("default");
+        expect(repaired.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
+        expect(repaired.bindings).toContainEqual(config.bindings![0]);
+        expect(resolveDefaultTelegramAccountId(repaired)).toBe("alerts");
+        expect(await fs.readFile(configPath, "utf8")).toBe(original);
       },
       {
         env: {

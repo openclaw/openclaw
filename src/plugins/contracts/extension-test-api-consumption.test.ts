@@ -74,8 +74,7 @@ function objectStringProperty(node: ts.ObjectLiteralExpression, name: string): s
   return undefined;
 }
 
-function collectTestApiSourceReferences(source: string, fileName = "source.ts") {
-  const sourceFile = parser.parseSourceFile(fileName, source);
+function collectTestApiSourceReferences(sourceFile: ts.SourceFile) {
   const moduleSpecifiers = collectModuleReferencesFromSource(sourceFile)
     .filter((entry) => entry.kind !== "import-meta-url")
     .map((entry) => entry.specifier)
@@ -131,6 +130,28 @@ function collectOrphanExtensionTestApiFiles(): string[] {
     testApis.filter((testApi) => testApi.packageExportsTestApi).map((testApi) => testApi.pluginId),
   );
   const testApiFiles = new Set(testApis.map((testApi) => testApi.repoPath));
+  const pendingSources: Array<{ fileName: string; text: string }> = [];
+
+  function consumePendingSources(): void {
+    if (pendingSources.length === 0) {
+      return;
+    }
+    const sources = pendingSources.splice(0);
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      const references = collectTestApiSourceReferences(sourceFile);
+      for (const pluginId of references.pluginIds) {
+        if (testApis.some((testApi) => testApi.pluginId === pluginId)) {
+          consumed.add(pluginId);
+        }
+      }
+      for (const specifier of references.moduleSpecifiers) {
+        const pluginId = resolveTestApiPluginId(specifier, sourceFile.fileName, testApis);
+        if (pluginId) {
+          consumed.add(pluginId);
+        }
+      }
+    }
+  }
 
   for (const repoPath of listTrackedFiles(["src", "test", "extensions", "packages", "scripts"])) {
     if (
@@ -141,23 +162,23 @@ function collectOrphanExtensionTestApiFiles(): string[] {
       continue;
     }
     const absolutePath = resolve(REPO_ROOT, repoPath);
-    const source = fs.readFileSync(absolutePath, "utf8");
+    let source: string;
+    try {
+      source = fs.readFileSync(absolutePath, "utf8");
+    } catch (error) {
+      // Preserve earlier parse failures before reporting a later unreadable file.
+      consumePendingSources();
+      throw error;
+    }
     if (!source.includes("test-api") && !source.includes("loadQaRunnerBundledPluginTestApi")) {
       continue;
     }
-    const references = collectTestApiSourceReferences(source, absolutePath);
-    for (const pluginId of references.pluginIds) {
-      if (testApis.some((testApi) => testApi.pluginId === pluginId)) {
-        consumed.add(pluginId);
-      }
-    }
-    for (const specifier of references.moduleSpecifiers) {
-      const pluginId = resolveTestApiPluginId(specifier, absolutePath, testApis);
-      if (pluginId) {
-        consumed.add(pluginId);
-      }
+    pendingSources.push({ fileName: absolutePath, text: source });
+    if (pendingSources.length === 32) {
+      consumePendingSources();
     }
   }
+  consumePendingSources();
 
   return testApis
     .filter((testApi) => !consumed.has(testApi.pluginId))
@@ -168,24 +189,34 @@ function collectOrphanExtensionTestApiFiles(): string[] {
 describe("extension test API consumption", () => {
   it("ignores identifier text and generic loader implementations", () => {
     expect(
-      collectTestApiSourceReferences(`
+      collectTestApiSourceReferences(
+        parser.parseSourceFile(
+          "source.ts",
+          `
         const testing = {};
         function loadQaRunnerBundledPluginTestApi(pluginId: string) {
           return load({ pluginId, artifactBasename: "test-api.js" });
         }
-      `),
+      `,
+        ),
+      ),
     ).toStrictEqual({ moduleSpecifiers: [], pluginIds: [] });
   });
 
   it("collects real module edges and literal plugin loaders", () => {
     expect(
-      collectTestApiSourceReferences(`
+      collectTestApiSourceReferences(
+        parser.parseSourceFile(
+          "source.ts",
+          `
         import { testing } from "@openclaw/example/test-api.js";
         export { helper } from "../test-api.js";
         type TestApi = typeof import("./test-api.js");
         loadQaRunnerBundledPluginTestApi("matrix");
         loadBundledPluginFacade({ pluginId: "codex", artifactBasename: "test-api.js" });
-      `),
+      `,
+        ),
+      ),
     ).toStrictEqual({
       moduleSpecifiers: ["../test-api.js", "./test-api.js", "@openclaw/example/test-api.js"],
       pluginIds: ["codex", "matrix"],

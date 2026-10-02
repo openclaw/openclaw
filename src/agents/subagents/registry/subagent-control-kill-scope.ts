@@ -7,8 +7,10 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
@@ -80,7 +82,8 @@ export async function withSubagentKillScope<T>(
     prepareRead: params.prepareRead,
     assertCurrent,
   };
-  const selected = new Set<string>();
+  const selected = new Map<string, Set<string | undefined>>();
+  let selectedCount = 0;
   const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const releaseRetirements: Array<() => void> = [];
   const completeRetirementPublications: Array<() => void> = [];
@@ -104,16 +107,12 @@ export async function withSubagentKillScope<T>(
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
       assertCurrent();
-      const entry = getLatestOwnedSubagentRun(
-        snapshot.childSessionKey,
-        snapshot.requesterAgentId,
-        params.cfg,
-      );
-      if (
-        !entry ||
-        !isSameSubagentRunOwner(entry, snapshot) ||
-        selected.has(entry.childSessionKey)
-      ) {
+      const childOwner = parseAgentSessionKey(snapshot.childSessionKey)
+        ? undefined
+        : (snapshot.childAgentId ?? resolveSubagentRequesterAgentId(params.cfg, snapshot));
+      const entry = getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
+      const selectedForChild = selected.get(snapshot.childSessionKey) ?? new Set();
+      if (!entry || !isSameSubagentRunOwner(entry, snapshot) || selectedForChild.has(childOwner)) {
         continue;
       }
       const ownerCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) =>
@@ -125,7 +124,9 @@ export async function withSubagentKillScope<T>(
       if (!ownerCurrent(entry, false) || !isCurrentSubagentRun(entry, params.cfg)) {
         continue;
       }
-      selected.add(entry.childSessionKey);
+      selectedForChild.add(childOwner);
+      selected.set(entry.childSessionKey, selectedForChild);
+      selectedCount += 1;
       const errors = new Set<string>();
       let session: SubagentKillSession | undefined;
       const ownsSessionIncarnation = () => {
@@ -142,8 +143,8 @@ export async function withSubagentKillScope<T>(
           throw error;
         }
       };
-      const { childSessionKey, requesterAgentId } = entry;
-      const latest = () => getLatestOwnedSubagentRun(childSessionKey, requesterAgentId, params.cfg);
+      const { childSessionKey } = entry;
+      const latest = () => getLatestOwnedSubagentRun(childSessionKey, childOwner, params.cfg);
       const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
         isSameSubagentRunOwner(latest(), candidate),
       );
@@ -335,7 +336,7 @@ export async function withSubagentKillScope<T>(
         for (const tree of trees) {
           await refreshTree(tree);
         }
-        return selected.size;
+        return selectedCount;
       },
     };
     await scope.refresh();

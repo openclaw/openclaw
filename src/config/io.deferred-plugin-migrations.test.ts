@@ -14,11 +14,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { resolveDeferredPluginMigrationConfigPaths } from "./deferred-plugin-migration-config.js";
 import { createConfigIO } from "./io.factory.js";
 import { readCurrentConfigForPolicyCheck } from "./io.runtime.js";
 import { resolveSessionStoreCompatibilityAgentId } from "./legacy.default-agent-owner.js";
-import { migratePersistedImplicitMainRoster } from "./legacy.roster.js";
 import { replaceConfigFile } from "./mutate.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -297,11 +297,13 @@ describe("config IO with deferred plugin migrations", () => {
     }
   });
 
-  it("keeps the legacy session owner while excluding a pending plugin field", () => {
-    const source = migratePersistedImplicitMainRoster({
+  it("keeps the migrated fixed-store owner while excluding a pending plugin field", () => {
+    const source = createCanonicalAgentConfigFixture({
       agents: { list: [{ id: "operator", default: true }, { id: "worker" }] },
+      session: { store: "/srv/shared/sessions.json" },
       legacySample: { root: "/srv/sample" },
     }).config;
+    expect(source.agents?.defaults?.sessionStore?.agentId).toBe("operator");
     const result = validateConfigObjectWithPlugins(source, {
       pluginValidation: "core-only",
       deferredPluginMigrations: [
@@ -314,6 +316,8 @@ describe("config IO with deferred plugin migrations", () => {
     });
     expect(result.ok).toBe(true);
     if (result.ok) {
+      expect(result.config).not.toHaveProperty("legacySample");
+      expect(result.config.session?.store).toBe(source.session?.store);
       expect(resolveSessionStoreCompatibilityAgentId(result.config)).toBe("operator");
     }
   });

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
   isMatrixActiveTokenRootDirectory,
@@ -10,12 +9,13 @@ import {
 } from "../../storage-paths.js";
 import {
   MATRIX_IDB_SNAPSHOT_FILENAME,
-  MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME,
   MATRIX_RECOVERY_KEY_FILENAME,
-  migrateLegacyMatrixLegacyCryptoMigrationFileToStore,
-  migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync,
   scoreMatrixCryptoStateInStore,
 } from "../crypto-state-store.js";
+import {
+  assertMatrixSupportedStateFile,
+  assertMatrixSupportedStateRoot,
+} from "../retired-state.js";
 import {
   normalizeMatrixStorageMetadata,
   openMatrixStorageMetaStoreOptions,
@@ -41,15 +41,8 @@ async function scoreStorageRoot(rootDir: string, metadata: MatrixStorageMetadata
   if (metadata.currentTokenStateClaimed === true) {
     score += 8;
   }
-  for (const [filename, weight] of [
-    ["crypto", 8],
-    [MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME, 3],
-    [MATRIX_RECOVERY_KEY_FILENAME, 2],
-    [MATRIX_IDB_SNAPSHOT_FILENAME, 2],
-  ] as const) {
-    if (fs.existsSync(path.join(rootDir, filename))) {
-      score += weight;
-    }
+  if (fs.existsSync(path.join(rootDir, "crypto"))) {
+    score += 8;
   }
   score += await scoreMatrixCryptoStateInStore(rootDir);
   return score;
@@ -71,6 +64,7 @@ type PopulatedMatrixStorageRoot = {
 };
 
 async function readStoredRootMetadata(rootDir: string): Promise<MatrixStorageMetadata> {
+  await assertMatrixSupportedStateFile(path.join(rootDir, STORAGE_META_FILENAME));
   if (fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
     try {
       const stored = normalizeMatrixStorageMetadata(
@@ -83,9 +77,7 @@ async function readStoredRootMetadata(rootDir: string): Promise<MatrixStorageMet
       // Root selection remains best-effort; a write path will surface SQLite failures.
     }
   }
-  return (
-    normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ?? {}
-  );
+  return {};
 }
 
 function isCompatibleStorageRoot(params: {
@@ -298,8 +290,8 @@ export async function maybeMigrateLegacyStorage({
 }: {
   storagePaths: MatrixStoragePaths;
 }): Promise<void> {
-  const { rootDir, storagePath, recoveryKeyPath } = storagePaths;
-  const cryptoMigrationPath = path.join(rootDir, MATRIX_LEGACY_CRYPTO_MIGRATION_FILENAME);
+  const { rootDir, storagePath } = storagePaths;
+  await assertMatrixSupportedStateRoot(rootDir);
   const hasAccountScopedLegacyStorageFile = fs.existsSync(storagePath);
   const syncCache = hasAccountScopedLegacyStorageFile
     ? await import("./sync-cache-state.js")
@@ -307,13 +299,7 @@ export async function maybeMigrateLegacyStorage({
   const hasAccountScopedLegacyStorage =
     hasAccountScopedLegacyStorageFile &&
     (await syncCache?.readLegacyMatrixSyncCacheState(rootDir)) !== null;
-  const hasAccountScopedRecoveryKey = fs.existsSync(recoveryKeyPath);
-  const hasAccountScopedLegacyCryptoMigration = fs.existsSync(cryptoMigrationPath);
-  if (
-    !hasAccountScopedLegacyStorage &&
-    !hasAccountScopedRecoveryKey &&
-    !hasAccountScopedLegacyCryptoMigration
-  ) {
+  if (!hasAccountScopedLegacyStorage) {
     return;
   }
 
@@ -339,19 +325,6 @@ export async function maybeMigrateLegacyStorage({
         }
         archiveSyncCache = true;
       }
-    }
-    if (hasAccountScopedRecoveryKey) {
-      await migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(
-        recoveryKeyPath,
-        getMatrixRuntime().state,
-      );
-      migrations.push(`- recovery key: ${recoveryKeyPath} -> ${rootDir} SQLite recovery key state`);
-    }
-    if (hasAccountScopedLegacyCryptoMigration) {
-      await migrateLegacyMatrixLegacyCryptoMigrationFileToStore(rootDir);
-      migrations.push(
-        `- legacy crypto migration: ${cryptoMigrationPath} -> ${rootDir} SQLite legacy crypto migration state`,
-      );
     }
   } catch (err) {
     throw new Error(`Failed migrating legacy Matrix client storage: ${String(err)}`, {
@@ -409,12 +382,10 @@ function prepareStorageMetaMutation(
 }
 
 async function mutateStorageMeta(rootDir: string, mutation: StorageMetaMutation): Promise<boolean> {
+  await assertMatrixSupportedStateFile(path.join(rootDir, STORAGE_META_FILENAME));
   try {
     const store = openStorageMetaStore(rootDir);
-    const decode = (value: unknown) =>
-      normalizeMatrixStorageMetadata(value) ??
-      normalizeMatrixStorageMetadata(loadJsonFile(path.join(rootDir, STORAGE_META_FILENAME))) ??
-      {};
+    const decode = (value: unknown) => normalizeMatrixStorageMetadata(value) ?? {};
     if (!store.observe || !store.compareAndApply) {
       // The published >=2026.9.4 host floor predates data-only comparisons.
       const legacyStore = getMatrixRuntime().state.openSyncKeyedStore<MatrixStorageMetadata>(

@@ -171,6 +171,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
     execApprovals: {
       sourcePath: "/tmp/state/exec-approvals.json",
       hasLegacy: false,
+      preview: "",
     },
     sessions: {
       targetDir: "/tmp/state/agents/main/sessions",

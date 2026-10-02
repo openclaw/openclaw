@@ -1026,6 +1026,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       );
       try {
         const owner = "agentic-agents-tools";
+        const pricedFile = "src/agents/embedded-agent-runner/pricing-heavy.test.ts";
+        if (indivisible) {
+          const listFiles = nodeTestInventory.listNodeTestConfigFiles;
+          vi.spyOn(nodeTestInventory, "listNodeTestConfigFiles").mockImplementation((config) =>
+            config === agentVitestProjectOwners.embedded.config
+              ? [
+                  pricedFile,
+                  "src/agents/embedded-agent-runner/pricing-light-a.test.ts",
+                  "src/agents/embedded-agent-runner/pricing-light-b.test.ts",
+                ]
+              : listFiles(config),
+          );
+          const fileSeconds = shardMetadata.estimateVitestTestFileSeconds;
+          vi.spyOn(shardMetadata, "estimateVitestTestFileSeconds").mockImplementation((file) =>
+            file === pricedFile ? 53 : fileSeconds(file),
+          );
+        }
         const timings: Record<"blacksmith" | "github", Record<string, number>> = {
           blacksmith: indivisible
             ? {
@@ -1050,9 +1067,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             plan.find((job) =>
               job.groups.some((group) =>
                 indivisible
-                  ? group.includePatterns?.includes(
-                      "src/agents/embedded-agent-runner/run.compaction-runtime.test.ts",
-                    )
+                  ? group.includePatterns?.includes(pricedFile)
                   : group.shard_name === owner,
               ),
             ),

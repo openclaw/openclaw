@@ -124,6 +124,7 @@ it.each([
 
     const successorCompleted = createDeferred();
     const originalCompleted = createDeferred();
+    const originalTimingCompleted = createDeferred();
     const originalSettled = createDeferred();
     const stopObserving = subscribeSubagentRunChanges("persistence", () => {
       const original = subagentRuns.get(b0.runId);
@@ -159,7 +160,15 @@ it.each([
           firstChildCleanup.resolve();
           await releaseFirstChildCleanup.promise;
         }
+        const completingOriginal =
+          entry.runId === b0.runId &&
+          entry.generation === b0.generation &&
+          entry.execution.status === "terminal" &&
+          entry.execution.outcome?.status === "ok";
         await persistTiming(entry, options);
+        if (completingOriginal) {
+          originalTimingCompleted.resolve();
+        }
       },
     );
     if (!completeDuringDrain && !provisional) {
@@ -316,6 +325,8 @@ it.each([
           terminalReply: { disposition: "visible", text: "original completed during cancellation" },
         });
         await originalCompleted.promise;
+        // Completion timing clears the abort marker after its registry outcome is durable.
+        await originalTimingCompleted.promise;
         expect(subagentRuns.get(b0.runId)?.killReconciliation).toBeUndefined();
         childAdmission.release();
         if (replace) {
@@ -355,8 +366,11 @@ it.each([
             ),
           ).toBe(true);
           const b1 = subagentRuns.get("publication-b1")!;
-          expect(subagentRuns.has(b0.runId)).toBe(false);
-          expect(b1).toMatchObject({ taskRunId: b0.taskRunId, execution: { status: "running" } });
+          expect(subagentRuns.get(b0.runId)).toMatchObject({
+            taskRunId: b0.taskRunId,
+            execution: { status: "terminal", suppressSessionEffects: true },
+          });
+          expect(b1).toMatchObject({ taskRunId: b1.runId, execution: { status: "running" } });
           if (typeof b0.generation !== "number") {
             throw new Error("Registration did not mint a run generation");
           }
@@ -404,6 +418,17 @@ it.each([
       });
       await successorCompleted.promise;
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("terminal");
+      if (priorChildKill && !handoff) {
+        // Successor admission retires the first child's delayed cleanup authority.
+        await expect(fixture.settle()).rejects.toMatchObject({
+          message: "Failed to settle subagent cleanup roots",
+          errors: [
+            expect.objectContaining({
+              message: "Subagent kill publication lost its original claim",
+            }),
+          ],
+        });
+      }
     } finally {
       stopObserving();
       cancellationClock?.mockRestore();

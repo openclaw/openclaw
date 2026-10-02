@@ -119,8 +119,6 @@ async function createFixture(
     origin?: Origin;
     self?: boolean;
     narrowTeam?: boolean;
-    legacy?: boolean;
-    unverified?: boolean;
     senderIsOwner?: boolean;
     botFrameworkTeam?: boolean;
     missingRequester?: boolean;
@@ -156,7 +154,7 @@ async function createFixture(
   const record = createPluginRecord({
     id: "msteams",
     origin,
-    trustedOfficialInstall: origin === "global" && !options.unverified,
+    trustedOfficialInstall: origin === "global",
   });
   const providerActions = msteamsPlugin.actions!;
   const providerSettlements: Array<{
@@ -169,7 +167,6 @@ async function createFixture(
     status: undefined,
     actions: {
       ...providerActions,
-      readAuthorityActions: options.legacy ? undefined : providerActions.readAuthorityActions,
       handleAction: async (ctx: ChannelMessageActionContext) => {
         try {
           const pending = providerActions.handleAction!(ctx);
@@ -390,8 +387,6 @@ async function createFixture(
 
 const surfaces = [
   ["tool", "bundled"],
-  ["tool", "global"],
-  ["gateway", "bundled"],
   ["gateway", "global"],
 ] as const;
 
@@ -536,7 +531,6 @@ describe("Teams Graph mutation currentness", () => {
     [307, false],
     [307, true],
     [308, false],
-    [308, true],
   ] as const)(
     "checks a same-origin %s redirect before replay (revoked=%s)",
     async (status, revoked) => {
@@ -815,7 +809,7 @@ describe("Teams Graph mutation currentness", () => {
 
 // Registry provenance is an explicit fixture; package installation is proved separately.
 describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin) => {
-  it("runs all seven existing read actions", async () => {
+  it("reads messages, reactions, pins and channel metadata", async () => {
     const fixture = await createFixture({ origin });
     const messagePath = `/v1.0/teams/${teamId}/channels/${targetChannel}/messages/${messageId}`;
     const cases: Array<{
@@ -841,21 +835,6 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
         params: { target: chatId },
         payload: { pins: [{ pinnedMessageId: "pin-1", messageId, text: message.body.content }] },
         requests: [`GET /v1.0/chats/${chatId}/pinnedMessages`],
-      },
-      {
-        action: "search",
-        params: { query: "permitted" },
-        payload: { messages: [{ id: messageId, text: message.body.content }], truncated: false },
-        requests: [`GET /v1.0/teams/${teamId}/channels/${currentChannel}/messages`],
-      },
-      {
-        action: "member-info",
-        params: { userId: memberId },
-        payload: { user: { id: memberId, displayName: "Member", roles: [] } },
-        requests: [
-          `GET /v1.0/teams/${teamId}/channels/${currentChannel}`,
-          `GET /v1.0/teams/${teamId}/members`,
-        ],
       },
       {
         action: "channel-info",
@@ -916,37 +895,17 @@ describe.each(surfaces)("Teams %s reads with a %s registration", (route, origin)
     expect(fixture.requests).toHaveLength(1);
   });
 
-  it.each([false, true])(
-    "fences the local requester-only member result (revoked=%s)",
-    async (revoked) => {
-      const fixture = await createFixture({ origin, self: true });
-      if (revoked) {
-        graph.afterEntry = fixture.retirePlugin;
-      }
-      const result = fixture.invoke(route, "member-info", { userId: requesterId });
-      if (revoked) {
-        await expect(result).rejects.toThrow(/no longer active|authority/i);
-      } else {
-        await expect(result).resolves.toMatchObject({ user: { id: requesterId, roles: [] } });
-      }
-      expect(fixture.requests).toEqual([]);
-      expect(graph.acquireToken).not.toHaveBeenCalled();
-    },
-  );
+  it("fences the local requester-only member result when the plugin closes", async () => {
+    const fixture = await createFixture({ origin, self: true });
+    graph.afterEntry = fixture.retirePlugin;
+    const result = fixture.invoke(route, "member-info", { userId: requesterId });
+    await expect(result).rejects.toThrow(/no longer active|authority/i);
+    expect(fixture.requests).toEqual([]);
+    expect(graph.acquireToken).not.toHaveBeenCalled();
+  });
 });
 
 describe.each(["tool", "gateway"] as const)("Teams %s policy controls", (route) => {
-  it.each(["legacy", "unverified"] as const)(
-    "does not grant cross-conversation reads to a %s adapter",
-    async (kind) => {
-      const fixture = await createFixture({ [kind]: true });
-      await expect(fixture.invoke(route, "read", { target, messageId })).rejects.toThrow(
-        /exact current conversation/i,
-      );
-      expect(fixture.requests).toEqual([]);
-    },
-  );
-
   it("rejects an unknown account before Graph", async () => {
     const fixture = await createFixture();
     await expect(

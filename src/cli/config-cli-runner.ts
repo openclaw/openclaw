@@ -417,6 +417,7 @@ export async function runConfigOperations(params: {
       pathTokens: operation.pathTokens,
       quotedNumericSegments: operation.quotedNumericSegments,
       schema: mutationSchema?.schema as JsonSchemaRecord | undefined,
+      command: params.successMode,
     };
     let suppliedPaths: PathSegment[][];
     if (merge) {
@@ -427,6 +428,7 @@ export async function runConfigOperations(params: {
         path: operation.setPath,
         value: operation.value,
         allowReplace: options.replace || operation.mutation === "replace",
+        command: params.successMode,
       });
       setAtPath(next, operation.setPath, operation.value, pathOptions);
       suppliedPaths = [operation.setPath];

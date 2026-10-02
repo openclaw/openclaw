@@ -114,6 +114,12 @@ describe("worker turn launcher terminal results", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
+  const completedWorkerMessage = () =>
+    makeAgentAssistantMessage({
+      content: [{ type: "text", text: "Remote work completed" }],
+      timestamp: 21,
+    });
+
   it.each<{
     stopReason: "stop" | "error";
     reconciliationFails: boolean;
@@ -206,7 +212,9 @@ describe("worker turn launcher terminal results", () => {
             // The second launch is the assertion boundary; do not replay its live-event stream.
             throw new WorkerTurnExecutionError("Unexpected second worker execution");
           }
-          const leafId = openSessionManager().appendMessage(
+          const leafId = await (
+            await openSessionManager()
+          ).appendMessageAsync(
             makeAgentAssistantMessage({
               content: providerFailure ? [] : [{ type: "text", text: "Remote answer" }],
               stopReason,
@@ -407,7 +415,7 @@ describe("worker turn launcher terminal results", () => {
           expect(candidateFailures[0]).toBeInstanceOf(WorkerTurnExecutionError);
           expect(candidateFailures[0]).toMatchObject({ message: failure });
           expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
-          expect(openSessionManager().getLeafEntry()).toMatchObject({
+          expect((await openSessionManager()).getLeafEntry()).toMatchObject({
             type: "message",
             message: {
               role: "assistant",
@@ -548,13 +556,8 @@ describe("worker turn launcher terminal results", () => {
     const tunnel: WorkerTunnelHandle = createWorkerTurnTunnel({
       launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
         request.onDispatchReady?.();
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Remote work completed" }],
-            timestamp: 21,
-          }),
-        );
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
         return acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
       }),
       reconcileWorkspace: vi.fn(async () => {
@@ -727,13 +730,8 @@ describe("worker turn launcher terminal results", () => {
         // A prior Move can fail its admission drain before terminal ACK. Its exact retry
         // joins the durable intent, while the admitted worker retains its original claim.
         placements.beginPlacementMove(request);
-        const completed = openSessionManager();
-        const leafId = completed.appendMessage(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Remote work completed" }],
-            timestamp: 21,
-          }),
-        );
+        const completed = await openSessionManager();
+        const leafId = await completed.appendMessageAsync(completedWorkerMessage());
         return acknowledgeCompletedWorkerTurn(launchRequest.turnClaim, leafId);
       }),
       reconcileWorkspace: vi
@@ -916,8 +914,8 @@ describe("worker turn launcher terminal results", () => {
           createWorkerTurnTunnel({
             launchTurn: vi.fn(async (request): Promise<SpawnResult> => {
               request.onDispatchReady?.();
-              const completed = openSessionManager();
-              completed.appendMessage(
+              const completed = await openSessionManager();
+              await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content: [{ type: "toolCall", id: "call-usage", name: "read", arguments: {} }],
                   provider: "openai",
@@ -934,10 +932,10 @@ describe("worker turn launcher terminal results", () => {
                   },
                 }),
               );
-              completed.appendMessage(
+              await completed.appendMessageAsync(
                 makeTextToolResult("call-usage", "read", "usage result", false, 22),
               );
-              const leafId = completed.appendMessage(
+              const leafId = await completed.appendMessageAsync(
                 makeAgentAssistantMessage({
                   content,
                   provider: "anthropic",

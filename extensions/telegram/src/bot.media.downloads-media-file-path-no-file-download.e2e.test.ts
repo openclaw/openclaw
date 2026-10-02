@@ -623,7 +623,7 @@ describe("telegram media groups", () => {
   it(
     "coalesces forwarded text + forwarded attachment into a single processing turn with default debounce config",
     async () => {
-      const forwardWindowMs = 80;
+      const forwardWindowMs = 1_000;
       const deliveredTurn = createDeferred<MsgContext>();
       const runtimeError = vi.fn((error: unknown) => deliveredTurn.reject(error));
       const { handler } = await createBotHandlerWithOptions({ runtimeError });

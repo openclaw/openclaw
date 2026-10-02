@@ -103,6 +103,7 @@ export function createSubagentSweeperHarness(
     vi.fn<Parameters<typeof createSubagentRegistrySweeper>[0]["discardTerminalDelivery"]>();
   const emitSubagentEndedHookForRun = vi.fn();
   const notifyContextEngineSubagentEnded = vi.fn();
+  const runContextEngineSubagentEnded = vi.fn();
   const callGateway = vi.fn();
   const resumeRequesterSettleWake = vi.fn();
   const warn = vi.fn();
@@ -118,7 +119,7 @@ export function createSubagentSweeperHarness(
     resumeRequesterSettleWake,
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     completeCleanupBookkeeping,
-    isEndedHookOwnerCurrent: (runId, selected) =>
+    isCleanupOwnerCurrent: (runId, selected) =>
       isSameSubagentRunOwner(runs.get(runId), selected) || !runs.has(runId),
     sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
     shouldSuppressSessionEffects: async (selected) =>
@@ -128,7 +129,7 @@ export function createSubagentSweeperHarness(
     emitSubagentEndedHookForRun,
     callGateway,
     cleanupCollectorLaunchResources: vi.fn(async () => true),
-    runContextEngineSubagentEnded: vi.fn(),
+    runContextEngineSubagentEnded,
     notifyContextEngineSubagentEnded,
     retireSupersededRun: vi.fn(),
     getRunsForChildSession: createSubagentSweeperChildLookup(runs),
@@ -157,6 +158,7 @@ export function createSubagentSweeperHarness(
     finalizeInterruptedSubagentRun,
     notifyContextEngineSubagentEnded,
     resumeRequesterSettleWake,
+    runContextEngineSubagentEnded,
     sweeper,
     warn,
   };

@@ -6,39 +6,19 @@ import OpenClawProtocol
 import OSLog
 
 struct MacNodeGatewayTLSSessionCache {
-    private struct Key: Equatable {
-        let url: URL
-        let required: Bool
-        let expectedFingerprint: String?
-        let allowTOFU: Bool
-        let storeKey: String?
-
-        init(url: URL, params: GatewayTLSParams) {
-            self.url = url
-            self.required = params.required
-            self.expectedFingerprint = params.expectedFingerprint
-            self.allowTOFU = params.allowTOFU
-            self.storeKey = params.storeKey
-        }
-    }
-
-    private var cachedKey: Key?
-    private var cachedBox: WebSocketSessionBox?
+    private var cached: (url: URL, params: GatewayTLSParams, box: WebSocketSessionBox)?
 
     mutating func sessionBox(url: URL, params: GatewayTLSParams) -> WebSocketSessionBox {
-        let key = Key(url: url, params: params)
-        if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
-            return cachedBox
+        if let cached, cached.url == url, cached.params == params {
+            return cached.box
         }
         let box = WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
-        self.cachedKey = key
-        self.cachedBox = box
+        self.cached = (url, params, box)
         return box
     }
 
     mutating func invalidate() {
-        self.cachedKey = nil
-        self.cachedBox = nil
+        self.cached = nil
     }
 }
 

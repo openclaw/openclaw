@@ -1598,6 +1598,7 @@ describe("scripts/test-projects changed-target routing", () => {
     "src/agents/models-config.write-serialization.test.ts",
     "src/agents/plugin-model-catalog-auth.test.ts",
     "src/agents/plugin-model-catalog.test.ts",
+    "src/agents/prepared-model-catalog-worker.agent-database.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.heap.integration.test.ts",
     "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
     "src/state/openclaw-state-db.test.ts",

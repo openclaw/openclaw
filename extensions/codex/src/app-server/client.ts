@@ -52,6 +52,7 @@ import { createCodexRequestAttempt, type CodexRequestAttempt } from "./request-a
 import type { CodexRequestWaiterFinished } from "./request-observation.js";
 import { CODEX_APP_SERVER_OVERLOADED_ERROR_CODE, CodexAppServerRpcError } from "./rpc-error.js";
 import { CodexServerRequests, type CodexServerRequestHandler } from "./server-requests.js";
+import { getCodexAppServerRegisteredTransportIdentity } from "./transport-process-registration.js";
 import { createStdioTransport } from "./transport-stdio.js";
 import { createWebSocketTransport } from "./transport-websocket.js";
 import {
@@ -123,18 +124,7 @@ export function isCodexAppServerRequestTimeoutError(error: unknown): boolean {
   );
 }
 
-export function isCodexAppServerBrokenPipeError(error: unknown): boolean {
-  const seen = new Set<unknown>();
-  let current = error;
-  while (current && typeof current === "object" && !seen.has(current)) {
-    seen.add(current);
-    if ("code" in current && current.code === "EPIPE") {
-      return true;
-    }
-    current = "cause" in current ? current.cause : undefined;
-  }
-  return false;
-}
+export { isCodexAppServerBrokenPipeError } from "./client-diagnostics.js";
 
 class CodexAppServerIndeterminateTransportError extends Error {
   readonly code = "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
@@ -400,6 +390,10 @@ export class CodexAppServerClient {
   /** Returns the local transport PID for scoped child-process cleanup, when available. */
   getTransportPid(): number | undefined {
     return this.child.pid;
+  }
+
+  getRegisteredTransportIdentity() {
+    return getCodexAppServerRegisteredTransportIdentity(this.child);
   }
 
   request<M extends CodexAppServerRequestMethod>(

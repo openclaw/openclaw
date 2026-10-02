@@ -12,6 +12,8 @@ import {
 } from "../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 
+const PREPARATION_CLEANUP_GUARD_MS = 5_000;
+
 export type AgentWorkerFixtureOperations = {
   inspect: { input: undefined; output: number };
   append: {
@@ -79,7 +81,11 @@ export function bindSqliteWorkerBackend(
         throw new Error("Fixture loader requires the nested command type");
       }
       enter(preparation.codeMarker, "loading");
-      return waitForFile(preparation.codeGate, 5000).then(() => {
+      // Preserve the worker fixture guard: host test signals cannot cross this structured-clone API.
+      return waitForFile(
+        preparation.codeGate,
+        AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS),
+      ).then(() => {
         codeLoaded = true;
       });
     },
@@ -94,7 +100,11 @@ export function bindSqliteWorkerBackend(
         throw new Error("Fixture preparation requires an append command");
       }
       enter(preparation.commandMarker, "preparing");
-      return waitForFile(preparation.commandGate, 5000).then(() => {
+      // Preserve the worker fixture guard: host test signals cannot cross this structured-clone API.
+      return waitForFile(
+        preparation.commandGate,
+        AbortSignal.timeout(PREPARATION_CLEANUP_GUARD_MS),
+      ).then(() => {
         preparedValue = command.input.value;
       });
     },

@@ -47,6 +47,7 @@ export type ReadSessionMessagesAsyncOptions =
   | {
       mode: "full";
       reason: string;
+      includeOffPathMessages?: boolean;
     }
   | ({
       mode: "recent";

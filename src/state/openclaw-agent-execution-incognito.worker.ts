@@ -19,7 +19,7 @@ import type {
   AgentDatabaseIncognitoOperations,
 } from "./openclaw-agent-execution-contract.js";
 
-/** The ephemeral arm of the canonical agent executor; no file/domain operation is admitted yet. */
+/** The ephemeral arm retains one native owner for every admitted operation. */
 export function createIncognitoAgentDatabaseBackend(
   input: AgentDatabaseIncognitoOpen,
   opening: { databasePath: string; target?: SqliteWorkerEphemeralTarget },
@@ -77,7 +77,22 @@ export function createIncognitoAgentDatabaseBackend(
       throw new Error("Incognito actor lost its retained native database");
     }
   };
+  let sessions:
+    | ReturnType<
+        typeof import("../config/sessions/session-incognito.worker.js").createIncognitoSessionWorker
+      >
+    | undefined;
   return {
+    async prepare(command) {
+      if (command.type !== "database.incognito.memory" && !sessions) {
+        const { createIncognitoSessionWorker } =
+          await import("../config/sessions/session-incognito.worker.js");
+        sessions = createIncognitoSessionWorker(database, input.identity, input.environment);
+      }
+      if (command.type !== "database.incognito.memory") {
+        await sessions?.prepare(command);
+      }
+    },
     execute(command) {
       assertCurrent();
       requestSqliteWorkerOperationAdmission({
@@ -85,7 +100,10 @@ export function createIncognitoAgentDatabaseBackend(
         facts: { identity: input.identity },
       });
       if (command.type !== "database.incognito.memory") {
-        throw new Error("Operation is not admitted for incognito storage");
+        if (!sessions) {
+          throw new Error("Incognito session operation was not prepared");
+        }
+        return sessions.execute(command);
       }
       // sqlite-allow-raw -- Connection diagnostics have no Kysely table representation.
       const pageCount = database.db.prepare("PRAGMA page_count").get()?.page_count;
@@ -98,10 +116,14 @@ export function createIncognitoAgentDatabaseBackend(
     },
     assertSettled() {
       assertCurrent();
+      sessions?.assertSettled();
       if (database.db.isTransaction) {
         throw new Error("Incognito command left an unsettled native transaction");
       }
     },
-    close,
+    close() {
+      sessions?.close();
+      close();
+    },
   };
 }

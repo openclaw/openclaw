@@ -32,7 +32,7 @@ export function formatModelName(modelString?: string | null): string {
     "gemini-pro": "Gemini Pro",
   };
 
-  const mappedName = modelMappings[modelName];
+  const mappedName = Object.hasOwn(modelMappings, modelName) ? modelMappings[modelName] : undefined;
   if (mappedName !== undefined) {
     return mappedName;
   }
@@ -109,7 +109,6 @@ export async function isDmAllowedWithIngress(
     senderShip,
     allowFrom: allowlist ?? [],
     conversation: { kind: "direct", id: "direct" },
-    dmPolicy: "allowlist",
   });
   return access.senderAccess.allowed;
 }
@@ -119,7 +118,6 @@ export async function resolveTlonMessageIngress(params: {
   allowFrom: string[];
   conversation: { kind: "direct" | "group"; id: string };
   accountId?: string;
-  dmPolicy?: "open" | "allowlist";
   groupPolicy?: "open" | "allowlist";
   contextBinding?: ChannelIngressContextBinding;
 }) {
@@ -130,7 +128,7 @@ export async function resolveTlonMessageIngress(params: {
     subject: { stableId: params.senderShip },
     conversation: params.conversation,
     contextBinding: params.contextBinding,
-    dmPolicy: params.dmPolicy ?? "allowlist",
+    dmPolicy: "allowlist",
     groupPolicy: params.groupPolicy ?? "open",
     allowFrom: params.allowFrom,
     groupAllowFrom: params.allowFrom,
@@ -140,14 +138,13 @@ export async function resolveTlonMessageIngress(params: {
 export async function resolveTlonCommandAuthorizationWithIngress(params: {
   senderShip: string;
   ownerShip: string | null | undefined;
-  useAccessGroups: boolean;
 }) {
   const normalizedOwner = params.ownerShip ? normalizeShip(params.ownerShip) : null;
   return await getTlonRuntime().channel.inbound.ingress.resolveStable({
     channelId: "tlon",
     accountId: "default",
     identity: tlonIngressIdentity,
-    useAccessGroups: params.useAccessGroups,
+    useAccessGroups: true,
     subject: { stableId: params.senderShip },
     conversation: {
       kind: "direct",

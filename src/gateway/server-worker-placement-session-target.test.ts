@@ -115,8 +115,9 @@ test.each([
         expectedGeneration: requested.generation,
         patch: { environmentId },
       });
-      if (captured.state !== "provisioning")
+      if (captured.state !== "provisioning") {
         throw new Error("Probe requires captured provisioning owner");
+      }
       const globalConfig: OpenClawConfig = { ...individual, session: { scope: "global" } };
       setRuntimeConfigSnapshot(globalConfig, globalConfig);
       const globalWorktree = await managedWorktrees.createEmpty({
@@ -141,7 +142,9 @@ test.each([
           },
         },
       );
-      if (scope === "individual") setRuntimeConfigSnapshot(individual, individual);
+      if (scope === "individual") {
+        setRuntimeConfigSnapshot(individual, individual);
+      }
       const destroy = vi.fn(async () => {});
       const unexpected = async (): Promise<never> => {
         throw new Error("Unexpected external provider work");

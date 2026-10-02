@@ -6,6 +6,7 @@ import { createServer, type Socket } from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { withRuntimePreload } from "../../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
@@ -129,15 +130,10 @@ childProcess.execFileSync = (command, args, options) => {
     workspace,
     extraProcessPath,
     env: {
-      ...process.env,
+      ...(probeClock ? withRuntimePreload(process.env, clockPath) : process.env),
       HOME: home,
       OPENCLAW_TEST_PS_EXTRA: extraProcessPath,
       PATH: `${bin}:${process.env.PATH ?? ""}`,
-      ...(probeClock
-        ? {
-            NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(clockPath)}`,
-          }
-        : {}),
     },
   };
 }
