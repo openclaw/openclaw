@@ -20,7 +20,9 @@ const DIAGNOSTIC_METHODS = new Set<string>([
 ]);
 const MAX_METHODS = 8;
 type InitializeSnapshot = ReturnType<CodexAppServerClient["getInitializeDiagnostic"]>;
-type RegisteredTransportIdentity = ReturnType<CodexAppServerClient["getRegisteredTransportIdentity"]>;
+type RegisteredTransportIdentity = ReturnType<
+  CodexAppServerClient["getRegisteredTransportIdentity"]
+>;
 
 type ReadInitializeSnapshot = (beforeClientClose?: boolean) => InitializeSnapshot;
 function readInitializeSnapshot(read: ReadInitializeSnapshot | undefined, beforeClose = false) {

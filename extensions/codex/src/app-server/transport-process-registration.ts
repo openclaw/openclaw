@@ -35,7 +35,9 @@ const childIdentity = processIdentity.extend({
 const registrationSchema = z.object({ parent: processIdentity, child: childIdentity }).strict();
 type ProcessRegistration = z.infer<typeof registrationSchema>;
 const registrationCleanup = new WeakMap<object, Promise<void>>();
-type RegisteredTransportIdentity = Readonly<Pick<ProcessRegistration["child"], "pid" | "startedAt">>;
+type RegisteredTransportIdentity = Readonly<
+  Pick<ProcessRegistration["child"], "pid" | "startedAt">
+>;
 const registeredTransportIdentities = new WeakMap<object, RegisteredTransportIdentity>();
 
 /** Registration-time direct transport identity, not descendant identity or current liveness. */
