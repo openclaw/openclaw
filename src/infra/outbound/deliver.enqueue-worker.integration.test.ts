@@ -50,25 +50,27 @@ describe("enqueue publication custody through the real sender", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  function deliver(
-    mode: "raw" | "prepared",
-    params: Parameters<typeof deliverOutboundPayloads>[0],
-  ) {
-    if (mode === "raw") {
-      return deliverOutboundPayloads(params);
-    }
-    const { payloads, ...delivery } = params;
-    return deliverStructuredOutboundPayloadsInternal({
-      ...delivery,
-      plan: createStructuredOutboundPayloadPlan(payloads),
-    });
-  }
-
   async function source() {
     const stateDir = fixtures.tmpDir();
     const mediaUrl = path.join(stateDir, "synthetic.txt");
     await fs.writeFile(mediaUrl, "synthetic retained media");
     return { stateDir, mediaUrl };
+  }
+
+  function deliveryParams(stateDir: string) {
+    return {
+      cfg: {},
+      channel: "matrix",
+      to: "!synthetic:example",
+      mediaAccess: { localRoots: [stateDir] },
+      queuePolicy: "best_effort",
+    } satisfies Omit<Parameters<typeof deliverOutboundPayloads>[0], "payloads">;
+  }
+
+  async function expectReleasedMedia(stateDir: string) {
+    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+    expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual([]);
+    expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
   }
 
   function installSender() {
@@ -109,75 +111,67 @@ describe("enqueue publication custody through the real sender", () => {
     return send;
   }
 
-  it.each(["raw", "prepared"] as const)(
-    "retains media after a committed reply is lost, suppresses live fallback, and recovers exactly once (%s)",
-    async (mode) => {
-      const { stateDir, mediaUrl } = await source();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const send = installSender();
-      const terminals: string[] = [];
-      const unsubscribe = onTrustedMessageAuditEvent((event) => {
-        if (event.action === "message.outbound.finished") {
-          terminals.push(event.outcome);
-        }
-      });
-      try {
-        const reply = holdEnqueueReply();
-        const delivery = deliver(mode, {
-          cfg: {},
-          channel: "matrix",
-          to: "!synthetic:example",
-          payloads: [{ mediaUrl }],
-          mediaAccess: { localRoots: [stateDir] },
-          queuePolicy: "best_effort",
-        });
-        const outcome = delivery.then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        );
-        try {
-          expect(
-            await Promise.race([
-              reply.held,
-              outcome.then((settled) => {
-                throw new Error("Delivery settled before committed reply", { cause: settled });
-              }),
-            ]),
-          ).toBe("created");
-          await reply.lose();
-          const settled = await outcome;
-          expect("error" in settled && isDeliveryRecoveryOwnedRetry(settled.error)).toBe(true);
-          expect(send).not.toHaveBeenCalled();
-          expect(terminals).toEqual([]);
-          expect(reply.attempts()).toBe(1);
-        } finally {
-          reply.release();
-          await outcome;
-          reply.restore();
-        }
-        const [entry] = await loadPendingDeliveries(stateDir);
-        expect(entry).toBeDefined();
-        const artifact = acceptedPreparedOutboundEntries(entry!.preparedBatch)[0]!.payload
-          .mediaUrl!;
-        expect(artifact).not.toBe(mediaUrl);
-        expect(await fs.readFile(artifact, "utf8")).toBe("synthetic retained media");
-        expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
-          [],
-        );
-        await fs.unlink(mediaUrl);
-        // Simulate lease expiry after the interrupted producer, without waiting for wall time.
-        setQueuedEntryState(stateDir, entry!.id, { retryCount: 0, availableAt: 1 });
-        await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-        await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
-        expect(send).toHaveBeenCalledOnce();
-        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(terminals).toEqual(["sent"]);
-      } finally {
-        unsubscribe();
+  it("retains prepared media after a committed reply is lost, suppresses live fallback, and recovers exactly once", async () => {
+    const { stateDir, mediaUrl } = await source();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const send = installSender();
+    const terminals: string[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => {
+      if (event.action === "message.outbound.finished") {
+        terminals.push(event.outcome);
       }
-    },
-  );
+    });
+    try {
+      const reply = holdEnqueueReply();
+      const delivery = deliverStructuredOutboundPayloadsInternal({
+        ...deliveryParams(stateDir),
+        plan: createStructuredOutboundPayloadPlan([{ mediaUrl }]),
+      });
+      const outcome = delivery.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        expect(
+          await Promise.race([
+            reply.held,
+            outcome.then((settled) => {
+              throw new Error("Delivery settled before committed reply", { cause: settled });
+            }),
+          ]),
+        ).toBe("created");
+        await reply.lose();
+        const settled = await outcome;
+        expect("error" in settled && isDeliveryRecoveryOwnedRetry(settled.error)).toBe(true);
+        expect(send).not.toHaveBeenCalled();
+        expect(terminals).toEqual([]);
+        expect(reply.attempts()).toBe(1);
+      } finally {
+        reply.release();
+        await outcome;
+        reply.restore();
+      }
+      const [entry] = await loadPendingDeliveries(stateDir);
+      expect(entry).toBeDefined();
+      const artifact = acceptedPreparedOutboundEntries(entry!.preparedBatch)[0]!.payload.mediaUrl!;
+      expect(artifact).not.toBe(mediaUrl);
+      expect(await fs.readFile(artifact, "utf8")).toBe("synthetic retained media");
+      expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
+        [],
+      );
+      await fs.unlink(mediaUrl);
+      // Simulate lease expiry after the interrupted producer, without waiting for wall time.
+      setQueuedEntryState(stateDir, entry!.id, { retryCount: 0, availableAt: 1 });
+      await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
+      await drainMatrixReconnect({ stateDir, deliver: deliverOutboundPayloads });
+      expect(send).toHaveBeenCalledOnce();
+      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
+      await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(terminals).toEqual(["sent"]);
+    } finally {
+      unsubscribe();
+    }
+  });
 
   it("releases staged media after a known serialization failure and still permits best-effort delivery", async () => {
     const { stateDir, mediaUrl } = await source();
@@ -192,21 +186,13 @@ describe("enqueue publication custody through the real sender", () => {
     };
     try {
       await deliverOutboundPayloads({
-        cfg: {},
-        channel: "matrix",
-        to: "!synthetic:example",
+        ...deliveryParams(stateDir),
         payloads: [{ mediaUrl }],
-        mediaAccess: { localRoots: [stateDir] },
-        queuePolicy: "best_effort",
         identity,
       });
       expect(send).toHaveBeenCalledOnce();
       expect(reply.attempts()).toBe(0);
-      expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-      expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
-        [],
-      );
-      expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
+      await expectReleasedMedia(stateDir);
     } finally {
       reply.restore();
     }
@@ -275,12 +261,8 @@ if (!isMainThread) {
       );
       try {
         await deliverOutboundPayloads({
-          cfg: {},
-          channel: "matrix",
-          to: "!synthetic:example",
+          ...deliveryParams(stateDir),
           payloads: kind === "media" ? [{ mediaUrl }] : [{ text: "synthetic retained text" }],
-          mediaAccess: { localRoots: [stateDir] },
-          queuePolicy: "best_effort",
           onDeliveryIntent: queued,
         });
         expect(admissionFailure).toMatchObject({
@@ -289,42 +271,31 @@ if (!isMainThread) {
         expect(reply.attempts()).toBe(1);
         expect(send).toHaveBeenCalledOnce();
         expect(queued).not.toHaveBeenCalled();
-        expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-        expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual(
-          [],
-        );
-        expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
+        await expectReleasedMedia(stateDir);
       } finally {
         reply.restore();
       }
     },
   );
 
-  it.each(["raw", "prepared"] as const)(
-    "does not resume a lost preparation when independent cleanup errors wrap it (%s)",
-    async (mode) => {
-      const { stateDir, mediaUrl } = await source();
-      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-      const send = installSender();
-      const primary = new StableDeliveryPreparationLostError("synthetic-preparation");
-      const cleanup = new Error("synthetic media cleanup failure");
-      const failure = new AggregateError([primary, cleanup], "admission and cleanup failed", {
-        cause: cleanup,
-      });
-      vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockRejectedValueOnce(failure);
-      await expect(
-        deliver(mode, {
-          cfg: {},
-          channel: "matrix",
-          to: "!synthetic:example",
-          payloads: [{ mediaUrl }],
-          mediaAccess: { localRoots: [stateDir] },
-          queuePolicy: "best_effort",
-        }),
-      ).rejects.toBe(failure);
-      expect(send).not.toHaveBeenCalled();
-    },
-  );
+  it("does not resume a lost preparation when independent cleanup errors wrap it", async () => {
+    const { stateDir, mediaUrl } = await source();
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const send = installSender();
+    const primary = new StableDeliveryPreparationLostError("synthetic-preparation");
+    const cleanup = new Error("synthetic media cleanup failure");
+    const failure = new AggregateError([primary, cleanup], "admission and cleanup failed", {
+      cause: cleanup,
+    });
+    vi.spyOn(queueAdmission, "stageAndEnqueueOutboundDelivery").mockRejectedValueOnce(failure);
+    await expect(
+      deliverOutboundPayloads({
+        ...deliveryParams(stateDir),
+        payloads: [{ mediaUrl }],
+      }),
+    ).rejects.toBe(failure);
+    expect(send).not.toHaveBeenCalled();
+  });
 
   it("releases a staged copy on a known preparation refusal", async () => {
     const { stateDir, mediaUrl } = await source();
@@ -348,8 +319,6 @@ if (!isMainThread) {
         },
       ),
     ).rejects.toThrow("preparation owner closed");
-    expect(await loadPendingDeliveries(stateDir)).toEqual([]);
-    expect(loadDeliveryQueueEntries(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, stateDir)).toEqual([]);
-    expect(await fs.readdir(path.join(stateDir, "delivery-queue-media"))).toEqual([]);
+    await expectReleasedMedia(stateDir);
   });
 });

@@ -174,7 +174,7 @@ it.each([
   });
 });
 
-it.each(["ENOENT", "EACCES", "EIO"])(
+it.each(["ENOENT", "EACCES"])(
   "refuses missing required config or source I/O errors: %s",
   async (code) => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {

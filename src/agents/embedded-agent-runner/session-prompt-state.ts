@@ -2,6 +2,7 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { Message } from "../../llm/types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentMessage } from "../runtime/index.js";
 
@@ -23,6 +24,9 @@ type EmbeddedSessionPromptState = {
   activeProjectKeys: string[];
   toolResults: ToolResultPromptProjectionState;
   sentUserTurnIds: Set<string>;
+  prunedImageMessages?: Set<string>;
+  removedRuntimeContextKeys?: Set<string>;
+  runtimeContextCarrierPositions?: number[];
 };
 
 const MAX_SESSION_PROMPT_STATES = 64;
@@ -131,16 +135,36 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
   return created;
 }
 
+export function recordRuntimeContextProjection(
+  sessionId: string,
+  removed: readonly AgentMessage[] | undefined,
+  converted: readonly Message[],
+): boolean {
+  const state = getEmbeddedSessionPromptState(sessionId);
+  const keys = removed?.map((message, index) => `${index}:${message.timestamp}`);
+  const positions = converted.flatMap((message, index) =>
+    message.role === "user" && message.runtimeContextCarrier ? [index] : [],
+  );
+  const changed =
+    keys?.some((key) => !state.removedRuntimeContextKeys?.has(key)) ||
+    state.runtimeContextCarrierPositions?.some((position, index) => positions[index] !== position);
+  if (keys) {
+    state.removedRuntimeContextKeys = new Set(keys);
+  }
+  state.runtimeContextCarrierPositions = positions;
+  return Boolean(changed);
+}
+
 export function hashToolResultProjectionSnapshot(
   snapshot: ReturnType<typeof serializeCacheTtlToolResultProjections>,
 ): string {
   return sha256Hex(JSON.stringify(snapshot));
 }
 
-export function persistToolResultProjections(
+export async function persistToolResultProjections(
   state: ToolResultPromptProjectionState,
-  appendEntry: (customType: string, data: unknown) => void,
-): void {
+  appendEntry: (customType: string, data: unknown) => unknown,
+): Promise<void> {
   if (state.frozen.size === 0) {
     return;
   }
@@ -149,7 +173,7 @@ export function persistToolResultProjections(
   if (hash === state.lastWrittenSnapshotHash) {
     return;
   }
-  appendEntry("openclaw.cache-ttl", snapshot);
+  await appendEntry("openclaw.cache-ttl", snapshot);
   // A failed owned write must leave the snapshot eligible for persistence.
   state.lastWrittenSnapshotHash = hash;
 }

@@ -20,6 +20,7 @@ import {
   isCoreQuotaExhausted,
   isGraphqlQuotaExhausted,
 } from "../../scripts/pr-lib/gh-api-preflight.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
@@ -333,10 +334,10 @@ function makeMismatchedWrapperRepo({
   const git = createWrapperGit(fixtureEnv);
   // Copy private object stores before creating worktrees, whose absolute
   // back-links must refer to this fixture. No refs or mutable files are shared.
-  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-  cpSync(template.bin, bin, copyOptions);
-  cpSync(template.canonical, canonical, copyOptions);
-  cpSync(template.origin, origin, copyOptions);
+  // PATH stubs and canonical scripts/pr are executed directly.
+  copyTreeCloseOnExec(template.bin, bin);
+  copyTreeCloseOnExec(template.canonical, canonical);
+  cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
 
@@ -578,6 +579,34 @@ describe("scripts/pr wrappers", () => {
       expect(result.stdout).toContain("Usage:");
       expect(result.stderr).not.toContain("only support PRs targeting main");
     }
+  });
+
+  itPosix("forwards explicit stale-head auto recovery only with a replacement head", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    writeFileSync(join(fixture.bin, "gh"), baseBranchGhStub("main"));
+    writeFileSync(
+      join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+      `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+    );
+    const oid = "a".repeat(40);
+    const replacement = "b".repeat(40);
+    const result = spawnSync(
+      join(fixture.canonical, "scripts/pr"),
+      [
+        "merge-recover",
+        "123",
+        oid,
+        "--confirmed-operator-recovery",
+        "--replacement-head",
+        replacement,
+        "--auto-merge",
+      ],
+      { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(result.stdout).toBe(
+      `<123>\n<true>\n<${oid}>\n<${replacement}>\n<>\n<>\n<false>\n<>\n<>\n<false>\n`,
+    );
   });
 
   itPosix("dispatches public correction commands to the explicit native owners", () => {

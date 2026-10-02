@@ -34,6 +34,15 @@ describe("outbound message planning", () => {
       chunkMode: "newline",
       expected: ["first", "second"],
     },
+    ...[0, -1].map((limit) => ({
+      name: `Markdown paragraphs with disabled limit ${limit}`,
+      text: "```txt\ncontent\n```\n\nafter",
+      limit,
+      chunker: chunkMarkdownText,
+      chunkerMode: "markdown" as const,
+      chunkMode: "newline" as const,
+      expected: ["```txt\ncontent\n```\n\nafter"],
+    })),
     {
       name: "fenced Markdown",
       text: "```txt\naa\nbb\ncc\n```",

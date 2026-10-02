@@ -28,12 +28,16 @@ import {
 } from "./openclaw-agent-db.paths.js";
 import type {
   AgentDatabaseExecutionFileIdentity,
-  AgentDatabaseGenerationClaim,
+  AgentDatabaseExecutionScope,
   AgentDatabaseRequestExecutionSource,
+  OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import {
+  createAgentDatabaseExecutionCapture,
+  type IncognitoAgentExecutionOwner,
+} from "./openclaw-agent-execution-incognito.js";
+import {
   createAgentDatabaseNativeGeneration,
-  type AgentDatabaseExecutionScope,
   type AgentDatabaseNativeGeneration,
 } from "./openclaw-agent-execution-native.js";
 import {
@@ -52,29 +56,8 @@ import {
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
 
-export type OpenClawAgentDatabaseExecution = {
-  readonly agentId: string;
-  readonly path: string;
-  /** The accepted native receipt; reading this never adopts the current pathname. */
-  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
-  assertCurrent(): void;
-  captureGenerationClaim(): AgentDatabaseGenerationClaim;
-  /** Initialize first-use storage through the same admitted native owner. */
-  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
-  /** Admit a write against existing storage; a missing store remains missing. */
-  runExisting<T>(
-    source: AgentDatabaseRequestExecutionSource,
-    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    options?: { retireNativeOnFailure: true },
-  ): Promise<T | undefined>;
-  /**
-   * Join this reference's work; native cleanup failures remain with its resource owner.
-   * The owner may retain one bounded idle generation.
-   */
-  release(): Promise<void>;
-};
-
 type ExecutionOwner = {
+  readonly kind: "file";
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   borrow(
@@ -90,12 +73,18 @@ type ExecutionOwner = {
 const log = createSubsystemLogger("state/agent-db");
 // References are derived; the canonical agent and shared resource owners govern retirement.
 const executionState = resolveGlobalSingleton<{
-  owners: Map<string, ExecutionOwner>;
+  owners: Map<string, ExecutionOwner | IncognitoAgentExecutionOwner>;
   // The slot stays occupied during eviction and after failed cleanup.
   idle?: ExecutionOwner;
 }>(Symbol.for("openclaw.agentDatabaseExecutionOwners"), () => ({ owners: new Map() }));
 const executions = executionState.owners;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
+
+/** File captures stay synchronous; explicit ephemeral targets await their pinned actor. */
+export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutionCapture(
+  executions,
+  captureFileAgentDatabaseExecution,
+);
 
 function supportsAgentDatabaseExecutionScope(options: OpenClawAgentDatabaseOptions): boolean {
   return (
@@ -116,7 +105,7 @@ export function supportsOpenClawAgentDatabaseExecution(
 }
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
-export function captureOpenClawAgentDatabaseExecution(
+function captureFileAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: {
     expectedIdentity?: AgentDatabaseExecutionFileIdentity;
@@ -165,6 +154,9 @@ export function captureOpenClawAgentDatabaseExecution(
         requestedPath: constraints.requestedPath,
       });
     }
+  }
+  if (existing.kind !== "file") {
+    throw new Error("Agent namespace belongs to an incognito execution owner");
   }
   if (existing.agentId !== agentId) {
     throw new Error(
@@ -433,6 +425,7 @@ function createAgentDatabaseExecution(
     }
   }
   const owner: ExecutionOwner = {
+    kind: "file",
     agentId,
     get sharedDatabaseKey() {
       return context.admission.identity.key;
@@ -521,6 +514,25 @@ function createAgentDatabaseExecution(
         }
         assertReferenceCurrent();
       };
+      const captureGenerationClaim = () => {
+        assertBorrowed();
+        const captured = generation;
+        if (!captured) {
+          throw new Error("Agent database execution has no admitted generation");
+        }
+        const claim = captured.captureClaim();
+        return {
+          identity: claim.identity,
+          incarnation: claim.incarnation,
+          assertCurrent() {
+            assertBorrowed();
+            if (generation !== captured) {
+              throw new Error("Agent database execution generation was replaced");
+            }
+            claim.assertCurrent();
+          },
+        };
+      };
       return {
         agentId,
         path: borrowedPath,
@@ -529,24 +541,18 @@ function createAgentDatabaseExecution(
           return fileIdentity;
         },
         assertCurrent: assertBorrowed,
-        captureGenerationClaim() {
+        captureGenerationClaim,
+        capturePreparedGenerationClaim() {
           assertBorrowed();
-          const captured = generation;
-          if (!captured) {
-            throw new Error("Agent database execution has no admitted generation");
+          if (
+            agentDatabaseLifecycle.pending.has(pathname) ||
+            nativeClosing ||
+            cleanupFailure ||
+            !generation?.isPrepared()
+          ) {
+            return undefined;
           }
-          const claim = captured.captureClaim();
-          return {
-            identity: claim.identity,
-            incarnation: claim.incarnation,
-            assertCurrent() {
-              assertBorrowed();
-              if (generation !== captured) {
-                throw new Error("Agent database execution generation was replaced");
-              }
-              claim.assertCurrent();
-            },
-          };
+          return captureGenerationClaim();
         },
         async prepare(source, signal) {
           assertBorrowed();

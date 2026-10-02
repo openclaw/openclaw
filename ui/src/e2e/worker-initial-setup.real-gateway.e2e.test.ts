@@ -173,7 +173,7 @@ suite.define(() => {
               timestamp: Date.now(),
             }),
           );
-          createWorkerSessionPlacementGate(placements).updateAckCursors({
+          await createWorkerSessionPlacementGate(placements).updateAckCursors({
             claim: request.turnClaim,
             transcriptSeq: launched.length * 2,
             liveSeq: launched.length,

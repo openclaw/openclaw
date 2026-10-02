@@ -182,7 +182,6 @@ describe("doctor invalid config process exit", () => {
       const configPath = path.join(stateDir, "openclaw.json");
       const approvalsPath = path.join(stateDir, "exec-approvals.json");
       const knowledgePath = path.join(root, "knowledge");
-      const legacyIndexPath = path.join(root, "legacy-memory.sqlite");
       const env = createDoctorEnv(root, stateDir, configPath);
 
       fs.mkdirSync(stateDir, { recursive: true });
@@ -199,7 +198,7 @@ describe("doctor invalid config process exit", () => {
                   sources: ["memory", "sessions"],
                   extraPaths: [knowledgePath],
                   experimental: { sessionMemory: true },
-                  store: { path: legacyIndexPath, vector: { enabled: false } },
+                  store: { vector: { enabled: false } },
                   query: { maxResults: 8 },
                 },
                 memory: {
@@ -257,7 +256,7 @@ describe("doctor invalid config process exit", () => {
       expect(output).toContain("Doctor complete.");
       expect(output).not.toContain(STARTUP_RECOVERY);
       expect(output).not.toContain("Building Control UI assets");
-      expect(output).toContain("Merged agents.entries.jup.memorySearch");
+      expect(output).toContain("Merged agents.list[0].memorySearch");
 
       const repairedConfig = JSON.parse(fs.readFileSync(configPath, "utf8")) as OpenClawConfig;
       expect(repairedConfig.agents).not.toHaveProperty("list");

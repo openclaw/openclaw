@@ -2,6 +2,7 @@
  * Gateway post-attach startup task tests.
  */
 import "./server-worker-free.test-support.js";
+import "./server-startup-background.test-support.js";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +12,6 @@ import {
 } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
@@ -150,10 +150,6 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-vi.mock("../agents/session-dirs.js", () => ({
-  resolveAgentSessionDirs: vi.fn(async () => []),
-}));
-
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   activateSubagentRegistry: hoisted.activateSubagentRegistry,
 }));
@@ -255,7 +251,6 @@ const {
   startGatewayPostAttachRuntime: startGatewayPostAttachRuntimeImpl,
   startGatewaySidecars: startGatewaySidecarsImpl,
 } = await import("./server-startup-post-attach.js");
-const sentinelStartup = await import("./server-startup-restart-sentinel.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-method-policy.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
@@ -1111,19 +1106,6 @@ describe("startGatewayPostAttachRuntime", () => {
         "gateway update check failed to initialize: Error: boom",
       );
     });
-  });
-
-  it("refreshes only an existing restart sentinel", async () => {
-    await expect(sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent()).resolves.toBeNull();
-    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
-
-    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
-    await writeRestartSentinel(sentinel, testState.env);
-    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
-    await expect(sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent()).resolves.toBe(
-      sentinel,
-    );
-    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
   });
 
   it("publishes Control UI cleanup before pending plugin startup", async () => {
@@ -3434,7 +3416,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     isNixMode: false,
     broadcastToConnIds: vi.fn(),
     getClientConnIds: () => new Set(),
-    controlUiBasePath: "/",
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginManifestRecords: [],

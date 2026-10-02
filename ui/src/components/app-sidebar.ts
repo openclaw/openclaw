@@ -13,6 +13,7 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { t } from "../i18n/index.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
 import "./session-menu.ts";
+import "./mcp-app-catalog.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
@@ -562,6 +563,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
                   ${renderAppSidebarHomeRow(this)}
+                  <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
                   ${repeat(sidebarZone.entries, serializeSidebarEntry, (entry) =>
                     renderAppSidebarZoneEntry(
                       this,

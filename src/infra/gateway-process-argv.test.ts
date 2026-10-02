@@ -133,12 +133,23 @@ describe("classifyOpenClawArgv", () => {
   it("recognizes Bun run after runtime flags without consuming a script named run twice", () => {
     const owned = scriptFixture("dist/index.js");
     const other = scriptFixture("run", "unrelated-service");
-    expect(classifyOpenClawArgv(["bun", "--watch", "run", owned.script, "gateway"])).toEqual({
-      kind: "openclaw",
-      entryIndex: 3,
-    });
+    for (const flag of ["--watch", "--hot", "--no-install"]) {
+      expect(classifyOpenClawArgv(["bun", flag, "run", owned.script, "gateway"])).toEqual({
+        kind: "openclaw",
+        entryIndex: 3,
+      });
+    }
     expect(classifyOpenClawArgv(["bun", "run", "run", owned.script], { cwd: other.root })).toEqual({
       kind: "other",
+    });
+  });
+
+  it.each(["node", "bun"])("keeps unknown %s options unclassified", (runtime) => {
+    const owned = scriptFixture("dist/index.js");
+    expect(classifyOpenClawArgv([runtime, "--unknown-option", owned.script, "gateway"])).toEqual({
+      kind: "unclassified",
+      cause: "runtime-syntax",
+      reason: "unsupported runtime option --unknown-option",
     });
   });
 

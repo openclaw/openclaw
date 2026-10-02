@@ -71,6 +71,21 @@ public final class OpenClawWebConversation {
     public var mode = Mode.probing
     public var state: NativeConversationState?
     public var navigate: ((NativeConversationContext, NavigationSource) -> Void)?
+    public var sessionFacts: [NativeConversationSessionFacts.Session]?
+    public var openSessionActions: ((NativeConversationContext) -> Void)?
+
+    public func sidebarFacts(for context: NativeConversationContext) -> NativeConversationSessionFacts.Session? {
+        guard self.mode == .web else { return nil }
+        return self.sessionFacts?.first { $0.context == context }
+    }
+
+    public func sessionActions(for context: NativeConversationContext) -> (() -> Void)? {
+        guard self.mode == .web, let openSessionActions = self.openSessionActions else { return nil }
+        return { [weak self] in
+            guard let self, self.mode == .web else { return }
+            openSessionActions(context)
+        }
+    }
 
     public init() {}
     public var ownsConversation: Bool {
@@ -162,7 +177,7 @@ extension OpenClawChatViewModel {
             if ok { self.loadWebConversationChrome()
                 self.refreshAgentsIfRequested()
             }
-        case .routeChanged, .seqGap:
+        case .routeChanged, .reconnected, .seqGap:
             self.invalidateSessionMetadataReadiness()
             self.invalidateOutboxBranchReconciliation()
             self.invalidateModelChoices()
@@ -175,12 +190,8 @@ extension OpenClawChatViewModel {
         case let .sessionsChanged(change):
             self.applySessionChangeProjection(change, ownedSwarmActivityNote: false)
             if change.reason == "groups" { self.sessionGroupsRevision += 1 }
-        case let .questionRequested(question):
-            self.upsertQuestion(question)
-            self.reconcileQuestionsAfterEvent()
-        case let .questionResolved(resolved):
-            self.resolveQuestionEvent(resolved)
-            self.reconcileQuestionsAfterEvent()
+        case .questionRequested, .questionResolved:
+            self.handleQuestionEvent(evt)
         case let .sessionObserver(digest):
             self.sessions = ChatSessionSidebarModel.applying(
                 observerDigest: digest,

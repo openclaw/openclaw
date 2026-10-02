@@ -1,5 +1,5 @@
-import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 /** Retains cancellation selection, session facts, and exact dispatch ownership. */
+import { isSessionDeliveryGenerationRevokedError } from "../../../config/sessions/session-delivery-generation.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -7,8 +7,10 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
@@ -23,12 +25,12 @@ import {
 } from "./subagent-control-session.js";
 import type { SubagentCancellationControl } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import { listRunsForControllerFromRuns } from "./subagent-registry-queries.js";
 import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { compareSubagentRunGeneration } from "./subagent-run-generation.js";
+import { compareSubagentRunGeneration, isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 type KillBinding = {
   entry: SubagentRunRecord;
@@ -60,7 +62,9 @@ export type KillScope = {
   stateContext: OpenClawStateWorkerContext;
 };
 
-export type KillPublicationPreparation = (publish: () => void) => Promise<void>;
+export type KillPublicationPreparation = (
+  publish: (prepareRows?: (publishResult: () => void) => Promise<void>) => Promise<void>,
+) => Promise<void>;
 
 export async function withSubagentKillScope<T>(
   params: KillSelection,
@@ -78,7 +82,8 @@ export async function withSubagentKillScope<T>(
     prepareRead: params.prepareRead,
     assertCurrent,
   };
-  const selected = new Set<string>();
+  const selected = new Map<string, Set<string | undefined>>();
+  let selectedCount = 0;
   const releaseSessions: Array<SubagentKillSession["release"]> = [];
   const releaseRetirements: Array<() => void> = [];
   const completeRetirementPublications: Array<() => void> = [];
@@ -102,19 +107,12 @@ export async function withSubagentKillScope<T>(
     const controller = owner ? { ...owner } : undefined;
     for (const snapshot of runs) {
       assertCurrent();
-      const entry = getLatestOwnedSubagentRun(
-        snapshot.childSessionKey,
-        snapshot.requesterAgentId,
-        params.cfg,
-      );
-      if (
-        !entry ||
-        entry.childSessionKey !== snapshot.childSessionKey ||
-        entry.runId !== snapshot.runId ||
-        entry.generation !== snapshot.generation ||
-        entry.createdAt !== snapshot.createdAt ||
-        selected.has(entry.childSessionKey)
-      ) {
+      const childOwner = parseAgentSessionKey(snapshot.childSessionKey)
+        ? undefined
+        : (snapshot.childAgentId ?? resolveSubagentRequesterAgentId(params.cfg, snapshot));
+      const entry = getLatestOwnedSubagentRun(snapshot.childSessionKey, childOwner, params.cfg);
+      const selectedForChild = selected.get(snapshot.childSessionKey) ?? new Set();
+      if (!entry || !isSameSubagentRunOwner(entry, snapshot) || selectedForChild.has(childOwner)) {
         continue;
       }
       const ownerCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) =>
@@ -126,7 +124,9 @@ export async function withSubagentKillScope<T>(
       if (!ownerCurrent(entry, false) || !isCurrentSubagentRun(entry, params.cfg)) {
         continue;
       }
-      selected.add(entry.childSessionKey);
+      selectedForChild.add(childOwner);
+      selected.set(entry.childSessionKey, selectedForChild);
+      selectedCount += 1;
       const errors = new Set<string>();
       let session: SubagentKillSession | undefined;
       const ownsSessionIncarnation = () => {
@@ -143,45 +143,57 @@ export async function withSubagentKillScope<T>(
           throw error;
         }
       };
-      const { childSessionKey, requesterAgentId } = entry;
-      const latest = () => getLatestOwnedSubagentRun(childSessionKey, requesterAgentId, params.cfg);
-      const retirement = subagentRuns.captureRetirement(
-        entry,
-        (candidate) => latest() === candidate,
+      const { childSessionKey } = entry;
+      const latest = () => getLatestOwnedSubagentRun(childSessionKey, childOwner, params.cfg);
+      const retirement = subagentRuns.captureRetirement(entry, (candidate) =>
+        isSameSubagentRunOwner(latest(), candidate),
       );
       completeRetirementPublications.push(retirement.completePublication);
       releaseRetirements.push(retirement.release);
-      const bind = (current: SubagentRunRecord): KillBinding => {
-        const { generation, createdAt } = retirement.observation;
-        const ownsRun = () =>
-          retirement.observation.entry === current &&
-          current.generation === generation &&
-          current.createdAt === createdAt &&
+      const selectedEntry = () => retirement.observation.entry;
+      const ownsRun = () => {
+        const observed = retirement.observation;
+        const current = observed.entry;
+        return (
+          current !== undefined &&
+          isSameSubagentRunOwner(current, entry) &&
           isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
-          (subagentRuns.get(current.runId) === current ||
-            retirement.observation.state === "retired");
-        const isCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) =>
-          retirement.observation.entry === candidate &&
-          ownerCurrent(candidate, requirePreparedSession) &&
-          isCurrentSubagentRun(candidate, params.cfg) &&
-          (candidate !== current || ownsRun()) &&
-          (!requirePreparedSession || ownsSessionIncarnation());
-        const canTraverse = (requirePreparedSession = true) => {
-          if (!ownerCurrent(current, requirePreparedSession) || !ownsRun()) {
-            return false;
-          }
-          const replacement = latest();
-          return (
-            (replacement === current ||
-              (retirement.observation.state === "retired" &&
-                (!replacement || compareSubagentRunGeneration(replacement, current) < 0))) &&
-            (!requirePreparedSession || ownsSessionIncarnation())
-          );
-        };
-        return { entry: current, isCurrent, ownsRun, canTraverse };
+          (isSameSubagentRunOwner(getCurrentSubagentRunOwner(subagentRuns, current), current) ||
+            observed.state === "retired")
+        );
+      };
+      const isCurrent = (candidate: SubagentRunRecord, requirePreparedSession = true) => {
+        const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+        return (
+          current !== undefined &&
+          isSameSubagentRunOwner(candidate, entry) &&
+          isSameSubagentRunOwner(current, entry) &&
+          ownsRun() &&
+          ownerCurrent(current, requirePreparedSession) &&
+          isCurrentSubagentRun(current, params.cfg) &&
+          (!requirePreparedSession || ownsSessionIncarnation())
+        );
+      };
+      const canTraverse = (requirePreparedSession = true) => {
+        const current = selectedEntry();
+        if (!current || !ownerCurrent(current, requirePreparedSession) || !ownsRun()) {
+          return false;
+        }
+        const replacement = latest();
+        return (
+          (isSameSubagentRunOwner(replacement, current) ||
+            (retirement.observation.state === "retired" &&
+              (!replacement || compareSubagentRunGeneration(replacement, current) < 0))) &&
+          (!requirePreparedSession || ownsSessionIncarnation())
+        );
       };
       const tree: KillTree = {
-        ...bind(entry),
+        get entry() {
+          return selectedEntry() ?? entry;
+        },
+        isCurrent,
+        ownsRun,
+        canTraverse,
         session,
         children: [],
         errors,
@@ -194,12 +206,13 @@ export async function withSubagentKillScope<T>(
         tree,
         prepare: async () => {
           try {
+            const selectedRun = tree.entry;
             session = await prepareSubagentKillSession(
               params.cfg,
-              entry.childSessionKey,
+              selectedRun.childSessionKey,
               () => assertSubagentRegistryWriteSourceCurrent(stateContext),
-              entry.execution.transcriptTarget,
-              entry.childAgentId,
+              selectedRun.execution.transcriptTarget,
+              selectedRun.childAgentId,
             );
             releaseSessions.push(session.release);
             if (!tree.canTraverse(false)) {
@@ -323,7 +336,7 @@ export async function withSubagentKillScope<T>(
         for (const tree of trees) {
           await refreshTree(tree);
         }
-        return selected.size;
+        return selectedCount;
       },
     };
     await scope.refresh();
@@ -340,10 +353,27 @@ export async function withSubagentKillScope<T>(
         published = publish(result, trees);
       }
     };
+    // Exact-run cancellation publishes one root's outcome. Join session writers
+    // through row preparation and the synchronous generation check, after drain.
+    const publicationSession = publish ? trees[0]?.session : undefined;
+    const publishPrepared = async (prepareRows?: (publishResult: () => void) => Promise<void>) => {
+      const prepareResult = async () => {
+        if (prepareRows) {
+          await prepareRows(publishResult);
+        } else {
+          publishResult();
+        }
+      };
+      if (publicationSession) {
+        await publicationSession.withPublication(prepareResult);
+      } else {
+        await prepareResult();
+      }
+    };
     if (preparePublication) {
-      await preparePublication(publishResult);
+      await preparePublication(publishPrepared);
     } else {
-      publishResult();
+      await publishPrepared();
     }
     if (!publicationConsumed) {
       throw new Error("Subagent cancellation publication did not consume its prepared scope");

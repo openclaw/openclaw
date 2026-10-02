@@ -1158,6 +1158,7 @@ const nodeTestShards = targetNodeTestShards
               "src/agents/sessions/tools/index.test.ts",
               "src/agents/sessions/tools/grep.byte-path.test.ts",
               "src/agents/filesystem-tools-output-contract.test.ts",
+              "test/scripts/check-database-worker-ratchet.test.ts",
             ].some((test) => matchesGlob(test, pattern)),
           );
         }
@@ -1285,6 +1286,25 @@ const additionalChecks = [
       ? changedScopeHasPromptSnapshotImpact
       : narrowCheckScope.additionalGroups.includes(group)),
 );
+// Move an already-selected boundary row; sharing must never add another CI job.
+const sharedSdkDeclarations =
+  workflowEventName === "pull_request" &&
+  isCanonicalRepository &&
+  runnerProfile === "hybrid" &&
+  runCheckPlan &&
+  runNodeFull &&
+  !releaseFastLane &&
+  !releaseGate &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  existsSync("scripts/ci-sdk-declarations.mts") &&
+  additionalChecks.some(({ group }) => group === "extension-package-boundary");
+if (sharedSdkDeclarations) {
+  additionalChecks.splice(
+    additionalChecks.findIndex(({ group }) => group === "extension-package-boundary"),
+    1,
+  );
+}
 const checkTasks = [
   { check_name: "check-guards", task: "guards", runner: "blacksmith-4vcpu-ubuntu-2404" },
   { check_name: "check-npm-lock", task: "npm-lock", runner: "blacksmith-4vcpu-ubuntu-2404" },
@@ -1313,15 +1333,6 @@ const checkTasks = [
     : narrowCheckScope.checkTasks.includes(row.task);
 });
 
-// Move dependencies only when the preflight-only family is admitted.
-if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  const index = checkTasks.findIndex(({ task }) => task === "dependencies");
-  if (index >= 0) {
-    const { task, ...row } = checkTasks.splice(index, 1)[0];
-    additionalChecks.push({ ...row, group: task });
-  }
-}
-
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
   !frozenTarget &&
@@ -1332,6 +1343,17 @@ if (
   const coercionTask = checksFastCoreTasks.findIndex(({ task }) => task === "coercion-helpers");
   if (coercionTask >= 0) {
     checksFastCoreTasks.splice(coercionTask, 1);
+  }
+}
+
+// These rows need no compiler plan; retain their existing full-check placement.
+if (runCheckPlan && runNodeFull && !releaseFastLane) {
+  for (const task of ["guards", "dependencies"]) {
+    const index = checkTasks.findIndex((row) => row.task === task);
+    if (index >= 0) {
+      const { task: group, ...row } = checkTasks.splice(index, 1)[0];
+      additionalChecks.push({ ...row, group });
+    }
   }
 }
 
@@ -1425,6 +1447,7 @@ const manifest = {
     : "",
   changed_core_test_paths_json: changedCoreTestPaths ? JSON.stringify(changedCoreTestPaths) : "",
   run_check_additional: runNodeFull && !releaseFastLane && additionalChecks.length > 0,
+  shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
   run_format_check: runFormatCheck,
@@ -1553,12 +1576,7 @@ const hybridHostedEligible =
   isCanonicalRepository &&
   ["hybrid", "runson"].includes(process.env.OPENCLAW_CI_RUNNER_BACKEND ?? "") &&
   process.env.GITHUB_RUN_ATTEMPT === "1" &&
-  (eventName === "push" ||
-    ciQualification ||
-    (eventName === "pull_request" &&
-      ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"].includes(
-        process.env.OPENCLAW_CI_AUTHOR_ASSOCIATION ?? "",
-      )));
+  (eventName === "push" || ciQualification || eventName === "pull_request");
 let hybridHostedBaseRows = 0;
 let hybridHostedOffloadRows = 0;
 if (hybridHostedEligible) {
@@ -1657,6 +1675,7 @@ const hybridHostedOffload =
 // Reserve the previous check-row budget so retaining the boundary on Blacksmith
 // does not expand admission for other hosted checks. Report only actual rows below.
 const hybridHostedCheckRows =
+  Number(sharedSdkDeclarations) +
   (manifest.run_check && checkTasks.some(({ task }) => task === "dependencies") ? 1 : 0) +
   (manifest.run_check &&
   checkTasks.some(({ task }) => task === "test-types") &&
@@ -1670,11 +1689,13 @@ const hybridHostedCheckRows =
         ),
       ).length
     : 0);
-const retainedBoundaryRows = manifest.run_check_additional
-  ? manifest.check_additional_matrix.include.filter(
-      (row) => row.group === "extension-package-boundary",
-    ).length
-  : 0;
+const retainedBoundaryRows =
+  Number(sharedSdkDeclarations) +
+  (manifest.run_check_additional
+    ? manifest.check_additional_matrix.include.filter(
+        (row) => row.group === "extension-package-boundary",
+      ).length
+    : 0);
 const hybridHostedExistingRows =
   hybridHostedBaseRows + (hybridHostedOffload ? hybridHostedOffloadRows : 0);
 // R1's slowest admitted hosted check took 496s including setup. A full
@@ -1750,6 +1771,7 @@ manifest.pr_job_count =
   workflowEventName !== "pull_request"
     ? 0
     : 2 +
+      countPrJobs(sharedSdkDeclarations) +
       countPrJobs(manifest.run_check_plan) +
       manifest.pr_check_job_count +
       [

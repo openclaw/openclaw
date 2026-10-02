@@ -1,67 +1,58 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
-import type { SessionRowProjection } from "../session-row-projection.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import {
   ArtifactSessionResolutionError,
   type ArtifactQuery,
+  type ArtifactSessionAccess,
   prepareArtifactSessionResolution,
 } from "./artifacts-session-resolution.js";
-import type { GatewayClient } from "./types.js";
 
-/** Retain the selected physical transcript independently of later query resolution. */
+/** Authorization and transcript reads retain the same selected physical target. */
 export async function prepareArtifactSessionRead(
   query: ArtifactQuery,
-  getRuntimeConfig: () => OpenClawConfig | undefined,
-  client: GatewayClient | null,
-  projection?: SessionRowProjection,
+  access: ArtifactSessionAccess,
 ) {
-  const resolveSession = await prepareArtifactSessionResolution(query, projection);
-  const resolved = resolveSession(getRuntimeConfig(), client);
-  if (!resolved) {
+  const resolveSession = await prepareArtifactSessionResolution(query, access.projection);
+  const selected = await resolveSession(access);
+  if (!selected) {
     return undefined;
   }
-  const { sessionKey } = resolved;
-  const unscopedAgentId = parseAgentSessionKey(sessionKey) ? undefined : resolved.agentId;
-  const readEntry = () =>
-    unscopedAgentId
-      ? loadGatewaySessionEntryReadOnly(sessionKey, { agentId: unscopedAgentId })
-      : loadGatewaySessionEntryReadOnly(sessionKey);
-  const { storePath, entry } = readEntry();
+  const { sessionKey, release } = selected;
+  const initial = selected.readCurrent();
+  const { target } = initial;
+  const entry = target?.entry;
   const sessionId = entry?.sessionId;
+  const storePath = initial.sourcePath ?? target?.storePath;
+  const lifecycleRevision = entry?.lifecycleRevision;
+  const assertCurrent = () => {
+    const current = selected.readCurrent();
+    if (
+      (current.sourcePath ?? current.target?.storePath) !== storePath ||
+      current.target?.entry.sessionId !== sessionId ||
+      current.target?.entry.lifecycleRevision !== lifecycleRevision
+    ) {
+      throw new ArtifactSessionResolutionError(
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "session changed while reading artifact; reload the conversation",
+          { retryable: true },
+        ),
+      );
+    }
+  };
   if (!sessionId || !storePath) {
-    return { sessionKey };
+    return { sessionKey, assertCurrent, release };
   }
-  const lifecycleRevision = entry.lifecycleRevision;
   return {
     sessionKey,
     scope: {
-      agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+      agentId: initial.sourceAgentId ?? selected.agentId,
       sessionEntry: entry,
       sessionId,
       sessionKey,
       storePath,
     } satisfies SessionTranscriptReadScope,
-    assertCurrent: () => {
-      const authorized = resolveSession(getRuntimeConfig(), client);
-      const current = readEntry();
-      if (
-        authorized?.sessionKey !== sessionKey ||
-        authorized.agentId !== resolved.agentId ||
-        current.storePath !== storePath ||
-        current.entry?.sessionId !== sessionId ||
-        current.entry.lifecycleRevision !== lifecycleRevision
-      ) {
-        throw new ArtifactSessionResolutionError(
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "session changed while reading artifact; reload the conversation",
-            { retryable: true },
-          ),
-        );
-      }
-    },
+    assertCurrent,
+    release,
   };
 }

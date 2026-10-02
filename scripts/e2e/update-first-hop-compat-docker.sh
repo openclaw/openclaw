@@ -8,7 +8,6 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 
 if [ "${OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP:-0}" != "1" ]; then
   echo "blocked destructive package self-update; set OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 to run" >&2
@@ -105,11 +104,9 @@ for version in "${SOURCE_VERSIONS[@]}"; do
     cp "$ARTIFACT_DIR/second-hop-fixture.json" "$lane_artifact_dir/second-hop-fixture.json"
     npm pack "openclaw@$version" --ignore-scripts --json --min-release-age=0 \
       --pack-destination "$FIXTURE_ROOT/source" >"$lane_artifact_dir/source-pack.json"
-    source_package="$FIXTURE_ROOT/source/$(node -e '
-      const result = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
-      if (!Array.isArray(result) || result.length !== 1 || !result[0]?.filename) process.exit(1);
-      process.stdout.write(result[0].filename);
-    ' "$lane_artifact_dir/source-pack.json")"
+    source_package="$FIXTURE_ROOT/source/$(
+      node "$FIXTURE_HELPER" pack-filename "$lane_artifact_dir/source-pack.json"
+    )"
   fi
   chmod a+rwx "$lane_artifact_dir"
   node "$FIXTURE_HELPER" source "$FIXTURE_ROOT/packages/original/package" \

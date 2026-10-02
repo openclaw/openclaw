@@ -8,19 +8,12 @@ import {
   type SystemChangesListParams,
   type SystemChangesListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  CONFIG_AUDIT_MAX_ENTRIES,
-  CONFIG_AUDIT_SCOPE,
-  type ConfigAuditRecord,
-} from "../../config/io.audit.js";
+import { CONFIG_AUDIT_SCOPE, type ConfigAuditRecord } from "../../config/io.audit.js";
 import { consumeRootOptionToken, FLAG_TERMINATOR } from "../../infra/cli-root-options.js";
-import { createSqliteAuditRecordStore } from "../../infra/sqlite-audit-record-store.js";
+import { createSqliteAuditRecordReader } from "../../infra/sqlite-audit-record-store.async.js";
 import type { SequencedSqliteAuditRecordEntry } from "../../infra/sqlite-audit-record.kernel.js";
-import {
-  SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
-  SYSTEM_AGENT_AUDIT_SCOPE,
-  type SystemAgentAuditEntry,
-} from "../../system-agent/audit.js";
+import { SYSTEM_AGENT_AUDIT_SCOPE, type SystemAgentAuditEntry } from "../../system-agent/audit.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -64,7 +57,7 @@ type AuditStore<T> = {
   latest: (params: {
     limit: number;
     beforeSequence?: number;
-  }) => SequencedSqliteAuditRecordEntry<T>[];
+  }) => Promise<SequencedSqliteAuditRecordEntry<T>[]>;
 };
 
 function encodeCursor(cursor: ChangeCursor): string {
@@ -113,10 +106,6 @@ function transitionKey(before: string | null | undefined, after: string | null |
     return undefined;
   }
   return JSON.stringify([before ?? null, after ?? null]);
-}
-
-function recordTime(value: string, fallback: number): number {
-  return parseDateStringTimestampMs(value) ?? fallback;
 }
 
 function classifyConfigWriteSource(record: Extract<ConfigAuditRecord, { event: "config.write" }>) {
@@ -185,7 +174,7 @@ function toSystemAgentCandidate(
   return {
     entry: {
       id: `${SYSTEM_AGENT_AUDIT_SCOPE}:${record.sequence}`,
-      at: recordTime(record.value.timestamp, record.createdAt),
+      at: parseDateStringTimestampMs(record.value.timestamp) ?? record.createdAt,
       kind: "operation",
       source: "system-agent",
       summary: record.value.summary,
@@ -208,7 +197,7 @@ function toConfigCandidate(
     return {
       entry: {
         id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
-        at: recordTime(value.ts, record.createdAt),
+        at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
         kind: "external-edit",
         source: "external",
         summary: summarizePaths("Configuration edited outside OpenClaw", changedPaths),
@@ -229,7 +218,7 @@ function toConfigCandidate(
   return {
     entry: {
       id: `${CONFIG_AUDIT_SCOPE}:${record.sequence}`,
-      at: recordTime(value.ts, record.createdAt),
+      at: parseDateStringTimestampMs(value.ts) ?? record.createdAt,
       kind: "config-write",
       source,
       summary: configWriteSummary(source, changedPaths),
@@ -241,21 +230,17 @@ function toConfigCandidate(
   };
 }
 
-function scanEligible<T>(params: {
+async function scanEligible<T>(params: {
   beforeSequence: number;
   target: number;
-  latest: (params: {
-    limit: number;
-    beforeSequence?: number;
-  }) => SequencedSqliteAuditRecordEntry<T>[];
+  latest: AuditStore<T>["latest"];
   include: (entry: SequencedSqliteAuditRecordEntry<T>) => boolean;
-}): EligibleScan<T> {
+}): Promise<EligibleScan<T>> {
   const entries: SequencedSqliteAuditRecordEntry<T>[] = [];
   let beforeSequence = params.beforeSequence;
   let exhausted = false;
   let loadedRawEntries = 0;
-  // Journal history is served on the gateway event loop. Bound each scope even
-  // when nearly every retained row is an ineligible observation or failed write.
+  // Bound each scope even when most rows are observations or failed writes.
   while (
     entries.length < params.target &&
     loadedRawEntries < SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE
@@ -264,7 +249,7 @@ function scanEligible<T>(params: {
       CHANGE_SCAN_BATCH_SIZE,
       SYSTEM_CHANGE_MAX_RAW_SCAN_PER_SCOPE - loadedRawEntries,
     );
-    const page = params.latest({
+    const page = await params.latest({
       limit: pageLimit,
       beforeSequence,
     });
@@ -482,34 +467,30 @@ function mergeCandidates(params: {
   };
 }
 
-function initialBefore<T>(
-  latest: (params: { limit: number }) => SequencedSqliteAuditRecordEntry<T>[],
-): number {
-  const sequence = latest({ limit: 1 })[0]?.sequence;
+async function initialBefore<T>(latest: AuditStore<T>["latest"]): Promise<number> {
+  const sequence = (await latest({ limit: 1 }))[0]?.sequence;
   return sequence === undefined ? 0 : sequence + 1;
 }
 
-export function listSystemChanges(
+export async function listSystemChanges(
   params: SystemChangesListParams,
   options: {
     env?: NodeJS.ProcessEnv;
     systemStore?: AuditStore<SystemAgentAuditEntry>;
     configStore?: AuditStore<ConfigAuditRecord>;
   } = {},
-): SystemChangesListResult {
+): Promise<SystemChangesListResult> {
   const env = options.env ?? process.env;
   const systemStore =
     options.systemStore ??
-    createSqliteAuditRecordStore<SystemAgentAuditEntry>({
+    createSqliteAuditRecordReader<SystemAgentAuditEntry>({
       scope: SYSTEM_AGENT_AUDIT_SCOPE,
-      maxEntries: SYSTEM_AGENT_AUDIT_MAX_ENTRIES,
       env,
     });
   const configStore =
     options.configStore ??
-    createSqliteAuditRecordStore<ConfigAuditRecord>({
+    createSqliteAuditRecordReader<ConfigAuditRecord>({
       scope: CONFIG_AUDIT_SCOPE,
-      maxEntries: CONFIG_AUDIT_MAX_ENTRIES,
       env,
     });
   const cursor = params.beforeCursor
@@ -518,18 +499,18 @@ export function listSystemChanges(
         version: 1 as const,
         // Freeze both journal heads before scanning so page two cannot admit a
         // record inserted into the untouched scope after page one was read.
-        systemAgentBefore: initialBefore(systemStore.latest),
-        configBefore: initialBefore(configStore.latest),
+        systemAgentBefore: await initialBefore(systemStore.latest),
+        configBefore: await initialBefore(configStore.latest),
       };
   const limit = Math.min(MAX_CHANGE_LIMIT, Math.max(1, params.limit ?? DEFAULT_CHANGE_LIMIT));
   const target = limit + 1;
-  const systemScan = scanEligible({
+  const systemScan = await scanEligible({
     beforeSequence: cursor.systemAgentBefore,
     target,
     latest: systemStore.latest,
     include: () => true,
   });
-  const configScan = scanEligible({
+  const configScan = await scanEligible({
     beforeSequence: cursor.configBefore,
     target,
     latest: configStore.latest,
@@ -611,14 +592,19 @@ export function listSystemChanges(
 }
 
 export const systemChangesHandlers: GatewayRequestHandlers = {
-  "openclaw.changes.list": ({ params, respond }) => {
+  "openclaw.changes.list": async (options) => {
+    const { params, respond } = options;
     if (
       !assertValidParams(params, validateSystemChangesListParams, "openclaw.changes.list", respond)
     ) {
       return;
     }
     try {
-      respond(true, listSystemChanges(params));
+      const authority = readGatewayRequestMutationAuthority(options);
+      authority.assertCurrent();
+      const result = await listSystemChanges(params);
+      authority.assertCurrent();
+      respond(true, result);
     } catch (error) {
       respond(
         false,

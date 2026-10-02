@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
-import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
@@ -352,33 +352,28 @@ it("rejects duplicate ordinary keys introduced after store admission before filt
   });
 });
 
-it.each([undefined, "Research"])(
-  "keeps visible spawned work discoverable with group=%s",
-  async (category) => {
-    const result = await listSessionFixture({
-      cfg: { agents: { entries: { main: {} } } },
-      storePath: "/tmp/openclaw-visible-session-activity",
-      store: {
-        "agent:main:subagent:hidden": {
-          sessionId: "hidden",
-          updatedAt: 3,
-          category,
-          spawnedBy: "agent:main:discussion",
-        },
-        "agent:main:dashboard:visible": {
-          sessionId: "visible",
-          updatedAt: 2,
-          category,
-          spawnedBy: "agent:main:discussion",
-        },
-        "agent:main:discussion": { sessionId: "parent", updatedAt: 1 },
+it("keeps ungrouped visible spawned work discoverable", async () => {
+  const result = await listSessionFixture({
+    cfg: { agents: { entries: { main: {} } } },
+    storePath: "/tmp/openclaw-visible-session-activity",
+    store: {
+      "agent:main:subagent:hidden": {
+        sessionId: "hidden",
+        updatedAt: 3,
+        spawnedBy: "agent:main:discussion",
       },
-      opts: { excludeSubagents: true, limit: 1 },
-    });
-    expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:visible"]);
-    expect(result).toMatchObject({ totalCount: 2, nextOffset: 1, hasMore: true });
-  },
-);
+      "agent:main:dashboard:visible": {
+        sessionId: "visible",
+        updatedAt: 2,
+        spawnedBy: "agent:main:discussion",
+      },
+      "agent:main:discussion": { sessionId: "parent", updatedAt: 1 },
+    },
+    opts: { excludeSubagents: true, limit: 1 },
+  });
+  expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:dashboard:visible"]);
+  expect(result).toMatchObject({ totalCount: 2, nextOffset: 1, hasMore: true });
+});
 
 it("lists indexed children without inspecting unrelated resident ownership", async () => {
   await withOpenClawTestState(
@@ -391,8 +386,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
       const parent = "agent:main:parent";
       const other = "agent:main:other";
       const key = (name: string) => `agent:main:${name}`;
-      const benchmark = process.env.OPENCLAW_SESSION_PARENT_INDEX_BENCH === "1";
-      const unrelated = benchmark ? 5_000 : 96;
+      const unrelated = 96;
       const entries = new Map<string, SessionEntry>(
         Array.from({ length: unrelated }, (_, index) => [
           key(`unrelated-${index}`),
@@ -464,50 +458,17 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
         ownership.mockClear();
         expect(await list()).toEqual(first);
         const visited = new Set(ownership.mock.calls.map(([params]) => params.key));
-        const ownershipCalls = ownership.mock.calls.length;
         ownership.mockRestore();
-        const elapsed: number[] = [];
-        const samples = benchmark ? 30 : 0;
-        for (let sample = 0; sample < samples; sample++) {
-          const started = performance.now();
-          const result = await list();
-          elapsed.push(performance.now() - started);
-          expect(result).toEqual(first);
-        }
-        if (benchmark) {
-          const sorted = elapsed.toSorted((a, b) => a - b);
-          const sentinelElapsed: number[] = [];
-          for (let sample = 0; sample < samples; sample++) {
-            const started = performance.now();
-            const result = await listProjectedSessions({
-              projection,
-              opts: { ...opts, spawnedBy: "global" },
-            });
-            sentinelElapsed.push(performance.now() - started);
-            expect(result.sessions).toEqual([]);
-          }
-          const sentinels = sentinelElapsed.toSorted((a, b) => a - b);
-          console.log(
-            JSON.stringify({
-              unrelated,
-              samples,
-              visited: visited.size,
-              ownershipCalls,
-              p50Ms: sorted[Math.floor(samples / 2)],
-              p95Ms: sorted[Math.floor(samples * 0.95)],
-              sentinelP50Ms: sentinels[Math.floor(samples / 2)],
-              sentinelP95Ms: sentinels[Math.floor(samples * 0.95)],
-              checksum: createHash("sha256")
-                .update(JSON.stringify({ ...first, path: "<fixture>" }))
-                .digest("hex"),
-            }),
-          );
-        }
+        const sentinel = await listProjectedSessions({
+          projection,
+          opts: { ...opts, spawnedBy: "global" },
+        });
+        expect(sentinel.sessions).toEqual([]);
         expect([...visited].filter((sessionKey) => sessionKey.includes("unrelated-")).length).toBe(
           0,
         );
         runs.set(runtime.runId, { ...runtime, controllerSessionKey: other });
-        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        persistRegistryFixture(runs, [runtime.runId]);
         const moved = await list();
         expect(moved.sessions.map((row) => row.key)).toEqual([
           key("dashboard:persistent"),
@@ -519,7 +480,7 @@ it("lists indexed children without inspecting unrelated resident ownership", asy
           controllerSessionKey: undefined,
           requesterSessionKey: parent,
         });
-        persistSubagentRunsToDiskOrThrow(runs, [runtime.runId]);
+        persistRegistryFixture(runs, [runtime.runId]);
         expect((await list()).totalCount).toBe(4);
       } finally {
         ownership.mockRestore();

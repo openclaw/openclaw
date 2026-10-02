@@ -7,7 +7,6 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetPolicy,
   resolveSessionResetType,
-  resolveSessionWorkStartError,
   type SessionEntry,
   type SessionFreshness,
 } from "../../config/sessions.js";
@@ -19,6 +18,7 @@ import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
+  resolveAgentSessionWorkStartError,
   type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -182,7 +182,7 @@ export function prepareAgentSession(params: {
   ) {
     return undefined;
   }
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return undefined;

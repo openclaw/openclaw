@@ -78,13 +78,9 @@ extension OpenClawChatViewModel {
             self.handleSessionReactionEvent(event)
         case let .progressCardChanged(event):
             self.handleProgressCardChanged(event)
-        case let .questionRequested(question):
-            self.upsertQuestion(question)
-            self.reconcileQuestionsAfterEvent()
-        case let .questionResolved(resolved):
-            self.resolveQuestionEvent(resolved)
-            self.reconcileQuestionsAfterEvent()
-        case .routeChanged, .seqGap:
+        case .questionRequested, .questionResolved:
+            self.handleQuestionEvent(evt)
+        case .routeChanged, .reconnected, .seqGap:
             self.resetSessionReactions()
             self.invalidateSessionMetadataReadiness()
             self.syncSessionReactions(refreshMetadata: true)
@@ -93,9 +89,11 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.invalidateAgentCatalog(clear: true)
             self.refreshAgentsIfRequested()
-            if case .routeChanged = evt {
+            switch evt {
+            case .routeChanged, .reconnected:
                 self.questionAttentionOwnerID = UUID()
                 self.applyProgressCard(nil)
+            default: break
             }
             // Apple transports publish replacement sockets through either event.
             // Old known-absent state must not authorize legacy plans on the new Gateway.
@@ -140,12 +138,6 @@ extension OpenClawChatViewModel {
             let context = self.currentSessionSnapshot()
             Task { await self.fetchSessions(limit: 50, sessionSnapshot: context) }
         }
-    }
-
-    private enum LifecycleSessionMergeResult: Equatable {
-        case merged
-        case unavailable
-        case rejected
     }
 
     private func handleSessionsChangedEvent(_ change: OpenClawChatSessionsChangedEvent) {
@@ -268,9 +260,9 @@ extension OpenClawChatViewModel {
             }
         }
 
-        let mergeResult: LifecycleSessionMergeResult
+        let mergedSnapshot: Bool
         if change.session != nil {
-            mergeResult = self.mergeLifecycleSessionSnapshot(change, phase: phase, runID: runID)
+            mergedSnapshot = self.mergeLifecycleSessionSnapshot(change, phase: phase, runID: runID)
         } else {
             if let projected = ChatSessionSidebarModel.applying(
                 sessionChange: change,
@@ -279,10 +271,10 @@ extension OpenClawChatViewModel {
             {
                 self.sessions = projected
             }
-            mergeResult = .unavailable
+            mergedSnapshot = false
         }
 
-        if mergeResult != .merged {
+        if !mergedSnapshot {
             self.refreshSessions(limit: 50)
         }
     }
@@ -290,21 +282,19 @@ extension OpenClawChatViewModel {
     private func mergeLifecycleSessionSnapshot(
         _ change: OpenClawChatSessionsChangedEvent,
         phase: String,
-        runID: String?) -> LifecycleSessionMergeResult
+        runID: String?) -> Bool
     {
-        guard let snapshot = change.session else { return .unavailable }
-        guard self.lifecycleSnapshotMatchesEvent(snapshot, change: change) else { return .rejected }
-        guard let index = self.lifecycleSessionIndex(snapshot, change: change) else { return .unavailable }
+        guard let snapshot = change.session else { return false }
+        guard self.lifecycleSnapshotMatchesEvent(snapshot, change: change) else { return false }
+        guard let index = self.lifecycleSessionIndex(snapshot, change: change) else { return false }
 
         let existing = self.sessions[index]
-        if let rejection = Self.lifecycleSnapshotRejection(
+        guard Self.canMergeLifecycleSnapshot(
             snapshot: snapshot,
             existing: existing,
             phase: phase,
             runID: runID)
-        {
-            return rejection
-        }
+        else { return false }
 
         var updated = self.sessions
         updated[index] = Self.mergedLifecycleSession(
@@ -319,7 +309,7 @@ extension OpenClawChatViewModel {
         self.persistSessionsToCache(
             self.sessions,
             agentID: self.currentSessionSnapshot().deliveryAgentID)
-        return .merged
+        return true
     }
 
     private func lifecycleSnapshotMatchesEvent(
@@ -353,30 +343,30 @@ extension OpenClawChatViewModel {
         })
     }
 
-    private static func lifecycleSnapshotRejection(
+    private static func canMergeLifecycleSnapshot(
         snapshot: OpenClawChatSessionEntry,
         existing: OpenClawChatSessionEntry,
         phase: String,
-        runID: String?) -> LifecycleSessionMergeResult?
+        runID: String?) -> Bool
     {
         if phase == "start" {
-            guard let snapshotUpdatedAt = snapshot.updatedAt else { return .unavailable }
+            guard let snapshotUpdatedAt = snapshot.updatedAt else { return false }
             if let existingUpdatedAt = existing.updatedAt, snapshotUpdatedAt <= existingUpdatedAt {
-                return .rejected
+                return false
             }
         } else if let snapshotUpdatedAt = snapshot.updatedAt,
                   let existingUpdatedAt = existing.updatedAt,
                   snapshotUpdatedAt < existingUpdatedAt
         {
-            return .rejected
+            return false
         }
 
-        guard phase == "end" || phase == "error", let runID else { return nil }
+        guard phase == "end" || phase == "error", let runID else { return true }
         let activeRunIDs = existing.activeRunIds?.compactMap { ChatPayloadDecoding.trimmedNonEmptyString($0) } ?? []
         if !activeRunIDs.isEmpty {
-            return activeRunIDs == [runID] ? nil : .rejected
+            return activeRunIDs == [runID]
         }
-        return existing.hasActiveRun == true ? .rejected : nil
+        return existing.hasActiveRun != true
     }
 
     private static func mergedLifecycleSession(

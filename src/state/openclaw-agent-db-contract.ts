@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
 // v24 separates keyed cold session snapshots from hot entry facts without rewriting transcripts.
@@ -43,6 +44,14 @@ export type OpenClawAgentDatabase = {
 /** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
+};
+
+/** Internal Doctor custody; never part of the plugin-facing database options. */
+export type OpenClawAgentDatabaseRepairAdmission = {
+  /** Bind repair admission to the physical database inspected and backed up by its owner. */
+  expectedIdentity?: DatabaseFileIdentity;
+  /** Live caller authority for native open and schema/registry admission mutations. */
+  assertCurrent?: () => void;
 };
 
 /** Shared-state registry row describing an agent database seen by this process. */

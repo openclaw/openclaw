@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../../cron/run-history-detail.js";
@@ -37,7 +36,7 @@ async function withCronHistory(
     viewer: GatewayClient;
     owner: GatewayClient;
   }) => Promise<void>,
-  options: { legacyDefaultAgentId?: string } = {},
+  options: { unresolvedDefault?: boolean } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
@@ -45,14 +44,11 @@ async function withCronHistory(
       agents: {
         entries: {
           main: { workspace: state.workspaceDir },
-          ...(options.legacyDefaultAgentId ? { [options.legacyDefaultAgentId]: {} } : {}),
+          ...(options.unresolvedDefault ? { ops: {} } : {}),
         },
-        ...(options.legacyDefaultAgentId
-          ? { ownership: "explicit" as const, defaults: { systemAgent: { agentId: "main" } } }
-          : {}),
+        ...(options.unresolvedDefault ? { ownership: "explicit" as const } : {}),
       },
     };
-    retainLegacyDefaultAgentId(cfg, options.legacyDefaultAgentId);
     await state.writeConfig(cfg);
     const owner = roleClient("none", "history-owner");
     const foreign = roleClient("none", "history-foreign");
@@ -81,8 +77,7 @@ async function withCronHistory(
       scheduler: createTestGatewayScheduler(),
       nowMs: () => Date.now(),
       storePath,
-      defaultAgentId: "main",
-      legacyDefaultAgentId: options.legacyDefaultAgentId,
+      resolveDefaultAgentId: () => (options.unresolvedDefault ? undefined : "main"),
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
@@ -188,7 +183,7 @@ describe("cron.runs session visibility", () => {
     { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: null },
     { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: "main" },
   ] as const)(
-    "uses canonical sharing for $sessionTarget during legacy repair (explicit=$explicitOwner, SQL owner=$sqlOwner)",
+    "uses canonical sharing for $sessionTarget without a fleet default (explicit=$explicitOwner, SQL owner=$sqlOwner)",
     async ({ sessionTarget, agentId, explicitOwner, sqlOwner }) => {
       await withCronHistory(
         async ({ cron, query, jobId, storePath, owner, viewer }) => {
@@ -290,7 +285,7 @@ describe("cron.runs session visibility", () => {
             );
           }
         },
-        { legacyDefaultAgentId: "ops" },
+        { unresolvedDefault: true },
       );
     },
   );

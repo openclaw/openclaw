@@ -35,6 +35,7 @@ import { getPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   createJitiAliasContentCacheKey,
   normalizePluginLoaderAliasMapForJiti,
+  sanitizeJitiCachePathSegment,
 } from "./sdk-alias-normalization.js";
 import {
   WORKSPACE_PACKAGE_ALIAS_ENTRIES,
@@ -71,11 +72,6 @@ function readSdkJsonFile(filePath: string): unknown {
   });
   const parsed = file.ok ? parsePluginCacheJson(file) : undefined;
   return parsed?.ok ? parsed.value : null;
-}
-
-function sanitizeJitiCachePathSegment(value: string): string {
-  const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
-  return normalized.length > 0 ? normalized : "unknown";
 }
 
 function resolveJitiFsCacheRoot(): string {
@@ -394,6 +390,7 @@ const PRIVATE_QA_ONLY_PLUGIN_SDK_SUBPATHS = new Set([
   "channel-ingress-test-runtime",
   "channel-target-testing",
   "channel-test-helpers",
+  "compiled-subprocess-testing",
   "plugin-test-api",
   "plugin-test-contracts",
   "plugin-state-test-runtime",

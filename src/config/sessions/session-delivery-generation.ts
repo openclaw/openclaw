@@ -78,6 +78,7 @@ async function prepareSessionGenerationLease(
 ): Promise<{
   assertCurrent: () => void;
   assertDeliveryCurrent: () => void;
+  prepareRead: () => Promise<void> | undefined;
   release: () => void;
 }> {
   if (!isSessionGenerationFacts(input)) {
@@ -193,6 +194,10 @@ async function prepareSessionGenerationLease(
   releases.push(sessionChanges.subscribeFacts(changed));
   try {
     let readCurrent: () => void;
+    let prepareRead: () => Promise<void> | undefined = () => {
+      assertActive();
+      return undefined;
+    };
     if (isIncognitoSessionKey(generation.sessionKey)) {
       const database = getOpenIncognitoAgentDatabase(generation.agentId, generation.storePath);
       if (!database && generation.sessionId !== null) {
@@ -297,7 +302,8 @@ async function prepareSessionGenerationLease(
           },
         );
       }
-      readCurrent = () => {
+      const assertSourceCurrent = () => {
+        assertActive();
         for (const candidate of candidates) {
           if (
             captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
@@ -309,7 +315,14 @@ async function prepareSessionGenerationLease(
         if (!source || readDatabasePathIdentitySync(source.path).key !== source.identity) {
           throw new SessionDeliveryGenerationUnavailableError();
         }
+      };
+      readCurrent = () => {
+        assertSourceCurrent();
         checkEntry(retained?.readCurrent());
+      };
+      prepareRead = () => {
+        assertSourceCurrent();
+        return retained?.prepareRead()?.then(assertSourceCurrent);
       };
     }
     const assertCurrent = (delivery = false) => {
@@ -339,6 +352,9 @@ async function prepareSessionGenerationLease(
         throw failure;
       }
     };
+    for (let pending = prepareRead(); pending; pending = prepareRead()) {
+      await pending;
+    }
     assertCurrent();
     if (onRevoked) {
       let checkedPublications = publications;
@@ -357,7 +373,12 @@ async function prepareSessionGenerationLease(
         }),
       );
     }
-    return { assertCurrent, assertDeliveryCurrent: () => assertCurrent(true), release };
+    return {
+      assertCurrent,
+      assertDeliveryCurrent: () => assertCurrent(true),
+      prepareRead,
+      release,
+    };
   } catch (error) {
     release();
     if (
@@ -372,8 +393,8 @@ async function prepareSessionGenerationLease(
 
 /** Session lifecycle owners compose these facts with their own admitted mutation authority. */
 export async function prepareSessionGenerationFacts(input: SessionGenerationFacts) {
-  const { assertCurrent, release } = await prepareSessionGenerationLease(input);
-  return { assertCurrent, release };
+  const { assertCurrent, prepareRead, release } = await prepareSessionGenerationLease(input);
+  return { assertCurrent, prepareRead, release };
 }
 
 /** Stable cron roots retain their admitted run; exact-run keys already name one generation. */

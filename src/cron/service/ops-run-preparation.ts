@@ -1,7 +1,6 @@
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { CronActiveJobMarker } from "../active-jobs.js";
-import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronCompletionStatus } from "../completion-status.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
@@ -274,9 +273,6 @@ async function inspectManualRunPreflight(
     : findJobOrThrow(state, id);
   if (!job || (opts?.onExit && !matchesOnExitSchedule(job, opts.onExit.schedule))) {
     return { ok: true, ran: false, reason: "not-due" };
-  }
-  if (state.deps.legacyDefaultAgentId) {
-    resolveCronJobEffectiveAgentId(job, undefined, state.deps.legacyDefaultAgentId);
   }
   assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {

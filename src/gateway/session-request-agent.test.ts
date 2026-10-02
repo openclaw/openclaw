@@ -81,7 +81,7 @@ describe("requested session agent ownership", () => {
       const cfg = retainLegacyDefaultAgentId(
         {
           agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-        },
+        } satisfies OpenClawConfig,
         retainedOwner,
       );
 

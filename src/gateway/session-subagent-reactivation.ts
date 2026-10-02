@@ -1,11 +1,16 @@
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
-  waitForPendingSubagentRegistryWrites,
+  restoreSubagentRunsFromDisk,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
 } from "../agents/subagents/registry/subagent-registry-read.js";
+import {
+  isSameSubagentRun,
+  isSameSubagentRunOwner,
+} from "../agents/subagents/registry/subagent-run-generation.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -29,46 +34,53 @@ export async function reactivateCompletedSubagentSession(params: {
   if (!existing || typeof existing.execution.endedAt !== "number") {
     return false;
   }
+  if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+    return false;
+  }
   const stateContext = captureOpenClawStateWorkerContext();
+  if (
+    !getLatestLiveSubagentRunByChildSessionKey(
+      params.sessionKey,
+      (entry) => entry.runId === existing.runId,
+    )
+  ) {
+    await restoreSubagentRunsFromDisk({
+      runs: subagentRuns,
+      mergeOnly: true,
+      context: stateContext,
+      assertCurrent: params.assertCurrent,
+    });
+  }
   const selected = getLatestLiveSubagentRunByChildSessionKey(
     params.sessionKey,
     (entry) => entry.runId === existing.runId,
   );
-  const selectedGeneration = selected?.generation;
+  if (!selected || !isSameSubagentRun(selected, existing)) {
+    return false;
+  }
   const latest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
-  const latestGeneration = latest?.generation;
-  const source = selected ?? existing;
-  const isOriginalOwnerCurrent = () => {
+  const source = selected;
+  const assertOriginalOwnerCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
+    const current = getLatestLiveSubagentRunByChildSessionKey(
+      params.sessionKey,
+      (entry) => entry.runId === existing.runId,
+    );
+    const currentLatest = getLatestLiveSubagentRunByChildSessionKey(params.sessionKey);
     if (
-      getLatestLiveSubagentRunByChildSessionKey(
-        params.sessionKey,
-        (entry) => entry.runId === existing.runId,
-      ) !== selected ||
-      selected?.generation !== selectedGeneration ||
-      (selected && selectedGeneration !== existing.generation) ||
-      getLatestLiveSubagentRunByChildSessionKey(params.sessionKey) !== latest ||
-      latest?.generation !== latestGeneration ||
-      typeof source.execution.endedAt !== "number"
+      !isSameSubagentRunOwner(current, selected) ||
+      (latest ? !isSameSubagentRunOwner(currentLatest, latest) : currentLatest !== undefined) ||
+      (current && typeof current.execution.endedAt !== "number")
     ) {
       throw new Error("subagent follow-up source changed while its writes settled");
     }
     params.assertCurrent?.();
-    return !params.gatewayContextResolver || Boolean(params.gatewayContextResolver());
+    if (params.gatewayContextResolver && !params.gatewayContextResolver()) {
+      throw new Error("subagent follow-up Gateway owner retired");
+    }
   };
   const runtime = await import("../agents/subagents/registry/subagent-registry.js");
-  for (;;) {
-    if (!isOriginalOwnerCurrent()) {
-      return false;
-    }
-    const pending = waitForPendingSubagentRegistryWrites([source.runId], stateContext.admission);
-    if (!pending) {
-      break;
-    }
-    // Completion cleanup can admit another write while the previous one settles.
-    // Join its publication before comparing the replacement's exact durable source.
-    await pending;
-  }
+  assertOriginalOwnerCurrent();
   const task = params.task;
   const hasTask = typeof task === "string" && task.trim().length > 0;
   // A yielded child still owes its parent completion; operator follow-ups must
@@ -76,21 +88,24 @@ export async function reactivateCompletedSubagentSession(params: {
   const gatewayBinding = params.gatewayContextResolver
     ? { gatewayContextResolver: params.gatewayContextResolver }
     : {};
-  const replaced = paused
-    ? runtime.adoptPausedSubagentRunForFollowUp({
-        childSessionKey: params.sessionKey,
-        runId,
-        task: hasTask ? task : paused.task,
-        ...gatewayBinding,
-      })
-    : runtime.replaceSubagentRunAfterSteerCore({
-        previousRunId: source.runId,
-        nextRunId: runId,
-        fallback: source,
-        runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
-        ...(hasTask ? { task } : {}),
-        ...gatewayBinding,
-      });
+  const replaced =
+    source.pauseReason === "sessions_yield"
+      ? await runtime.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: params.sessionKey,
+          runId,
+          task: hasTask ? task : source.task,
+          assertCurrent: assertOriginalOwnerCurrent,
+          ...gatewayBinding,
+        })
+      : await runtime.replaceSubagentRunAfterSteerCore({
+          previousRunId: source.runId,
+          nextRunId: runId,
+          preserveCompletedRun: true,
+          runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
+          ...(hasTask ? { task } : {}),
+          assertCurrent: assertOriginalOwnerCurrent,
+          ...gatewayBinding,
+        });
   if (replaced) {
     return true;
   }

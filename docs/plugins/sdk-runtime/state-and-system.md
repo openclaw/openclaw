@@ -11,6 +11,20 @@ sidebarTitle: "State and system"
 
 The runtime config snapshot, durable plugin-scoped storage, system utilities, event subscriptions, and logging. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Config and utilities](/plugins/sdk-runtime/config-and-utilities#config-loading-and-writes) covers the wider config read and write guidance.
 
+## SQLite maintenance lifetime
+
+Plugin worker stores using `configureSqliteConnectionPragmas` from
+`openclaw/plugin-sdk/plugin-state-runtime` receive a maintenance handle with
+`stop(): Promise<void>`. Await `stop()` before the existing `close()` checkpoint
+and the database handle's native close. Stopping closes timer admission and joins
+accepted maintenance; it does not change transaction ownership or close the
+database. Synchronous `close()` remains available for failed-open and process-exit
+cleanup, where asynchronous joins cannot be completed.
+Memory Core's private shadow-index owner uses
+`stopMemorySqliteWalMaintenance(db)` from its existing
+`memory-core-host-engine-storage` facade before draining its private queue and
+closing the connection.
+
 ## State, config, and system namespaces
 
 <AccordionGroup>

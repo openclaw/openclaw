@@ -70,6 +70,33 @@ function source(
   };
 }
 
+it("exposes a prepared generation only after registration publication and keeps its borrower live", async () => {
+  const options = fixture();
+  readOpenClawAgentDatabaseRegistryToken({ env: options.env });
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  let observedUnpublishedIdentity = false;
+  const requestSource = source();
+  requestSource.onRegistryChange = () => {
+    // Registration publishes after the native identity is accepted. Neither boundary
+    // alone permits another borrower to skip the remaining preparation.
+    observedUnpublishedIdentity ||= execution.fileIdentity !== undefined;
+    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+  };
+  try {
+    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+    await execution.prepare(requestSource);
+    expect(observedUnpublishedIdentity).toBe(true);
+    const claim = execution.capturePreparedGenerationClaim();
+    expect(claim).toBeDefined();
+    claim!.assertCurrent();
+    await execution.release();
+    expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
+    expect(() => claim!.assertCurrent()).toThrow(/released/);
+  } finally {
+    await execution.release();
+  }
+});
+
 it("shares an execution owner across directory aliases, later turns, and cleanup", async () => {
   const { options, aliased } = aliasedFixture();
   const creator = captureOpenClawAgentDatabaseExecution(aliased, {
@@ -638,6 +665,7 @@ it("retains canonical borrowers and rejects the changed alias before caller cont
     fs.symlinkSync(successorDirectory, alias, linkType);
     expect(() => creator.assertCurrent()).toThrow(/identity|observed target/);
     expect(() => creator.fileIdentity).toThrow(/identity|observed target/);
+    expect(() => creator.capturePreparedGenerationClaim()).toThrow(/identity|observed target/);
     await expect(creator.runExisting(source(), operation)).rejects.toThrow(
       /identity|observed target/,
     );

@@ -6,6 +6,7 @@ import {
   registerControlUiReloadGuard,
   canReloadControlUiDocument,
 } from "../../app/document-reload-guard.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { storeChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
@@ -75,6 +76,7 @@ describe("queued edit page callbacks", () => {
           querySelector: () => null,
         },
       );
+      state.client = createTestGatewayClient(async () => ({}));
       controller.attach(state);
       try {
         const queued = enqueueChatMessage(state, "queued original")!;
@@ -105,6 +107,7 @@ describe("queued edit page callbacks", () => {
         querySelector: () => null,
       },
     );
+    state.client = createTestGatewayClient(async () => ({}));
     controller.attach(state);
     try {
       const queued = enqueueChatMessage(state, "queued original")!;

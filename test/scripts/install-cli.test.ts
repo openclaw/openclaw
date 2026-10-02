@@ -15,6 +15,7 @@ import {
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { isSupportedOpenClawNodeVersion } from "../../node-version.mjs";
+import { readStandaloneInstaller } from "../../scripts/lib/standalone-installers.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { NODE_RELEASE_VERSION_CASES } from "../helpers/node-version-cases.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -112,7 +113,7 @@ function npmPolicyFixture(prefix = "openclaw-install-cli-lifecycle-") {
 }
 
 describe("install-cli.sh", () => {
-  const script = readFileSync(SCRIPT_PATH, "utf8");
+  const script = readStandaloneInstaller(process.cwd(), SCRIPT_PATH.slice("scripts/".length));
   const installerContract = {
     scriptPath: SCRIPT_PATH,
     runShell,

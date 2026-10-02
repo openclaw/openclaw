@@ -304,13 +304,17 @@ Older unfinished shared requests without this requester binding require a new au
 
 Pending session deletion blocks publication actions without discarding the original request. A failed deletion restores its retry. Confirmed deletion retires the attempt. The page clears this memory on reload or connection changes. Profile, session access, and workspace changes also retire affected browser state; they never retarget an existing Gateway request.
 
-Publication requires `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
+Shared publication also supports `operator.sessions.write` for the session creator. When the Gateway identifies a supported GitHub target in an owned session's managed worktree or repository workspace, session-only callers can use **Publish PR** without access to the broader PR list. A plain conversation or project folder alone does not make publication available. The Gateway rechecks the workspace, unpublished work, current access, and workflow restrictions before publishing. Shared results remain visible after refresh or reconnect.
+
+Personal publication and confirmation require `operator.write` and current access to change the session. Connecting your account alone does not grant either permission.
 
 Personal GitHub is a Gateway-brokered publication connection, not a session-wide shell identity. Ordinary agent `git`/`gh` commands, model-initiated publication, and repository previews and discovery keep their existing credential behavior. OpenClaw cloud workers use the shared execution identity, never your personal connection. For a repository-only session, finish the current turn and wait for its accepted Git-normalized checkpoint. Personal publication is available while the worker is idle or after Stop, without a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud worker…** before personal publication. See [`tools.github`](/gateway/config-tools#tools-github) for shared agent execution.
 
 The Gateway binds personal publication to your authenticated profile, the selected account, and the accepted worktree snapshot or repository checkpoint. Another participant's message cannot switch that account or authorize later work using your connection. If the account becomes unavailable or the workspace changes, publication stops with a recovery action instead of falling back to System or native credentials.
 
 After a Gateway restart, unfinished personal publication requires your explicit confirmation before it continues. Confirmation reuses the original request. It checks for an already-created commit, pushed branch, or pull request, so a lost response does not blindly repeat the action. A changed connection or incompatible workspace requires a new, explicitly selected action. For a repository-only session, confirmation retains the original checkpoint even if later turns have completed. It never silently publishes those later changes.
+
+Archived sessions do not offer personal-publication confirmation. Unarchive the session to restore an otherwise valid pending confirmation; recorded publication results remain visible.
 
 If confirmation cannot access its state store, the Gateway reports a retryable unavailable result with the storage cause. If the workspace exclusion is held, the response names its recorded holder and lease epoch. Caller cancellation is reported separately and does not trigger an automatic retry. Retry uses the original request and accepted checkpoint.
 

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfigFileSnapshot, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/health";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { withTempHome } from "openclaw/plugin-sdk/test-env";
+import { createCanonicalAgentConfigFixture, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { buildQaGatewayConfig } from "../../qa-gateway-config.js";
 import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
@@ -53,7 +53,25 @@ describe("WhatsApp QA broadcast config", () => {
             sutAccountId: "sut",
           });
 
-          await fs.writeFile(path.join(home, ".openclaw", "openclaw.json"), JSON.stringify(cfg));
+          const configPath = path.join(home, ".openclaw", "openclaw.json");
+          const authored = JSON.stringify(cfg);
+          await fs.writeFile(configPath, authored);
+          if (roster === "legacy-default") {
+            const before = await readConfigFileSnapshot({
+              pluginValidation: "core-only",
+              observe: false,
+            });
+            expect(before.valid).toBe(false);
+            expect(before.sourceConfig.agents?.entries?.main?.default).toBe(true);
+            expect(await fs.readFile(configPath, "utf8")).toBe(authored);
+          }
+          const runtimeConfig = createCanonicalAgentConfigFixture(cfg, {
+            homedir: () => home,
+          }).config;
+          const originalRuntimeConfig = createCanonicalAgentConfigFixture(original, {
+            homedir: () => home,
+          }).config;
+          await fs.writeFile(configPath, JSON.stringify(runtimeConfig));
           const snapshot = await readConfigFileSnapshot({
             pluginValidation: "core-only",
             observe: false,
@@ -61,12 +79,12 @@ describe("WhatsApp QA broadcast config", () => {
           expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
           expect(cfg.agents?.defaults).toMatchObject(original.agents?.defaults ?? {});
           const route = { channel: "whatsapp", accountId: "sut" };
-          expect(resolveAgentRoute({ cfg, ...route }).agentId).toBe(
-            resolveAgentRoute({ cfg: original, ...route }).agentId,
+          expect(resolveAgentRoute({ cfg: runtimeConfig, ...route }).agentId).toBe(
+            resolveAgentRoute({ cfg: originalRuntimeConfig, ...route }).agentId,
           );
           for (const agentId of Object.keys(original.agents?.entries ?? {})) {
-            expect(resolveAgentWorkspaceDir(cfg, agentId)).toBe(
-              resolveAgentWorkspaceDir(original, agentId),
+            expect(resolveAgentWorkspaceDir(runtimeConfig, agentId)).toBe(
+              resolveAgentWorkspaceDir(originalRuntimeConfig, agentId),
             );
           }
           expect(cfg.agents?.entries).toMatchObject(original.agents?.entries ?? {});

@@ -128,7 +128,7 @@ it(
               model: { primary: `${PROVIDER}/${MODEL}` },
               utilityModel: "",
             },
-            list: [{ id: "main", workspace: state.workspaceDir }],
+            entries: { main: { workspace: state.workspaceDir } },
           },
           models: {
             providers: {

@@ -58,7 +58,9 @@ describe("doctor config analysis helpers", () => {
   it("requires a durable default designation despite retained migration provenance", () => {
     noteMock.mockClear();
     const cfg = retainLegacyDefaultAgentId(
-      { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
+      {
+        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+      } satisfies OpenClawConfig,
       "ops",
     );
 
@@ -237,33 +239,6 @@ describe("doctor config analysis helpers", () => {
       const result = stripUnknownConfigKeys(input);
       expect(result.config).toBe(input);
       expect(result.removed).toEqual([]);
-    });
-  });
-
-  describe("plugins.installs whitelist", () => {
-    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-
-    beforeEach(() => {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    });
-
-    afterEach(() => {
-      if (originalEnv !== undefined) {
-        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
-      } else {
-        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-      }
-    });
-
-    it("never strips plugins.installs even when env is unset", () => {
-      const result = stripUnknownConfigKeys({
-        plugins: { installs: ["matrix"], badKey: true },
-      } as never);
-      expect(result.removed).toContain("plugins.badKey");
-      expect(result.removed).not.toContain("plugins.installs");
-      expect((result.config as Record<string, Record<string, unknown>>).plugins?.installs).toEqual([
-        "matrix",
-      ]);
     });
   });
 });

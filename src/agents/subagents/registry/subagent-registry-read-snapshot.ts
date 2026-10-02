@@ -6,17 +6,13 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
-import {
-  getSubagentRunIdLookup,
-  getSubagentSessionReadLookup,
-} from "./subagent-registry-memory.js";
+import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
   acceptedFullSnapshot,
   assertSubagentReadContext,
   consumeSubagentRuns,
   getPersistedSubagentRunsSnapshot,
-  getPersistedRunIdLookup,
   getSessionListLookup,
   mergeSelectedFullRuns,
   prepareSubagentRunsCache,
@@ -107,8 +103,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       let liveKeys: string[];
       let persistedKeys: string[];
       if ("runIds" in readScope) {
-        liveKeys = getSubagentRunIdLookup(inMemoryRuns).select(readScope.runIds);
-        persistedKeys = getPersistedRunIdLookup(compactCache, compact).select(
+        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectRunIds(readScope.runIds);
+        persistedKeys = getSessionListLookup(compactCache, compact).selectRunIds(
           readScope.runIds,
           liveKeys,
         );
@@ -390,7 +386,7 @@ export type PreparedSubagentMaintenanceRead = {
   dispose(): void;
 };
 
-/** Fresh physical maintenance facts share the existing cache's unpublished-intent overlays. */
+/** Fresh physical maintenance facts combine with current published resident rows. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
@@ -414,17 +410,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     context ? selectSubagentCacheStateForRead(cache.state, context) : {};
   const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
     assertCurrent();
-    const state = stateForRead();
-    const runs = new Map(state.replacementPending ? state.snapshot : persisted);
-    for (const [runId, { entry, committed }] of state.changes ?? []) {
-      if (!committed) {
-        if (entry) {
-          runs.set(runId, entry);
-        } else {
-          runs.delete(runId);
-        }
-      }
-    }
+    const runs = new Map(persisted);
     for (const [runId, entry] of inMemoryRuns) {
       runs.set(runId, cache.project(entry));
     }

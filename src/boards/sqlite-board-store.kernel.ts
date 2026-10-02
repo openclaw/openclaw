@@ -171,7 +171,10 @@ function upsertTabs(
         ),
     );
   }
-  sessionChanges.emit({ sessionKey: next.sessionKey, storePath: database.path }, database.db);
+  sessionChanges.emit(
+    { sessionKey: next.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
+    database.db,
+  );
 }
 
 function updateWidgetLayouts(

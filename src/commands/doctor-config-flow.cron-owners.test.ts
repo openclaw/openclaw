@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js";
+import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { CronService } from "../cron/service.js";
@@ -18,6 +19,7 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -89,11 +91,7 @@ async function repair(state: OpenClawTestState) {
   });
 }
 
-function createCron(
-  storePath: string,
-  defaultAgentId = "research",
-  legacyDefaultAgentId: string | null = "ops",
-) {
+function createCron(storePath: string, defaultAgentId?: string) {
   const clock = createGatewaySchedulerClock(Date.now());
   const scheduler = createTestGatewayScheduler(clock.clock);
   const execute = vi.fn(async () => ({ status: "ok" as const }));
@@ -103,7 +101,7 @@ function createCron(
     cronEnabled: true,
     nowMs: clock.clock.now,
     defaultAgentId,
-    legacyDefaultAgentId: legacyDefaultAgentId ?? undefined,
+    resolveDefaultAgentId: () => defaultAgentId,
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     enqueueSystemEvent: () => false,
     requestHeartbeat() {},
@@ -134,10 +132,13 @@ it.each(["retains", "removes"])(
         const beforeRows = rows(storePath);
         const beforeConfig = await fs.readFile(state.configPath, "utf8");
         const write = transformConfigFile({
-          transform: (current) => ({
-            nextConfig:
-              agentChange === "removes" ? pruneAgentConfig(current, "ops").config : current,
-          }),
+          transform: (current) => {
+            const canonical = createCanonicalAgentConfigFixture(current).config;
+            return {
+              nextConfig:
+                agentChange === "removes" ? pruneAgentConfig(canonical, "ops").config : canonical,
+            };
+          },
           writeOptions: {
             persistCanonicalAgentRoster: true,
             ...(agentChange === "removes" ? { allowedAgentRosterRemovals: ["ops"] } : {}),
@@ -179,7 +180,7 @@ it.each(["update", "remove"])(
             operation === "update"
               ? cron.update("historical", { name: "changed" })
               : cron.remove("historical");
-          await expect(operationResult).rejects.toThrow("openclaw doctor --fix");
+          await expect(operationResult).rejects.toThrow(CRON_AGENT_SELECTION_REQUIRED_MESSAGE);
           expect(rows(storePath)).toEqual(beforeRows);
           expect(await backups()).toEqual([]);
         } finally {
@@ -212,7 +213,10 @@ it("preserves historical and explicit jobs when agent deletion needs Doctor", as
           cron.removeAgentJobsTransactional("research", () =>
             transformConfigFile({
               transform: (current) => ({
-                nextConfig: pruneAgentConfig(current, "research").config,
+                nextConfig: pruneAgentConfig(
+                  createCanonicalAgentConfigFixture(current).config,
+                  "research",
+                ).config,
               }),
               writeOptions: { allowedAgentRosterRemovals: ["research"] },
               afterWrite: { mode: "none", reason: "test agent deletion" },
@@ -293,7 +297,7 @@ it("leaves SQLite and legacy JSON owners unchanged on ordinary cron startup", as
   });
 });
 
-it("keeps a due legacy one-shot pending until Doctor repairs its owner, then runs it once", async () => {
+it("preserves a due legacy one-shot through Doctor ownership repair, then runs it once", async () => {
   await withOpenClawTestState(
     { label: "cron-owner-one-shot", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
     async (state) => {
@@ -313,23 +317,9 @@ it("keeps a due legacy one-shot pending until Doctor repairs its owner, then run
           }),
         ],
       });
-      const original = createCron(storePath);
-      try {
-        await original.cron.start();
-        expect(original.execute).not.toHaveBeenCalled();
-        expect(original.cron.getJob("pending-one-shot")).toMatchObject({
-          enabled: true,
-          state: { nextRunAtMs: dueAt },
-        });
-        expect(original.cron.getJob("pending-one-shot")?.state.lastRunStatus).toBeUndefined();
-        expect(await original.cron.status()).toMatchObject({ nextWakeAtMs: null });
-        await expect(original.cron.run("pending-one-shot", "force")).rejects.toThrow(
-          "openclaw doctor --fix",
-        );
-      } finally {
-        original.cron.stop();
-        await original.scheduler.stop();
-      }
+      const original = rows(storePath);
+      expect((await readConfigFileSnapshot()).valid).toBe(false);
+      expect(rows(storePath)).toEqual(original);
       const readReceipts = () =>
         openOpenClawStateDatabase()
           .db.prepare(
@@ -339,7 +329,7 @@ it("keeps a due legacy one-shot pending until Doctor repairs its owner, then run
       expect(readReceipts()).toEqual([]);
       await repair(state);
       expect(await backups()).toHaveLength(1);
-      const repaired = createCron(storePath, "research", null);
+      const repaired = createCron(storePath, "research");
       try {
         await repaired.cron.start();
         expect(repaired.execute).not.toHaveBeenCalled();
@@ -489,35 +479,6 @@ it.each([
         }
       },
     );
-  },
-);
-
-it.each(["ops", "research"])(
-  "pins newly created jobs to the selected %s owner while legacy repair is pending",
-  async (agentId) => {
-    await withOpenClawTestState({ label: "cron-owner-new-job" }, async (state) => {
-      const storePath = state.statePath("cron", "jobs.json");
-      const { cron, scheduler, execute } = createCron(storePath, agentId);
-      try {
-        const created = await cron.add({
-          name: "New job",
-          enabled: false,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "isolated",
-          wakeMode: "now",
-          payload: { kind: "agentTurn", message: "newly authored job" },
-        });
-        expect(created.agentId, "New cron jobs must preserve their freshly selected owner").toBe(
-          agentId,
-        );
-        expect(rows(storePath).find((row) => row.job_id === created.id)?.agent_id).toBe(agentId);
-        await cron.run(created.id, "force");
-        expect(execute).toHaveBeenCalledOnce();
-      } finally {
-        cron.stop();
-        await scheduler.stop();
-      }
-    });
   },
 );
 

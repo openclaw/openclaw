@@ -17,16 +17,13 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../runtime-plugins.js";
+import { configureMockSubagentRegistryPersistence } from "../subagent-test-fixtures.test-helpers.js";
 import {
   captureSubagentCompletionReply,
   runSubagentAnnounceFlow,
 } from "../subagents/announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../subagents/announce/subagent-announce.requester-settle-wake.js";
-import {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-  restoreSubagentRunsFromDisk,
-} from "../subagents/registry/subagent-registry-state.js";
+import { restoreSubagentRunsFromDisk } from "../subagents/registry/subagent-registry-persistence.js";
 import { observeRootWork } from "../subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import { supportedSpawnModelChoice } from "../subagents/spawn/subagent-spawn.test-helpers.js";
@@ -52,6 +49,7 @@ vi.mock("../timeout.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.js", { spy: true });
 vi.mock("../subagents/announce/subagent-announce.requester-settle-wake.js", { spy: true });
 vi.mock("../subagents/registry/subagent-registry-state.js", { spy: true });
+vi.mock("../subagents/registry/subagent-registry-persistence.js", { spy: true });
 
 const requesterSessionKey = "agent:main:main";
 const config: OpenClawConfig = {
@@ -79,15 +77,15 @@ describe("swarm tools integration", () => {
   const completionResolvers = new Map<string, () => void>();
   const collectorRunIds = new Set<string>();
 
-  beforeEach(() => {
+  beforeEach(async () => {
     completionResolvers.clear();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     swarmSchedulerTesting.reset();
   });
 
   afterEach(async () => {
     spawnTesting.setDepsForTest();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     for (const runId of collectorRunIds) {
       consumeSwarmStructuredOutput(runId);
     }
@@ -189,8 +187,7 @@ describe("swarm tools integration", () => {
     vi.mocked(cleanupBrowserSessionsForLifecycleEnd).mockResolvedValue(undefined);
     vi.mocked(getRuntimeConfig).mockReturnValue(config);
     vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockResolvedValue(false);
-    vi.mocked(persistSubagentRunsToDisk).mockImplementation(() => {});
-    vi.mocked(persistSubagentRunsToDiskOrThrow).mockImplementation(() => {});
+    await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
     vi.mocked(resolveAgentTimeoutMs).mockReturnValue(1_000);
     vi.mocked(restoreSubagentRunsFromDisk).mockResolvedValue(0);
     vi.mocked(runSubagentAnnounceFlow).mockResolvedValue("delivered");

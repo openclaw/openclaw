@@ -34,7 +34,6 @@ async function readSelectedProjectFile(projectRoot: string, path: string): Promi
   const read = await sourceRoot.read(path, {
     hardlinks: "reject",
     maxBytes: MAX_MANAGED_FILE_BYTES,
-    nonBlockingRead: true,
     symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;

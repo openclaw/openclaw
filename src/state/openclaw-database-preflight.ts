@@ -96,6 +96,7 @@ export async function assertOpenClawDatabasesReady(
         configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
         config?: OpenClawConfig;
         onDeferredSchemaPublication?: (publication: DeferredStateSchemaPublication) => void;
+        onVerified?: (schemas: OpenClawDatabaseSchemaPreflight) => void;
       }
     | { operation: "gateway-restart"; config?: OpenClawConfig }
     | { operation: "gateway-startup"; config: OpenClawConfig }
@@ -180,6 +181,7 @@ export async function assertOpenClawDatabasesReady(
     for (const publication of schemas.deferredSchemaPublications ?? []) {
       options.onDeferredSchemaPublication?.(publication);
     }
+    options.onVerified?.(schemas);
   }
 }
 

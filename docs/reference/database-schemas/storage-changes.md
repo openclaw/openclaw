@@ -454,17 +454,31 @@ the mutation or converting the original error into success. Failed reconciliatio
 or reader retirement remains owned by canonical close for retry. Profile schema,
 avatar bytes, fetch limits, and final identity and permission checks are unchanged.
 
-Required queued collector registration writes its named registry rows through the
-shared-state worker. The host captures those rows and deletions before waiting,
-and binds SQL values from the isolated capture without copying the full payload again.
-Binding retains both normalization passes and restores the capture before publication.
-The host retains the original database admission and authorizes the transaction again
-before mutation and commit. Synchronous Stop, replacement, and completion writes
-supersede pending row authority; delayed worker acknowledgments cannot overwrite
-newer local projections or notification history. Database shutdown joins physical
-settlement and publication. Acknowledged changes reach the live registry before
-read-cache updates and reader wakes; pending terminal writes remain invisible to
-cleanup readers. Unknown write outcomes are never replayed.
+Subagent registry mutations use one row owner, including registration, cancellation,
+replacement, completion, requester wakes, and recovery. Per-row FIFO admission
+precedes synchronous planning against immutable published values; multi-row plans
+admit their sorted keys together. The worker compares digests of the stored payload
+and indexed ownership columns before writing, then returns acknowledged versions.
+Foreign conflicts refresh authoritative rows through the read worker and replan up
+to three times. Genuine execution, cancellation, and requester-cohort ownership
+loss remains an explicit rejection.
+
+Only committed postimages become resident rows. Runtime custody follows the same
+execution across metadata publications, while actual execution replacement revokes
+it. Recovery after an in-process Gateway replacement acquires a new runtime
+incarnation under row admission without changing the durable execution generation.
+Eligible terminal session-state events share the row transaction. Unknown write
+outcomes fence affected rows until canonical restore; they never authorize replay.
+The digest requires no new column, schema migration, or updater behavior, and also
+detects writes from older processes that cannot maintain a new revision column.
+
+An ordinary follow-up to a completed child creates a new task and execution while
+retaining the completed row's pending parent delivery and receipt. The same row
+transaction fences the predecessor's session effects; its exact execution and
+requester custody still own announcement retries. Each turn reads its own transcript
+result and uses its own announcement idempotency key. Paused continuation and steer
+replacement retain their same-task adoption semantics. No schema migration or
+updater change is required.
 
 Provisional cancellation claims keep registration pending until their owner releases
 or confirms them. Existing persistence notifications wake the wait; work cancellation,
@@ -953,11 +967,10 @@ reads use native run state rather than restoring a shared Tasks registry.
 Terminal subagent cancellation prepares retained child-session rows in the
 shared-state read worker, retries after registry publication changes, and applies current
 live runs last. Each synchronous decision retains the original database admission.
-Failed best-effort publications remain authoritative through cache hydration:
-fresh reads overlay unpublished named changes or an explicitly failed full
-replacement. Exact successful commits release only their rows back to durable
-reads; full success and restore clear that intent. These overlays remain bound to
-their producing database, and returned persisted records cannot mutate them.
+Refused writes leave the last committed projection intact. Cold reads retain
+acknowledged row changes until their first full snapshot, and canonical restore
+replaces those facts under the same database owner. Returned records cannot
+mutate immutable resident rows.
 The progress observer uses its existing live-run owner, matching the admission
 and generation checks that already require a live entry.
 Inspection links prepare their configuration through the existing asynchronous
@@ -1048,9 +1061,12 @@ Gateway user-preference RPCs and Talk appearance reads resolve merged profile ID
 and access preferences in the shared-state worker. Preference writes keep profile
 resolution, quota validation, and mutation in one synchronous write transaction;
 Gateway replies and changed events follow completion. Profile merge and consent
-updates retain their connection-bound kernels. Push preference and notification
-callers still use the synchronous facade until their preparation and publication
-owners migrate together.
+updates retain their connection-bound kernels. Web Push browser settings use the
+same preference workers while holding subscription snapshot custody through
+preference completion. Request and profile authority are rechecked after awaits
+and at transaction and commit admission; replies and preference-change events
+follow guarded completion. Device subscription mutations keep their deferred
+start after snapshot preparation.
 
 Fleet registry reads use a separate read-only worker and remain noncreating;
 listing cells does not join Gateway writable lifecycle admission. The existing
@@ -1696,6 +1712,14 @@ no-op commits do not reopen a disposed handle. Native deletion and archive
 preparation still run outside the writer; the subsequent commit rechecks its
 native owner's authority after any awaited admission.
 
+Subagent cancellation preparation can reuse a borrowed native database generation
+after its initialization and registration publication finish. It retains the exact
+physical source and live owner while reading session facts, without queuing an
+empty write behind unrelated sessions. Pending publication for the selected
+session still settles before its generation is checked. Cold preparation and
+terminal publication keep their existing writer admission; this changes no
+schema, stored data, retention, or update behavior.
+
 Automatic entry maintenance captures its policy at writer admission, then plans
 on the existing reclamation worker. Only a pass with retention candidates requests
 protected session identities, after rolling back candidate discovery and before
@@ -2127,6 +2151,17 @@ retains its health observations and partial-checkpoint reporting; offline
 maintenance still refuses busy truncation before compaction or recovery proceeds.
 The read cache's version-gated `NOOP` probe remains a freshness observation.
 This ownership cut changes no schema, stored bytes, admission, or update behavior.
+
+Each WAL connection owns a scheduler scope for checkpoint ticks and bounded
+reclamation. Orderly database retirement stops timer admission and joins accepted
+maintenance before the final checkpoint and native close. Shared connections
+retire maintenance only when their final native reference is released; closing
+one worker actor does not stop a sibling's maintenance. Synchronous exit and
+failed-open cleanup remain best-effort cancellation paths. The deprecated
+synchronous debug-capture store keeps that same close contract.
+Checkpoint modes, write admission, stored bytes, and reclamation limits are
+unchanged. Updates require no schema or configuration migration; the new process
+reconstructs its connection-owned schedules from the existing database owners.
 
 SQLite FTS5/BM25, vector tables, JSON table-valued queries, attached shadow
 databases, WAL maintenance, integrity checks, and backup operations remain

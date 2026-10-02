@@ -1,4 +1,7 @@
 import "../../../styles/chat/composer-surface.css";
+import "../../../components/mcp-app-catalog.ts";
+import "../../../components/mcp-app-context-strip.ts";
+import "../../../components/mcp-app-resources.ts";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
@@ -10,6 +13,7 @@ import { renderSessionProgressCard } from "../../../components/session-progress-
 import { t } from "../../../i18n/index.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { presentedContent } from "../../../lit/presentation-binding.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
@@ -381,8 +385,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
-        ${progressCard} ${queue} ${renderChatGoalRecovery(props.goalRecovery, props.connected)}
-        ${goalCard}
+        ${presentedContent(props.progressCardVisibility ?? true, progressCard)} ${queue}
+        ${renderChatGoalRecovery(props.goalRecovery, props.connected)} ${goalCard}
       </div>
       ${
         showComposerInput
@@ -422,6 +426,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   : nothing
               }
               <div class="agent-chat__composer-lede">
+                <openclaw-mcp-app-catalog
+                  surface="thread"
+                  .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
+                ></openclaw-mcp-app-catalog>
+                <openclaw-mcp-app-resources
+                  .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
+                ></openclaw-mcp-app-resources>
                 ${goalComposer.render()}
                 ${renderSelectedHumanMentions(
                   visibleDraft,
@@ -464,6 +477,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       `
                     : nothing
                 }
+                <openclaw-mcp-app-context-strip
+                  .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
+                ></openclaw-mcp-app-context-strip>
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}

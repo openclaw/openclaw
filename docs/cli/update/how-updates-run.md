@@ -142,6 +142,13 @@ path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
 
+Package publication hashes the candidate before activation and the installed
+package after publication. Launcher publication checks package identities without
+repeatedly hashing both generations. Retirement verifies the live package before
+deleting obsolete backups; rollback still hashes a backup before restoring it
+and verifies the restored bytes. These improvements belong to the installed
+updater and do not change an older updater already running.
+
 An older installed updater that stops with `Package rollback verification byte
 limit exceeded` cannot obtain this repair from its staged candidate. Use the
 installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
@@ -199,8 +206,8 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, and other side services are suppressed in this canary.
 The copied databases undergo the same schema checks and migrations without
 reviving the removed Tasks registry.
-The canary also defers session catalog hydration, worker recovery, and startup
-maintenance until activation, recording a warning. Required configuration,
+The canary also defers session catalog hydration, subagent and worker recovery,
+and startup maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
 plugin runtime loading remains part of validation. The serving Gateway prepares
 its session catalogs and maintenance normally after activation.
@@ -303,6 +310,10 @@ reports its size and applied budget. Snapshot time does not consume the separate
 runtime validation budget. Each validation process receives a fresh allowance
 that scales with measured database and plugin bytes. An explicit per-step
 timeout replaces that derived allowance.
+While retaining its own runtime, the updater reports completed file operations
+directly instead of repeatedly scanning the growing copy. If those operations
+stop completing, isolated filesystem probes still track a slow individual copy.
+This improvement applies when the installed updater contains the fix.
 Automatic and chat updates leave that runtime allowance derived from state.
 Their request and recovery watchdogs do not become update validation deadlines.
 Startup and readiness responses share their own allowance, including reading
@@ -382,6 +393,15 @@ TMPDIR=/var/tmp openclaw update --yes
 ```
 
 Subsequent updates use the new updater's measured destination selection.
+
+Snapshot creation checks the source and the final transformed output for full
+SQLite integrity and foreign-key consistency. It validates the transformed output
+once, in private publication staging, and verifies its exact bytes before making
+the snapshot available. The same checks cover recovery backups. This avoids a
+duplicate full-database scan without changing the backup or rollback contract.
+The published 2026.9.7 updater selects its own snapshot worker, so its initial
+snapshot does not benefit from this change on the first upgrade. Updaters that
+select the staged candidate's worker can use the candidate's snapshot implementation.
 
 Live snapshots use SQLite read transactions and private backups while writers
 continue. Artifact-preserving planning and Doctor checks retain byte-neutral

@@ -4,7 +4,6 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { tryGetLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import type { CronJob, CronJobPatch } from "../../cron/types.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -147,11 +146,7 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
       }
       if (prepareVisibility) {
         await visibilityRead.prepare([
-          cronJobVisibilityTarget(
-            loaded,
-            context.cron.getDefaultAgentId(),
-            tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
-          ),
+          cronJobVisibilityTarget(loaded, context.cron.getDefaultAgentId()),
         ]);
         assertCronReadCurrent(options);
       }
@@ -161,17 +156,11 @@ export function scopedCronJobHandler<P extends CronJobIdParams>(
       if (
         !job ||
         (scope.checkVisibility &&
-          !cronJobIsVisible(
-            job,
-            visibility,
-            context.cron.getDefaultAgentId(),
-            tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
-          )) ||
+          !cronJobIsVisible(job, visibility, context.cron.getDefaultAgentId())) ||
         !cronJobMatchesCallerScope({
           job,
           callerScope,
           defaultAgentId: context.cron.getDefaultAgentId(),
-          legacyDefaultAgentId: tryGetLegacyDefaultAgentId(context.getRuntimeConfig()),
           allowCurrentJob: scope.allowCurrentJob,
         })
       ) {

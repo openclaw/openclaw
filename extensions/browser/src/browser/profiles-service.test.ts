@@ -4,7 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { BrowserProfileConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { resolveOpenClawUserDataDir } from "./chrome.js";
 import type { BrowserRouteContext, BrowserServerState } from "./server-context.js";
@@ -115,6 +115,10 @@ const [
 const { setDefaultBrowserProfile } = await import("./config-mutations.js");
 
 afterEach(() => {
+  getChromeMcpModule.clear();
+});
+
+afterAll(() => {
   getChromeMcpModule.clear();
 });
 
@@ -582,7 +586,6 @@ describe("BrowserProfilesService", () => {
       exe: { kind: "chromium", path: "/usr/bin/chromium" },
       userDataDir,
       cdpPort: 18801,
-      startedAt: Date.now(),
       proc: { on: vi.fn(), exitCode: null, signalCode: null },
     } as unknown as import("./chrome.js").RunningChrome;
     const starting = enqueueProfileStart({

@@ -2,18 +2,19 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS } from "openclaw/plugin-sdk/memory-core-host-status";
-import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asFiniteNumberInRange,
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+  parseDateStringTimestampMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { deriveConceptTags, MAX_CONCEPT_TAGS } from "./concept-vocabulary.js";
-import type {
-  PromotionWeights,
-  ShortTermRecallEntry,
-  ShortTermRecallStore,
-} from "./short-term-promotion-types.js";
+import type { ShortTermRecallEntry, ShortTermRecallStore } from "./short-term-promotion-types.js";
 
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -38,14 +39,6 @@ const MEMORY_FLUSH_PROMPT_RE =
 const PROMOTION_SCORE_METADATA_RE =
   /\[\s*score=\d+(?:\.\d+)?\s+(?:signals=\d+\s+)?recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
-const DEFAULT_PROMOTION_WEIGHTS: PromotionWeights = {
-  frequency: 0.24,
-  relevance: 0.3,
-  diversity: 0.15,
-  recency: 0.15,
-  consolidation: 0.1,
-  conceptual: 0.06,
-};
 
 export function clampScore(value: number): number {
   if (!Number.isFinite(value)) {
@@ -55,14 +48,7 @@ export function clampScore(value: number): number {
 }
 
 export function toFiniteScore(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  if (num < 0 || num > 1) {
-    return fallback;
-  }
-  return num;
+  return asFiniteNumberInRange(Number(value), { min: 0, max: 1 }) ?? fallback;
 }
 
 export function isGenericDailyHeading(heading: string): boolean {
@@ -151,9 +137,7 @@ function normalizeProjectKeyList(value: unknown): string | undefined {
 }
 
 export function mergeProjectKeyLists(...values: unknown[]): string | undefined {
-  return normalizeProjectKeyList(
-    values.flatMap((value) => normalizeProjectKeyList(value)?.split(";") ?? []).join(";"),
-  );
+  return normalizeProjectKeyList(values.filter((value) => typeof value === "string").join(";"));
 }
 
 export function truncateShortTermSnippet(snippet: string): string {
@@ -200,9 +184,6 @@ function consumeDreamingLeadPrefix(snippet: string): string {
 
 function hasDreamingNarrativeLead(snippet: string): boolean {
   const withoutPrefix = consumeDreamingLeadPrefix(snippet);
-  if (/^(?:Candidate|Reflections?):/i.test(withoutPrefix)) {
-    return true;
-  }
   // Serialized metadata can precede narrative markers; bound the scan to the lead.
   // REM uses a Markdown heading instead of the staged block's colon marker.
   const head = truncateUtf16Safe(withoutPrefix, 200);
@@ -309,17 +290,9 @@ export function totalSignalCountForEntry(entry: {
   );
 }
 
-function emptyStore(nowIso: string): ShortTermRecallStore {
-  return {
-    version: 1,
-    updatedAt: nowIso,
-    entries: {},
-  };
-}
-
 export function normalizeShortTermRecallStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
-    return emptyStore(nowIso);
+    return { version: 1, updatedAt: nowIso, entries: {} };
   }
   const record = raw as Record<string, unknown>;
   const entriesRaw = record.entries;
@@ -513,48 +486,11 @@ export function enforceShortTermRecallStoreRetention(store: ShortTermRecallStore
 }
 
 export function toFinitePositive(value: unknown, fallback: number): number {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) {
-    return fallback;
-  }
-  return num;
+  return asPositiveFiniteNumber(Number(value)) ?? fallback;
 }
 
 export function toFiniteNonNegativeInt(value: unknown, fallback = 0): number {
-  const num = Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  const floored = Math.floor(num);
-  if (floored < 0) {
-    return fallback;
-  }
-  return floored;
-}
-
-export function normalizeWeights(weights?: Partial<PromotionWeights>): PromotionWeights {
-  const merged = {
-    ...DEFAULT_PROMOTION_WEIGHTS,
-    ...weights,
-  };
-  const frequency = Math.max(0, merged.frequency);
-  const relevance = Math.max(0, merged.relevance);
-  const diversity = Math.max(0, merged.diversity);
-  const recency = Math.max(0, merged.recency);
-  const consolidation = Math.max(0, merged.consolidation);
-  const conceptual = Math.max(0, merged.conceptual);
-  const sum = frequency + relevance + diversity + recency + consolidation + conceptual;
-  if (sum <= 0) {
-    return { ...DEFAULT_PROMOTION_WEIGHTS };
-  }
-  return {
-    frequency: frequency / sum,
-    relevance: relevance / sum,
-    diversity: diversity / sum,
-    recency: recency / sum,
-    consolidation: consolidation / sum,
-    conceptual: conceptual / sum,
-  };
+  return asNonNegativeFiniteNumber(Math.floor(Number(value))) ?? fallback;
 }
 
 export function calculateRecencyComponent(ageDays: number, halfLifeDays: number): number {

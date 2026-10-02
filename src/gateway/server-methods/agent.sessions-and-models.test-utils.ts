@@ -7,7 +7,6 @@ import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-to
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
-import * as subagentRegistryStore from "../../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
@@ -180,7 +179,7 @@ describe("gateway agent handler", () => {
   ])("tracks plugin subagent $identity runs through the registry", async ({ runId }) => {
     await withTestDir({ prefix: "openclaw-gateway-plugin-subagent-task-" }, async (root) => {
       useTestStateDir(root);
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       const childSessionKey = "agent:work:subagent:plugin-helper";
       await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });
       const cfg = {
@@ -361,11 +360,11 @@ describe("gateway agent handler", () => {
     await withPluginSubagentTestState(
       "openclaw-resume-cleanup-failure-",
       async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:dashboard:resume-cleanup";
         const previousRunId = "resume-cleanup-paused";
         const runId = "resume-cleanup-successor";
-        seedPersistedSubagentRunForAgentTest({
+        await seedPersistedSubagentRunForAgentTest({
           runId: previousRunId,
           childSessionKey,
           requesterSessionKey: "agent:main:main",
@@ -377,12 +376,10 @@ describe("gateway agent handler", () => {
           expectsCompletionMessage: true,
         });
         mockSpawnedChildSessionEntry(childSessionKey, root);
-        // Replacement has its own atomic store; fail its row write after the real source guard.
-        const replacementWrite = vi
-          .spyOn(subagentRegistryStore, "upsertSubagentRunRowInDatabase")
-          .mockImplementationOnce(() => {
-            throw new Error("task replacement failed");
-          });
+        // Seed first, then fail the replacement at the row owner's worker boundary.
+        const replacementWrite = mocks.registryWrite.mockClear().mockImplementationOnce(() => {
+          throw new Error("task replacement failed");
+        });
         const runtime = await import("../../agents/prepared-model-runtime.js");
         const acquire = vi.mocked(runtime.acquireAgentRunPreparedModelRuntime);
         const createLease = requireValue(acquire.getMockImplementation(), "model lease fixture");
@@ -453,7 +450,7 @@ describe("gateway agent handler", () => {
             pauseReason: "sessions_yield",
           });
         } finally {
-          replacementWrite.mockRestore();
+          replacementWrite.mockReset();
         }
       },
     );
@@ -463,7 +460,7 @@ describe("gateway agent handler", () => {
     await withPluginSubagentTestState(
       "openclaw-gateway-plugin-subagent-own-requester-",
       async ({ stateDir: root }) => {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:work:subagent:plugin-yield-own-requester";
         const originalRequester = "agent:main:telegram:direct:777";
         const previousRunId = "plugin-subagent-paused";
@@ -491,7 +488,7 @@ describe("gateway agent handler", () => {
         const completion = createDeferred<AgentWaitResult>();
         const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
         mocks.registryCallGateway.mockReturnValue(completion.promise);
-        addSubagentRunForTests({
+        await addSubagentRunForTests({
           runId: previousRunId,
           childSessionKey,
           requesterSessionKey: originalRequester,
@@ -582,7 +579,7 @@ describe("gateway agent handler", () => {
           session: { mainKey: "main", scope: "per-sender" as const },
           agents: { list: [{ id: "main", default: true }, { id: "work" }] },
         };
-        seedPersistedSubagentRunForAgentTest({
+        await seedPersistedSubagentRunForAgentTest({
           runId: "plugin-subagent-paused",
           childSessionKey,
           requesterSessionKey: originalRequester,
@@ -638,18 +635,11 @@ describe("gateway agent handler", () => {
     await withPluginSubagentTestState(
       "openclaw-gateway-plugin-subagent-registry-fail-",
       async () => {
-        resetSubagentRegistryForTests({ persist: false });
-        const persistence = await vi.importActual<
-          typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-        >("../../agents/subagents/registry/subagent-registry-state.js");
-        const persistSubagentRunsToDiskOrThrow = vi.fn(
-          persistence.persistSubagentRunsToDiskOrThrow,
-        );
+        await resetSubagentRegistryForTests({ persist: false });
         const persistenceError = Object.assign(new Error("disk full"), { code: "SQLITE_FULL" });
-        persistSubagentRunsToDiskOrThrow.mockImplementationOnce(() => {
+        mocks.registryWrite.mockImplementationOnce(() => {
           throw persistenceError;
         });
-        mocks.registryPersistOrThrow.mockImplementation(persistSubagentRunsToDiskOrThrow);
         const runId = "plugin-subagent-registry-fail";
         const childSessionKey = "agent:main:subagent:registry-fail";
         const cfg = {
@@ -704,22 +694,22 @@ describe("gateway agent handler", () => {
           },
         );
 
-        expect(persistSubagentRunsToDiskOrThrow).toHaveBeenCalledTimes(1);
+        expect(mocks.registryWrite).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
         expect(context.chatAbortControllers.has(runId)).toBe(false);
         expectRespondError(respond, {
           code: ErrorCodes.UNAVAILABLE,
           message:
-            "plugin subagent registry persistence failed; run was not started | disk full | SQLITE_FULL",
+            "plugin subagent registry persistence failed; run was not started | Queued subagent registry persistence failed: disk full | SQLITE_FULL",
         });
         expect(context.logGateway.warn).toHaveBeenCalledWith(
           expect.stringContaining("rejecting untracked dispatch"),
         );
 
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const pausedRunId = "plugin-subagent-paused-before-persistence-failure";
-        seedPersistedSubagentRunForAgentTest({
+        await seedPersistedSubagentRunForAgentTest({
           runId: pausedRunId,
           childSessionKey,
           requesterSessionKey: "agent:main:telegram:direct:777",
@@ -729,11 +719,10 @@ describe("gateway agent handler", () => {
           pauseReason: "sessions_yield",
           expectsCompletionMessage: true,
         });
-        using replacementWrite = vi
-          .spyOn(subagentRegistryStore, "upsertSubagentRunRowInDatabase")
-          .mockImplementationOnce(() => {
-            throw new Error("disk full during paused-run adoption");
-          });
+        mocks.registryWrite.mockClear();
+        mocks.registryWrite.mockImplementationOnce(() => {
+          throw new Error("disk full during paused-run adoption");
+        });
         const adoptionRunId = "plugin-subagent-adoption-registry-fail";
         const adoptionRespond = vi.fn();
         await invokeAgent(
@@ -763,7 +752,7 @@ describe("gateway agent handler", () => {
           pauseReason: "sessions_yield",
         });
         expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).not.toBe(adoptionRunId);
-        expect(replacementWrite).toHaveBeenCalledOnce();
+        expect(mocks.registryWrite).toHaveBeenCalledOnce();
         const storedRuns = loadSubagentRegistryFromSqlite();
         expect(storedRuns.has(adoptionRunId)).toBe(false);
         expect(storedRuns.get(pausedRunId)).toMatchObject({
@@ -773,10 +762,10 @@ describe("gateway agent handler", () => {
         expectRespondError(adoptionRespond, {
           code: ErrorCodes.UNAVAILABLE,
           message:
-            "plugin subagent registry persistence failed; run was not started | disk full during paused-run adoption",
+            "plugin subagent registry persistence failed; run was not started | Queued subagent registry persistence failed: disk full during paused-run adoption",
         });
 
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const retryRunId = "plugin-subagent-registry-retry";
         await invokeAgent(
           {
@@ -798,7 +787,7 @@ describe("gateway agent handler", () => {
           },
         );
 
-        expect(persistSubagentRunsToDiskOrThrow.mock.calls.length).toBeGreaterThan(1);
+        expect(mocks.registryWrite.mock.calls.length).toBeGreaterThan(1);
         await waitForAssertion(() => {
           expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount + 1);
           const retryRun = requireValue(
@@ -2563,7 +2552,7 @@ describe("gateway agent handler", () => {
     it("registers plugin subagent completion for ACP-shaped child sessions", async () => {
       await withOpenClawTestState({ label: "acp-plugin", layout: "state-only" }, async (state) => {
         const root = state.stateDir;
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         const childSessionKey = "agent:main:acp:plugin-child";
         const runId = "acp-plugin-subagent-run";
         await using fixture = createPluginSubagentTestLifetime({ root, runId, childSessionKey });

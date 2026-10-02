@@ -6,22 +6,19 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { SessionWorkStartInvalidatedError } from "./lifecycle.js";
 import { readSessionEntryInstanceId } from "./session-accessor.sqlite-entry-identity.js";
+import type {
+  SessionSuggestionClaimParams,
+  SessionSuggestionDispatchClaim,
+  SessionSuggestionFinalizeParams,
+  SessionSuggestionReleaseParams,
+  StoredSessionSuggestion,
+  StoredSessionSuggestionResolution,
+  StoredSessionSuggestionState,
+} from "./session-sharing-store.types.js";
+import { SessionWorkStartInvalidatedError } from "./work-start-error.js";
 
 type SuggestionDatabase = Pick<OpenClawAgentKyselyDatabase, "session_suggestions">;
-
-type StoredSessionSuggestionState = "pending" | "accepted" | "dismissed";
-type StoredSessionSuggestionResolution = "send" | "queue" | "edit" | "dismiss";
-
-export type StoredSessionSuggestion = {
-  id: string;
-  authorId: string;
-  authorLabel?: string;
-  text: string;
-  createdAt: number;
-  state: StoredSessionSuggestionState;
-};
 
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_AUTHOR = 20;
 const MAX_PENDING_SESSION_SUGGESTIONS_PER_SESSION = 100;
@@ -162,21 +159,10 @@ export function listSessionSuggestionsInDatabase(
   ).rows.map(toSuggestion);
 }
 
-type SessionSuggestionDispatchClaim =
-  | { kind: "busy" }
-  | { kind: "mismatch"; resolution: StoredSessionSuggestionResolution }
-  | { kind: "claimed"; suggestion: StoredSessionSuggestion; token: string };
-
 export function claimSessionSuggestionDispatchInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  params: {
-    id: string;
-    expectedSessionId?: string;
-    resolution: StoredSessionSuggestionResolution;
-    now?: number;
-    claimTtlMs?: number;
-  },
+  params: Omit<SessionSuggestionClaimParams, "expectedEntry">,
 ): SessionSuggestionDispatchClaim | null {
   assertSessionInstance(database, sessionKey, params.expectedSessionId);
   const db = suggestionDb(database);
@@ -238,7 +224,7 @@ export function claimSessionSuggestionDispatchInDatabase(
 export function releaseSessionSuggestionDispatchInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  params: { id: string; token: string; expectedSessionId?: string },
+  params: SessionSuggestionReleaseParams,
 ): boolean {
   assertSessionInstance(database, sessionKey, params.expectedSessionId);
   const result = executeSqliteQuerySync(
@@ -257,12 +243,7 @@ export function releaseSessionSuggestionDispatchInDatabase(
 export function finalizeSessionSuggestionClaimInDatabase(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-  params: {
-    id: string;
-    token: string;
-    state: Exclude<StoredSessionSuggestionState, "pending">;
-    expectedSessionId?: string;
-  },
+  params: Omit<SessionSuggestionFinalizeParams, "expectedEntry">,
 ): StoredSessionSuggestion | null {
   assertSessionInstance(database, sessionKey, params.expectedSessionId);
   const db = suggestionDb(database);

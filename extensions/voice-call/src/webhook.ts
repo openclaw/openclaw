@@ -1,5 +1,6 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
@@ -101,18 +102,12 @@ function buildRequestUrl(requestUrl: string | undefined): URL {
 
 function resolveForwardedClientIp(
   request: http.IncomingMessage,
-  trustedProxyIPs: readonly string[],
+  normalizedTrustedProxyIps: ReadonlySet<string>,
 ): string | undefined {
-  const normalizedTrustedProxyIps = new Set(
-    trustedProxyIPs.map((ip) => normalizeProxyIp(ip)).filter((ip): ip is string => Boolean(ip)),
-  );
   const forwardedFor = getHeader(request.headers, "x-forwarded-for");
   if (forwardedFor) {
     const forwardedIps = normalizeStringEntries(forwardedFor.split(","));
     if (forwardedIps.length > 0) {
-      if (normalizedTrustedProxyIps.size === 0) {
-        return forwardedIps[0];
-      }
       for (let index = forwardedIps.length - 1; index >= 0; index -= 1) {
         const hop = forwardedIps[index];
         if (!normalizedTrustedProxyIps.has(normalizeProxyIp(hop) ?? "")) {
@@ -292,7 +287,7 @@ export class VoiceCallWebhookServer {
       this.config.webhookSecurity.trustForwardingHeaders && fromTrustedProxy;
 
     if (shouldTrustForwardingHeaders) {
-      const forwardedIp = resolveForwardedClientIp(request, trustedProxyIPs);
+      const forwardedIp = resolveForwardedClientIp(request, normalizedTrustedProxyIps);
       if (forwardedIp) {
         return forwardedIp;
       }
@@ -302,13 +297,9 @@ export class VoiceCallWebhookServer {
   }
 
   private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
-    if (!call || call.direction !== "outbound") {
-      return false;
-    }
-
     // Suppress only while the initial greeting is actively being played.
     // If playback fails and the call leaves "speaking", do not block auto-response.
-    if (call.state !== "speaking") {
+    if (!call || call.direction !== "outbound" || call.state !== "speaking") {
       return false;
     }
 
@@ -849,13 +840,7 @@ export class VoiceCallWebhookServer {
         }
       }
     }
-    while (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
-      const oldest = this.replayResponses.keys().next().value;
-      if (!oldest) {
-        break;
-      }
-      this.replayResponses.delete(oldest);
-    }
+    pruneMapToMaxSize(this.replayResponses, WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES);
   }
 
   private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {

@@ -7,7 +7,6 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginInstall from "../plugins/install.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -123,7 +122,7 @@ async function createStaleLocalFixture() {
 }
 
 describe("maybeRepairPluginRegistryState", () => {
-  it("distinguishes uninitialized registry state from retired config migration", async () => {
+  it("does not warn for uninitialized registry state", async () => {
     const stateDir = makeTempDir();
     await expect(
       detectPluginRegistryHealthIssues({
@@ -133,29 +132,6 @@ describe("maybeRepairPluginRegistryState", () => {
         prompter: { shouldRepair: false },
       }),
     ).resolves.toEqual([]);
-
-    const migrationStateDir = makeTempDir();
-    const registryPath = resolveInstalledPluginIndexStorePath({ stateDir: migrationStateDir });
-    const [issue] = await detectPluginRegistryHealthIssues({
-      stateDir: migrationStateDir,
-      env: hermeticEnv(),
-      config: {
-        plugins: {
-          installs: {
-            demo: {
-              source: "path",
-              installPath: migrationStateDir,
-            },
-          },
-        },
-      },
-      prompter: { shouldRepair: false },
-    });
-
-    expect(issue).toEqual({
-      kind: "registry-missing-or-stale",
-      path: registryPath,
-    });
   });
 
   it("maps stale managed npm bundled plugin shadows to structured findings", async () => {
@@ -263,28 +239,6 @@ describe("maybeRepairPluginRegistryState", () => {
     );
     expect(vi.mocked(note).mock.calls.join("\n")).toContain("@openclaw/bundled-demo@2026.5.2");
     expect(fs.existsSync(managed.packageDir)).toBe(true);
-  });
-
-  it("does not mutate stale packages when config install records are invalid", async () => {
-    const { stateDir, managed, params } = createBundledNpmFixture();
-    const config = JSON.parse(
-      '{"plugins":{"installs":{"__proto__":{"source":"bogus"}}}}',
-    ) as OpenClawConfig;
-
-    await expect(
-      maybeRepairPluginRegistryState({
-        ...params,
-        config,
-        prompter: { shouldRepair: true },
-      }),
-    ).resolves.toEqual({ config });
-
-    expect(fs.existsSync(managed.packageDir)).toBe(true);
-    const notes = vi.mocked(note).mock.calls.join("\n");
-    expect(notes).toContain("plugins.installs contains invalid records");
-    expect(notes).toContain("Back up openclaw.json");
-    expect(notes).toContain("rerun `openclaw doctor --fix`");
-    expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
   });
 
   it("reports the supported manual recovery for invalid persisted records", async () => {

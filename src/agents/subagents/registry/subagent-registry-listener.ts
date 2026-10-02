@@ -1,5 +1,10 @@
-import type { AgentEventPayload } from "../../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+  type AgentEventPayload,
+} from "../../../infra/agent-events.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
 import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
@@ -8,16 +13,21 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
+import {
+  assertSubagentRegistryWriteSourceCurrent,
+  mutateSubagentRuns,
+} from "./subagent-registry-persistence.js";
 import { preserveSubagentRunForRestart } from "./subagent-registry-run-manager.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 
 export function createSubagentRegistryListener(config: {
   runs: Map<string, SubagentRunRecord>;
   pendingLifecycle: ReturnType<typeof createPendingLifecycleScheduler>;
   onAgentEvent: (listener: (event: AgentEventPayload) => void) => () => void;
-  persist: (...runIds: string[]) => void;
   resumeRequesterSettleWake: (runId: string, entry: SubagentRunRecord) => void;
   refreshFrozenResultFromSession: (sessionKey: string) => Promise<unknown>;
   completeSubagentRunWithRecovery: (
@@ -30,7 +40,6 @@ export function createSubagentRegistryListener(config: {
     runs,
     pendingLifecycle,
     onAgentEvent,
-    persist,
     refreshFrozenResultFromSession,
     completeSubagentRunWithRecovery,
     warn,
@@ -60,17 +69,58 @@ export function createSubagentRegistryListener(config: {
           }
           return;
         }
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
+        const context = captureOpenClawStateWorkerContext();
+        const assertCurrent = () => {
+          assertSubagentRegistryWriteSourceCurrent(context);
+          if (
+            !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
+            !isSameSubagentRunOwner(runs.get(evt.runId), entry)
+          ) {
+            throw new Error("Subagent lifecycle event lost its original run");
+          }
+        };
         if (phase === "start") {
-          pendingLifecycle.clear(evt.runId);
           const startedAt =
             typeof evt.data?.startedAt === "number" ? evt.data.startedAt : undefined;
           if (startedAt) {
-            if (typeof entry.sessionStartedAt !== "number") {
-              entry.sessionStartedAt = startedAt;
-            }
-            entry.execution = { ...entry.execution, status: "running", startedAt };
-            persist(entry.runId);
+            await mutateSubagentRuns(
+              [evt.runId],
+              (rows) => {
+                const current = rows.get(evt.runId);
+                if (!current || !isSameSubagentRunOwner(current, entry)) {
+                  throw new Error("Subagent lifecycle start lost its original run");
+                }
+                if (
+                  current.execution.status === "terminal" ||
+                  current.killIntent ||
+                  current.killReconciliation ||
+                  shouldSuppressSubagentRecoverySessionEffects(current) ||
+                  (current.execution.status === "running" &&
+                    current.execution.startedAt === startedAt &&
+                    typeof current.sessionStartedAt === "number")
+                ) {
+                  return { value: undefined };
+                }
+                return {
+                  value: undefined,
+                  postimages: new Map([
+                    [
+                      evt.runId,
+                      {
+                        ...current,
+                        sessionStartedAt: current.sessionStartedAt ?? startedAt,
+                        execution: { ...current.execution, status: "running" as const, startedAt },
+                      },
+                    ],
+                  ]),
+                };
+              },
+              { runs, context, assertCurrent },
+            );
           }
+          assertCurrent();
+          pendingLifecycle.clearPriorAttempt(evt.runId);
           return;
         }
         if (phase !== "end" && phase !== "error") {
@@ -93,6 +143,7 @@ export function createSubagentRegistryListener(config: {
           completeSubagentRunWithRecovery(
             {
               runId: evt.runId,
+              expectedEntry: entry,
               endedAt,
               outcome,
               reason,
@@ -115,24 +166,43 @@ export function createSubagentRegistryListener(config: {
           (entry.collect !== true ||
             (terminalOutcome.status !== "timeout" && terminalOutcome.reason !== "blocked"))
         ) {
-          // Drop any grace timer from an earlier aborted/error terminal so it can't
-          // later fire and settle this now-paused run with a false notice.
-          pendingLifecycle.clear(evt.runId);
           if (entry.collect !== true) {
-            if (
-              markSubagentRunPausedAfterYield({
-                entry,
-                endedAt,
-                startedAt: startedAt ?? entry.execution.startedAt,
-              })
-            ) {
-              persist(entry.runId);
-            }
-            if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
-              config.resumeRequesterSettleWake(entry.runId, entry);
+            await mutateSubagentRuns(
+              [evt.runId],
+              (rows) => {
+                const current = rows.get(evt.runId);
+                if (!current || !isSameSubagentRunOwner(current, entry)) {
+                  throw new Error("Subagent lifecycle yield lost its original run");
+                }
+                if (current.collect || current.killIntent || current.killReconciliation) {
+                  return { value: undefined };
+                }
+                const draft = structuredClone(current);
+                return {
+                  value: undefined,
+                  ...(markSubagentRunPausedAfterYield({
+                    entry: draft,
+                    endedAt,
+                    startedAt: startedAt ?? current.execution.startedAt,
+                  })
+                    ? { postimages: new Map([[evt.runId, draft]]) }
+                    : {}),
+                };
+              },
+              { runs, context, assertCurrent },
+            );
+            assertCurrent();
+            const paused = runs.get(evt.runId);
+            if (paused?.pauseReason === "sessions_yield") {
+              // An earlier event can arm grace while this row's publication awaits its ACK.
+              pendingLifecycle.clear(evt.runId);
+              if (paused.requesterSettleWake?.pauseNotice) {
+                config.resumeRequesterSettleWake(paused.runId, paused);
+              }
             }
             return;
           }
+          pendingLifecycle.clear(evt.runId);
           // A collector result is read by an explicit wait and never delivered by
           // a requester continuation, so nothing can resume a parked collector and
           // its waiter blocks for good. The attempt's own terminal is the only
@@ -145,12 +215,26 @@ export function createSubagentRegistryListener(config: {
           );
           return;
         }
-        if (preserveSubagentRunForRestart({ entry, terminal: terminalOutcome, persist })) {
+        const preservation = await preserveSubagentRunForRestart({
+          entry,
+          terminal: terminalOutcome,
+          runs,
+          context,
+          assertCurrent,
+        });
+        if (preservation.preserved) {
           pendingLifecycle.clear(evt.runId);
           return;
         }
+        assertCurrent();
         const classification = classifySubagentTerminalOutcome(terminalOutcome);
-        const pendingTerminal = { runId: evt.runId, endedAt, startedAt, terminalReply };
+        const pendingTerminal = {
+          runId: evt.runId,
+          expectedEntry: preservation.observedEntry,
+          endedAt,
+          startedAt,
+          terminalReply,
+        };
         if (
           classification === "cancellation" &&
           evt.data?.aborted === true &&

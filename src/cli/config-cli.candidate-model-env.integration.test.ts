@@ -84,6 +84,21 @@ function withModelConfig(
 }
 
 describe("config CLI candidate model environment", () => {
+  it("preserves a shorthand primary when adding default model fallbacks", async () => {
+    const raw = JSON.stringify({
+      agents: { entries: { main: {} }, defaults: { model: "fixture-model/allowed" } },
+    });
+    await withConfig(raw, async ({ configPath }) => {
+      await set("agents.defaults.model.fallbacks", '["fixture-model/backup"]', "--strict-json");
+      expect(readJson(configPath).agents.defaults.model).toEqual({
+        primary: "fixture-model/allowed",
+        fallbacks: ["fixture-model/backup"],
+      });
+      expect(read(`${configPath}.bak`)).toBe(raw);
+      expect(errors).toEqual([]);
+    });
+  });
+
   it("persists a valid candidate environment-backed model", async () => {
     const raw = JSON.stringify({ agents: { entries: { main: {} } } });
     await withModelConfig(raw, { CONFIG_VALID_CANDIDATE_MODEL: undefined }, async (configPath) => {

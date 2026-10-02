@@ -166,6 +166,7 @@ export function resolveLoginFailureFeedback(
       tone: "pending",
       rawError,
       titleKey: "login.failure.profileUnavailable.title",
+      summaryKey: "login.failure.profileUnavailable.summary",
       stepKeys: [
         "login.failure.profileUnavailable.stepRetry",
         "login.failure.profileUnavailable.stepAdmin",

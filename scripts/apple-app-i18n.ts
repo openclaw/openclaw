@@ -2,6 +2,8 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { decodeXml } from "../src/shared/xml.ts";
+import { selectDeterministicTranslation } from "./android-app-i18n.ts";
+import { compareAscii as compareCodeUnits } from "./lib/canonical-json.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -187,7 +189,7 @@ const LOCALIZED_WRAPPER_CONTRACTS: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(verbatim: self.item.title)",
-    "Text(verbatim: self.item.trailing)",
+    'Text(verbatim: "chat")',
     "Text(verbatim: self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: OpenClawTextValue\n    let detail: OpenClawTextValue",
     "private func actionButton(\n        _ title: OpenClawTextValue",
@@ -262,7 +264,7 @@ const RAW_LOCALIZATION_BYPASSES: Record<string, readonly string[]> = {
   ],
   "apps/ios/Sources/Design/CommandCenterSupport.swift": [
     "Text(self.item.title)",
-    "Text(self.item.trailing)",
+    'Text("chat")',
     "Text(self.item.detail)",
     "struct CommandEmptyStateRow: View {\n    let icon: String\n    let title: String",
     "private func actionButton(\n        _ title: String",
@@ -345,10 +347,6 @@ function formatTokens(value: string): string[] {
   return [...value.matchAll(FORMAT_RE)].map((match) => match[0]).toSorted();
 }
 
-function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export function serializeAppleCatalog(catalog: Catalog): string {
   const topLevelEntries = Object.entries(catalog);
   const lines = ["{"];
@@ -412,7 +410,7 @@ export function selectInfoPlistTranslation(
     (candidate) => candidate.trim() && candidate.trim() !== source.trim(),
   );
   if (translatedCandidates.length > 0) {
-    return chooseTranslation(source, translatedCandidates);
+    return selectDeterministicTranslation(source, translatedCandidates);
   }
   return existing?.source === source && existing.value.trim() ? existing.value : source;
 }
@@ -517,21 +515,6 @@ function appleCatalogValue(value: string): string {
   );
 }
 
-function chooseTranslation(source: string, translations: readonly string[]): string {
-  // Apple catalogs key by source, so duplicate native contexts must converge.
-  // Preserve shipped values first; otherwise choose deterministically and report every conflict.
-  const counts = new Map<string, number>();
-  for (const translation of translations) {
-    counts.set(translation, (counts.get(translation) ?? 0) + 1);
-  }
-  return (
-    [...counts].toSorted(([leftValue, leftCount], [rightValue, rightCount]) => {
-      const sourcePenalty = Number(leftValue === source) - Number(rightValue === source);
-      return sourcePenalty || rightCount - leftCount || compareCodeUnits(leftValue, rightValue);
-    })[0]?.[0] ?? source
-  );
-}
-
 function buildAppleCatalog(
   existingCatalog: Catalog,
   nativeSource: NativeSourceArtifact,
@@ -589,7 +572,8 @@ function buildAppleCatalog(
         };
         continue;
       }
-      const value = chooseTranslation(source, candidates);
+      const value =
+        candidates.length === 0 ? source : selectDeterministicTranslation(source, candidates);
       localizations[locale] = {
         stringUnit: {
           state: value === source ? "new" : "translated",

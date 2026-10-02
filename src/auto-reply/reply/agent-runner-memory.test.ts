@@ -36,13 +36,14 @@ import {
   appendTranscriptEvent,
   loadSessionEntry,
   readSessionTranscriptMessageEvents,
-  readSessionTranscriptActiveStats,
   readTranscriptStatsSync,
   upsertSessionEntryCore,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import {
@@ -61,6 +62,7 @@ import {
 } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
+  seedMemoryAccountingTranscript,
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
@@ -598,75 +600,38 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(releaseOperatorAuthority).toHaveBeenCalledOnce();
   });
 
-  it("marks memory inference from a non-owner requester as tainted", async () => {
-    const sessionEntry = createFlushSessionEntry();
-
-    await runDefaultMemoryFlush(sessionEntry, {
-      followupRun: createTestFollowupRun({ workspaceDir: rootDir, senderIsOwner: false }),
-    });
-
-    expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({ initialTurnTainted: true }),
-    );
-  });
-
   it.each([
     { label: "bounded tail", customTail: 512, newUser: false, tainted: true },
     { label: "latest usage", customTail: 0, newUser: false, tainted: true },
     { label: "new user boundary", customTail: 0, newUser: true, tainted: false },
+    {
+      label: "non-owner requester",
+      customTail: 0,
+      newUser: true,
+      tainted: true,
+      senderIsOwner: false,
+    },
   ])(
     "accounts for usage and owner-turn taint independently across $label",
-    async ({ customTail, newUser, tainted }) => {
+    async ({ customTail, newUser, tainted, senderIsOwner = true }) => {
       const scope = sessionScope("agent:main:main", "tainted-owner-session.json");
       const { sessionKey, storePath } = scope;
-      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-      const transcript = SessionManager.open(scope, rootDir);
-      const user = {
-        role: "user" as const,
-        content: "Research this",
-        timestamp: 1,
-        __openclaw: { senderIsOwner: true },
-      };
-      transcript.appendMessage(user);
-      const networkResult = {
-        role: "toolResult" as const,
-        toolCallId: "network-read",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text" as const, text: "untrusted page" }],
-        timestamp: 2,
-        __openclaw: { resultContentSource: "network" as const },
-      };
-      transcript.appendMessage(networkResult);
-      const answer = {
-        ...makeAssistantMessageFixture({
-          content: [{ type: "text", text: "network-derived answer" }],
-          stopReason: "stop",
-          errorMessage: undefined,
-        }),
-        usage: {
-          ...makeAssistantMessageFixture().usage,
-          input: 78_000,
-          output: 100,
-          totalTokens: 78_100,
-        },
-      };
-      transcript.appendMessage(answer);
-      if (newUser) {
-        transcript.appendMessage({ ...user, content: "Save my own notes", timestamp: 3 });
-      }
-      // The bounded case loses the original turn marker across this tail.
-      for (let index = 0; index < customTail; index += 1) {
-        transcript.appendCustomEntry("fixture-tail", { index });
-      }
+      await seedMemoryAccountingTranscript(scope, rootDir, { customTail, newUser });
       const sessionEntry = createFlushSessionEntry({ totalTokensFresh: customTail > 0 });
+      const hostAccounting = vi.spyOn(
+        transcriptAccounting,
+        "readSessionTranscriptAccountingFromProjection",
+      );
+      onTestFinished(() => {
+        hostAccounting.mockRestore();
+      });
 
       await runDefaultMemoryFlush(sessionEntry, {
         followupRun: createTestFollowupRun({
           workspaceDir: rootDir,
           sessionId: "session",
           sessionKey,
-          senderIsOwner: true,
+          senderIsOwner,
         }),
         sessionKey,
         storePath,
@@ -675,6 +640,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({ initialTurnTainted: tainted }),
       );
+      expect(hostAccounting).not.toHaveBeenCalled();
       if (customTail === 0) {
         expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeGreaterThanOrEqual(
           78_000,
@@ -796,8 +762,9 @@ describe("runMemoryFlushIfNeeded", () => {
 
   it("redacts and caps generic visible memory-flush failures before delivery", async () => {
     const sessionEntry = createFlushSessionEntry();
+    await writeTestSessionStore(sessionScope().storePath, "main", sessionEntry);
     const visibleErrorPayloads: Array<{ text?: string; isError?: boolean }> = [];
-    const token = "sk-abcdefghijklmnopqrstuv";
+    const token = ["sk", "abcdefghijklmnopqrstuv"].join("-");
     runWithModelFallbackMock.mockRejectedValueOnce(
       new Error(`provider failed with Authorization: Bearer ${token} ${"🚀".repeat(400)}`),
     );
@@ -2039,7 +2006,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "x".repeat(260) }, type: "message" },
     ]);
-    const growthBytes = readSessionTranscriptActiveStats(scope).sizeBytes - latchedBytes;
+    const growthBytes = readActiveTranscriptStats(scope).sizeBytes - latchedBytes;
     expect(growthBytes).toBeGreaterThan(0);
     expect(growthBytes).toBeLessThan(10);
     entry = await run(entry);
@@ -2117,7 +2084,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
     const manager = SessionManager.open(scope, rootDir);
     manager.appendMessage({ role: "user", content: "x".repeat(256), timestamp: 1 });
-    const activeBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const activeBytes = readActiveTranscriptStats(scope).sizeBytes;
     const sessionEntry: SessionEntry = createFlushSessionEntry({
       totalTokens: 10,
       compactionCount: 0,
@@ -2225,7 +2192,7 @@ describe("runMemoryFlushIfNeeded", () => {
         storePath: fixture.storePath,
         isHeartbeat: true,
       });
-    const initialBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const initialBytes = readActiveTranscriptStats(scope).sizeBytes;
     let settledBytes = 0;
     incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
     compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
@@ -2253,7 +2220,7 @@ describe("runMemoryFlushIfNeeded", () => {
       await replaceTranscriptEvents(scope, [
         { type: "message", message: { role: "user", content: "x".repeat(128) } },
       ]);
-      settledBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+      settledBytes = readActiveTranscriptStats(scope).sizeBytes;
       await host?.onHostCompactionTranscriptSettled?.(commit);
       return {
         ok: true,
@@ -2283,7 +2250,7 @@ describe("runMemoryFlushIfNeeded", () => {
     await replaceTranscriptEvents(scope, [
       { message: { role: "user", content: "small" }, type: "message" },
     ]);
-    const activeBytes = readSessionTranscriptActiveStats(scope).sizeBytes;
+    const activeBytes = readActiveTranscriptStats(scope).sizeBytes;
     const sessionEntry = createSessionEntry({
       compactionCount: 1,
       agentRuntimeOverride: "codex",

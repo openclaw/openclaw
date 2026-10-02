@@ -268,7 +268,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       const append =
         scenario === "storage failure"
-          ? vi.spyOn(sessionManager, "appendCustomEntry").mockImplementation(() => {
+          ? vi.spyOn(sessionManager, "appendCustomEntryAsync").mockImplementation(async () => {
               throw new Error("synthetic storage failure");
             })
           : undefined;
@@ -468,8 +468,8 @@ describe("attempt projection persistence through settlement", () => {
           onFinalPromptText: () => {},
           onSteeringAcknowledged: () => {},
           persistToolResultProjections: async () => {
-            persistToolResultProjections(projectionState, (customType, data) =>
-              manager.appendCustomEntry(customType, data),
+            await persistToolResultProjections(projectionState, (customType, data) =>
+              manager.appendCustomEntryAsync(customType, data),
             );
           },
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),

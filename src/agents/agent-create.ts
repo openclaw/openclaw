@@ -22,6 +22,7 @@ import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
+import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
 import {
   readAgentDeletionRecoveryHolds,
   resolveAgentDeletionRecoveryHolds,
@@ -279,7 +280,6 @@ async function writeIdentityFile(params: {
   try {
     const result = await workspaceRoot.read(DEFAULT_IDENTITY_FILENAME, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     existing = result.buffer.toString("utf-8");
   } catch (error) {
@@ -314,6 +314,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   const agentId = validation.agentId;
   const isBootstrapMain = agentId === BOOTSTRAP_AGENT_ID && params.bootstrapMain === true;
   const automaticBootstrap = params.bootstrapMain === true || params.bootstrapFirstAgent === true;
+  // Staged auth for a recreated identity must open that identity's databases beneath its
+  // completed deletion record. The scope covers only the receipt, so early exits never hold it.
+  const withCreationClaim = <T>(run: () => Promise<T>) =>
+    runWithAgentCreationClaim({ agentId }, run);
 
   const template = params.role ? await loadAgentRole(params.role) : undefined;
   const safeName = sanitizeAgentIdentityLine(rawName);
@@ -622,9 +626,14 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
             identityPublished = true;
           }
           // The receipt owns compensation until the config transform publishes this result.
+          // Capture the receipt before settlement so a failed close still reaches rollback.
           beforePersistentApply();
-          const preparedReceipt = await params.prepareConfigCommit?.();
-          configCommitReceipt = preparedReceipt ? preparedReceipt : undefined;
+          if (params.prepareConfigCommit) {
+            const prepareConfigCommit = params.prepareConfigCommit;
+            await withCreationClaim(async () => {
+              configCommitReceipt = (await prepareConfigCommit()) ?? undefined;
+            });
+          }
 
           return {
             nextConfig,
@@ -654,7 +663,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
           : {}),
       };
       params.onCommitted?.(result);
-      await committedReceipt?.commit();
+      if (committedReceipt) {
+        await withCreationClaim(async () => await committedReceipt.commit());
+      }
       if (
         deletion?.cleanupCompleted &&
         !tombstoneClaimed &&
@@ -684,8 +695,9 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
     });
   } catch (error) {
     if (configCommitReceipt) {
+      const stagedReceipt = configCommitReceipt;
       try {
-        await configCommitReceipt.rollback();
+        await withCreationClaim(async () => await stagedReceipt.rollback());
       } catch (rollbackError) {
         throw new Error(
           `${String(error)}\nstaged config rollback failed: ${String(rollbackError)}`,

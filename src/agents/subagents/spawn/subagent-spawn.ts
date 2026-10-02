@@ -68,7 +68,6 @@ export async function spawnSubagentDirect(
   const label = params.label?.trim() || "";
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const requesterSessionKey = ctx.agentSessionKey;
   const gatewayCaller = getGatewayToolCallerIdentity();
   const gatewayScope = getPluginRuntimeGatewayRequestScope();
   const gatewayContextResolver =
@@ -173,6 +172,7 @@ export async function spawnSubagentDirect(
     const initialSession = await createInitialSubagentSession({
       assertActive,
       cfg,
+      requesterAgentId,
       targetAgentId,
       childSessionKey,
       label: label || undefined,
@@ -183,6 +183,7 @@ export async function spawnSubagentDirect(
       spawnedWorkspaceDir,
       spawnedCwd,
       sessionPermissionPolicy: ctx.sessionPermissionPolicy,
+      worktree: params.worktree ? params : undefined,
       admissionPatch: admission.childSessionPatch,
       inheritedToolAllowlist: ctx.inheritedToolAllowlist,
       inheritedToolDenylist: ctx.inheritedToolDenylist,
@@ -291,7 +292,7 @@ export async function spawnSubagentDirect(
       soleCollectorChild: soleImplicitMember,
       spawnMode,
       task,
-      requesterSessionKey,
+      requesterSessionKey: ctx.agentSessionKey,
       requesterOrigin: childSessionOrigin,
       childSessionKey,
       label: label || undefined,
@@ -344,7 +345,7 @@ export async function spawnSubagentDirect(
         message: envelope.message,
         spawnedByKey: requesterInternalKey,
         toolSpawnMetadata,
-        spawnedWorkspaceDir,
+        spawnedWorkspaceDir: params.worktree ? undefined : spawnedWorkspaceDir,
         childSessionKey,
         childSessionOrigin,
         childIdem,
@@ -411,6 +412,14 @@ export async function spawnSubagentDirect(
         ),
         childLaunch.authorization,
         gatewayContextResolver,
+        childEntry?.sessionId && childEntry.lifecycleRevision
+          ? {
+              sessionKey: childSessionKey,
+              sessionId: childEntry.sessionId,
+              lifecycleRevision: childEntry.lifecycleRevision,
+              runId: childIdem,
+            }
+          : undefined,
       );
       acceptedChildRunId = readGatewayRunId(launch.response) ?? childIdem;
       cleanupOwner?.bindAcceptedRun(acceptedChildRunId);

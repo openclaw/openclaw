@@ -244,6 +244,7 @@ async function runCronIsolatedAgentTurnInTrace(
               {
                 sessionKey: prepared.context.runSessionKey,
                 sessionId: initialSessionId,
+                agentId: prepared.context.agentId,
                 lifecycleGeneration: runLifecycleGeneration,
                 cronRunsByJobId: new Map([
                   [params.job.id, { pacingEnabled: params.job.pacing !== undefined }],

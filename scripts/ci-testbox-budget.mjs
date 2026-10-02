@@ -78,7 +78,7 @@ export function boundedTestboxIdleMinutes(value) {
 
 async function main() {
   if (process.argv[2] === "configure") {
-    assertFreshTestboxAdmission(process.env.TESTBOX_EXPIRES_AT);
+    // The workflow checks queue age before checkout; admitted work keeps its lease.
     const path = "/tmp/.testbox/idle_timeout";
     const idle = boundedTestboxIdleMinutes(readFileSync(path, "utf8"));
     writeFileSync(path, `${idle}\n`);

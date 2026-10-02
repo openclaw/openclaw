@@ -2,8 +2,8 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/index.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,11 +13,15 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState as withRawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import {
+  createArtifactSessionAccess,
+  prepareArtifactSessionResolution,
+} from "./server-methods/artifacts-session-resolution.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type { RespondFn } from "./server-methods/types.js";
-import { resolveSessionKeyForRun } from "./server-session-key.js";
+import { resolveSessionForRun } from "./server-session-key.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -428,6 +432,52 @@ describe("gateway session lookups", () => {
     });
   });
 
+  it("keeps a shared-store run scoped to its logical owner", async () => {
+    await withOpenClawTestState({ label: "lookup-shared-owner" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      const sharedConfig: OpenClawConfig = {
+        agents: {
+          entries: { main: { default: true }, ops: {} },
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+        session: { scope: "global", store: storePath },
+      };
+      setRuntimeConfigSnapshot(sharedConfig);
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      replaceSessionEntrySync(
+        { agentId: "ops", storePath, sessionKey: "global" },
+        { sessionId: "shared-run", updatedAt: 1 },
+      );
+      const projection = await projectionFor(sharedConfig);
+      expect(
+        projection.findBySessionId({ sessionId: "shared-run", agentId: "main", federated: true }),
+      ).toMatchObject([{ agentId: "ops", key: "global", storeTarget: { agentId: "main" } }]);
+      expect(resolveSessionForRun("shared-run", { agentId: "ops", projection })).toEqual({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      expect
+        .soft(resolveSessionForRun("shared-run", { agentId: "main", projection }))
+        .toBeUndefined();
+      expect.soft(resolveSessionForRun("shared-run", { projection })).toEqual({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      const resolveArtifacts = await prepareArtifactSessionResolution(
+        { runId: "shared-run" },
+        projection,
+      );
+      using access = createArtifactSessionAccess({
+        getRuntimeConfig: () => sharedConfig,
+        client: null,
+      });
+      expect(await resolveArtifacts(access)).toMatchObject({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+    });
+  });
+
   it("keeps the freshest same-session-id row when prompts are not decoded", async () => {
     await withOpenClawTestState({ label: "lookup-projection-freshness" }, async () => {
       setRuntimeConfigSnapshot(cfg);
@@ -454,33 +504,42 @@ describe("gateway session lookups", () => {
       const statements = vi.spyOn(DatabaseSync.prototype, "prepare");
       const observed = measureSiblingDecodes(() => {
         for (let run = 0; run < 20; run++) {
-          expect(resolveSessionKeyForRun(`orphan-${run}`, { projection })).toBeUndefined();
+          expect(resolveSessionForRun(`orphan-${run}`, { projection })).toBeUndefined();
         }
-        return resolveSessionKeyForRun("shared-id", { agentId: "main", projection });
+        return resolveSessionForRun("shared-id", { agentId: "main", projection });
       });
       expect(statements).not.toHaveBeenCalled();
       statements.mockRestore();
-      expect(observed.result).toBe("fresh");
+      expect(observed.result).toEqual({ sessionKey: "agent:main:fresh", agentId: "main" });
       expect(observed.decodes).toBe(0);
       replaceSessionEntrySync(
         { ...scope, sessionKey: "agent:main:stale" },
         { sessionId: "shared-id", updatedAt: 100 },
       );
-      expect(resolveSessionKeyForRun("shared-id", { projection })).toBe("stale");
-      expect(resolveSessionKeyForRun("late-id", { projection })).toBeUndefined();
+      expect(resolveSessionForRun("shared-id", { projection })).toEqual({
+        sessionKey: "agent:main:stale",
+        agentId: "main",
+      });
+      expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
       replaceSessionEntrySync(
         { ...scope, sessionKey: "agent:main:late" },
         { sessionId: "late-id", updatedAt: 1 },
       );
-      expect(resolveSessionKeyForRun("late-id", { projection })).toBe("late");
+      expect(resolveSessionForRun("late-id", { projection })).toEqual({
+        sessionKey: "agent:main:late",
+        agentId: "main",
+      });
       replaceSessionEntrySync(
         { ...scope, sessionKey: "agent:main:late" },
         { sessionId: "rolled-id", updatedAt: 2 },
       );
-      expect(resolveSessionKeyForRun("late-id", { projection })).toBeUndefined();
-      expect(resolveSessionKeyForRun("rolled-id", { projection })).toBe("late");
+      expect(resolveSessionForRun("late-id", { projection })).toBeUndefined();
+      expect(resolveSessionForRun("rolled-id", { projection })).toEqual({
+        sessionKey: "agent:main:late",
+        agentId: "main",
+      });
       projection.dispose();
-      expect(resolveSessionKeyForRun("rolled-id", { projection })).toBeUndefined();
+      expect(resolveSessionForRun("rolled-id", { projection })).toBeUndefined();
     });
   });
 });

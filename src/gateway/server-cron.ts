@@ -13,10 +13,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { getRuntimeConfig } from "../config/io.js";
-import {
-  resolveSessionStoreCompatibilityAgentId,
-  tryGetLegacyDefaultAgentId,
-} from "../config/legacy.default-agent-owner.js";
+import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentIdFromSessionKey,
@@ -305,7 +302,6 @@ export function buildGatewayCronService(params: {
   };
 
   const defaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
-  const legacyDefaultAgentId = tryGetLegacyDefaultAgentId(params.cfg);
   const resolveSessionStorePath = (agentId?: string) =>
     resolveSessionStorePathCore(params.cfg.session?.store, {
       agentId: agentId ?? resolveSessionStoreCompatibilityAgentId(getRuntimeConfig()),
@@ -518,7 +514,6 @@ export function buildGatewayCronService(params: {
     listConfiguredChannels: () => listConfiguredMessageChannels(getRuntimeConfig()),
     ...(scriptRuntime ? { evaluateCronTrigger: scriptRuntime.evaluateTrigger } : {}),
     ...(defaultAgentId ? { defaultAgentId } : {}),
-    ...(legacyDefaultAgentId ? { legacyDefaultAgentId } : {}),
     resolveDefaultAgentId: () => tryResolveAmbientOwnerAgentId(getRuntimeConfig()),
     resolveSessionStoreAgentIds: () => {
       const cfg = getRuntimeConfig();
@@ -627,24 +622,12 @@ export function buildGatewayCronService(params: {
       });
       const summaryIsSilent =
         typeof result.summary === "string" && isSilentReplyText(result.summary, SILENT_REPLY_TOKEN);
-      if (summaryIsSilent) {
-        const { summary: _summary, ...silentResult } = result;
-        const completion = await finalizeCronCompletionAnnouncement({
-          deliveryAttemptFence,
-          job,
-          suppressionReason: "silent",
-          deps: params.deps,
-          resolveCronAgent,
-          logger: cronLogger,
-          label: "command",
-        });
-        return { ...silentResult, ...completion };
-      }
       const completion = await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
+        suppressionReason: summaryIsSilent ? "silent" : undefined,
         text:
-          typeof result.summary === "string" && result.summary.trim()
+          !summaryIsSilent && typeof result.summary === "string" && result.summary.trim()
             ? redactCronCommandSummaryForExternalDelivery(result.summary)
             : undefined,
         runStartedAtMs: job.state.runningAtMs,
@@ -655,6 +638,10 @@ export function buildGatewayCronService(params: {
         label: "command",
         traceResolvedFailure: true,
       });
+      if (summaryIsSilent) {
+        const { summary: _summary, ...silentResult } = result;
+        return { ...silentResult, ...completion };
+      }
       return { ...result, ...completion };
     },
     sendCronWebhook: async ({ job, event, abortSignal, onDeliveryState, assertCurrent }) => {
@@ -895,7 +882,7 @@ export function buildGatewayCronService(params: {
   });
 
   const exitWatcherHandlers = {
-    legacyDefaultAgentId,
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
     getProcessSupervisor,
     fireOnExit: async (job, exit, controls) => {
       // Reload adopts children before draining the previous scheduler. Its
@@ -971,7 +958,7 @@ export function buildGatewayCronService(params: {
   } satisfies CronExitWatcherHandlers;
   exitWatchers = createCronExitWatchers(exitWatcherHandlers, params.scheduler);
   const streamWatchers = createCronStreamWatchers({
-    legacyDefaultAgentId,
+    getDefaultAgentId: () => cron.getDefaultAgentId(),
     scheduler: params.scheduler,
     getProcessSupervisor,
     updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {

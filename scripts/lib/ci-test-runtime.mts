@@ -1,4 +1,6 @@
-import { globSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { globSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { agentVitestProjectOwners } from "../../test/vitest/vitest.agents-paths.mjs";
 import { databaseWorkerCoreTestFiles } from "../../test/vitest/vitest.database-worker-core-paths.mjs";
 import {
@@ -20,6 +22,7 @@ import {
   unitTestIncludePatterns,
 } from "../../test/vitest/vitest.unit-paths.mjs";
 import { buildVitestRunPlans } from "../test-projects.test-support.mts";
+import nativeBunQualification from "./ci-test-native-bun-qualification.json" with { type: "json" };
 import { vitestOptionConsumesNextArg } from "./vitest-cli-mode.mts";
 
 export type CiTestRuntimePolicy = "node" | "bun-compatible" | "dual";
@@ -32,13 +35,25 @@ type TestSelection = {
   vitestArgs?: readonly string[];
 };
 type TestShard = TestSelection & { groups?: readonly TestSelection[] };
-export type CiTestRuntimeSelection = {
+type VitestRuntimeSelection = {
   runtime: TestRuntime;
+  engine?: "vitest";
   configs?: string[];
   includePatterns?: string[];
   includeAfterShard?: true;
   env?: Readonly<Record<string, string>>;
 };
+export type CiTestRuntimeSelection =
+  | VitestRuntimeSelection
+  | {
+      runtime: "bun";
+      engine: "bun-test";
+      files: string[];
+      configs?: never;
+      includePatterns?: never;
+      includeAfterShard?: never;
+      env?: never;
+    };
 
 // Short-lived UI workers spend less time compiling their top JIT tier when it
 // starts later. Keep every tier enabled and share the producer/consumer policy.
@@ -51,14 +66,44 @@ export const BUN_UI_TEST_ENV = {
 
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
 const gatewayClientConfig = "test/vitest/vitest.gateway-client.config.ts";
+const unitFastConfig = "test/vitest/vitest.unit-fast.config.ts";
+const exactTestFilePattern = /^[\w./-]+\.test\.[cm]?[jt]sx?$/u;
+const nativeBunTestHashes: Readonly<Record<string, string>> = nativeBunQualification.tests;
+const nativeBunHelperHashes: Readonly<Record<string, Readonly<Record<string, string>>>> =
+  nativeBunQualification.helpers;
 const bunCompatibleConfigs = new Set([
   "test/vitest/vitest.unit-fast-fake-timers.config.ts",
   "test/vitest/vitest.unit-fast-isolated.config.ts",
   "test/vitest/vitest.extension-memory.config.ts",
   gatewayClientConfig,
 ]);
-// Measured whole-file admission; the rest of agents-support retains Node.
-const bunCompatibleAgentSupportFiles = ["src/agents/worktrees/service.removal-recovery.test.ts"];
+// Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
+const bunCompatibleScopedOwners = new Map([
+  [
+    agentVitestProjectOwners.support.config,
+    {
+      dir: agentVitestProjectOwners.support.dir,
+      files: ["src/agents/worktrees/service.removal-recovery.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.plugins.config.ts",
+    {
+      dir: "src/plugins",
+      files: ["src/plugins/plugin-module-generation.interop.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.tooling.config.ts",
+    {
+      dir: "",
+      files: [
+        "test/scripts/oxlint-config.test.ts",
+        "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
+      ],
+    },
+  ],
+]);
 const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 // src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:
 // cold fs-safe native initialization roots the caller's ALS through custom_gc.
@@ -66,7 +111,7 @@ const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 const runtimePartitions = new Map<
   string,
   {
-    files: (cwd: string) => string[];
+    files: (cwd: string, includePatterns?: string[]) => string[];
     nodeRequired: ReadonlySet<string> | ((file: string) => boolean);
     includeAfterShard?: true;
   }
@@ -83,19 +128,16 @@ const runtimePartitions = new Map<
     },
   ],
   [
-    "test/vitest/vitest.unit-fast.config.ts",
+    unitFastConfig,
     {
-      files: unitFastFiles,
+      files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
+        // The pinned WebKit still misidentifies UTF-16 surrogate-pair segment boundaries.
         "packages/markdown-core/src/render-aware-chunking.test.ts",
-        // Bun skips a sibling diagnostics subscriber when warm-worker cleanup unsubscribes.
-        "src/agents/code-mode-node.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
         // Asserts V8 used_heap_size deltas, cachedDataVersionTag stability, explicit GC,
         // and Worker resourceLimits.maxOldGenerationSizeMb propagation.
         "src/infra/worker-task-pool.memory.test.ts",
-        // queryObjects collection assertions require Node V8.
-        "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",
@@ -171,9 +213,46 @@ function partitionRequiresNode(
     : partition.nodeRequired.has(file);
 }
 
-function unitFastFiles(): string[] {
-  const otherOwners = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
-  return getUnitFastTestFiles().filter((file) => !otherOwners.has(file));
+function unitFastFiles(includePatterns?: string[]): string[] {
+  const otherOwners = new Set([
+    ...getUnitFastTimerTestFiles(includePatterns),
+    ...getUnitFastIsolatedTestFiles(includePatterns),
+  ]);
+  return getUnitFastTestFiles(includePatterns).filter((file) => !otherOwners.has(file));
+}
+
+function matchesNativeBunSource(file: string, sha256: string, cwd: string): boolean {
+  try {
+    return (
+      createHash("sha256")
+        .update(readFileSync(path.join(cwd, file)))
+        .digest("hex") === sha256
+    );
+  } catch {
+    // Missing or unreadable qualification inputs retain the ordinary Vitest run.
+    return false;
+  }
+}
+
+function qualifiedNativeBunFiles(files: readonly string[], cwd: string): string[] {
+  const candidates = files.filter((file) => nativeBunTestHashes[file]);
+  if (
+    !candidates.length ||
+    !Object.entries(nativeBunQualification.setup).every(([file, sha256]) =>
+      matchesNativeBunSource(file, sha256, cwd),
+    )
+  ) {
+    return [];
+  }
+  // Native table argument semantics are qualified against test bytes, not the
+  // production code they exercise. Changed tests/helpers keep Vitest coverage.
+  return candidates.filter(
+    (file) =>
+      matchesNativeBunSource(file, nativeBunTestHashes[file]!, cwd) &&
+      Object.entries(nativeBunHelperHashes[file] ?? {}).every(([helper, sha256]) =>
+        matchesNativeBunSource(helper, sha256, cwd),
+      ),
+  );
 }
 
 function unitFiles(cwd: string): string[] {
@@ -286,7 +365,7 @@ export function resolveCiTestRuntimeSelections(
   if (selection.targets?.length) {
     // Preserve exact target argv and its native owner; broad targets can carry
     // multiple process/filter contracts and stay on Node.
-    if (selection.targets.some((target) => !/^[\w./-]+\.test\.[cm]?[jt]sx?$/u.test(target))) {
+    if (selection.targets.some((target) => !exactTestFilePattern.test(target))) {
       return node;
     }
     const plans = selection.targets.flatMap((target) => buildVitestRunPlans([target], cwd));
@@ -296,13 +375,15 @@ export function resolveCiTestRuntimeSelections(
     if (plans.every((plan) => bunCompatibleConfigs.has(plan.config))) {
       return completeBun();
     }
+    const config = plans[0]!.config;
+    const scopedOwner = bunCompatibleScopedOwners.get(config);
     if (
-      plans.every((plan) => plan.config === agentVitestProjectOwners.support.config) &&
-      selection.targets.every((file) => bunCompatibleAgentSupportFiles.includes(file))
+      scopedOwner &&
+      plans.every((plan) => plan.config === config) &&
+      selection.targets.every((file) => scopedOwner.files.includes(file))
     ) {
       return completeBun();
     }
-    const config = plans[0]!.config;
     const partition = runtimePartitions.get(config);
     if (
       !partition ||
@@ -311,12 +392,25 @@ export function resolveCiTestRuntimeSelections(
     ) {
       return node;
     }
-    const files = new Set(partition.files(cwd));
-    return selection.targets.every(
-      (target) => files.has(target) && !partitionRequiresNode(partition, target),
-    )
-      ? completeBun()
-      : node;
+    const files = new Set(partition.files(cwd, [...selection.targets]));
+    if (
+      !selection.targets.every(
+        (target) => files.has(target) && !partitionRequiresNode(partition, target),
+      )
+    ) {
+      return node;
+    }
+    if (
+      config === unitFastConfig &&
+      args.length === 0 &&
+      qualifiedNativeBunFiles(selection.targets, cwd).length === selection.targets.length
+    ) {
+      return [
+        ...(policy === "dual" ? node : []),
+        { runtime: "bun", engine: "bun-test", files: [...selection.targets] },
+      ];
+    }
+    return completeBun();
   }
   if (
     selection.configs?.length === 2 &&
@@ -341,13 +435,13 @@ export function resolveCiTestRuntimeSelections(
   if (bunCompatibleConfigs.has(config)) {
     return completeBun();
   }
-  if (config === agentVitestProjectOwners.support.config) {
-    const owner = agentVitestProjectOwners.support;
+  const scopedOwner = bunCompatibleScopedOwners.get(config);
+  if (scopedOwner) {
     const includePatterns = selection.includePatterns?.length ? selection.includePatterns : null;
-    const qualifiedPatterns = relativizeScopedPatterns(bunCompatibleAgentSupportFiles, owner.dir);
+    const qualifiedPatterns = relativizeScopedPatterns(scopedOwner.files, scopedOwner.dir);
     if (
       includePatterns &&
-      relativizeScopedPatterns(includePatterns, owner.dir).every((pattern) =>
+      relativizeScopedPatterns(includePatterns, scopedOwner.dir).every((pattern) =>
         qualifiedPatterns.includes(pattern),
       )
     ) {
@@ -355,8 +449,15 @@ export function resolveCiTestRuntimeSelections(
     }
     const bunFiles =
       policy === "dual"
-        ? bunCompatibleAgentSupportFiles.filter((file) =>
-            matchesVitestCliSelection(file, owner.include, [], owner.dir, {}, includePatterns),
+        ? scopedOwner.files.filter((file) =>
+            matchesVitestCliSelection(
+              file,
+              scopedOwner.files,
+              [],
+              scopedOwner.dir,
+              {},
+              includePatterns,
+            ),
           )
         : [];
     return bunFiles.length ? [...node, { runtime: "bun", includePatterns: bunFiles }] : node;
@@ -365,7 +466,14 @@ export function resolveCiTestRuntimeSelections(
   if (!partition || (partition.includeAfterShard && !uiPartition)) {
     return node;
   }
-  const inventory = partition.files(cwd);
+  // Reuse canonical scoped analysis only for exact files; glob envelopes keep
+  // their full inventory and existing matcher semantics.
+  const exactSelection = selection.includePatterns?.every((pattern) =>
+    exactTestFilePattern.test(pattern),
+  )
+    ? [...selection.includePatterns]
+    : undefined;
+  const inventory = partition.files(cwd, exactSelection);
   const requested = new Set(selection.includePatterns ?? []);
   // Canonical file inventories should not reparse every file pair as a glob.
   const exactFiles = selection.includePatterns?.every(
@@ -383,6 +491,12 @@ export function resolveCiTestRuntimeSelections(
     return node;
   }
   const nodeFiles = files.filter((file) => partitionRequiresNode(partition, file));
+  // Ordinary CI passes no extra Vitest argv. Collection, filters and overrides
+  // keep Vitest's interpretation rather than silently changing native semantics.
+  const nativeFiles =
+    config === unitFastConfig && args.length === 0 ? qualifiedNativeBunFiles(bunFiles, cwd) : [];
+  const nativeSet = new Set(nativeFiles);
+  const vitestFiles = bunFiles.filter((file) => !nativeSet.has(file));
   return [
     ...(policy === "dual"
       ? node
@@ -395,12 +509,19 @@ export function resolveCiTestRuntimeSelections(
             },
           ]
         : []),
-    {
-      runtime: "bun",
-      includePatterns: bunFiles,
-      ...(partition.includeAfterShard ? { includeAfterShard: true } : {}),
-      ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
-    },
+    ...(vitestFiles.length
+      ? [
+          {
+            runtime: "bun" as const,
+            includePatterns: vitestFiles,
+            ...(partition.includeAfterShard ? { includeAfterShard: true as const } : {}),
+            ...(config === "ui/vitest.config.ts" ? { env: BUN_UI_TEST_ENV } : {}),
+          },
+        ]
+      : []),
+    ...(nativeFiles.length
+      ? [{ runtime: "bun" as const, engine: "bun-test" as const, files: nativeFiles }]
+      : []),
   ];
 }
 

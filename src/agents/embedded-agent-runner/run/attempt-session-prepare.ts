@@ -37,9 +37,12 @@ import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import { createEmbeddedAgentResourceLoader } from "../resource-loader.js";
+import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { applySystemPromptToSession } from "../system-prompt.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
 import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
@@ -202,6 +205,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const { session: activeSession } = await createAgentSessionForEmbeddedRunner(sessionOptions, {
     // Without a resolved model budget, the outer loop cannot own bounded recovery.
     contextOverflowRecoveryOwner: attempt.contextTokenBudget === undefined ? "session" : "caller",
+    resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
+      attempt,
+      input.sessionAgentId,
+    ),
     beforeToolBatch: input.clientToolPreparation.catalogToolHookContext
       ? createToolLoopBatchAdmission(input.clientToolPreparation.catalogToolHookContext)
       : undefined,
@@ -367,6 +374,9 @@ type SessionBoundaryAttempt = Pick<
   | "onUserMessagePersistenceInvalidated"
   | "operation"
   | "prompt"
+  | "promptCacheKey"
+  | "sessionId"
+  | "sessionKey"
   | "skipPreparedUserTurnMessage"
   | "suppressNextUserMessagePersistence"
   | "userTurnTranscriptRecorder"
@@ -493,25 +503,35 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     };
   };
 
-  if (typeof activeSession.agent.convertToLlm === "function") {
-    const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
-    activeSession.agent.convertToLlm = async (messages) => {
-      const normalized = normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions());
-      const converted = await baseConvertToLlm(
-        // Persisted carriers stay after their user turn, including during tool loops;
-        // moving one would change the prefix bound to later thinking signatures.
-        input.appendOnlyRuntimeContext
-          ? normalized
-          : relocateCurrentRuntimeContextCarrierToTail(normalized),
-      );
-      for (const message of converted) {
-        if (message.role === "user" && message.runtimeContextCarrier) {
-          message.runtimeContextCarrierRetained = input.appendOnlyRuntimeContext;
-        }
+  const baseConvertToLlm = activeSession.agent.convertToLlm.bind(activeSession.agent);
+  activeSession.agent.convertToLlm = async (messages) => {
+    let removedRuntimeContext: AgentMessage[] | undefined;
+    const normalized = normalizeMessagesForLlmBoundary(messages, {
+      ...buildBoundaryOptions(),
+      onRuntimeContextCarrierRemoved: (removed) => {
+        removedRuntimeContext = removed;
+      },
+    });
+    const converted = await baseConvertToLlm(
+      // Persisted carriers stay after their user turn, including during tool loops;
+      // moving one would change the prefix bound to later thinking signatures.
+      input.appendOnlyRuntimeContext
+        ? normalized
+        : relocateCurrentRuntimeContextCarrierToTail(normalized),
+    );
+    for (const message of converted) {
+      if (message.role === "user" && message.runtimeContextCarrier) {
+        message.runtimeContextCarrierRetained = input.appendOnlyRuntimeContext;
       }
-      return converted;
-    };
-  }
+    }
+    if (
+      !input.appendOnlyRuntimeContext &&
+      recordRuntimeContextProjection(attempt.sessionId, removedRuntimeContext, converted)
+    ) {
+      declarePromptHistoryRewrite({ ...attempt, reason: "runtimeContextCarrier" });
+    }
+    return converted;
+  };
 
   return {
     boundaryTimezone,

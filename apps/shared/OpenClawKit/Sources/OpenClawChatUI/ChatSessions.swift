@@ -539,6 +539,7 @@ public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashabl
 
 public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {
     public let groups: [OpenClawChatSessionGroup]
+    public var sectionOrder: [String]?
 }
 
 public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equatable {
@@ -568,6 +569,10 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var icon: String?
     public var channel: String?
     public var channelAvatarUrl: String?
+    public var origin: [String: AnyCodable]?
+    public var chatType: String?
+    public var groupChannel: String?
+    public var deliveryContext: [String: AnyCodable]?
     public var owner: Owner?
     public var participants: [Participant]?
     public var expandedParticipants: [Participant]?
@@ -932,11 +937,12 @@ public enum OpenClawChatChildSessionPager {
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
     public let path: String?
-    public let count: Int?
-    public let totalCount: Int?
+    public var count: Int?
+    public var totalCount: Int?
     public let offset: Int?
-    public let nextOffset: Int?
-    public let hasMore: Bool?
+    public var nextOffset: Int?
+    public var nextOffsetPresent: Bool
+    public var hasMore: Bool?
     public let owners: [OpenClawChatSessionEntry.CreatedActor]?
     public let ownerSessionCounts: [SessionOwnerSessionCount]?
     public let people: [SessionPerson]?
@@ -953,6 +959,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         totalCount: Int? = nil,
         offset: Int? = nil,
         nextOffset: Int? = nil,
+        nextOffsetPresent: Bool? = nil,
         hasMore: Bool? = nil,
         owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
         ownerSessionCounts: [SessionOwnerSessionCount]? = nil,
@@ -969,6 +976,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         self.totalCount = totalCount
         self.offset = offset
         self.nextOffset = nextOffset
+        self.nextOffsetPresent = nextOffsetPresent ?? (nextOffset != nil)
         self.hasMore = hasMore
         self.owners = owners
         self.ownerSessionCounts = ownerSessionCounts
@@ -978,5 +986,31 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         self.involvingProfileId = involvingProfileId
         self.defaults = defaults
         self.sessions = sessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ts, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
+        case owners, ownerSessionCounts, people, peopleIncomplete, peopleSessionCount, involvingProfileId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            ts: container.decodeIfPresent(Double.self, forKey: .ts),
+            path: container.decodeIfPresent(String.self, forKey: .path),
+            count: container.decodeIfPresent(Int.self, forKey: .count),
+            totalCount: container.decodeIfPresent(Int.self, forKey: .totalCount),
+            offset: container.decodeIfPresent(Int.self, forKey: .offset),
+            nextOffset: container.decodeIfPresent(Int.self, forKey: .nextOffset),
+            nextOffsetPresent: container.contains(.nextOffset),
+            hasMore: container.decodeIfPresent(Bool.self, forKey: .hasMore),
+            owners: container.decodeIfPresent([OpenClawChatSessionEntry.CreatedActor].self, forKey: .owners),
+            ownerSessionCounts: container.decodeIfPresent([SessionOwnerSessionCount].self, forKey: .ownerSessionCounts),
+            people: container.decodeIfPresent([SessionPerson].self, forKey: .people),
+            peopleIncomplete: container.decodeIfPresent(Bool.self, forKey: .peopleIncomplete),
+            peopleSessionCount: container.decodeIfPresent(Int.self, forKey: .peopleSessionCount),
+            involvingProfileId: container.decodeIfPresent(String.self, forKey: .involvingProfileId),
+            defaults: container.decodeIfPresent(OpenClawChatSessionsDefaults.self, forKey: .defaults),
+            sessions: container.decode([OpenClawChatSessionEntry].self, forKey: .sessions))
     }
 }

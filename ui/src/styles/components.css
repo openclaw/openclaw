@@ -2328,7 +2328,13 @@ select.input {
   margin-top: 8px;
 }
 
+.lazy-view-error__details {
+  max-width: 100%;
+  color: var(--muted);
+}
+
 .lazy-view-error__detail {
+  display: block;
   margin-top: 8px;
   max-width: 100%;
   color: var(--muted);

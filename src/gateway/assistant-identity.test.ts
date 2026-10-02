@@ -55,17 +55,9 @@ describe("resolveAssistantIdentity", () => {
       expected: "ops",
     },
     {
-      name: "retained legacy owner",
+      name: "first entry despite retained Doctor provenance",
       cfg: retainLegacyDefaultAgentId(
         { agents: { entries: { ops: {}, research: {} } } },
-        "research",
-      ),
-      expected: "research",
-    },
-    {
-      name: "first entry for undesignated explicit presentation despite provenance",
-      cfg: retainLegacyDefaultAgentId(
-        { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
         "research",
       ),
       expected: "ops",

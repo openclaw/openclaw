@@ -1,8 +1,13 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
-import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
+import {
+  createUpdateDoctorDatabaseWriteCapture,
+  DoctorMaintenanceRefusalError,
+} from "../infra/update-doctor-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -171,7 +176,7 @@ export function createDoctorMaintenanceState(options: {
         await enterResources(owner!);
       }
       if (migration) {
-        const result = await resources!.run(() => migration.complete());
+        const result = migration.result;
         for (const change of [...result.changes, ...(result.notices ?? [])]) {
           params.runtime.log(sanitizeDoctorNote(change));
         }
@@ -210,6 +215,105 @@ export function createDoctorMaintenanceState(options: {
         });
       } finally {
         // Restoration and update receipts use a fresh scope for the new file identity.
+        await enterResources(owner!);
+      }
+    },
+    async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
+      const { enableDoctorSqliteReclamation } = await import("./doctor-sqlite-reclamation.js");
+      const { closeOpenClawAgentDatabaseByPathAsync } =
+        await import("../state/openclaw-agent-db-lifecycle.js");
+      const databasePath = resolveOpenClawStateSqlitePath(selectedEnv);
+      options.signal.throwIfAborted();
+      options.assertCurrent?.();
+      owner!.assertCurrent();
+      await closeResources();
+      let operationError: Error | undefined;
+      let result: { warnings: string[] } | undefined;
+      try {
+        result = await owner!.run(async () => {
+          for (const agent of agents) {
+            await closeOpenClawAgentDatabaseByPathAsync(agent.path, agent.agentId);
+          }
+          await closeOpenClawStateDatabaseByPathAsync(databasePath);
+          await assertDoctorAgentLeaseAdmission(selectedEnv);
+          return enableDoctorSqliteReclamation({
+            env: selectedEnv,
+            agents,
+            signal: options.signal,
+            assertCurrent: () => {
+              options.assertCurrent?.();
+              owner!.assertCurrent();
+              owner!.assertDatabaseAccess(databasePath);
+            },
+            log: params.runtime.log,
+          });
+        });
+      } catch (error) {
+        operationError = toErrorObject(error, "SQLite reclamation failed.");
+      }
+      // Keep the original write-capture baseline until final maintenance release.
+      try {
+        await enterResources(owner!);
+      } catch (error) {
+        if (operationError !== undefined) {
+          throw new AggregateError(
+            [operationError, error],
+            "SQLite reclamation and maintenance scope restoration failed.",
+            { cause: error },
+          );
+        }
+        throw error;
+      }
+      if (operationError !== undefined) {
+        throw operationError;
+      }
+      return result!;
+    },
+    async cleanupRetainedRuntimes(inspectService: boolean) {
+      const { captureRetainedNativeWorkerSource } =
+        await import("../infra/worker-native-lifecycle.js");
+      const { retireIdleOpenClawStateReadWorkers } =
+        await import("../state/openclaw-state-read-worker.js");
+      const { prepareRetainedUpdateRuntimeCleanup } = await import("./doctor-retained-runtime.js");
+      options.assertCurrent?.();
+      owner!.assertCurrent();
+      const cleanup = await state.run(() =>
+        prepareRetainedUpdateRuntimeCleanup(selectedEnv, { inspectService }),
+      );
+      const nativeSource = captureRetainedNativeWorkerSource();
+      // This phase runs after the tracked Doctor callback has settled.
+      let readersRetired: boolean;
+      let brokerRetired: boolean;
+      try {
+        await closeResources();
+        readersRetired = await retireIdleOpenClawStateReadWorkers(nativeSource);
+        brokerRetired = await nativeSource.retireIdleBroker();
+      } catch (cause) {
+        throw new DoctorMaintenanceRefusalError(
+          `Doctor inspection resource cleanup failed: ${formatErrorMessage(cause)}. Resolve this cleanup failure before restarting the Gateway or rerunning openclaw doctor --fix.`,
+          { kind: "data-at-risk", reason: "active-mutation" },
+          { cause },
+        );
+      }
+      try {
+        await owner!.run(() =>
+          cleanup(true, {
+            assertCurrent() {
+              options.assertCurrent?.();
+              owner!.assertCurrent();
+              owner!.assertDatabaseAccess(resolveOpenClawStateSqlitePath(selectedEnv));
+            },
+            assertResourcesSettled() {
+              // Worker threads share this PID and are invisible to the process census.
+              if (!readersRetired || !brokerRetired || nativeSource.hasActiveWorkers) {
+                throw new Error(
+                  `independent native work in this process (PID: ${process.pid}); let these holders finish, then rerun openclaw doctor --fix`,
+                );
+              }
+            },
+          }),
+        );
+      } finally {
         await enterResources(owner!);
       }
     },

@@ -11,10 +11,9 @@ import type { GatewayRequestHandlers } from "./server-methods/types.js";
 import { defineValidatedGatewayHandler } from "./server-methods/validation.js";
 import { SessionCompanionAskError } from "./session-companion-errors.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import { hiddenSessionNotFound } from "./session-sharing-policy.js";
 import { prepareSessionSharing, resolveSessionSharingTarget } from "./session-sharing.js";
-import { resolveSessionStoreKey } from "./session-store-key.js";
+import { resolveRequestedSessionStoreTarget } from "./session-store-key.js";
 import { captureGatewayClientUploadCommitGuard } from "./upload-policy.js";
 
 function resolveCompanionTarget(
@@ -29,19 +28,14 @@ function resolveCompanionTarget(
     };
   }
   const cfg = context.getRuntimeConfig();
-  const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
+  const requested = resolveRequestedSessionStoreTarget(cfg, params.sessionKey, params.agentId);
   if (!requested.ok) {
     return requested;
   }
   return {
     ok: true as const,
     companion,
-    agentId: requested.agentId,
-    sessionKey: resolveSessionStoreKey({
-      cfg,
-      sessionKey: params.sessionKey,
-      storeAgentId: requested.agentId,
-    }),
+    ...requested.value,
   };
 }
 

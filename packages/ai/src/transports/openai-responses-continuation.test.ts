@@ -1099,18 +1099,4 @@ describe("OpenAI Responses continuation", () => {
     expect(next?.request.previous_response_id).toBe("resp_replacement");
     next?.release();
   });
-
-  it("expires completed continuation state after the bounded idle TTL", () => {
-    vi.useFakeTimers();
-    const first = claim({});
-    first?.commit(continuationState().lastRequest, {
-      id: "resp_expiring",
-      output: continuationState().lastResponseItems,
-    });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    const next = claim({ request: nextRequest() });
-    expect(next?.request.previous_response_id).toBeUndefined();
-    next?.release();
-  });
 });

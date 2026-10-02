@@ -59,9 +59,9 @@ async function changeDuringReadiness(
   });
 }
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   resetAgentEventsForTest();
 });
 
@@ -121,7 +121,7 @@ it("selects current work before pagination and represents an isolated cron run o
       sessionId: "cron-session",
       projectSessionActive: true,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "child-run",
       childSessionKey: childKey,
       controllerSessionKey: "agent:main:parent",
@@ -303,7 +303,7 @@ it.each(["global", "unknown"] as const)(
           visibility: "shared",
         },
       );
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: "sentinel-child-run",
         childSessionKey: childKey,
         controllerSessionKey: sentinel,

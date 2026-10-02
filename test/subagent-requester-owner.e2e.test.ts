@@ -2,12 +2,12 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
+import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -512,7 +512,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         await import("../src/agents/subagents/registry/subagent-registry.test-helpers.js");
       await runQaGatewayFixture(
         async () => {
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
           const childSessionKey = `agent:${REQUESTER_AGENT_ID}:subagent:requester-owner-legacy`;
           await writeSubagentSessionEntry({
             stateDir: instance.stateDir,
@@ -549,7 +549,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           expect(registered.requesterStorePath).toBeTruthy();
           expect(registered.controllerStorePath).toBe(registered.requesterStorePath);
           // Retire setup callbacks, not durable ownership, before freezing the completed fixture.
-          registry.resetSubagentRegistryForTests({ persist: false });
+          await registry.resetSubagentRegistryForTests({ persist: false });
           const endedAt = Date.now();
           const restored: SubagentRunRecord = {
             ...registered,

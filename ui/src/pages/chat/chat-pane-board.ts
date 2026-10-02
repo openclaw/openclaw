@@ -636,9 +636,14 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     // must not replace the original session target (notably global versus a literal key).
     session.agentId ??= parseAgentSessionKey(board.snapshot.sessionKey)?.agentId;
     const boardActive = isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented;
-    const renderSurface = (active: boolean) =>
+    const connectionGeneration = this.connectionGeneration;
+    const renderSurface = () =>
       renderBoardSessionSurface({
-        active,
+        active: {
+          owner: this,
+          isPresented: () => isSidebarSlotVisible(layout, "dashboard") && this.visuallyPresented,
+          preview: () => !this.presented && this.connectionGeneration === connectionGeneration,
+        },
         session,
         snapshot: board.snapshot,
         activeTabId: board.activeTabId,
@@ -662,9 +667,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       });
     // Keep one template boundary so hiding the panel does not remount app iframes.
     return html`${
-      boardActive
-        ? renderSurface(true)
-        : guard([sessionKey, session.agentId], () => renderSurface(false))
+      boardActive ? renderSurface() : guard([sessionKey, session.agentId], renderSurface)
     }`;
   }
 

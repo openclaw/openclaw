@@ -1,5 +1,5 @@
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
-import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+import { isWorkspaceJournalReadCommand } from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadRequest,
@@ -124,6 +124,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
   }
   if (
     command.type === "operatorApprovals.history" ||
+    command.type === "diagnostic.latest" ||
     command.type === "operatorApprovals.listCronGrants"
   ) {
     return structuredClone(command);
@@ -205,6 +206,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "diagnostic.latest") {
+    return bytes + Buffer.byteLength(command.input.scope, "utf8") + 16;
+  }
   if (command.type === "cron.activeReceiptOwners") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
@@ -262,7 +266,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return bytes + Buffer.byteLength(command.purpose, "utf8");
   }
-  if (command.type === "agentDeletionJournal.status") {
+  if (
+    command.type === "agentDeletionJournal.status" ||
+    command.type === "agentDeletionJournal.authority"
+  ) {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {

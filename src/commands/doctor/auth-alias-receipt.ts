@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { normalizeLegacyCredentialFields } from "../../agents/auth-profiles/legacy-flat-credential.js";
 import {
   readLegacyMigrationReceipt,
   readLegacyMigrationReceiptFromDatabase,
@@ -26,6 +27,8 @@ const receiptSchema = z.object({
             databasePath: z.string(),
             beforeSha256: z.string().nullable(),
             afterSha256: z.string(),
+            beforeCanonicalFieldsSha256: z.string().optional(),
+            afterCanonicalFieldsSha256: z.string().optional(),
           }),
         )
         .min(1),
@@ -51,12 +54,15 @@ export function recordAuthAliasMigration(params: {
   stores: readonly (AuthAliasStoreSnapshot & { migratedStore: unknown })[];
   env: NodeJS.ProcessEnv;
   importedProfileIds?: ReadonlySet<string>;
+  normalizeCredentialFields?: boolean;
   sources?: readonly { path: string; sha256: string }[];
 }): string | undefined {
   const previousReceipt = readLegacyMigrationReceipt(SOURCE_KEY, params.env);
-  if (previousReceipt && params.importedProfileIds) {
-    const previous = receiptSchema.parse(JSON.parse(previousReceipt.reportJson));
-    for (const { from } of previous.mappings) {
+  const previousMappings = previousReceipt
+    ? receiptSchema.parse(JSON.parse(previousReceipt.reportJson)).mappings
+    : [];
+  if (params.importedProfileIds) {
+    for (const { from } of previousMappings) {
       if (params.importedProfileIds.has(from) && !params.profileIdMap.has(from)) {
         throw new Error(
           `Recorded auth account ${from} could not be verified; its import source was preserved.`,
@@ -70,11 +76,27 @@ export function recordAuthAliasMigration(params: {
       continue;
     }
     const credentials = params.stores.flatMap(({ databasePath, store, migratedStore }) => {
-      const before = profiles(store)[from];
+      const sourceProfiles = profiles(store);
+      const before = sourceProfiles[from];
       const after = profiles(migratedStore)[to];
+      const current = before ?? sourceProfiles[to];
+      const historical = previousMappings
+        .filter((entry) => entry.from === from && entry.to === to)
+        .flatMap((entry) => entry.credentials)
+        .find(
+          (expected) =>
+            expected.databasePath === databasePath &&
+            current !== undefined &&
+            (before === undefined
+              ? [expected.afterSha256, expected.afterCanonicalFieldsSha256]
+              : [expected.beforeSha256, expected.beforeCanonicalFieldsSha256]
+            ).includes(digest(current)),
+        );
       if (
         after === undefined ||
-        (before === undefined && !(params.importedProfileIds?.has(from) && params.sources?.length))
+        (before === undefined &&
+          !historical &&
+          !(params.importedProfileIds?.has(from) && params.sources?.length))
       ) {
         return [];
       }
@@ -88,6 +110,23 @@ export function recordAuthAliasMigration(params: {
         throw new Error(
           `Legacy auth input conflicts with the existing account ${from}; its source was preserved.`,
         );
+      }
+      if (historical) {
+        if (
+          before === undefined &&
+          (!isRecord(current) || digest(normalizeLegacyCredentialFields(current)) !== digest(after))
+        ) {
+          throw new Error(
+            `Recorded auth account ${from} changed during migration; its source was preserved.`,
+          );
+        }
+        return [
+          {
+            ...historical,
+            ...(before !== undefined ? { beforeCanonicalFieldsSha256: digest(before) } : {}),
+            afterCanonicalFieldsSha256: digest(after),
+          },
+        ];
       }
       return [
         {
@@ -106,21 +145,68 @@ export function recordAuthAliasMigration(params: {
       });
     }
   }
-  if (mappings.length === 0) {
-    return readLegacyMigrationReceipt(SOURCE_KEY, params.env)?.sourceSha256 ?? undefined;
+  if (mappings.length === 0 && (!previousReceipt || !params.normalizeCredentialFields)) {
+    return previousReceipt?.sourceSha256 ?? undefined;
   }
   return runOpenClawStateWriteTransaction(
     ({ db, path }) => {
       const prior = readLegacyMigrationReceiptFromDatabase(db, SOURCE_KEY);
       const previous = prior ? receiptSchema.parse(JSON.parse(prior.reportJson)).mappings : [];
       // A concurrent or interrupted plan must not replace an earlier committed mapping.
-      const records = new Map(previous.map((entry) => [digest(entry), entry]));
+      const records = new Map<string, AliasReceipt["mappings"][number]>(
+        params.normalizeCredentialFields ? [] : previous.map((entry) => [digest(entry), entry]),
+      );
+      // Preserve each owner's exact preimage and its field-only normalization.
+      // Independent owner commits may settle on either side of this conversion.
+      for (const entry of params.normalizeCredentialFields ? previous : []) {
+        const normalized = structuredClone(entry);
+        for (const expected of normalized.credentials) {
+          const store = params.stores.find(
+            (candidate) => candidate.databasePath === expected.databasePath,
+          );
+          if (!store) {
+            continue;
+          }
+          const before = profiles(store.store);
+          const after = profiles(store.migratedStore);
+          const normalizedFingerprint = (
+            id: string,
+            fingerprints: readonly (string | null | undefined)[],
+          ) => {
+            const value = before[id];
+            return isRecord(value) &&
+              after[id] !== undefined &&
+              fingerprints.includes(digest(value)) &&
+              digest(normalizeLegacyCredentialFields(value)) === digest(after[id])
+              ? digest(after[id])
+              : undefined;
+          };
+          const beforeCanonicalFieldsSha256 = normalizedFingerprint(entry.from, [
+            expected.beforeSha256,
+            expected.beforeCanonicalFieldsSha256,
+          ]);
+          const afterCanonicalFieldsSha256 = normalizedFingerprint(entry.to, [
+            expected.afterSha256,
+            expected.afterCanonicalFieldsSha256,
+          ]);
+          if (beforeCanonicalFieldsSha256) {
+            expected.beforeCanonicalFieldsSha256 = beforeCanonicalFieldsSha256;
+          }
+          if (afterCanonicalFieldsSha256) {
+            expected.afterCanonicalFieldsSha256 = afterCanonicalFieldsSha256;
+          }
+        }
+        records.set(digest(normalized), normalized);
+      }
       for (const entry of mappings) {
         records.set(digest(entry), entry);
       }
       const report: AliasReceipt = { format: SOURCE_KEY, mappings: [...records.values()] };
       const reportJson = JSON.stringify(report);
       const sourceSha256 = digest(report);
+      if (prior?.sourceSha256 === sourceSha256 && prior.reportJson === reportJson) {
+        return sourceSha256;
+      }
       recordLegacyMigrationReceipt(db, {
         sourceKey: SOURCE_KEY,
         migrationKind: "auth-profile-sqlite-alias-map",
@@ -223,8 +309,12 @@ export function recoverAuthAliasMigration(params: {
         return (
           (before !== undefined &&
             after === undefined &&
-            digest(before) === expected.beforeSha256) ||
-          (before === undefined && after !== undefined && digest(after) === expected.afterSha256) ||
+            [expected.beforeSha256, expected.beforeCanonicalFieldsSha256].includes(
+              digest(before),
+            )) ||
+          (before === undefined &&
+            after !== undefined &&
+            [expected.afterSha256, expected.afterCanonicalFieldsSha256].includes(digest(after))) ||
           (before === undefined &&
             after === undefined &&
             expected.beforeSha256 === null &&

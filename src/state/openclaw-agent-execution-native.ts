@@ -36,9 +36,10 @@ import {
 } from "./openclaw-agent-db-validation-cache.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
 import type {
-  AgentDatabaseExecutionIdentity,
+  AgentDatabaseFileExecutionIdentity,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionOpen,
+  AgentDatabaseExecutionScope,
   AgentDatabaseGenerationClaim,
   AgentDatabaseRequestExecutionSource,
   AgentDatabaseOperations,
@@ -78,9 +79,9 @@ async function settleAgentRegistration<T>(
   return result.value;
 }
 
-export type AgentDatabaseExecutionScope = Pick<Store, "execute">;
 export type AgentDatabaseNativeGeneration = {
   failed(): boolean;
+  isPrepared(): boolean;
   captureClaim(): AgentDatabaseGenerationClaim;
   run<T>(
     source: AgentDatabaseRequestExecutionSource,
@@ -117,11 +118,12 @@ export function createAgentDatabaseNativeGeneration(
   let openedStore: Store | undefined;
   let openingFailed = false;
   let closing: Promise<void> | undefined;
-  let nativeIdentity: AgentDatabaseExecutionIdentity | undefined;
+  let nativeIdentity: AgentDatabaseFileExecutionIdentity | undefined;
   let nativeStopped: Promise<void> | undefined;
   let readCloseReceipt: (() => SqliteWorkerCloseReceipt | undefined) | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let quickCheckPending = false;
+  let preparationPublished = false;
   let receiveValidation:
     | ReturnType<typeof captureOpenClawAgentDatabaseValidationTransfer>
     | undefined;
@@ -151,7 +153,7 @@ export function createAgentDatabaseNativeGeneration(
         context.admission.databasePath,
         context.admission.identity.canonicalPath,
       ];
-      const assertSourceCurrent = (identity?: AgentDatabaseExecutionIdentity) => {
+      const assertSourceCurrent = (identity?: AgentDatabaseFileExecutionIdentity) => {
         source.assertCurrent();
         assertCurrent();
         // The reference checks its captured constraints; this owner checks the path last.
@@ -166,7 +168,7 @@ export function createAgentDatabaseNativeGeneration(
       };
       const authorizeNative = (
         request: SqliteWorkerAdmissionRequest,
-      ): AgentDatabaseExecutionIdentity | undefined => {
+      ): AgentDatabaseFileExecutionIdentity | undefined => {
         const facts = request.facts;
         if (
           request.stage === "prepare" &&
@@ -289,7 +291,7 @@ export function createAgentDatabaseNativeGeneration(
           ) {
             throw new Error("Agent database operation belongs to another native owner");
           }
-          const receivedIdentity: AgentDatabaseExecutionIdentity =
+          const receivedIdentity: AgentDatabaseFileExecutionIdentity =
             nativeIdentity ??
             Object.freeze({
               kind: "file",
@@ -416,6 +418,10 @@ export function createAgentDatabaseNativeGeneration(
       openedStore = store;
       try {
         assertCurrent();
+        // An eager opener has already settled registration and its topology publication.
+        if (nativeIdentity) {
+          preparationPublished = true;
+        }
         return store;
       } catch (error) {
         try {
@@ -479,6 +485,7 @@ export function createAgentDatabaseNativeGeneration(
         assertCurrent();
         source.assertCurrent();
       });
+      preparationPublished = true;
     }
     if (quickCheckPending) {
       quickCheckPending = false;
@@ -526,6 +533,10 @@ export function createAgentDatabaseNativeGeneration(
   return {
     failed: () =>
       openingFailed || Boolean(openedStore && !isSqliteWorkerStoreAvailable(openedStore)),
+    isPrepared() {
+      assertCurrent();
+      return preparationPublished;
+    },
     captureClaim() {
       assertCurrent();
       const captured = nativeIdentity;

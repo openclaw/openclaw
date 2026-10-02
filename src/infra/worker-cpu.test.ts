@@ -33,9 +33,7 @@ async function createWorker(filename?: URL) {
 
 describe("worker CPU lifecycle", () => {
   it.each([
-    ["sqlite-store.worker.js", "sqlite-store.worker.js"],
     ["sqlite-store.worker.ts", "sqlite-store.worker.js"],
-    ["session-history.worker.js", "session-history.worker.js"],
     ["private-session-worker.js", "other"],
   ])(
     "attributes %s and removes direct and owned Worker samples at native exit",

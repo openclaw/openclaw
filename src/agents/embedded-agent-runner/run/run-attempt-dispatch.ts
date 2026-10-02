@@ -5,6 +5,7 @@ import { resolveSessionTranscriptRuntimeTarget } from "../../../config/sessions/
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { copyExplicitSkillSelectionFileHost } from "../../../skills/discovery/skill-command-provenance.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { createAgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
@@ -25,7 +26,7 @@ import {
   resolveHarnessWorkspace,
 } from "../../workspace-sandbox.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
-import { remapSkillReferencePaths } from "../sandbox-skills.js";
+import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
 import { prepareExecApprovalContinuationForAttempt } from "./attempt-exec-approval-continuation.js";
@@ -254,7 +255,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     : undefined;
   const captureRuntimeArtifact = Boolean(params.onSuccessfulAuthBinding || expectedHarnessArtifact);
   const beforeAgentFinalizeRevisionAttempts = terminalRetryState.beforeFinalizeRevisionAttempts;
-  const fallbackActive = modelId !== requestedModelId || Boolean(fallbackReason);
+  const fallbackActive =
+    modelId !== requestedModelId ||
+    params.modelRoutingProvenance?.stage === "fallback" ||
+    Boolean(fallbackReason);
   const attemptContextEngine = nativeModelOwned ? undefined : contextEngine;
   const authProfileIdSource =
     runtime.lastProfileId && runtime.lastProfileId === lockedProfileId ? "user" : "auto";
@@ -491,10 +495,12 @@ export async function prepareAndDispatchEmbeddedRunAttempt(input: {
     skipPreparedUserTurnMessage,
     currentInboundEventKind: params.currentInboundEventKind,
     currentInboundContext: params.currentInboundContext,
-    explicitSkillSelections: params.explicitSkillSelections?.map((selection) => ({
-      ...selection,
-      path: remapSkillReferencePaths(selection.path, skillReferencePaths),
-    })),
+    explicitSkillSelections: params.explicitSkillSelections?.map((selection) =>
+      copyExplicitSkillSelectionFileHost(selection, {
+        ...selection,
+        path: remapExplicitSkillSelectionPath(selection, skillReferencePaths),
+      }),
+    ),
     images: promptMedia.images,
     imageOrder: promptMedia.imageOrder,
     media: promptMedia.media,

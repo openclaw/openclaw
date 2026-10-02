@@ -11,6 +11,7 @@ import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
+import { livePresentation, presentedContent } from "../../lit/presentation-binding.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import {
   availableSidebarSlots,
@@ -130,10 +131,19 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ...chatProps,
       pluginToolIcons: this.toolIcons.icons,
       presented: this.active && this.presented,
+      presentation: { owner: this, isPresented: () => this.active && this.presented },
+      progressCardVisibility: { owner: this, isPresented: () => this.presented },
       transcriptVisible:
         this.presented &&
         this.visuallyPresented &&
         isSidebarSlotVisible(sidebarLayout, "conversation"),
+      transcriptPresentation: {
+        owner: this,
+        isPresented: () =>
+          this.presented &&
+          this.visuallyPresented &&
+          isSidebarSlotVisible(sidebarLayout, "conversation"),
+      },
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     });
@@ -148,8 +158,11 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
     this.syncSessionCompanionPresentation(companionPresented);
-    const browserPresented =
-      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
+    const browserPresented = {
+      owner: this,
+      isPresented: () =>
+        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser"),
+    };
     const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
     const terminalTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "terminal";
     // Another pane can own keyboard focus while this desktop remains visible.
@@ -189,28 +202,41 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     }
     const desktopFocus = this.desktopFocus;
     const panelDefinitions = sidebarPanelDefinitions({
+      panePresentation: { owner: this, isPresented: () => this.presented },
       state,
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
       browserTabsInHeader,
       linkReaders: availableLinkReaders(this.context.gateway.snapshot),
-      linkReaderPresented:
-        this.presented &&
-        this.visuallyPresented &&
-        isSidebarSlotVisible(sidebarLayout, "link-reader"),
+      linkReaderPresented: {
+        owner: this,
+        isPresented: () =>
+          this.presented &&
+          this.visuallyPresented &&
+          isSidebarSlotVisible(sidebarLayout, "link-reader"),
+      },
       linkReaderTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "link-reader",
       onCloseLinkReader: () => closePanelSlot("link-reader"),
       terminalTabsInHeader,
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
-      desktopPresented,
+      desktopPresented: {
+        owner: this,
+        isPresented: () =>
+          this.presented &&
+          this.visuallyPresented &&
+          isSidebarSlotVisible(sidebarLayout, "desktop"),
+      },
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource,
-      portalPresented:
-        this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "portal"),
+      portalPresented: {
+        owner: this,
+        isPresented: () =>
+          this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "portal"),
+      },
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
         // A retained callback cannot publish a previous presentation's source or control state.
@@ -227,13 +253,20 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           chat: chatProps,
           content,
           host: state,
+          requestUpdate: state.requestUpdate!,
         }),
       digest: observerDigest,
       activeRunId: observerRunId,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
       companionFocusRequest: this.sessionCompanionFocusRequest,
-      companionPresented,
+      companionPresented: {
+        owner: this,
+        isPresented: () =>
+          this.presented &&
+          this.visuallyPresented &&
+          isSidebarSlotVisible(sidebarLayout, "companion"),
+      },
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
@@ -250,12 +283,16 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
       pluginPanels: this.context.plugins.registrations("panels"),
-      isPluginPanelPresented: (slot) =>
-        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
+      isPluginPanelPresented: (slot) => ({
+        owner: this,
+        isPresented: () =>
+          this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
+      }),
     });
     const availableSlots = availableSidebarSlots(panelDefinitions);
     const panelTemplates = sidebarPanelTemplates(panelDefinitions);
     const panelActions = sidebarPanelTemplates(panelDefinitions, "headerAction");
+    const connectionGeneration = this.connectionGeneration;
     // Main panel actions share the task toolbar. Content roots stay in the
     // sidebar region so changing their presentation never reconnects them.
     const header = this.compact
@@ -269,12 +306,21 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
             chatProps.placementStartup,
             sidebarLayout,
             panelDefinitions,
-          )}<openclaw-plugin-contributions
-            .kind=${"session-header"}
-            .sessionKey=${state.sessionKey}
-            .agentId=${currentAgentId}
-            .presented=${this.visuallyPresented}
-          ></openclaw-plugin-contributions>`;
+          )}
+          <div class="chat-session-accessories">
+            <openclaw-plugin-contributions
+              .kind=${"session-header"}
+              .sessionKey=${state.sessionKey}
+              .agentId=${currentAgentId}
+              .session=${selectedSession}
+              .presented=${livePresentation({
+                owner: this,
+                isPresented: () => this.visuallyPresented,
+                preview: () =>
+                  !this.presented && this.connectionGeneration === connectionGeneration,
+              })}
+            ></openclaw-plugin-contributions>
+          </div>`;
     const content = renderSidebarRegion({
       presentationId: this.presentationId,
       conversationTab: {
@@ -304,9 +350,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       requestUpdate: state.requestUpdate!,
     });
     return html`${content}
-    ${renderChatImageLightbox(
-      state.imageLightbox,
-      state.handleCloseImage,
-    )}${this.renderResetConfirmation()}`;
+    ${presentedContent(
+      { owner: this, isPresented: () => this.presented },
+      html`${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}${this.renderResetConfirmation()}`,
+    )}`;
   }
 }

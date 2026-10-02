@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { collectPatchedMcpArtifactErrors } from "../../scripts/lib/package-bundled-mcp.mts";
 
-// Independent expectations from v2026.9.6 (eb377ac59e6) and the 1.9.0 upgrade (7dbfab8c2c7).
-const CONTRACT_HASHES: Record<"1.8.0" | "1.9.0", Record<string, string>> = {
+// Independent expectations from v2026.9.6 (eb377ac59e6) through the 1.10.1 upgrade.
+const CONTRACT_HASHES: Record<"1.8.0" | "1.9.0" | "1.10.1", Record<string, string>> = {
   "1.8.0": {
     "build/src/bin/chrome-devtools-mcp.js":
       "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5",
@@ -33,18 +33,33 @@ const CONTRACT_HASHES: Record<"1.8.0" | "1.9.0", Record<string, string>> = {
     "build/src/OPENCLAW_PATCH_NOTICE.md":
       "0e53a04f337a3760f2f1adab9c20e3b4f07019795f503266c0b68e0f46d55a6c",
   },
+  "1.10.1": {
+    "build/src/bin/chrome-devtools-mcp.js":
+      "9f380d06e1ac05b257e27e708c0cc4b4ba190e285ed6eb6c8aa50978d98a12c5",
+    "build/src/bin/chrome-devtools-mcp-main.js":
+      "10603ea8c2ac9f69a42791100701795018ebfaa522a7c93d783ed583cce5cce4",
+    LICENSE: "58d1e17ffe5109a7ae296caafcadfdbe6a7d176f0bc4ab01e12a689b0499d8bd",
+    "build/src/third_party/THIRD_PARTY_NOTICES":
+      "6ae0ce181dbc9ba4217b6aad679d7503ed3ab56c45e6f3647e9ab753aa97b67b",
+    "build/src/TextSnapshot.js": "299833ad0e4cfc171a417afaec41df594e4862fe53a7ada6ba160409f979788b",
+    "build/src/McpPage.js": "47aa13c6b28cc11e1b0883532edea97cfde7563d78d143035850852d09809975",
+    "build/src/third_party/index.js":
+      "c988e0684584b75e87ae04b768c4f8ae7064401afe5187ec0d4878b2c6833f12",
+    "build/src/OPENCLAW_PATCH_NOTICE.md":
+      "4bf44b52a80b5860b2160bc83407a5f0dd09f1801c85d0a2b6e4fec26bd7045d",
+  },
 };
 it("preserves the bootstrap producer's current-runtime default", () => {
-  for (const version of ["1.8.0", "1.9.0"] as const) {
+  for (const version of ["1.8.0", "1.9.0", "1.10.1"] as const) {
     const { declaredVersion: _declaredVersion, ...input } = fixture(
       version,
       CONTRACT_HASHES[version],
     );
     const errors = collectPatchedMcpArtifactErrors(input);
-    if (version === "1.9.0") {
+    if (version === "1.10.1") {
       expect(errors).toEqual([]);
     } else {
-      expect(errors).toContain("bundled chrome-devtools-mcp must be ESM version 1.9.0");
+      expect(errors).toContain("bundled chrome-devtools-mcp must be ESM version 1.10.1");
     }
   }
 });
@@ -74,7 +89,7 @@ describe.each(Object.entries(CONTRACT_HASHES))("patched MCP %s contract", (versi
 
   it("binds the bundled manifest to the exact declared pin", () => {
     const input = fixture(version, hashes);
-    input.manifest.version = version === "1.8.0" ? "1.9.0" : "1.8.0";
+    input.manifest.version = version === "1.10.1" ? "1.9.0" : "1.10.1";
     expect(collectPatchedMcpArtifactErrors(input)).toContain(
       "bundled chrome-devtools-mcp must be ESM version " + version,
     );
@@ -99,8 +114,11 @@ describe.each(Object.entries(CONTRACT_HASHES))("patched MCP %s contract", (versi
   });
 
   it("rejects mixed-version byte contracts", () => {
-    const other = CONTRACT_HASHES[version === "1.8.0" ? "1.9.0" : "1.8.0"];
-    expect(collectPatchedMcpArtifactErrors(fixture(version, other))).toHaveLength(5);
+    const other = Object.entries(CONTRACT_HASHES).find(([candidate]) => candidate !== version)?.[1];
+    expect(other).toBeDefined();
+    expect(collectPatchedMcpArtifactErrors(fixture(version, other ?? {}))).toContain(
+      "bundled chrome-devtools-mcp has unpatched or changed runtime entry build/src/bin/chrome-devtools-mcp-main.js",
+    );
   });
 
   it("does not trust artifact-supplied replacement hashes", () => {

@@ -167,9 +167,14 @@ public enum ChatSessionSidebarModel {
         groups: [OpenClawChatSessionGroup] = [],
         excludesMainSession: Bool = false,
         query: String,
+        rankedSearch: Bool = false,
         sessionRoutingContract: String? = nil,
         viewOptions: ViewOptions? = nil,
-        observedOrder: ObservedOrder = .init()) -> [Section]
+        observedOrder: ObservedOrder = .init(),
+        owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
+        selfOwnerID: String? = nil,
+        sectionOrder: [String] = [],
+        now: Date = .now) -> [Section]
     {
         let entries = self.visibleSessions(
             sessions: sessions,
@@ -178,16 +183,34 @@ public enum ChatSessionSidebarModel {
             activeAgentID: activeAgentID,
             excludesMainSession: excludesMainSession,
             sessionRoutingContract: sessionRoutingContract,
-            viewOptions: viewOptions)
+            visibility: (viewOptions, now))
+        if rankedSearch {
+            // Apply sidebar visibility before the palette's ten-result cap, preserving incoming relevance order.
+            // ui/src/components/command-palette-session-search.ts:63.
+            let visible = Set(entries.map(OpenClawChatSessionSidebarData.identity))
+            let nodes = sessions.filter { visible.contains(OpenClawChatSessionSidebarData.identity($0)) }
+                .prefix(10).flatMap { self.tree(from: [$0]) }
+            return nodes.isEmpty ? [] : [.init(id: "search", title: String(localized: "Search results"), nodes: nodes)]
+        }
         let ordered: [OpenClawChatSessionEntry]
-        if viewOptions?.sort == .created {
+        let sort = viewOptions?.sort == .people && owners.map { $0.count < 2 } == true ? .created : viewOptions?.sort
+        if sort == .created || sort == .people {
             var order = observedOrder
             order.observe(sessions.map(\.key))
-            ordered = order.sortedByCreation(entries)
+            ordered = order.sortedByCreation(entries, owners: sort == .people ? owners ?? [] : nil)
         } else {
             ordered = OpenClawChatSessionListOrganizer.organize(entries)
         }
         let visible = OpenClawChatSessionListOrganizer.filter(ordered, search: query)
+        if let viewOptions {
+            return self.groupedSections(
+                visible,
+                groups: groups,
+                options: viewOptions,
+                peopleAvailable: owners.map { $0.count >= 2 } ?? true,
+                selfOwnerID: selfOwnerID,
+                sectionOrder: sectionOrder)
+        }
         // Pin state owns first placement. Group sections then preserve the
         // same tree builder, so grouped parent/child rosters still nest.
         let pinned = self.tree(from: OpenClawChatSessionListOrganizer.organize(visible.filter { $0.pinned == true }))
@@ -645,8 +668,9 @@ public enum ChatSessionSidebarModel {
         activeAgentID: String?,
         excludesMainSession: Bool,
         sessionRoutingContract: String?,
-        viewOptions: ViewOptions?) -> [OpenClawChatSessionEntry]
+        visibility: (options: ViewOptions?, now: Date)) -> [OpenClawChatSessionEntry]
     {
+        let (viewOptions, now) = visibility
         let scopedSessions = sessions.filter {
             self.isSessionInActiveAgentScope(key: $0.key, agentID: $0.agentId, activeAgentID: activeAgentID)
         }
@@ -678,11 +702,20 @@ public enum ChatSessionSidebarModel {
             if selectedIsResolvedAlias, entry.key.lowercased() == normalizedCurrent {
                 return false
             }
-            return entry.key == selectedSessionKey ||
-                (!self.isHiddenInternalSession(entry.key) && entry.archived != true &&
+            let status = viewOptions?.status ?? .active
+            return (entry.key == selectedSessionKey &&
+                (viewOptions == nil || status.includes(entry, now: now))) ||
+                (!self
+                    .isHiddenInternalSession(entry.key) &&
+                    status.includes(entry, now: now) &&
                     (viewOptions?.includes(entry) ?? true))
         }
-        if !(excludesMainSession && selectedIsMain),
+        let selected = scopedSessions.first { $0.key == selectedSessionKey }
+        let selectedMatchesStatus = selected.map { (viewOptions?.status ?? .active).includes($0, now: now) } ?? true
+        if viewOptions?.status != .archived, viewOptions?.status != .snoozed,
+           viewOptions == nil || selectedMatchesStatus,
+           viewOptions?.ownerFilter.isEmpty != false,
+           !(excludesMainSession && selectedIsMain),
            !entries.contains(where: { $0.key == selectedSessionKey }),
            self.isSessionInActiveAgentScope(key: selectedSessionKey, activeAgentID: activeAgentID),
            !currentSessionKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

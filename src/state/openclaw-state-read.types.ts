@@ -57,12 +57,12 @@ import type { WorkerSessionPlacementChangeSnapshot } from "../gateway/worker-env
 import type {
   WorkspaceJournalReadCommand,
   WorkspaceJournalReadResult,
-} from "../gateway/worker-environments/placement-workspace-journal.worker-contract.js";
+} from "../gateway/worker-environments/placement-workspace-journal.types.js";
 import type {
   WorkerEnvironmentFacts,
   WorkerEnvironmentPrunePage,
   WorkerEnvironmentPruneReadInput,
-} from "../gateway/worker-environments/store-worker-contract.js";
+} from "../gateway/worker-environments/store.types.js";
 import type {
   DevicePairingReadCommand,
   DevicePairingReadReply,
@@ -96,6 +96,7 @@ import type { SkillLibraryReadOnlyOperations } from "../skills/library/selection
 import type { TuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import type {
   AgentDatabaseDeletionSnapshot,
+  AgentDeletionJournalAuthority,
   AgentDeletionJournalPurpose,
   AgentDeletionJournalStatus,
 } from "./agent-deletion-journal.types.js";
@@ -111,6 +112,10 @@ import type {
 import type { OnboardingRecommendationsRecord } from "./onboarding-recommendations.contract.js";
 import type { OpenClawAgentDatabaseRegistryReadResult } from "./openclaw-agent-db-contract.js";
 import type { ConfigMachineState } from "./openclaw-state-db.generated.js";
+import type {
+  RegisteredStateReadCommand,
+  RegisteredStateReadResult,
+} from "./openclaw-state-read-operation-registry.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerErrorPayload } from "./openclaw-state-worker-error.js";
 import type { SessionRepositoryWorkspaceRecord } from "./session-repository-workspaces.types.js";
@@ -144,6 +149,7 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | RegisteredStateReadCommand
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
@@ -199,6 +205,7 @@ export type OpenClawStateReadCommand =
   | { type: "agentDatabaseRegistry.read" }
   | { type: "agentDatabaseDeletion.snapshot"; purpose: AgentDeletionJournalPurpose }
   | { type: "agentDeletionJournal.status"; agentId: string }
+  | { type: "agentDeletionJournal.authority"; agentId: string }
   | { type: "workerEnvironments.snapshot"; ids?: readonly string[] }
   | { type: "workerEnvironments.pruneCandidates"; input: WorkerEnvironmentPruneReadInput }
   | { type: "sessionGroups.snapshot" }
@@ -270,6 +277,7 @@ export type OpenClawStateReadRequest = {
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
 export type OpenClawStateReadResult =
+  | RegisteredStateReadResult
   | { type: "backup.runs"; runs: BackupRunRecord[] }
   | { type: "doctor.gatewayOwnerLease.read"; lease: GatewayOwnerLeaseIdentity | undefined }
   | {
@@ -280,6 +288,10 @@ export type OpenClawStateReadResult =
   | {
       type: "agentDeletionJournal.status";
       status: AgentDeletionJournalStatus;
+    }
+  | {
+      type: "agentDeletionJournal.authority";
+      authority: AgentDeletionJournalAuthority | undefined;
     }
   | {
       type: "deliveryQueue.outbound";
@@ -392,6 +404,7 @@ export type OpenClawStateReadResult =
       type: "subagents.runs";
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
+      versions?: Map<string, string | null>;
       descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {

@@ -1,5 +1,6 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type RequestListener, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
@@ -27,7 +28,6 @@ import {
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { readQaSubagentRuns } from "../../../helpers/qa-subagent-runs.js";
-import { stopChildProcess } from "../../../helpers/stop-child-process.js";
 
 const MODEL = "mock-openai/progress-fixture";
 const FINAL_MARKER = "TOOL-PROGRESS-FINAL";
@@ -665,7 +665,16 @@ describe("channel progress presentation through an isolated Gateway", () => {
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
-    cleanups.push(() => stopChildProcess(provider, 5_000));
+    const providerExited = once(provider, "exit");
+    void providerExited.catch(() => {});
+    cleanups.push(async () => {
+      if (provider.pid) {
+        if (provider.exitCode === null && provider.signalCode === null) {
+          provider.kill("SIGTERM");
+        }
+        await providerExited;
+      }
+    });
     let providerOutput = "";
     let providerError: Error | undefined;
     provider.on("error", (error) => {

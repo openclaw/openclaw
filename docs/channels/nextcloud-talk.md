@@ -120,6 +120,12 @@ Minimal config:
 - Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
 - With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` probes the bot and warns when the `response` feature is missing.
 
+Pre-July-2026 JSON replay caches under `<state-dir>/nextcloud-talk/replay-dedupe/`
+are outside the supported upgrade window. Doctor leaves these files unchanged and
+stops with recovery guidance. [Upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its Doctor before installing the latest version. Supported SQLite replay
+state continues to migrate into durable webhook deduplication.
+
 ## Moving existing webhook endpoints to the Gateway
 
 Updates preserve the previous webhook listener address. When `legacyWebhook` is

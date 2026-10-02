@@ -447,9 +447,8 @@ describe("runDoctorSessionSqlite", () => {
   });
 });
 
-// Build the physical v1 layout directly so the doctor path, not the runtime
-// opener, owns the upgrade. Empty session tables preserve the dormant-agent
-// reproduction: import has no rows to open before its compact step.
+// Use the shipped July schema so Doctor owns the upgrade. Empty session tables
+// preserve the dormant-agent case: import has no rows to open before compaction.
 function createHistoricalV1AgentDatabase(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
@@ -459,65 +458,13 @@ function createHistoricalV1AgentDatabase(params: {
   const sqlite = nodeSqlite.requireNodeSqlite();
   const database = new sqlite.DatabaseSync(sqlitePath);
   try {
-    database.exec(`
-      CREATE TABLE schema_meta (
-        meta_key TEXT NOT NULL PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT,
-        app_version TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE sessions (
-        session_id TEXT NOT NULL PRIMARY KEY,
-        session_key TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT NOT NULL PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE memory_index_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        revision INTEGER NOT NULL
-      );
-      INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
-      CREATE TABLE memory_index_sources (
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT,
-        session_id TEXT,
-        hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        PRIMARY KEY (source_kind, source_key),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE memory_index_chunks (
-        id TEXT PRIMARY KEY,
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT NOT NULL,
-        session_id TEXT,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        text TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        embedding_dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (source_kind, source_key)
-          REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      PRAGMA user_version = 1;
-    `);
+    database.exec(
+      fs.readFileSync(
+        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v1.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    database.exec("PRAGMA user_version = 1;");
     database
       .prepare(
         `
