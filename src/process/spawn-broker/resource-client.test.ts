@@ -24,9 +24,13 @@ afterEach(async () => {
   }
 });
 
-/** A private broker socket directory, matching createNativeResourceDirectory's contract. */
+/** A private broker endpoint, mirroring the production platform distinction in host.ts. */
 function makeEndpoint() {
-  const directory = join(tmpdir(), `oc-native-resource-${randomBytes(6).toString("hex")}`);
+  const secret = randomBytes(6).toString("hex");
+  if (process.platform === "win32") {
+    return `\\\\.\\pipe\\oc-br-test-${secret}`;
+  }
+  const directory = join(tmpdir(), `oc-native-resource-${secret}`);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   chmodSync(directory, 0o700);
   cleanups.push(async () => rmSync(directory, { recursive: true, force: true }));
@@ -43,19 +47,31 @@ async function brokerEndpoint() {
       resolve(socket);
     });
   });
-  await new Promise<void>((resolve) => server.listen(endpoint, () => resolve()));
+  await new Promise<void>((resolve) => {
+    server.listen(endpoint, () => {
+      resolve();
+    });
+  });
   cleanups.push(async () => {
     await Promise.all(
       sockets.map(async (socket) => {
         if (socket.closed) {
           return;
         }
-        const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+        const closed = new Promise<void>((resolve) => {
+          socket.once("close", () => {
+            resolve();
+          });
+        });
         socket.destroy();
         await closed;
       }),
     );
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => {
+        resolve();
+      });
+    });
   });
   return { endpoint, accepted };
 }
@@ -114,7 +130,7 @@ describe("spawn broker native resource client", () => {
     );
 
     // Input arriving before the factory admits ownership is forwarded once it does.
-    target.peer.postMessage("early-input");
+    target.peer.postMessage("early-input", []);
 
     await peer.send({ type: "resource-ready", id: attachment.id, pid: 42, generation: 1 });
 
@@ -168,9 +184,22 @@ describe("spawn broker native resource client", () => {
 
     // Another consumer of the target port starts it: the port drains queued input before the
     // factory admits ownership, so a listener installed only after admission sees nothing.
-    target.peer.postMessage("input-before-start");
+    // This probe is that competing consumer: awaiting its dispatch proves the port delivered
+    // the input before admission, so the regression cannot pass on code that listens late.
+    const dispatched = new Promise<unknown>((resolve) => {
+      target.port.once("message", (value) => {
+        resolve(value);
+      });
+    });
+    target.peer.postMessage("input-before-start", []);
     target.port.start();
-    await vi.waitFor(() => expect(received).toHaveLength(1));
+    expect(await dispatched).toBe("input-before-start");
+
+    // The dispatched input is buffered, not forwarded: admission has not happened yet.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(received).toHaveLength(1);
 
     await peer.send({ type: "resource-ready", id: attachment.id, pid: 1, generation: 1 });
     await peer.send({ type: "resource-created", id: attachment.id });
@@ -204,17 +233,19 @@ describe("spawn broker native resource client", () => {
 
   it("fails the attachment when the startup deadline passes without readiness", async () => {
     // A broker that accepts the connection but never reports readiness: the deadline is the
-    // only failure path, so the socket's own close cannot race the assertion.
+    // only failure path, so the socket's own close cannot race the assertion. The connection
+    // is real; only the deadline clock is controlled, so a loaded runner cannot expire the
+    // timer before the server accepts.
     const { endpoint, accepted } = await brokerEndpoint();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const attachment = makeAttachment(endpoint, { startupDeadline: Date.now() + 50 });
     const target = makeTarget();
     const { failures } = makeOwner(attachment, target.port);
     await accepted;
 
-    await vi.waitFor(() =>
-      expect(failures.map((error) => error.message)).toContain(
-        "Spawn broker readiness deadline exceeded",
-      ),
+    vi.advanceTimersByTime(60);
+    expect(failures.map((error) => error.message)).toContain(
+      "Spawn broker readiness deadline exceeded",
     );
   });
 });
