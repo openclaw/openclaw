@@ -414,6 +414,7 @@ export const startSubagentAnnounceCleanupFlow = (
     expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
     completionTarget: pendingPayload.completionTarget,
     completionRequesterSessionId: pendingPayload.completionRequesterSessionId,
+    completionRequesterLifecycleRevision: entry.completionRequesterLifecycleRevision,
     wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
     suppressChildSessionEffects: suppressSessionEffects,
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,

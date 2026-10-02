@@ -294,7 +294,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   surfaces:
     "Per-surface message policy overrides keyed by the resolved delivery surface id. Use this only when one deployed surface needs stricter silent-reply handling than the agent default.",
   "surfaces.*.silentReply":
-    "Overrides silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply; use narrow surface ids so internal or group-specific behavior does not spill into other destinations.",
+    "Overrides group silent-reply policy for one resolved delivery surface. Unset fields inherit agents.defaults.silentReply. Direct chats and internal sessions always require a reply.",
   "agents.entries.*.skills":
     "Optional allowlist of skills for this agent. If omitted, the agent inherits agents.defaults.skills when set; otherwise skills stay unrestricted. Set [] for no skills. An explicit list fully replaces inherited defaults instead of merging with them.",
   agents:

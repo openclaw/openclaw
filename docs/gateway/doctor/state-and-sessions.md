@@ -13,7 +13,9 @@ auth health, sandbox images, and plugin installs.
 
 <AccordionGroup>
   <Accordion title="3. Legacy state migrations (disk layout)">
-    Doctor can migrate older on-disk layouts into the current structure:
+    Supported upgrade sources are state shapes written by releases shipped on or after July 1, 2026. Session rows that still need `provider`, `lastProvider`, or `room` converted to their current fields are refused without changing the original store. Preserve a backup and use an older OpenClaw release to migrate those rows before upgrading. Rows with current fields remain supported even when obsolete metadata remains alongside them. July-era `sessions.json` and JSONL transcript imports remain supported.
+
+    Doctor can migrate supported on-disk layouts into the current structure:
 
     - Session rows and transcripts: import legacy `sessions.json` and JSONL history from `~/.openclaw/sessions/` or per-agent `sessions/` directories into `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
     - Agent dir: from `~/.openclaw/agent/` to `~/.openclaw/agents/<agentId>/agent/`
@@ -107,6 +109,22 @@ auth health, sandbox images, and plugin installs.
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
     - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from the retired raw `cron.webhook` value when valid; announce jobs keep their chat delivery and get `delivery.completionDestination`. Doctor then removes the old config key. Without a usable legacy webhook, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it.
+
+    Legacy default-agent ownership is repaired only by Doctor. Gateway startup
+    leaves stored cron ownership unchanged. An ownerless job whose config still
+    retains a legacy default marker waits for repair without consuming its due
+    occurrence or disabling a one-shot. Manual runs return `openclaw doctor --fix`
+    guidance; explicitly owned jobs continue normally. Doctor pins the historical
+    owner before removing that marker, preserving the job's definition and runtime
+    state. Unresolved historical jobs also require Doctor before updates or removal,
+    and the current system agent does not gain management access to them. Operator
+    inspection remains available. Current configurations without a legacy marker keep their dynamic
+    system-agent selection.
+
+    Missing interval anchors are repaired by Doctor. Runtime scheduling can
+    calculate the next run without writing an anchor into an old definition.
+    Schedule maintenance and run outcomes preserve stored ownership and authored
+    fields; intentional enable/disable transitions change only the enabled field.
 
     The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Malformed rows are quarantined in the shared SQLite state database in the same transaction that removes them from active scheduling; doctor reports those records and imports any `jobs-quarantine.json` sidecars left by older releases.
 

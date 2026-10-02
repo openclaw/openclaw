@@ -237,7 +237,7 @@ it("sends a private-source completion once through the catalog and never respawn
   expect(outputText(await turn.complete(call, catalogResult("message", { ok: true })))).toBe("");
 });
 
-it("keeps the private second-child completion silent with catalog-only tools", async () => {
+it("records the private second-child handoff with catalog-only tools", async () => {
   const turn = await startTurn("Subagent terminal reply QA check: private.", {
     model: "gpt-5.6-luna",
   });
@@ -253,7 +253,7 @@ it("keeps the private second-child completion silent with catalog-only tools", a
   });
   expect(
     outputText(await turn.complete(call, catalogResult("sessions_spawn", { status: "accepted" }))),
-  ).toBe("NO_REPLY");
+  ).toBe("Second worker started.");
 });
 
 it("drives yielded-parent fallback through catalog spawn and namespaced yield", async () => {

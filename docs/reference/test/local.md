@@ -135,6 +135,11 @@ Use `requireNodeTool("node")` and `stripNodeTypeScriptTypes` from
 `test/helpers/node-toolchain.ts`, which share that Node-selection owner, while
 keeping the Vitest worker on the selected test runtime.
 
+Isolated native worker and subprocess fixtures use `mockNativeModuleExports` from
+`test/helpers/native-module-mock.ts` for controlled module exports on either runtime.
+The mocks live until that child exits. Capture original call-through functions before
+registering replacements because Bun updates existing module namespace bindings.
+
 The test toolchain pins stable Vitest `5.0.1`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module

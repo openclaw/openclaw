@@ -12,7 +12,7 @@ import {
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.worker-contract.js";
+import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import {
   createWorkerWorkspaceReconcileRequest,

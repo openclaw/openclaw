@@ -25,17 +25,19 @@ import {
 } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
+import type { ChatPaneActiveResources } from "./chat-pane-active-resources.ts";
 import { ChatPaneBoard } from "./chat-pane-board.ts";
 import type { PaneSessionHandoff } from "./chat-pane-handoff-lifecycle.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
-import { refreshCurrentChatSessionList } from "./chat-session.ts";
+import { cancelChatModelRecovery, refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message-confirmation.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
@@ -51,6 +53,8 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  protected abstract readonly activeSessionResources: ChatPaneActiveResources;
+
   protected captureProgressCardRefreshAction(): SessionProgressCardRefreshAction | undefined {
     const state = this.state;
     const scope = this.captureConnectionScope();
@@ -396,6 +400,14 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     if (!presented) {
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
+      this.syncSessionCompanionPresentation(false);
+      this.activeSessionResources.sync(null);
+      if (this.state) {
+        cancelChatModelRecovery(this.state);
+      }
+      if (this.context) {
+        publishChatWorkContext(this.context, this);
+      }
     }
     if (!this.isConnected) {
       return;

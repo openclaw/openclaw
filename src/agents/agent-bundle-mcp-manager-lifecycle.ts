@@ -121,6 +121,7 @@ function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
 }
 
 export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntimeManagerStore) {
+  let cleanupUncertain = false;
   const schedulers = new Set<GatewayScheduler>();
   let schedulerScope = store.scheduler.scope();
   const reserveRuntimeSlot = (
@@ -181,6 +182,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
         store.runtimeSlots.delete(runtime);
       }
     } catch (error) {
+      cleanupUncertain = true;
       recordAgentCleanupFailure();
       throw error;
     }
@@ -189,6 +191,7 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     const disposal = Promise.resolve()
       .then(close)
       .catch((error: unknown) => {
+        cleanupUncertain = true;
         recordAgentCleanupFailure();
         throw error;
       })
@@ -459,6 +462,10 @@ export function createSessionMcpRuntimeManagerLifecycle(store: SessionMcpRuntime
     return disposal.finally(() => {
       if (store.disposalInFlight === disposal) {
         store.disposalInFlight = undefined;
+      }
+      // Unpublished runtimes can fail before this caller opens its cleanup scope.
+      if (sessionId === undefined && cleanupUncertain) {
+        recordAgentCleanupFailure();
       }
     });
   };

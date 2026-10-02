@@ -12,6 +12,10 @@ import type {
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { ConversationRecord } from "./conversation-registry.js";
 import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+} from "./session-accessor.sqlite-active-events.js";
+import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
@@ -20,6 +24,10 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { StoredMessageReactionSummary } from "./session-reaction-store.types.js";
+import type {
+  SessionTranscriptAccountingOptions,
+  SessionTranscriptAccountingSnapshot,
+} from "./session-transcript-accounting.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
@@ -135,6 +143,17 @@ export type SessionConversationBinding = Pick<
 >;
 
 export type SessionHistoryWorkerRequest =
+  | {
+      kind: "active-accounting";
+      params: { target: SessionTranscriptReadScope; options: SessionTranscriptAccountingOptions };
+    }
+  | {
+      kind: "bounded-tail";
+      params: {
+        target: SessionTranscriptReadScope;
+        options: SessionTranscriptBoundedMessageTailOptions;
+      };
+    }
   | { kind: "reactions"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "conversation-binding";
@@ -206,6 +225,8 @@ export type SessionHistoryWorkerRequest =
   | { kind: "http"; params: SessionHistoryReadParams };
 
 export type SessionHistoryWorkerResult =
+  | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
+  | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
   | { kind: "reactions"; result: Record<string, StoredMessageReactionSummary[]> }
   | { kind: "conversation-binding"; result: SessionConversationBinding | null }
   | { kind: "artifacts"; result: SessionArtifactReadResult }

@@ -644,22 +644,14 @@ export async function readBestEffortConfigSnapshotFromContext(
   context: ConfigIoContext,
 ): Promise<BestEffortConfigSnapshot> {
   const operation = async () => {
-    const result = await readConfigFileSnapshotInternal(context);
-    if (!result.snapshot.valid) {
-      return {
-        config: result.snapshot.config,
-        sourceConfig: result.snapshot.sourceConfig,
-        configDiagnostics: {
-          path: result.snapshot.path,
-          issues: result.snapshot.issues,
-        },
-      };
-    }
+    const { snapshot } = await readConfigFileSnapshotInternal(context);
     return {
       // The snapshot already materialized under the caller's plugin-validation policy.
-      config: context.finalizeLoadedRuntimeConfig(result.snapshot.config),
-      sourceConfig: result.snapshot.sourceConfig,
-      configDiagnostics: null,
+      config: snapshot.valid
+        ? context.finalizeLoadedRuntimeConfig(snapshot.config)
+        : snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      configDiagnostics: snapshot.valid ? null : { path: snapshot.path, issues: snapshot.issues },
     };
   };
   // Unobserved CLI reads resolve plugin metadata before command-specific admission.

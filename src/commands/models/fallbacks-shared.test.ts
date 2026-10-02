@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerModelsCli } from "../../cli/models-cli.js";
 import { defaultRuntime } from "../../runtime.js";

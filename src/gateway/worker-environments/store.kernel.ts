@@ -38,8 +38,8 @@ import {
   normalizeSessionId,
   requireWorkerEnvironmentString,
 } from "./store-validation.js";
-import type { WorkerEnvironmentMutationMethods } from "./store-worker-contract.js";
 import type { CredentialRevocationInput } from "./store-write-types.js";
+import type { WorkerEnvironmentMutationMethods } from "./store.types.js";
 
 export function createWorkerEnvironmentStoreKernel(options: WorkerEnvironmentKernelOptions) {
   const database = options.database;

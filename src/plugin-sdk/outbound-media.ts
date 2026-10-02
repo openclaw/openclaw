@@ -1,6 +1,6 @@
 // Outbound media helpers normalize plugin media attachments before channel delivery.
 import { randomBytes } from "node:crypto";
-import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "../media/load-options.js";
 import type { PluginStateKeyedStore } from "./plugin-state-runtime.js";
@@ -231,19 +231,10 @@ export function createHostedOutboundMediaStore(
   ) {
     throw new Error("hosted outbound media physical TTL must be a positive safe integer");
   }
-  let capacityMutation = Promise.resolve();
+  const withCapacityMutation = createAsyncLock();
   const activeReaders = new Map<string, number>();
   const deferredDeletes = new Set<string>();
   const deletingEntries = new Set<string>();
-
-  async function withCapacityMutation<T>(operation: () => Promise<T>): Promise<T> {
-    const result = capacityMutation.then(operation, operation);
-    capacityMutation = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return await result;
-  }
 
   async function deleteEntry(id: string): Promise<boolean> {
     // Deletion revokes the bearer capability immediately, even when an admitted

@@ -5,13 +5,14 @@ import { isWithinDir } from "@openclaw/fs-safe/path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
 import { resolveAgentsDirFromSessionStorePath } from "../config/sessions/paths.js";
 import { resolvePersistedSessionStoreOwner } from "../config/sessions/session-store-owner.js";
-import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import { assertSupportedSessionStoreEntry } from "../config/sessions/supported-session-store.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
@@ -239,17 +240,14 @@ export function normalizeSessionEntry(
   entry: SessionEntryLike,
   sessionKey?: string,
 ): SessionEntry | null {
-  const { room, ...entryWithoutRoom } = entry;
-  const shaped = normalizePersistedSessionEntryShape(entryWithoutRoom, { sessionKey });
+  assertSupportedSessionStoreEntry(entry);
+  const shaped = normalizePersistedSessionEntryShape(entry, { sessionKey });
   if (!shaped) {
     return null;
   }
   const normalized = { ...shaped };
   if (typeof normalized.sessionId === "string") {
     normalized.updatedAt = asFiniteNumber(normalized.updatedAt) ?? Date.now();
-  }
-  if (typeof normalized.groupChannel !== "string" && typeof room === "string") {
-    normalized.groupChannel = room;
   }
   return normalized;
 }

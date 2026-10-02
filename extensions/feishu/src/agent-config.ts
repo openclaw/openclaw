@@ -1,4 +1,3 @@
-// Feishu helper module supports agent config behavior.
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 

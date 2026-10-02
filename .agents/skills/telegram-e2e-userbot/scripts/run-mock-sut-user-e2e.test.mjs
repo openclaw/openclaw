@@ -127,6 +127,49 @@ function assertStopped(pid) {
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
 
+test("forwardBurst rejects a non-DM scenario before acquiring credentials", async (context) => {
+  // openclaw-temp-dir: allow the CLI reads its scenario and loader from disk.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-forward-burst-dm-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const scenario = path.join(root, "scenario.json");
+  fs.writeFileSync(
+    scenario,
+    JSON.stringify({ actions: [{ type: "forwardBurst", text: "burst", photo: "/fixture.png" }] }),
+  );
+  const preload = path.join(root, "preload.mjs");
+  fs.writeFileSync(
+    preload,
+    `import { registerHooks } from "node:module";
+    registerHooks({load(url, context, next) {
+      if (url.endsWith("/telegram-test-credential.mjs")) return {
+        format: "module", shortCircuit: true,
+        source: 'export async function acquireTelegramTestCredential() { throw new Error("unexpected credential acquisition"); }'
+      };
+      return next(url, context);
+    }});`,
+  );
+  const result = await runCommand(
+    process.execPath,
+    [
+      "--import",
+      preload,
+      new URL("./run-mock-sut-user-e2e.mjs", import.meta.url).pathname,
+      "--backend",
+      "qa-mock",
+      "--chat",
+      "-1001",
+      "--scenario",
+      scenario,
+      "--record",
+      path.join(root, "events.ndjson"),
+    ],
+    { cwd: root, env: {} },
+  );
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /forwardBurst actions require --dm/);
+  assert.doesNotMatch(result.stderr, /unexpected credential acquisition/);
+});
+
 test("config patches restart before releasing their scenario barrier", async (context) => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-config-patch-"));
   context.after(() => fs.rmSync(temp, { recursive: true, force: true }));

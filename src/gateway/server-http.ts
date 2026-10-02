@@ -345,7 +345,6 @@ export function createGatewayHttpServer(opts: {
         resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
       });
       const controlUiRouteOptions = {
-        sessionRowProjectionOwner: opts.getGatewayRequestContext?.()?.sessionRowProjectionOwner,
         basePath: controlUiBasePath,
         config: configSnapshot,
         ...routeAuth,
@@ -697,7 +696,12 @@ export function createGatewayHttpServer(opts: {
                 parseControlUiResourcePath(route, scopedRequestPath, controlUiRouteBasePath)
                   .matched,
             ),
-          async () => (await loadHandler())(req, res, controlUiRouteOptions),
+          async () =>
+            (await loadHandler())(req, res, {
+              ...controlUiRouteOptions,
+              sessionRowProjectionOwner:
+                opts.getGatewayRequestContext?.()?.sessionRowProjectionOwner,
+            }),
         );
       }
       // Authenticated media also serves non-browser clients when dashboard hosting is disabled.

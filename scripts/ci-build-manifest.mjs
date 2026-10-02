@@ -1553,12 +1553,7 @@ const hybridHostedEligible =
   isCanonicalRepository &&
   ["hybrid", "runson"].includes(process.env.OPENCLAW_CI_RUNNER_BACKEND ?? "") &&
   process.env.GITHUB_RUN_ATTEMPT === "1" &&
-  (eventName === "push" ||
-    ciQualification ||
-    (eventName === "pull_request" &&
-      ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"].includes(
-        process.env.OPENCLAW_CI_AUTHOR_ASSOCIATION ?? "",
-      )));
+  (eventName === "push" || ciQualification || eventName === "pull_request");
 let hybridHostedBaseRows = 0;
 let hybridHostedOffloadRows = 0;
 if (hybridHostedEligible) {

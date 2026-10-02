@@ -1,5 +1,4 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { wrapPromptDataBlock } from "../../sanitize-for-prompt.js";
 import {
   SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
@@ -70,10 +69,10 @@ export function buildRequesterSettleWakeMessage(params: {
     params.parentOnly
       ? `[Subagent Context] ${SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION}`
       : params.yieldedFinalDeliverable
-        ? `[Subagent Context] Child results are internal input. Answer the original conversation under its normal reply rules: if replies there must go through the message tool, send your answer with it. Reply ONLY: ${SILENT_REPLY_TOKEN} when no user-facing update is owed or you already sent it.`
+        ? "[Subagent Context] Child results are internal input. Answer the original conversation under its normal reply rules: if replies there must go through the message tool, send your answer with it. Continue any unfinished work, and avoid repeating an update already delivered."
         : params.requireVisibleReply
           ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer only after the requested outcome is complete or genuinely blocked."
-          : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+          : "[Subagent Context] Review the settled results and continue any unfinished work. Avoid repeating a consolidated final answer that was already delivered.",
     ...(modelRouteChange
       ? [
           modelRouteChange,

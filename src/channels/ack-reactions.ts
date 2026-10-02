@@ -49,10 +49,7 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
     return params.isGroup;
   }
   if (scope === "group-mentions") {
-    if (!params.isMentionableGroup) {
-      return false;
-    }
-    if (!params.canDetectMention) {
+    if (!params.isMentionableGroup || !params.canDetectMention) {
       return false;
     }
     // Whether the group *requires* a mention is a separate policy: a group that

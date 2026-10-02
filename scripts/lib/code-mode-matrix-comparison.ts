@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import type { CodeModeMatrixCellResult } from "../code-mode-model-matrix.ts";
+import { groupBy } from "./group-by.mts";
 
 const comparableResult = z
   .object({
@@ -422,10 +423,9 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
     }
   }
   const grouped = (includeTask: boolean) => {
-    const subsets = new Map<string, ModeResult[]>();
-    for (const row of rows) {
+    const subsets = groupBy(rows, (row) => {
       const settings = row.workload!.settings;
-      const identity = canonicalJson({
+      return canonicalJson({
         model: row.model,
         ...(includeTask
           ? { task: row.task, settings }
@@ -434,10 +434,7 @@ export function compareCodeModeMatrixModes(values: readonly unknown[]) {
         buildSha256: row.buildSha256,
         sourcePatchSha256: row.sourcePatchSha256,
       });
-      const subset = subsets.get(identity) ?? [];
-      subset.push(row);
-      subsets.set(identity, subset);
-    }
+    });
     return [...subsets]
       .toSorted(([a], [b]) => a.localeCompare(b))
       .map(([identity, subset]) => {

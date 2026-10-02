@@ -24,14 +24,21 @@ import {
 } from "./openclaw-agent-db-registry.js";
 import * as schema from "./openclaw-agent-db-schema.js";
 import {
+  clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
   openOpenClawAgentDatabase,
+  recordOpenClawAgentDatabaseOpenFailure,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
 import { cleanupRetiredAgentDatabaseLease } from "./openclaw-agent-execution-cleanup.js";
-import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
+import {
+  clearOpenClawDatabaseQuarantine,
+  readOpenClawAgentIntegrityVerification,
+  readOpenClawDatabaseQuarantineFailure,
+  recordOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseForTest,
@@ -444,3 +451,91 @@ it.each(["", "-wal", "-shm", "-journal"])(
     }
   },
 );
+
+it("a fresh read-only agent database open refuses a generation held by a persisted generation-aware quarantine", () => {
+  const owner = openOwner();
+  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  closeOpenClawStateDatabase();
+
+  // Persisted quarantine survives a process restart: record it, drop the
+  // process-held writer cache, and reopen read-only in the same process to
+  // prove the durable row alone is enough to refuse the read.
+  expect(
+    recordOpenClawDatabaseQuarantine({
+      kind: "agent",
+      path: owner.database.path,
+      reason: "synthetic readonly quarantine",
+      env: owner.env,
+    }),
+  ).toBe(true);
+  closeOpenClawAgentDatabasesForTest();
+
+  expect(
+    readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),
+  ).toBeDefined();
+
+  expect(() =>
+    openOpenClawAgentDatabaseReadOnly({ agentId: "integrity-lease", env: owner.env }),
+  ).toThrow(expect.objectContaining({ name: "SqliteIntegrityError" }));
+
+  // Clearing the quarantine (Doctor repair) makes the same generation readable again.
+  expect(clearOpenClawDatabaseQuarantine(owner.database.path, { env: owner.env })).toBe(true);
+  const repaired = openOpenClawAgentDatabaseReadOnly({
+    agentId: "integrity-lease",
+    env: owner.env,
+  });
+  expect(repaired.found).toBe(true);
+  if (repaired.found) {
+    repaired.database.close();
+  }
+});
+
+it("a fresh read-only agent database open refuses a generation held by a process terminal latch with no persisted quarantine", () => {
+  const owner = openOwner();
+  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  closeOpenClawStateDatabase();
+  closeOpenClawAgentDatabasesForTest();
+
+  // The process terminal latch is the in-process damage marker the verifier
+  // records through the agent database owner before persisting quarantine.
+  // Record it directly and assert no persisted quarantine row exists, so this
+  // case fails if the latch assertion is removed (the durable row does not
+  // backstop the read refusal here).
+  const latchError = new Error("synthetic terminal latch");
+  latchError.name = "SqliteIntegrityError";
+  expect(recordOpenClawAgentDatabaseOpenFailure(owner.database.path, latchError)).toBe(true);
+  expect(
+    readOpenClawDatabaseQuarantineFailure("agent", owner.database.path, { env: owner.env }),
+  ).toBeUndefined();
+
+  expect(() =>
+    openOpenClawAgentDatabaseReadOnly({ agentId: "integrity-lease", env: owner.env }),
+  ).toThrow(latchError);
+
+  // Clearing the latch (Doctor repair) makes the same generation readable again.
+  expect(clearOpenClawAgentDatabaseOpenFailure(owner.database.path, { env: owner.env })).toBe(true);
+  const repaired = openOpenClawAgentDatabaseReadOnly({
+    agentId: "integrity-lease",
+    env: owner.env,
+  });
+  expect(repaired.found).toBe(true);
+  if (repaired.found) {
+    repaired.database.close();
+  }
+});
+
+it("a fresh read-only agent database open still serves a healthy, non-quarantined generation", () => {
+  const owner = openOwner();
+  closeOpenClawAgentDatabaseByPath(owner.database.path);
+  closeOpenClawStateDatabase();
+  closeOpenClawAgentDatabasesForTest();
+
+  const reader = openOpenClawAgentDatabaseReadOnly({
+    agentId: "integrity-lease",
+    env: owner.env,
+  });
+  expect(reader.found).toBe(true);
+  if (reader.found) {
+    reader.database.close();
+  }
+});

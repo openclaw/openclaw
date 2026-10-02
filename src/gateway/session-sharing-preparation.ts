@@ -38,10 +38,8 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
-import {
-  prepareGatewaySessionStoreTargetReadOnly,
-  type GatewaySessionStoreDiscoveryCache,
-} from "./session-utils-store-lookup.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
+import { prepareGatewaySessionStoreTargetReadOnly } from "./session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 
@@ -84,6 +82,7 @@ type SessionFactsRequest = {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  preserveQualifiedAddress?: boolean;
   storageReady?: Promise<void>;
 };
 export type SessionFactsRead<Facts extends PreparedSessionMutationFacts> = {
@@ -419,6 +418,7 @@ export async function prepareSessionMutationFacts(
               cfg: inventory.config,
               key: params.sessionKey,
               agentId,
+              preserveQualifiedAddress: params.preserveQualifiedAddress,
               env: inventory.env,
               targetDiscoveryCache,
             },

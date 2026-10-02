@@ -365,7 +365,7 @@ export async function validateUpdateCandidateCanary(
               ? parseUpdateDoctorLintReport(running.stdout(), env)
               : undefined;
           const completed = checksCompletedAt !== undefined && (phase === "doctor" || lintReport);
-          timeoutMessage = `Update ${phase} checks phase timed out (${elapsed}ms)`;
+          timeoutMessage = `candidate-migration-rehearsal: ${phase} exceeded budget after ${Math.ceil(elapsed / 1000)} s (${stepLogTail.at(-1) ?? "no progress output"})`;
           if (completed && checksCompletedAt !== undefined) {
             exitWarning = `Update ${phase} exit phase timed out after ${Date.now() - checksCompletedAt}ms (${elapsed}ms total); checks completed; ${running.processExited() ? "output pipes stayed open" : "process did not exit"}. Continuing with recorded check results.`;
             code =

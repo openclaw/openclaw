@@ -119,7 +119,7 @@ describe("Gateway MCP App board grant revalidation", () => {
   it(
     "rejects a standalone tool call revoked during a real catalog refresh",
     { timeout: TEST_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const repoRoot = process.cwd();
       const taskRoot = tempDirs.make("openclaw-mcp-app-grant-revalidation-");
       const fixtureRoot = path.join(taskRoot, "fixture");
@@ -151,6 +151,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         );
         fixture = await startHttpFixture({
           fixturePath,
+          signal,
           labelPrefix: "session",
           env: createChildEnv({
             home: fixtureHome,
@@ -257,7 +258,7 @@ describe("Gateway MCP App board grant revalidation", () => {
         expect(notificationCall.status).toBe(200);
 
         pendingCall = postStandalone({ gateway, ticket, marker: POST_REVOCATION_MARKER });
-        await waitForMcpFixtureGate(startedPath);
+        await waitForMcpFixtureGate(startedPath, signal);
         await gateway.call("board.update", {
           sessionKey,
           ops: [{ kind: "widget_remove", name: widget.name }],

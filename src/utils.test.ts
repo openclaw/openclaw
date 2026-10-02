@@ -173,9 +173,13 @@ describe("shortenHomePath", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")("keeps POSIX home matching case-sensitive", () => {
+  it.skipIf(process.platform === "win32")("preserves POSIX home path boundaries and case", () => {
     withEnv({ OPENCLAW_HOME: "/srv/OpenClaw-Home", HOME: "/home/other" }, () => {
       expect(shortenHomePath("/srv/openclaw-home/workspace")).toBe("/srv/openclaw-home/workspace");
+      expect(shortenHomePath("/srv/OpenClaw-Home\\workspace")).toBe(
+        "/srv/OpenClaw-Home\\workspace",
+      );
+      expect(shortenHomePath("/srv/OpenClaw-Home/work\\space")).toBe("$OPENCLAW_HOME/work\\space");
     });
   });
 

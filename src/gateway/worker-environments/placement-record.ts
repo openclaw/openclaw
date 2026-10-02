@@ -34,13 +34,6 @@ export type WorkerSessionPlacementDispatchIdentity = WorkerSessionPlacementIdent
   >;
 };
 
-export type WorkerPlacementDispatchStoreOperations = {
-  "workerPlacements.startDispatch": {
-    input: { placement: WorkerSessionPlacementDispatchIdentity; nowMs: number };
-    output: WorkerSessionPlacementRecord;
-  };
-};
-
 export type WorkerSessionTurnOwner =
   | { kind: "local"; environmentId?: string; ownerEpoch?: number }
   | { kind: "worker"; environmentId: string; ownerEpoch: number };

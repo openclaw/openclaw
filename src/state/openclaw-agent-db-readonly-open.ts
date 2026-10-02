@@ -7,6 +7,7 @@ import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-lifecycle.js";
 import {
   classifyOpenClawAgentDatabaseReadError,
   recordOpenClawAgentDatabaseReadOpenFailure,
@@ -21,6 +22,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 export type OpenClawAgentReadOnlyDatabase = {
@@ -95,6 +97,17 @@ export function openOpenClawAgentDatabaseReadOnly(
   }
   if (!fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
+  }
+  // Verified-corrupt generations stay quarantined for reads as well as writes:
+  // the process terminal latch and the persisted generation-aware quarantine
+  // row must both clear before any fresh read-only physical open proceeds.
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  const persistedQuarantine = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
+    env: options.env,
+  });
+  if (persistedQuarantine) {
+    recordOpenClawAgentDatabaseReadOpenFailure(persistedQuarantine);
+    throw persistedQuarantine;
   }
   // Lock policy belongs to the open: node:sqlite has no busy handler until one
   // is set, so a later PRAGMA leaves every earlier statement unprotected.

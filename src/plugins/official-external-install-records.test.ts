@@ -6,7 +6,6 @@ import {
   isTrustedOfficialPluginInstallRecord,
   resolveTrustedSourceLinkedOfficialClawHubInstall,
   resolveTrustedSourceLinkedOfficialNpmInstall,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
 } from "./official-external-install-records.js";
 
 const QQBOT_EXPECTED_INTEGRITY =
@@ -119,9 +118,6 @@ describe("trusted official npm install records", () => {
       resolvedSpec: "@openclaw/acpx@2026.7.2",
     };
 
-    expect(resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: "acpx", record })).toBe(
-      "@openclaw/acpx",
-    );
     expect(resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId: "acpx", record })).toEqual({
       npmSpec: "@openclaw/acpx",
       pluginId: "acpx",
@@ -153,9 +149,9 @@ describe("trusted official npm install records", () => {
       },
     },
   ])("preserves canonical official updates for $name", ({ record }) => {
-    expect(resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: "acpx", record })).toBe(
-      "@openclaw/acpx",
-    );
+    expect(
+      resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId: "acpx", record })?.npmSpec,
+    ).toBe("@openclaw/acpx");
   });
 
   it("returns a replacement only for a catalog-declared legacy id", () => {

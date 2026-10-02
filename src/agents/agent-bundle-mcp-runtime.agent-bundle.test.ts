@@ -214,6 +214,13 @@ it("discovers an installed Agent Plugins bundle and executes its real stdio tool
           pluginDataExists: true,
           argv: [expandedMarkerPath],
         });
+      } catch (error) {
+        console.error(
+          "Agent Plugins bundle failed before MCP cleanup",
+          error,
+          runtime.peekCatalog()?.diagnostics,
+        );
+        throw error;
       } finally {
         await materialized.dispose();
         await disposeAllSessionMcpRuntimes();

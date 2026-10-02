@@ -1,9 +1,35 @@
 import { expect } from "vitest";
 import { selectSessionArtifacts } from "../session-artifact-read.js";
+import type { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import { expectRecordFields } from "../test-helpers.assertions.js";
 
 type ResponderCalls = Array<{ ok: boolean; payload?: unknown; error?: unknown }>;
 type ArtifactListPayload = { artifacts?: Array<Record<string, unknown>> };
+
+/** Transcript-format fixtures; access and lifetime suites retain the real facts owner. */
+export function artifactFixtureSessionFacts(
+  params: Parameters<typeof prepareSessionMutationFacts>[0],
+) {
+  const { agentId, canonicalKey } = resolveSessionStoreIdentity(params);
+  const storageTarget = { agentId, canonicalKey, storePath: "/tmp/sessions.json" };
+  return {
+    storageTarget,
+    bindCreation() {},
+    release() {},
+    readCurrent: () => ({
+      target: {
+        ...storageTarget,
+        storeKey: canonicalKey,
+        storeKeys: [canonicalKey],
+        entry: { sessionId: "sess-main" },
+      },
+      membership: new Set<string>(),
+      sourceAgentId: agentId,
+      sourcePath: storageTarget.storePath,
+    }),
+  };
+}
 
 export function withArtifactFixtureReader(
   actual: typeof import("../session-transcript-readers.js"),

@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
+import { syncWorkspaceSkills } from "../loading/workspace-skill-sync.runtime.js";
 import {
   bumpSkillsSnapshotVersion,
   getSkillsResourceVersion,
@@ -17,8 +19,6 @@ type SkillsChangeEvent = NonNullable<Parameters<typeof bumpSkillsSnapshotVersion
 const observer = createSkillsWatcherMock();
 const { watchMock } = observer;
 let refreshModule: typeof import("./refresh.js");
-let buildSkillSnapshot: typeof import("../loading/workspace-skill-prompt.js").buildSkillSnapshot;
-let syncWorkspaceSkills: typeof import("../loading/workspace-skill-sync.runtime.js").syncWorkspaceSkills;
 let fixtureWorkspaceDir: string;
 
 vi.mock("@openclaw/fs-safe/watch", () => ({ watch: watchMock }));
@@ -31,14 +31,7 @@ describe("skills watcher churn", () => {
   const fixture = useSkillsWatcherFixture(observer);
   const { createFixtureDirectory } = fixture;
   beforeAll(async () => {
-    const [refresh, snapshot, sync] = await Promise.all([
-      import("./refresh.js"),
-      import("../loading/workspace-skill-prompt.js"),
-      import("../loading/workspace-skill-sync.runtime.js"),
-    ]);
-    refreshModule = refresh;
-    buildSkillSnapshot = snapshot.buildSkillSnapshot;
-    syncWorkspaceSkills = sync.syncWorkspaceSkills;
+    refreshModule = await import("./refresh.js");
   });
   beforeEach(() => {
     vi.stubEnv("CHOKIDAR_USEPOLLING", "false");

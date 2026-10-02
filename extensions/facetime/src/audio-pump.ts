@@ -8,6 +8,7 @@ import type {
   RealtimeVoiceAudioChunkMetadata,
   RealtimeVoicePlaybackItem,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 type PumpProcess = {
   pid?: number;
@@ -181,26 +182,14 @@ async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIG
   } catch {
     return;
   }
-  await Promise.race([
-    exitedPromise,
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    }),
-  ]);
+  await Promise.race([exitedPromise, sleepWithAbort(500, undefined, { ref: false })]);
   if (!exited && signal !== "SIGKILL") {
     try {
       proc.kill("SIGKILL");
     } catch {
       return;
     }
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 500);
-        timer.unref?.();
-      }),
-    ]);
+    await Promise.race([exitedPromise, sleepWithAbort(500, undefined, { ref: false })]);
   }
 }
 

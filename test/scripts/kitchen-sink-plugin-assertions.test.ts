@@ -1040,7 +1040,7 @@ export KITCHEN_SINK_SPEC=npm:@openclaw/kitchen-sink@0.0.0
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 run_expect_failure "install/failure" bash -c 'printf "%s\\n" "npm ERR! No matching version @openclaw/kitchen-sink@0.0.0"; exit 1'
 test -f "$SCRATCH_ROOT/kitchen-sink-expected-failure-install_failure.log"
-scan_logs_for_unexpected_errors
+node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs scan-logs
 `,
         {
           HOME_DIR: home,

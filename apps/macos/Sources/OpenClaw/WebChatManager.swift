@@ -219,7 +219,12 @@ final class WebChatManager {
     #endif
 
     @discardableResult
-    func openGatewayWindow(for target: DashboardGatewayTarget, newWindow: Bool = false) -> Task<Void, Never> {
+    func openGatewayWindow(
+        for target: DashboardGatewayTarget,
+        newWindow: Bool = false,
+        route: WebChatRoute? = nil,
+        sourceIsCurrent: @escaping () -> Bool = { true }) -> Task<Void, Never>
+    {
         if target == .primary {
             self.preparePrimaryGateway(gatewayID: GatewayDiscoveryPreferences.deviceAuthGatewayID(
                 root: OpenClawConfigFile.loadDict()))
@@ -241,7 +246,12 @@ final class WebChatManager {
                     name = profile.name
                 }
                 guard generation == self.windowGeneration else { return }
-                try await self.showGateway(target: target, name: name, newWindow: newWindow)
+                try await self.showGateway(
+                    target: target,
+                    name: name,
+                    newWindow: newWindow,
+                    requestedRoute: route,
+                    sourceIsCurrent: sourceIsCurrent)
             } catch is CancellationError {
                 webChatManagerLogger.debug("Cancelled native Gateway window open after its owner changed")
             } catch {
@@ -251,7 +261,13 @@ final class WebChatManager {
         }
     }
 
-    private func showGateway(target: DashboardGatewayTarget, name: String, newWindow: Bool) async throws {
+    private func showGateway(
+        target: DashboardGatewayTarget,
+        name: String,
+        newWindow: Bool,
+        requestedRoute: WebChatRoute?,
+        sourceIsCurrent: () -> Bool) async throws
+    {
         let generation = self.windowGeneration
         let primaryGeneration = self.primaryGeneration
         // An older close must finish retiring the fleet before this open can acquire its successor.
@@ -292,11 +308,12 @@ final class WebChatManager {
         // Another admission can finish while connection setup is suspended.
         // Recheck at the presentation boundary to keep ordinary opens single-window.
         if !newWindow, self.showExistingWindow(for: target) { return }
+        guard sourceIsCurrent() else { throw CancellationError() }
+        let route = requestedRoute ?? WebChatRoute(sessionKey: resolved.sessionKey, agentID: nil)
         if target == .primary {
-            self.presentChat(sessionKey: resolved.sessionKey, agentID: nil, draft: nil, newWindow: newWindow)
+            self.presentChat(sessionKey: route.sessionKey, agentID: route.agentID, draft: nil, newWindow: newWindow)
             return
         }
-        let route = WebChatRoute(sessionKey: resolved.sessionKey, agentID: nil)
         let controller = WebChatSwiftUIWindowController(
             sessionKey: route.sessionKey,
             agentID: route.agentID,
@@ -306,6 +323,23 @@ final class WebChatManager {
             windowTitle: "\(name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
         self.install(controller, target: target, route: route, connection: connection)
+    }
+
+    static func sessionLink(base: URL, sessionKey: String, agentID: String?, preview: Bool) -> URL? {
+        guard var url = URLComponents(url: base, resolvingAgainstBaseURL: false),
+              let route = WebChatRoute.dashboardPath(sessionKey: sessionKey, agentID: agentID) else { return nil }
+        if url.scheme == "ws" { url.scheme = "http" }
+        if url.scheme == "wss" { url.scheme = "https" }
+        guard url.scheme == "http" || url.scheme == "https" else { return nil }
+        url.user = nil
+        url.password = nil
+        url.query = nil
+        url.fragment = nil
+        while url.percentEncodedPath.hasSuffix("/") {
+            url.percentEncodedPath.removeLast()
+        }
+        url.percentEncodedPath += (preview ? "/share" : "") + route
+        return url.url
     }
 
     private func install(
