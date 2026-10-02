@@ -10,7 +10,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
-import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../cli/command-config-resolution.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getScopedChannelsCommandSecretTargets } from "../cli/command-secret-targets.js";
@@ -70,7 +69,7 @@ export async function messageCommand(
     targets: opts.targets,
     accountId: opts.accountId,
   });
-  const explicitAccountId = validateExplicitMessageAccountSelection({
+  const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: loadedRaw,
     channel: scope.channel,
     accountId: opts.accountId,
@@ -84,7 +83,7 @@ export async function messageCommand(
   // command runs, so the operation-local plan sees the canonical registry.
   const broadcastAccountPlan =
     normalizedActionInput === "broadcast" && !scope.channel && explicitAccountId
-      ? resolveMessageBroadcastAccountPlan({
+      ? await resolveMessageBroadcastAccountPlan({
           cfg: loadedRaw,
           accountId: explicitAccountId,
         })
@@ -107,18 +106,16 @@ export async function messageCommand(
     surface: "message CLI",
     hint: `Run ${formatCliCommand("openclaw config set agents.defaults.systemAgent.agentId <id>")} with a configured agent ID.`,
   });
-  const actionMatch = (CHANNEL_MESSAGE_ACTION_NAMES as readonly string[]).find(
+  const action = CHANNEL_MESSAGE_ACTION_NAMES.find(
     (name) => normalizeLowercaseStringOrEmpty(name) === normalizedActionInput,
   );
-  if (!actionMatch) {
+  if (!action) {
     throw new Error(
       `Unknown message action "${actionInput}". Use one of ${CHANNEL_MESSAGE_ACTION_NAMES.join(
         ", ",
       )}. Example: ${formatCliCommand("openclaw message send --channel <channel> --target <id> --text <message>")}.`,
     );
   }
-  const action = actionMatch as ChannelMessageActionName;
-
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
 
   // Keep the gateway client identity explicit so channel plugins can distinguish

@@ -590,10 +590,24 @@ describe("restart health", () => {
     },
   );
 
-  it("annotates stopped-free early exits with the actual elapsed time", async () => {
+  it("retains the default stopped-free timing for a missing unit", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "free",
+      listeners: [],
+      hints: [],
+    });
 
-    const snapshot = await waitForStoppedFreeGatewayRestart();
+    const snapshot = await waitForGatewayHealthyRestart({
+      service: {
+        readCommand: async () => null,
+        readRuntime: async () => ({ status: "stopped", missingUnit: true }),
+      },
+      port: 18789,
+      attempts: 120,
+      delayMs: 500,
+    });
 
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.runtime.status).toBe("stopped");

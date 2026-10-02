@@ -23,7 +23,11 @@ import {
   resolveSqliteSessionTranscriptReadFence,
   SessionTranscriptReadFenceError,
 } from "./session-transcript-read-fence.js";
-import { projectTranscriptRetainedDataSql } from "./session-transcript-retained-data.js";
+import {
+  projectTranscriptRetainedDataSql,
+  transcriptRetainedDataBytesSql,
+} from "./session-transcript-retained-data.js";
+import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 /** Loads one raw suffix only after SQL-side row and byte bounds are proven. */
 export function loadTranscriptSuffixEventsBoundedSync(
@@ -59,17 +63,13 @@ export function loadTranscriptSuffixEventsBoundedSync(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select((eb) => {
-            const projected = projectTranscriptRetainedDataSql(
-              eb.ref("event_json"),
-              limits.retainedCustomDataIds ?? [],
-            );
-            return [
-              "seq",
-              /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
-              sql<number>`OCTET_LENGTH(${projected}) + 1`.as("serialized_bytes"),
-            ];
-          })
+          .select([
+            "seq",
+            /* kysely-allow-raw: reject oversized suffixes before acquiring their JSON payloads. */
+            sql<number>`${transcriptRetainedDataBytesSql(limits.retainedCustomDataIds ?? [])} + 1`.as(
+              "serialized_bytes",
+            ),
+          ])
           .where("session_id", "=", resolved.sessionId)
           .where("seq", ">=", startSeq)
           .orderBy("seq", "asc")
@@ -96,9 +96,9 @@ export function loadTranscriptSuffixEventsBoundedSync(
         database.db,
         db
           .selectFrom("transcript_events")
-          .select((eb) => [
+          .select([
             projectTranscriptRetainedDataSql(
-              eb.ref("event_json"),
+              transcriptEventJsonSql(database.db),
               limits.retainedCustomDataIds ?? [],
             ).as("event_json"),
             "seq",
@@ -148,7 +148,10 @@ export function readPreviousIndexedTranscriptEventSync(
             .onRef("event.session_id", "=", "identity.session_id")
             .onRef("event.seq", "=", "identity.seq"),
         )
-        .select(["event.event_json", "identity.seq"])
+        .select([
+          transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
+          "identity.seq",
+        ])
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.seq", "<", beforeSeq)
         .orderBy("active.active_position", "desc")

@@ -1,9 +1,9 @@
 import { createTimeZoneDayKeyFormatter } from "./format-time/format-datetime.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
-import type { UsageCostTranscriptFile } from "./session-cost-usage-collection.js";
 import {
   canUseUsageCostRollupForPartial,
   decodeUsageCostRollup,
+  decodeUsageCostRollupEnvelope,
   isUsageCostRollupFresh,
 } from "./session-cost-usage-rollup-codec.js";
 import {
@@ -17,6 +17,7 @@ import type {
   SessionCostSummary,
   UsageCacheStatus,
   UsageDailyBucket,
+  UsageCostTranscriptFile,
 } from "./session-cost-usage.types.js";
 
 const formatUtcDayKey = (date: Date): string =>
@@ -26,6 +27,8 @@ type UsageDayKeyFormatter = (date: Date) => string;
 
 export type UsageCostRollupRowSource = {
   readRow: (filePath: string) => SessionCostUsageRollupRow | undefined;
+  readBody: (row: SessionCostUsageRollupRow) => Uint8Array | null | Promise<Uint8Array | null>;
+  onInvalidBody: (key: string) => void;
   /** Snapshot rows whose keys are absent from the resolved files. */
   remainingRows: Iterable<SessionCostUsageRollupRow>;
 };
@@ -42,23 +45,10 @@ const createUsageDayKeyFormatter = (dayBucket?: UsageDailyBucket): UsageDayKeyFo
   return createTimeZoneDayKeyFormatter(timeZone);
 };
 
-/**
- * Maximum window (in days) for which we will zero-fill missing calendar
- * days. Bounded ranges from the UI's range filter top out at 90 days for
- * the explicit picker and "All" is the wildcard escape hatch — anything
- * wider than this threshold is treated as an all-time / open-ended range
- * and falls back to sparse behavior (only days with activity), since a
- * dense series at that scale would produce tens of thousands of zero
- * buckets (e.g. a 1970-based startMs → ~20k entries) without any user
- * value. 366 days covers a full year + leap-day cushion.
- */
+// Wider, open-ended ranges stay sparse instead of generating years of empty buckets.
 const MAX_ZERO_FILL_DAYS = 366;
 
-/**
- * Parse a `YYYY-MM-DD` day key into its UTC calendar-day timestamp. The
- * timestamp is only used to enumerate calendar labels; usage timestamps stay
- * in their requested timezone bucket.
- */
+// UTC timestamps enumerate labels; usage timestamps remain in the requested calendar zone.
 const parseDayKeyToUtcMs = (dayKey: string): number | null => {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dayKey);
   if (!match) {
@@ -76,16 +66,7 @@ const parseDayKeyToUtcMs = (dayKey: string): number | null => {
     : null;
 };
 
-/**
- * Ensure the daily map has an entry for every calendar day in [startMs, endMs].
- * Days without activity are inserted with a zero-valued totals bucket so the
- * resulting `daily` series matches the requested range length (one bar per
- * calendar day) instead of only covering days with recorded usage.
- *
- * Day keys must use the same calendar zone as the request range. Otherwise a
- * remote Gateway can return local-date labels for UTC/browser-local ranges,
- * which drops boundary usage when the UI compares calendar windows.
- */
+// Match the request's calendar zone so the UI does not discard boundary-day usage.
 const fillMissingDays = (
   dailyMap: Map<string, CostUsageTotals>,
   startMs: number,
@@ -101,9 +82,7 @@ const fillMissingDays = (
   const startDayMs = parseDayKeyToUtcMs(startKey);
   const endDayMs = parseDayKeyToUtcMs(endKey);
   if (startDayMs === null || endDayMs === null) {
-    // Defensive fallback — formatDayKey should always produce a YYYY-MM-DD
-    // key, but if locale data ever shifts under us, at least make sure the
-    // endpoint days are present so the chart isn't completely empty.
+    // Preserve the endpoints if locale data produces an unexpected day-key format.
     if (!dailyMap.has(startKey)) {
       dailyMap.set(startKey, emptyTotals());
     }
@@ -118,13 +97,11 @@ const fillMissingDays = (
   if (spanDays > MAX_ZERO_FILL_DAYS) {
     return;
   }
-  const maxIterations = MAX_ZERO_FILL_DAYS + 1;
-  for (let cursorMs = startDayMs, i = 0; cursorMs <= endDayMs && i < maxIterations; i += 1) {
+  for (let cursorMs = startDayMs; cursorMs <= endDayMs; cursorMs += dayMs) {
     const key = formatUtcDayKey(new Date(cursorMs));
     if (!dailyMap.has(key)) {
       dailyMap.set(key, emptyTotals());
     }
-    cursorMs += dayMs;
   }
   if (!dailyMap.has(endKey)) {
     dailyMap.set(endKey, emptyTotals());
@@ -187,7 +164,7 @@ function includeRemainingRollupScans(
 ): number | undefined {
   let latest = initialLatest;
   for (const row of rows) {
-    const entry = decodeUsageCostRollup(row.valueJson, pricingFingerprint);
+    const entry = decodeUsageCostRollupEnvelope(row.valueJson, pricingFingerprint);
     if (entry) {
       latest = Math.max(latest, entry.scannedAt);
     }
@@ -195,7 +172,7 @@ function includeRemainingRollupScans(
   return latest || undefined;
 }
 
-export function projectCostUsageSummary(
+export async function projectCostUsageSummary(
   params: UsageCostRollupRowSource & {
     files: readonly UsageCostTranscriptFile[];
     pricingFingerprint: string;
@@ -204,7 +181,7 @@ export function projectCostUsageSummary(
     dayBucket?: UsageDailyBucket;
     refreshing: boolean;
   },
-): CostUsageSummary {
+): Promise<CostUsageSummary> {
   const daily = new Map<string, CostUsageTotals>();
   const totals = emptyTotals();
   const formatDay = createUsageDayKeyFormatter(params.dayBucket);
@@ -214,20 +191,38 @@ export function projectCostUsageSummary(
   // Keep file order and per-bucket additions: folding per-file totals changes rounding.
   for (const file of params.files) {
     const row = params.readRow(file.filePath);
-    const entry = row ? decodeUsageCostRollup(row.valueJson, params.pricingFingerprint) : undefined;
-    const stored = entry && row ? { entry, valueJson: row.valueJson } : undefined;
-    if (entry) {
-      latestScan = Math.max(latestScan, entry.scannedAt);
+    const envelope = row
+      ? decodeUsageCostRollupEnvelope(row.valueJson, params.pricingFingerprint)
+      : undefined;
+    if (envelope) {
+      latestScan = Math.max(latestScan, envelope.scannedAt);
     }
-    if (!isUsageCostRollupFresh({ checkpoint: entry?.checkpoint, file })) {
+    const fresh = isUsageCostRollupFresh({ checkpoint: envelope?.checkpoint, file });
+    if (!fresh) {
       staleFiles += 1;
     }
-    if (!stored || !canUseUsageCostRollupForPartial({ stored, file })) {
+    if (
+      !row ||
+      !envelope ||
+      !canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file })
+    ) {
+      continue;
+    }
+    const entry = decodeUsageCostRollup(
+      row.valueJson,
+      params.pricingFingerprint,
+      await params.readBody(row),
+    );
+    if (!entry) {
+      params.onInvalidBody(row.key);
+      if (fresh) {
+        staleFiles += 1;
+      }
       continue;
     }
     cachedFiles += 1;
     addRollupToCostUsageSummary({
-      rollup: stored.entry.rollup,
+      rollup: entry.rollup,
       startMs: params.startMs,
       endMs: params.endMs,
       formatDay,
@@ -252,7 +247,7 @@ export function projectCostUsageSummary(
   });
 }
 
-export function projectSessionCostSummaries(
+export async function projectSessionCostSummaries(
   params: UsageCostRollupRowSource & {
     sessions: ReadonlyArray<{ sessionId?: string; sessionFile: string }>;
     files: ReadonlyArray<UsageCostTranscriptFile | undefined>;
@@ -263,11 +258,11 @@ export function projectSessionCostSummaries(
     dayBucket?: UsageDailyBucket;
     refreshing: boolean;
   },
-): {
+): Promise<{
   summaries: Array<SessionCostSummary | null>;
   cacheStatus: UsageCacheStatus;
   staleSessionFiles: string[];
-} {
+}> {
   const summaries = Array<SessionCostSummary | null>(params.sessions.length).fill(null);
   const requestsByPath = new Map<
     string,
@@ -296,30 +291,49 @@ export function projectSessionCostSummaries(
   let latestScan = 0;
   for (const [filePath, requests] of requestsByPath) {
     const row = params.readRow(filePath);
-    const entry = row ? decodeUsageCostRollup(row.valueJson, params.pricingFingerprint) : undefined;
-    if (!entry || !row) {
+    const envelope = row
+      ? decodeUsageCostRollupEnvelope(row.valueJson, params.pricingFingerprint)
+      : undefined;
+    if (!envelope || !row) {
       continue;
     }
-    latestScan = Math.max(latestScan, entry.scannedAt);
-    for (const { index, session, file } of requests) {
-      if (!isUsageCostRollupFresh({ checkpoint: entry.checkpoint, file })) {
-        continue;
-      }
+    latestScan = Math.max(latestScan, envelope.scannedAt);
+    const usableRequests = requests.filter(({ file }) =>
+      canUseUsageCostRollupForPartial({ checkpoint: envelope.checkpoint, file }),
+    );
+    if (usableRequests.length === 0) {
+      continue;
+    }
+    const entry = decodeUsageCostRollup(
+      row.valueJson,
+      params.pricingFingerprint,
+      await params.readBody(row),
+    );
+    if (!entry) {
+      params.onInvalidBody(row.key);
+      continue;
+    }
+    for (const { index, session, file } of usableRequests) {
       cachedFiles += 1;
-      summaries[index] = buildSessionCostSummaryFromRollup({
-        rollup: entry.rollup,
-        sessionId: session.sessionId,
-        sessionFile: session.sessionFile,
-        startMs,
-        endMs,
-        includeUntimestamped,
-        formatDay,
-      });
+      const fresh = isUsageCostRollupFresh({ checkpoint: entry.checkpoint, file });
+      summaries[index] = {
+        ...buildSessionCostSummaryFromRollup({
+          rollup: entry.rollup,
+          sessionId: session.sessionId,
+          sessionFile: session.sessionFile,
+          startMs,
+          endMs,
+          includeUntimestamped,
+          formatDay,
+        }),
+        computedAt: entry.scannedAt,
+        ...(!fresh ? { refreshing: params.refreshing, staleSince: file.mtimeMs } : {}),
+      };
     }
   }
   const staleSessionFiles = new Set<string>();
   for (const [index, session] of params.sessions.entries()) {
-    if (summaries[index] === null) {
+    if (summaries[index] === null || summaries[index]?.staleSince !== undefined) {
       staleSessionFiles.add(params.files[index]?.sourcePath ?? session.sessionFile);
     }
   }

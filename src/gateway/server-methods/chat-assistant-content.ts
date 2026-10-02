@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   readPairingQrReplyChannelData,
   stripReplyMediaFailureFallback,
   type ReplyPayload,
@@ -214,16 +215,21 @@ export async function buildAssistantReplyContentFromInputs(
     const metadataSource = payloads[entry.sourceIndex] ?? payload;
     const mediaFailures = getReplyPayloadMetadata(metadataSource)?.assistantMediaFailures ?? [];
     const isPrepared = params.inputs[entry.sourceIndex]?.kind === "prepared";
+    const statusNotice = isReplyPayloadStatusNotice(payload);
     const displayText = isPrepared ? prepareAssistantDisplayText : sanitizeAssistantDisplayText;
     const text = displayText(stripReplyMediaFailureFallback(payload.text, mediaFailures), {
       preserveBoundaries: preserveTextBoundaries,
     });
     if (text && (isPrepared || !isSuppressedControlReplyText(text))) {
-      const previousBlock = content.at(-1);
-      if (Array.isArray(previousBlock)) {
-        previousBlock.push(text);
+      if (statusNotice) {
+        content.push({ type: "text", text, openclawStatusNotice: true });
       } else {
-        content.push([text]);
+        const previousBlock = content.at(-1);
+        if (Array.isArray(previousBlock)) {
+          previousBlock.push(text);
+        } else {
+          content.push([text]);
+        }
       }
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
@@ -232,7 +238,11 @@ export async function buildAssistantReplyContentFromInputs(
     // stay attached to their source payload instead of matching display slots.
     const transcriptText = params.transcriptMediaMessage?.payloadTexts[entry.sourceIndex] ?? text;
     if (transcriptText && (isPrepared || !isSuppressedControlReplyText(transcriptText))) {
-      persistedContent.push({ type: "text", text: transcriptText });
+      persistedContent.push({
+        type: "text",
+        text: transcriptText,
+        ...(statusNotice ? { openclawStatusNotice: true } : {}),
+      });
     }
     if (params.includeSensitiveDisplay === true) {
       try {

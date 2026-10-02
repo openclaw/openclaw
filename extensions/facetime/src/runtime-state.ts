@@ -1,6 +1,7 @@
 import type { FaceTimeCallStatusEvent, AuthenticatedFaceTimeOwner } from "./call-events.js";
 import { FaceTimeCallInstance } from "./call-lifecycle.js";
-import type { HelperActionResult, FaceTimeHelperPeer } from "./helper-rpc.js";
+import type { HelperActionResult } from "./helper-results.js";
+import type { FaceTimeHelperPeer } from "./helper-rpc.js";
 import type { FaceTimeHelperSupervisorStatus } from "./helper-supervisor.js";
 import type { FaceTimeDialMode, PendingFaceTimeDial } from "./outbound-call.js";
 import type { FaceTimeTalkDriver } from "./talk-driver.js";
@@ -200,14 +201,4 @@ export function updateCallStatus(call: ActiveFaceTimeCall, event: FaceTimeCallSt
       event.data.remote_meter_level,
     );
   }
-}
-
-export function createManagedCall(params: {
-  callUUID: string;
-  phase: "ringing" | "active";
-  owner: AuthenticatedFaceTimeOwner;
-  handle?: string;
-  peer?: FaceTimeHelperPeer;
-}): ActiveFaceTimeCall {
-  return new ActiveFaceTimeCall(params);
 }

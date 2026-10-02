@@ -1,17 +1,17 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesDeclaredProviderOwner } from "./provider-owner-index.js";
-import type { PluginProviderRegistration, ProviderPlugin } from "./provider-plugin.types.js";
+import type { PluginProviderRegistration } from "./provider-plugin.types.js";
 import { getProviderRegistryIndex } from "./provider-registry-index.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
-/** Resolves the hook receiver with its authoritative registry-owned plugin id. */
-export function findProviderRuntimePluginInRegistry(params: {
+/** Selects the current provider registration without reading unrelated runtime fields. */
+export function findProviderRuntimeRegistrationInRegistry(params: {
   registry: { providers: readonly PluginProviderRegistration[] };
   provider: string;
   ownerRefs: readonly string[];
   isOwnerEligible?: (pluginId: string) => boolean;
-}): ProviderPlugin | undefined {
+}): PluginProviderRegistration | undefined {
   const scope = getPluginRuntimeGatewayRequestScope();
   const owners =
     (scope?.pluginRegistry === params.registry ? scope.declaredProviderOwners : undefined) ??
@@ -40,6 +40,5 @@ export function findProviderRuntimePluginInRegistry(params: {
           ].toSorted((left, right) => left - right);
     position = candidates?.find(eligible);
   }
-  const entry = position === undefined ? undefined : providers[position];
-  return entry ? Object.assign({}, entry.provider, { pluginId: entry.pluginId }) : undefined;
+  return position === undefined ? undefined : providers[position];
 }

@@ -13,6 +13,7 @@ import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
 
@@ -30,6 +31,7 @@ function waitThroughGateway(
       params,
       respond,
       context: {
+        dedupe: new Map(),
         chatAbortControllers: activeKind
           ? new Map([[params.runId, { kind: activeKind }]])
           : new Map(),
@@ -74,6 +76,110 @@ afterEach(() => {
 });
 
 describe("agent.wait gateway dedupe observations", () => {
+  it.each(
+    (["ok", "error", "timeout"] as const).flatMap((status) =>
+      (["active", "retired", "sessionless"] as const).map((registration) => ({
+        status,
+        registration,
+      })),
+    ),
+  )(
+    "waits for replayable $status after execution ends ($registration)",
+    async ({ status, registration }) => {
+      vi.useFakeTimers();
+      const runId = `publication-${status}-${registration}`;
+      const key = `agent:${runId}`;
+      const context = createGatewayRequestContext(makeContextParams());
+      if (registration !== "sessionless") {
+        context.chatAbortControllers.set(runId, {
+          kind: "agent",
+          controller: new AbortController(),
+          sessionKey: "agent:main:publication",
+          sessionId: "publication-session",
+          startedAtMs: Date.now(),
+          expiresAtMs: Number.MAX_SAFE_INTEGER,
+        });
+      }
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
+      });
+      const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
+      const invokeWait = (timeoutMs: number, respond = vi.fn()) => ({
+        respond,
+        promise: handler({
+          req: { type: "req", id: runId, method: "agent.wait" },
+          params: { runId, timeoutMs },
+          respond,
+          context,
+          client: null,
+          isWebchatConnect: () => false,
+        }),
+      });
+      const replay = () => {
+        const emitAcceptance = vi.fn();
+        expect(
+          replayAgentTurnIfCached({
+            preflight: { runId, agentDedupeKeys: [key] },
+            context,
+            io: { emitAcceptance, emitFinal: vi.fn() },
+          }),
+        ).toBe(true);
+        return emitAcceptance.mock.calls[0]?.[0];
+      };
+      const terminal = {
+        runId,
+        status,
+        ...(status === "timeout" ? { stopReason: "rpc" } : {}),
+        result: { payloads: [{ text: "canonical terminal reply" }] },
+      };
+      const publish = () =>
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key,
+          entry: { ts: Date.now(), ok: status !== "error", payload: terminal },
+        });
+      const waiting = invokeWait(60_000);
+      try {
+        expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
+        emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "start" } });
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: { phase: "end", executionSettled: true, ...terminal },
+        });
+        if (registration === "retired") {
+          context.chatAbortControllers.delete(runId);
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(waiting.respond).not.toHaveBeenCalled();
+        const duringPublication = invokeWait(0);
+        await duringPublication.promise;
+        expect(duringPublication.respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
+        expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
+        publish();
+        context.chatAbortControllers.delete(runId);
+        await waiting.promise;
+        expect(waiting.respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({
+            runId,
+            status: status === "timeout" ? "error" : status,
+          }),
+        );
+        expect(replay()).toEqual([status !== "error", terminal, undefined]);
+        const afterCleanup = invokeWait(0);
+        await afterCleanup.promise;
+        expect(afterCleanup.respond.mock.calls).toEqual(waiting.respond.mock.calls);
+      } finally {
+        publish();
+        await waiting.promise;
+        context.chatAbortControllers.clear();
+      }
+    },
+  );
+
   it.each([undefined, true] as const)(
     "retires a sticky terminal only for an admitted new attempt: %s",
     async (startNewAttempt) => {
@@ -378,6 +484,7 @@ describe("agent.wait gateway dedupe observations", () => {
     const chatQueuedTurns: QueuedChatTurnMap = new Map();
     const service = createAgentTurnService({
       context: {
+        dedupe: new Map(),
         chatAbortControllers: new Map(),
         chatQueuedTurns,
       } as Parameters<typeof createAgentTurnService>[0]["context"],
@@ -402,32 +509,35 @@ describe("agent.wait gateway dedupe observations", () => {
     }
   });
 
-  it("resolves concurrent waiters when the terminal dedupe entry lands", async () => {
-    const runId = "run-public-concurrent-waiters";
-    const dedupe = new Map<string, DedupeEntry>();
-    const first = waitThroughGateway({ runId, timeoutMs: 1_000 });
-    const second = waitThroughGateway({ runId, timeoutMs: 1_000 });
+  it.each([undefined, "agent", "chat"] as const)(
+    "resolves concurrent %s waiters when the terminal dedupe entry lands",
+    async (source) => {
+      const runId = `run-public-concurrent-waiters-${source ?? "untracked"}`;
+      const dedupe = new Map<string, DedupeEntry>();
+      const first = waitThroughGateway({ runId, timeoutMs: 1_000 }, source);
+      const second = waitThroughGateway({ runId, timeoutMs: 1_000 }, source);
 
-    await Promise.resolve();
-    completeRun(dedupe, runId);
-    await Promise.all([first.promise, second.promise]);
+      await Promise.resolve();
+      completeRun(dedupe, runId, source ?? "agent");
+      await Promise.all([first.promise, second.promise]);
 
-    const expected = {
-      runId,
-      status: "ok",
-      startedAt: 100,
-      endedAt: 200,
-      error: undefined,
-      stopReason: undefined,
-      livenessState: undefined,
-      yielded: undefined,
-      pendingError: undefined,
-      timeoutPhase: undefined,
-      providerStarted: undefined,
-    };
-    expect(first.respond).toHaveBeenCalledWith(true, expected);
-    expect(second.respond).toHaveBeenCalledWith(true, expected);
-  });
+      const expected = {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        error: undefined,
+        stopReason: undefined,
+        livenessState: undefined,
+        yielded: undefined,
+        pendingError: undefined,
+        timeoutPhase: undefined,
+        providerStarted: undefined,
+      };
+      expect(first.respond).toHaveBeenCalledWith(true, expected);
+      expect(second.respond).toHaveBeenCalledWith(true, expected);
+    },
+  );
 
   it("retires only its scope's observer without ending the shared run", async () => {
     const runId = "run-scope-observers";

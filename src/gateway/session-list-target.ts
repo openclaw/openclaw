@@ -14,7 +14,13 @@ export function readSessionListSelectionFacts(
     isCronRun: isCronRunSessionKey(key),
     isSubagent:
       isSubagentSessionKey(key) ||
-      Boolean(entry?.spawnedBy && !normalizeOptionalString(entry.category)),
+      // Visible spawned conversations use dashboard keys even without a sidebar group.
+      // Lineage alone must not hide the session where the human follows the work.
+      Boolean(
+        entry?.spawnedBy &&
+        !parsed?.rest.toLowerCase().startsWith("dashboard:") &&
+        !normalizeOptionalString(entry.category),
+      ),
     isPhantom:
       entry?.updatedAt == null &&
       !normalizeOptionalString(entry?.sessionId) &&

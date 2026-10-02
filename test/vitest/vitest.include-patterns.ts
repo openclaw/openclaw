@@ -2,6 +2,32 @@ import path from "node:path";
 
 type GlobMatcher = (value: string, pattern: string) => boolean;
 
+export function filterFilesByPatterns(
+  files: readonly string[],
+  include: readonly string[],
+  exclude: readonly string[],
+  matchesGlob: GlobMatcher,
+): string[] {
+  const selected = new Set<string>();
+  // Finish each pattern before advancing so large inventories do not churn
+  // the runtime's bounded compiled-glob cache for every candidate file.
+  for (const pattern of include) {
+    for (const file of files) {
+      if (!selected.has(file) && matchesGlob(file, pattern)) {
+        selected.add(file);
+      }
+    }
+  }
+  for (const pattern of exclude) {
+    for (const file of selected) {
+      if (matchesGlob(file, pattern)) {
+        selected.delete(file);
+      }
+    }
+  }
+  return files.filter((file) => selected.has(file));
+}
+
 function literalPrefixForGlobPattern(value: string): string {
   const normalized = value.replaceAll("\\", "/");
   const globIndex = normalized.search(/[?*[\]{}]/u);
@@ -36,25 +62,32 @@ export function narrowIncludePatterns(
     return null;
   }
 
-  // Vitest applies CLI filters after discovery. Prefix overlap cannot prove glob
-  // containment, so retain the owner's patterns unless selecting an owned literal file.
+  // Prefix overlap alone cannot prove containment. Only narrow literal files
+  // and plain directory test patterns; preserve more complex owner globs.
   const narrowed = new Set<string>();
   for (const candidate of candidatePatterns) {
     const isLiteral = !/[?*[\]{}]/u.test(candidate);
+    const directoryCandidate = candidate.replace(/\.test\.\*$/u, ".test.ts");
+    const candidateRoot = directoryTestPatternRoot(directoryCandidate);
     for (const laneScope of includePatterns) {
       if (isLiteral) {
         if (matchesGlob(candidate, laneScope)) {
           narrowed.add(candidate);
         }
       } else if (patternsCouldOverlap(candidate, laneScope, matchesGlob)) {
-        narrowed.add(laneScope);
+        const ownerRoot = directoryTestPatternRoot(laneScope);
+        narrowed.add(
+          candidateRoot !== null && ownerRoot !== null && isAtOrUnder(candidateRoot, ownerRoot)
+            ? directoryCandidate
+            : laneScope,
+        );
       }
     }
   }
   return [...narrowed];
 }
 
-function isPlainRepoRelativePath(value: string): boolean {
+export function isPlainRepoRelativePath(value: string): boolean {
   if (!/^[A-Za-z0-9_./-]+$/u.test(value) || path.isAbsolute(value)) {
     return false;
   }

@@ -9,6 +9,7 @@ import {
   isTrustedSecretSurfaceUnavailableError,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
+import type { ControlUiLinkReaderDocument } from "../shared/control-ui-link-reader.js";
 
 export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
   "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.";
@@ -34,6 +35,9 @@ type ControlUiGitHubPreviewTarget = {
   kind: "issue" | "pull";
   number: number;
 };
+type GitHubDetailTarget =
+  | ControlUiGitHubPreviewTarget
+  | { owner: string; repo: string; kind: "commit"; sha: string };
 
 /** Host consumers depend on this public read contract, not the plugin's source graph. */
 type GitHubPublicApi = {
@@ -89,6 +93,13 @@ type GitHubPublicApi = {
     maxBytes?: number,
   ) => Promise<unknown>;
   parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
+  parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
+  loadGitHubDetail: (
+    target: GitHubDetailTarget,
+    identity?: ControlUiGitHubPreviewIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+  ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,
     identity?: ControlUiGitHubPreviewIdentity,
@@ -144,6 +155,25 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
     const token = githubApiToken(env);
     return { token, cacheScope: library.githubApiCredentialCacheScope(token) };
   };
+  const resolveReadIdentity = (
+    identity: ControlUiGitHubPreviewIdentity | undefined,
+  ): ControlUiGitHubPreviewIdentity => {
+    if (identity) {
+      return identity;
+    }
+    const selected = resolveScope();
+    const assertSelected = () => {
+      if (resolveScope().cacheScope !== selected.cacheScope) {
+        throw new library.ControlUiGitHubError(409, "GitHub credential changed; retry the request");
+      }
+    };
+    return {
+      ...selected,
+      optionalAuth: true,
+      assertSelected,
+      revalidate: async () => assertSelected(),
+    };
+  };
   return {
     ...library,
     resolveGitHubApiCredentialScope: resolveScope,
@@ -153,29 +183,15 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
         : library.formatControlUiGitHubPreviewError(error);
     },
     loadControlUiGitHubPreview(target, identity, fetchImpl, refresh) {
-      if (identity) {
-        return library.loadControlUiGitHubPreview(target, identity, fetchImpl, refresh);
-      }
-      const selected = resolveScope();
-      const assertSelected = () => {
-        if (resolveScope().cacheScope !== selected.cacheScope) {
-          throw new library.ControlUiGitHubError(
-            409,
-            "GitHub credential changed; retry the preview",
-          );
-        }
-      };
       return library.loadControlUiGitHubPreview(
         target,
-        {
-          ...selected,
-          optionalAuth: true,
-          assertSelected,
-          revalidate: async () => assertSelected(),
-        },
+        resolveReadIdentity(identity),
         fetchImpl,
         refresh,
       );
+    },
+    loadGitHubDetail(target, identity, fetchImpl, refresh) {
+      return library.loadGitHubDetail(target, resolveReadIdentity(identity), fetchImpl, refresh);
     },
   };
 });

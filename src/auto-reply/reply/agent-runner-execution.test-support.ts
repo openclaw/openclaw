@@ -498,7 +498,7 @@ export function createFollowupRun(): FollowupRun {
       sessionFile: path.join(rootDir, "session.jsonl"),
       workspaceDir: rootDir,
       config: {},
-      skillsSnapshot: {},
+      skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
       // Missing fixture modalities trigger real provider catalog discovery during execution.
@@ -610,7 +610,6 @@ export function createAgentTurnExecutionDefaults() {
     shouldEmitToolResult: () => true,
     shouldEmitToolOutput: () => false,
     pendingToolTasks: new Set<Promise<void>>(),
-    resetSessionAfterRoleOrderingConflict: async () => false,
     isHeartbeat: false,
     sessionKey: "main",
     getActiveSessionEntry: () => undefined,

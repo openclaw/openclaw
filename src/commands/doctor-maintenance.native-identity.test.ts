@@ -1,27 +1,44 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForGatewayHealthyRestart } from "../cli/daemon-cli/restart-health.js";
+import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
 const native = vi.hoisted(() => ({
   directory: "",
+  resident: vi.fn<() => { pid: number } | undefined>(),
   busctl: vi.fn<typeof import("../daemon/systemd-exec.js").execBusctlSystem>(),
   systemctl: vi.fn<typeof import("../daemon/systemd-exec.js").execSystemctl>(),
   open: vi.fn<typeof import("../daemon/systemd-peer-native.js").openSystemdBroker>(),
 }));
-vi.mock("../daemon/systemd-exec.js", async (original) => ({
-  ...(await original<typeof import("../daemon/systemd-exec.js")>()),
-  execBusctlSystem: native.busctl,
-  execSystemctl: native.systemctl,
+// The manager identity fixture runs Doctor outside its synthetic Gateway's service.
+vi.mock("../daemon/service-process-membership.js", () => ({
+  inspectServiceProcessMembershipSync: () => "outside",
 }));
+vi.mock("../gateway/call.js", async (original) => {
+  const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../gateway/call.js")>()),
+    callGatewayCli: gatewayMaintenanceResponse(() => native.resident()),
+  };
+});
+vi.mock("../daemon/systemd-exec.js", async (original) => {
+  const { gatewayMaintenanceSystemdShow } =
+    await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../daemon/systemd-exec.js")>()),
+    execBusctlSystem: native.busctl,
+    execSystemctl: native.systemctl,
+    execSystemctlUser: gatewayMaintenanceSystemdShow,
+  };
+});
 vi.mock("../daemon/systemd-peer-native.js", async (original) => ({
   ...(await original<typeof import("../daemon/systemd-peer-native.js")>()),
   openSystemdBroker: native.open,
@@ -34,29 +51,6 @@ vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: vi.fn(async () => ({ healthy: true })),
   waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
-}));
-// Retain real SQLite exclusion while keeping every coordinator in the fixture.
-vi.mock("../infra/state-database-coordinator.js", async (original) => {
-  const actual = await original<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    ...actual,
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) =>
-      actual.acquireGatewayMaintenanceCoordinator({
-        ...params,
-        runtimeDirectory: native.directory,
-      }),
-    acquireStateDatabaseCoordinator: (
-      params: Parameters<typeof actual.acquireStateDatabaseCoordinator>[0],
-    ) => actual.acquireStateDatabaseCoordinator({ ...params, runtimeDirectory: native.directory }),
-  };
-});
-vi.mock("../infra/sqlite-coordinator.js", async (original) => ({
-  ...(await original<typeof import("../infra/sqlite-coordinator.js")>()),
-  // A synthetic root account cannot change real host ownership or Windows mode bits.
-  ensurePrivateSqliteCoordinatorDirectory: (directory: string) =>
-    fs.mkdirSync(directory, { recursive: true }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,7 +68,8 @@ type Scenario =
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockProcessPlatform("linux");
+  native.resident.mockReset();
+  mockDoctorServicePlatform("linux");
   vi.spyOn(process, "geteuid").mockReturnValue(0);
   vi.spyOn(os, "homedir").mockImplementation(() => native.directory);
   vi.spyOn(os, "userInfo").mockImplementation(() => ({
@@ -106,6 +101,13 @@ async function repair(scenario: Scenario) {
     readFile(file === unitFile ? fixtureUnit : file, options),
   );
   let running = true;
+  // The synthetic Gateway must not be this test process or one of its ancestors.
+  const ancestors = getSelfAndAncestorPidsSync();
+  let pid = 12345;
+  while (ancestors.has(pid)) {
+    pid += 1;
+  }
+  native.resident.mockImplementation(() => (running ? { pid } : undefined));
   let stopped = false;
   let diagnosticFailure = false;
   let serviceUser = "root";
@@ -162,12 +164,13 @@ async function repair(scenario: Scenario) {
         InactiveEnterTimestampMonotonic: { type: "t", data: 200 },
         Result: { type: "s", data: "success" },
         NRestarts: { type: "u", data: 0 },
-        MainPID: { type: "u", data: running ? 12345 : 0 },
+        MainPID: { type: "u", data: running ? pid : 0 },
         ExecMainStatus: { type: "i", data: 0 },
         ExecMainCode: { type: "i", data: 1 },
         KillMode: { type: "s", data: "control-group" },
         TasksCurrent: { type: "t", data: running ? 1 : 0 },
         MemoryCurrent: { type: "t", data: 0 },
+        ControlGroup: { type: "s", data: "/system.slice/openclaw-gateway.service" },
         ExecStart: {
           type: "a(sasbttttuii)",
           data: [[command[0], command, false, 0, 0, 0, 0, 0, 0, 0]],

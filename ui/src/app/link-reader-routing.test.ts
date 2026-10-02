@@ -1,8 +1,12 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiLinkReaderDescriptor } from "../../../src/shared/control-ui-link-reader.js";
-import { resolveLinkReaderTarget } from "../components/link-reader-target.ts";
-import { LINK_READER_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import { linkReaderResponseMatchesTarget } from "../components/link-reader-response.ts";
+import { linkReaderTargetKey, resolveLinkReaderTarget } from "../components/link-reader-target.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
+} from "../components/panel-toggle-contract.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -26,7 +30,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function setup() {
+function setup(shouldOpenExternally?: () => boolean) {
   const snapshot: ApplicationGatewaySnapshot = {
     phase: "connected",
     client: createTestGatewayClient(vi.fn()),
@@ -44,7 +48,7 @@ function setup() {
       controlUiLinkReaders: [reader],
     },
   };
-  const router = startLinkReaderRouting(() => snapshot);
+  const router = startLinkReaderRouting(() => snapshot, { shouldOpenExternally });
   cleanups.push(router.dispose);
   const accept = vi.fn((event: Event) => event.preventDefault());
   window.addEventListener(LINK_READER_PANEL_TOGGLE_EVENT, accept);
@@ -69,6 +73,55 @@ function setup() {
 }
 
 describe("Plugin reader link routing", () => {
+  it.each([false, true])(
+    "honors the external preference before readers and browser panels (native: %s)",
+    (native) => {
+      let external = true;
+      const shouldOpenExternally = () => external;
+      const { accept, click } = setup(shouldOpenExternally);
+      const postMessage = vi.fn();
+      if (native) {
+        vi.stubGlobal("webkit", {
+          messageHandlers: {
+            openclawLink: { postMessage },
+            openclawBrowser: { postMessage: vi.fn() },
+          },
+        });
+      }
+      const panel = vi.fn();
+      window.addEventListener(BROWSER_PANEL_TOGGLE_EVENT, panel);
+      cleanups.push(() => window.removeEventListener(BROWSER_PANEL_TOGGLE_EVENT, panel));
+      const routing = startNativeLinkRouting({
+        shouldOpenExternally,
+        shouldOpenInControlUiBrowser: () => true,
+      });
+      cleanups.push(() => routing.dispose());
+
+      expect(click().allowed).toBe(!native);
+      expect(accept).not.toHaveBeenCalled();
+      expect(panel).not.toHaveBeenCalled();
+      expect(postMessage.mock.calls).toEqual(
+        native
+          ? [
+              [
+                {
+                  type: "open-link",
+                  url: "https://forge.example/items/123",
+                  target: "external",
+                },
+              ],
+            ]
+          : [],
+      );
+
+      external = false;
+      expect(click().allowed).toBe(false);
+      expect(accept).toHaveBeenCalledOnce();
+      expect(panel).not.toHaveBeenCalled();
+      expect(postMessage).toHaveBeenCalledTimes(native ? 1 : 0);
+    },
+  );
+
   it("routes primary clicks once before native webview handling, retaining the original URL", () => {
     const { anchor, accept, click } = setup();
     const postMessage = vi.fn();
@@ -131,6 +184,22 @@ describe("Plugin reader link routing", () => {
 });
 
 describe("Plugin reader destinations", () => {
+  it("keys canonical URLs without losing query identity when fragments change", () => {
+    const target = resolveLinkReaderTarget(
+      "HTTPS://FORGE.EXAMPLE:443/items/123?label=%23one#start",
+      [reader],
+    )!;
+    expect(linkReaderTargetKey(target)).toBe(
+      "forge:items:https://forge.example/items/123?label=%23one",
+    );
+    expect(
+      linkReaderResponseMatchesTarget(target, "https://forge.example/items/123?label=%23one#other"),
+    ).toBe(true);
+    expect(
+      linkReaderResponseMatchesTarget(target, "https://forge.example/items/123?label=%23two#start"),
+    ).toBe(false);
+  });
+
   it("only claims URLs declared by an enabled plugin, including a non-forge provider", () => {
     const notes: ControlUiLinkReaderDescriptor = {
       pluginId: "notes",

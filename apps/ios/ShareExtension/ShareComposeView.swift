@@ -294,7 +294,12 @@ final class ShareComposeView: UIView, UITextViewDelegate {
     }
 
     private static func makeSendConfiguration() -> UIButton.Configuration {
-        var configuration = self.sendConfigurationBase()
+        // Keep the filled fallback on iOS 18 hosts (see DESIGN.md).
+        var configuration: UIButton.Configuration = if #available(iOS 26.0, *) {
+            .prominentGlass()
+        } else {
+            .filled()
+        }
         configuration.cornerStyle = .capsule
         configuration.baseBackgroundColor = self.accent
         configuration.baseForegroundColor = .white
@@ -305,15 +310,6 @@ final class ShareComposeView: UIView, UITextViewDelegate {
             NSLocalizedString("Send to OpenClaw", comment: "Share extension send action"),
             style: .headline)
         return configuration
-    }
-
-    /// Liquid Glass primary action on iOS 26 with the filled fallback that keeps
-    /// the same label, tint, and hit target on iOS 18 hosts (see DESIGN.md).
-    private static func sendConfigurationBase() -> UIButton.Configuration {
-        if #available(iOS 26.0, *) {
-            return .prominentGlass()
-        }
-        return .filled()
     }
 
     private static func attributedTitle(_ text: String, style: UIFont.TextStyle) -> AttributedString {

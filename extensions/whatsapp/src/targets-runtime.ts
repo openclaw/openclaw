@@ -138,14 +138,9 @@ const DIRECT_LID_JID_RE = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i;
 
 function addEquivalentDirectChatCandidate(target: string[], jid: string | null | undefined): void {
   addUniqueString(target, jid);
-  const pnMatch = jid?.match(DIRECT_PN_JID_RE);
-  if (pnMatch) {
-    addUniqueString(target, `${pnMatch[1]}@${pnMatch[2]}`);
-    return;
-  }
-  const lidMatch = jid?.match(DIRECT_LID_JID_RE);
-  if (lidMatch) {
-    addUniqueString(target, `${lidMatch[1]}@${lidMatch[2]}`);
+  const match = jid?.match(DIRECT_PN_JID_RE) ?? jid?.match(DIRECT_LID_JID_RE);
+  if (match) {
+    addUniqueString(target, `${match[1]}@${match[2]}`);
   }
 }
 
@@ -214,18 +209,23 @@ function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   return [...dirs];
 }
 
-function readLidReverseMapping(params: { lid: string; opts?: JidToE164Options }): string | null {
-  const mappingFilename = `lid-mapping-${params.lid}_reverse.json`;
-  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
-  for (const dir of mappingDirs) {
+function readLidMapping(
+  mappingFilename: string,
+  opts: JidToE164Options | undefined,
+  normalize: (value: string) => string | null,
+): string | null {
+  for (const dir of resolveLidMappingDirs({ opts })) {
     const mappingPath = path.join(dir, mappingFilename);
     try {
       const data = fs.readFileSync(mappingPath, "utf8");
-      const phone = JSON.parse(data) as string | number | null;
-      if (phone === null || phone === undefined) {
+      const value = JSON.parse(data) as string | number | null;
+      if (value === null || value === undefined) {
         continue;
       }
-      return normalizeE164(String(phone));
+      const normalized = normalize(String(value));
+      if (normalized !== null) {
+        return normalized;
+      }
     } catch {
       // next location
     }
@@ -237,25 +237,11 @@ function readLidForwardMapping(params: {
   phoneDigits: string;
   opts?: JidToE164Options;
 }): string | null {
-  const mappingFilename = `lid-mapping-${params.phoneDigits}.json`;
-  const mappingDirs = resolveLidMappingDirs({ opts: params.opts });
-  for (const dir of mappingDirs) {
-    const mappingPath = path.join(dir, mappingFilename);
-    try {
-      const data = fs.readFileSync(mappingPath, "utf8");
-      const lid = JSON.parse(data) as string | number | null;
-      if (lid === null || lid === undefined) {
-        continue;
-      }
-      const digits = String(lid).replace(/\D/g, "");
-      if (digits) {
-        return digits;
-      }
-    } catch {
-      // next location
-    }
-  }
-  return null;
+  return readLidMapping(
+    `lid-mapping-${params.phoneDigits}.json`,
+    params.opts,
+    (value) => value.replace(/\D/g, "") || null,
+  );
 }
 
 export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
@@ -273,10 +259,7 @@ export function jidToE164(jid: string, opts?: JidToE164Options): string | null {
   if (!lid) {
     return null;
   }
-  const phone = readLidReverseMapping({
-    lid,
-    opts,
-  });
+  const phone = readLidMapping(`lid-mapping-${lid}_reverse.json`, opts, normalizeE164);
   if (phone) {
     return phone;
   }

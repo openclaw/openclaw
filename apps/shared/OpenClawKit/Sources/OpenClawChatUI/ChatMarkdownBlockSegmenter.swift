@@ -106,6 +106,53 @@ enum ChatMarkdownBlockSyntax {
         return count.isMultiple(of: 2) == false
     }
 
+    static func codeSpans(in source: String, honoringEscapes: Bool) -> [Range<String.Index>] {
+        struct BacktickRun {
+            let start: String.Index
+            let end: String.Index
+            let length: Int
+            let canOpen: Bool
+        }
+
+        var runs: [BacktickRun] = []
+        var cursor = source.startIndex
+        while cursor < source.endIndex {
+            guard source[cursor] == "`" else {
+                cursor = source.index(after: cursor)
+                continue
+            }
+            var end = cursor
+            while end < source.endIndex, source[end] == "`" {
+                end = source.index(after: end)
+            }
+            runs.append(BacktickRun(
+                start: cursor,
+                end: end,
+                length: source.distance(from: cursor, to: end),
+                canOpen: !honoringEscapes || !self.isEscaped(at: cursor, in: source)))
+            cursor = end
+        }
+
+        var nextMatchingRun = [Int?](repeating: nil, count: runs.count)
+        var nextIndexByLength: [Int: Int] = [:]
+        for index in runs.indices.reversed() {
+            nextMatchingRun[index] = nextIndexByLength[runs[index].length]
+            nextIndexByLength[runs[index].length] = index
+        }
+
+        var spans: [Range<String.Index>] = []
+        var index = 0
+        while index < runs.count {
+            guard runs[index].canOpen, let closeIndex = nextMatchingRun[index] else {
+                index += 1
+                continue
+            }
+            spans.append(runs[index].start..<runs[closeIndex].end)
+            index = closeIndex + 1
+        }
+        return spans
+    }
+
     private static func matches(_ line: String, _ pattern: String) -> Bool {
         line.range(of: pattern, options: .regularExpression) != nil
     }
@@ -712,7 +759,7 @@ enum ChatMarkdownBlockSegmenter {
                 options: [.regularExpression, .caseInsensitive]) != nil
             else { return nil }
 
-            let codeRanges = self.inlineCodeRanges(in: line)
+            let codeRanges = ChatMarkdownBlockSyntax.codeSpans(in: line, honoringEscapes: false)
             let fullRange = NSRange(line.startIndex..<line.endIndex, in: line)
             let matches = self.tagExpression.matches(in: line, range: fullRange)
             let tags = matches.compactMap { match -> Tag? in
@@ -739,46 +786,6 @@ enum ChatMarkdownBlockSegmenter {
                 if lower.hasPrefix("<details") { return .unsupportedDetailsOpen }
                 return .unsupportedSummary
             }
-        }
-
-        private static func inlineCodeRanges(in line: String) -> [Range<String.Index>] {
-            var ranges: [Range<String.Index>] = []
-            var cursor = line.startIndex
-            while cursor < line.endIndex {
-                guard line[cursor] == "`" else {
-                    cursor = line.index(after: cursor)
-                    continue
-                }
-                let openerStart = cursor
-                var openerEnd = cursor
-                while openerEnd < line.endIndex, line[openerEnd] == "`" {
-                    openerEnd = line.index(after: openerEnd)
-                }
-                let runLength = line.distance(from: openerStart, to: openerEnd)
-                var search = openerEnd
-                var closeEnd: String.Index?
-                while search < line.endIndex {
-                    guard line[search] == "`" else {
-                        search = line.index(after: search)
-                        continue
-                    }
-                    let closeStart = search
-                    while search < line.endIndex, line[search] == "`" {
-                        search = line.index(after: search)
-                    }
-                    if line.distance(from: closeStart, to: search) == runLength {
-                        closeEnd = search
-                        break
-                    }
-                }
-                if let closeEnd {
-                    ranges.append(openerStart..<closeEnd)
-                    cursor = closeEnd
-                } else {
-                    cursor = openerEnd
-                }
-            }
-            return ranges
         }
     }
 

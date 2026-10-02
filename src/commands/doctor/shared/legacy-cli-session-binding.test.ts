@@ -7,18 +7,15 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import type { CliSessionBinding, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 
 const states: OpenClawTestState[] = [];
 afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
     await state.cleanup();
   }
@@ -56,8 +53,7 @@ describe("legacy CLI session binding migration", () => {
       sessionId: "Remote-MixedCase-Session/Alpha",
     });
     expect(saved).not.toHaveProperty("claudeCliSessionId");
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     const reopened = loadSessionEntryReadOnly(scope);
     expect(
       resolveCliSessionReuse({
@@ -121,8 +117,7 @@ describe("legacy CLI session binding migration", () => {
       shouldRepair: true,
     });
     expect(repaired.repairedSessions).toBe(2);
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     const savedCanonical = loadSessionEntryReadOnly(canonicalScope);
     const savedMap = loadSessionEntryReadOnly(mapScope);
     expect(savedCanonical?.cliSessionBindings).toEqual({
@@ -191,8 +186,7 @@ describe("legacy CLI session binding migration", () => {
     expect(repair.warnings.join("\n")).toContain("agent:main:ambiguous");
     expect(repair.warnings.join("\n")).toContain("agent:main:empty");
     expect(repair.warnings.join("\n")).toContain("agent:main:malformed");
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     expect(
       getCliSessionBinding(loadSessionEntryReadOnly(scope("safe")), "claude-cli")?.sessionId,
     ).toBe("Safe-MixedCase/ID");

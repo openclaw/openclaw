@@ -106,6 +106,7 @@ describe("Cloud Workers mutation requests", () => {
             sourceConfig: config,
             raw: JSON.stringify(config),
             hash,
+            appliedConfigHash: hash,
             valid: true,
             issues: [],
           };
@@ -114,7 +115,13 @@ describe("Cloud Workers mutation requests", () => {
           if (!isRecord(params) || params.projection !== "profiles") {
             throw new Error("environment inventory unavailable");
           }
-          return { environments: [], profiles: [{ id: "pending", operatingSystems: systems }] };
+          return {
+            environments: [],
+            profiles: [
+              { id: "pending", operatingSystems: systems },
+              ...(hash === "after" ? [{ id: "retained" }] : []),
+            ],
+          };
         }
         if (method !== "config.patch" || !validateConfigPatchParams(params)) {
           throw new Error(`Unexpected request ${method}`);
@@ -157,9 +164,6 @@ describe("Cloud Workers mutation requests", () => {
           );
           expect(profiles?.querySelectorAll(".settings-row code")).toHaveLength(2);
         });
-        await waitForFast(() =>
-          expect(request).toHaveBeenCalledWith("environments.list", { projection: "profiles" }),
-        );
         expect(page.textContent).not.toContain("environment inventory unavailable");
         const row = expectDefined(
           [...page.querySelectorAll(".settings-row")].find(
@@ -226,10 +230,17 @@ describe("Cloud Workers mutation requests", () => {
           actionButton(page, "Save").click();
         }
         await waitForFast(() => expect(patches).toHaveLength(1));
+        await runtimeConfig.refresh();
+        await waitForFast(() => {
+          const retainedRow = [...page.querySelectorAll(".settings-row")].find(
+            (entry) => entry.querySelector("code")?.textContent === "retained",
+          );
+          expect(retainedRow?.textContent).toContain("Advertised");
+        });
         if (action !== "delete") {
           await waitForFast(() =>
             expect(page.textContent).toContain(
-              "After the Gateway restarts, build a snapshot from the Snapshots view.",
+              "Profile saved. Build a snapshot from the Snapshots view.",
             ),
           );
           expect(request).not.toHaveBeenCalledWith("environments.prepare", expect.anything());
@@ -293,6 +304,14 @@ describe("Cloud Workers mutation requests", () => {
             expect(page.querySelector('input[aria-label="Profile ID"]')).not.toBeNull(),
           );
           expect(page.querySelector('select[aria-label="Operating system"]')).toBeNull();
+        } else {
+          gatewayHarness.publish(false);
+          await waitForFast(() => {
+            const retainedRow = [...page.querySelectorAll(".settings-row")].find(
+              (entry) => entry.querySelector("code")?.textContent === "retained",
+            );
+            expect(retainedRow?.textContent).toContain("Unavailable");
+          });
         }
       } finally {
         provider.remove();

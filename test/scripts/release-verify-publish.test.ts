@@ -3,6 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPluginNpmPublicationReadback } from "../../scripts/plugin-npm-publication-readback.mjs";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createNpmPublicationReadbackFixture,
@@ -82,11 +87,14 @@ globalThis.fetch = async (url) => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        resolve("node_modules/tsx/dist/loader.mjs"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptProcessEntrypoints.releaseVerifyPublish),
+        ).slice(0, -1),
         "--import",
         preload,
-        resolve("scripts/release-verify-publish.ts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptProcessEntrypoints.releaseVerifyPublish),
+        ).slice(-1),
         version,
         "--release-sha",
         sourceSha,

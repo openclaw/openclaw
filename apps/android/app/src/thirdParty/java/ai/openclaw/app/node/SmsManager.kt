@@ -11,60 +11,20 @@ import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
 import android.telephony.SmsManager as AndroidSmsManager
 
-/**
- * Sends SMS messages via the Android SMS API.
- * Requires SEND_SMS permission to be granted.
- *
- * Also provides SMS query functionality with READ_SMS permission.
- */
 class SmsManager(
   private val context: Context,
 ) {
   private val json = JsonConfig
 
   @Volatile private var permissionRequester: PermissionRequester? = null
-
-  data class SendResult(
-    val ok: Boolean,
-    val to: String,
-    val message: String?,
-    val error: String? = null,
-    val payloadJson: String,
-  )
-
-  /**
-   * Represents a single SMS message.
-   */
-  @Serializable
-  data class SmsMessage(
-    val id: Long,
-    val threadId: Long,
-    val address: String?,
-    val person: String?,
-    val date: Long,
-    val dateSent: Long,
-    val read: Boolean,
-    val type: Int,
-    val body: String?,
-    val status: Int,
-    val transportType: String? = null,
-  )
-
-  data class SearchResult(
-    val ok: Boolean,
-    val messages: List<SmsMessage>,
-    val error: String? = null,
-    val payloadJson: String,
-  )
 
   internal data class QueryMetadata(
     val mmsRequested: Boolean,
@@ -86,7 +46,6 @@ class SmsManager(
     data class Error(
       val error: String,
       val to: String = "",
-      val message: String? = null,
     ) : ParseResult
   }
 
@@ -154,7 +113,6 @@ class SmsManager(
       if (to.isEmpty()) {
         return ParseResult.Error(
           error = "INVALID_REQUEST: 'to' phone number required",
-          message = message,
         )
       }
 
@@ -243,44 +201,7 @@ class SmsManager(
       hasReadContactsPermission: Boolean,
     ): Boolean = !contactName.isNullOrEmpty() && phoneNumber.isNullOrEmpty() && !hasReadContactsPermission
 
-    internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? =
-      when (msgBox) {
-        1 -> 1
-
-        // inbox
-        2 -> 2
-
-        // sent
-        3 -> 3
-
-        // draft
-        4 -> 4
-
-        // outbox
-        5 -> 5
-
-        // failed
-        6 -> 6
-
-        // queued
-        else -> null
-      }
-
-    internal fun escapeSqlLikeLiteral(value: String): String =
-      buildString(value.length) {
-        for (ch in value) {
-          when (ch) {
-            '\\', '%', '_' -> {
-              append('\\')
-              append(ch)
-            }
-
-            else -> {
-              append(ch)
-            }
-          }
-        }
-      }
+    internal fun mapMmsMsgBoxToSearchType(msgBox: Int?): Int? = msgBox?.takeIf { it in 1..6 }
 
     internal fun buildContactNameLikeSelection(): String = "${ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME} LIKE ? ESCAPE '\\'"
 
@@ -472,14 +393,6 @@ class SmsManager(
       }
     }
 
-    internal fun materializeByPhoneCandidate(
-      candidates: MutableMap<String, SmsMessage>,
-      identityKey: String,
-      message: SmsMessage,
-    ) {
-      candidates[identityKey] = message
-    }
-
     internal fun collectMixedByPhoneCandidate(
       topCandidates: MutableList<Pair<String, SmsMessage>>,
       materializedCandidates: MutableMap<String, SmsMessage>,
@@ -489,7 +402,7 @@ class SmsManager(
       reviewMode: Boolean,
     ) {
       if (reviewMode) {
-        materializeByPhoneCandidate(materializedCandidates, identityKey, message)
+        materializedCandidates[identityKey] = message
       } else {
         upsertTopDateCandidates(topCandidates, identityKey, message, maxCandidates)
       }
@@ -548,13 +461,11 @@ class SmsManager(
       error: String? = null,
       queryMetadata: QueryMetadata? = null,
     ): String {
-      val messagesArray = json.encodeToString(messages)
-      val messagesElement = json.parseToJsonElement(messagesArray)
       val payload =
         mutableMapOf<String, JsonElement>(
           "ok" to JsonPrimitive(ok),
           "count" to JsonPrimitive(messages.size),
-          "messages" to messagesElement,
+          "messages" to json.encodeToJsonElement(messages),
         )
       queryMetadata?.let {
         payload["mmsRequested"] = JsonPrimitive(it.mmsRequested)
@@ -569,29 +480,15 @@ class SmsManager(
     }
   }
 
-  fun hasSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.SEND_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasSmsPermission(): Boolean = hasPermission(Manifest.permission.SEND_SMS)
 
-  fun hasReadSmsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_SMS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadSmsPermission(): Boolean = hasPermission(Manifest.permission.READ_SMS)
 
-  fun hasReadContactsPermission(): Boolean =
-    ContextCompat.checkSelfPermission(
-      context,
-      Manifest.permission.READ_CONTACTS,
-    ) == PackageManager.PERMISSION_GRANTED
+  fun hasReadContactsPermission(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
 
   fun canSendSms(): Boolean = hasSmsPermission() && hasTelephonyFeature()
 
-  fun canSearchSms(): Boolean = hasReadSmsPermission() && hasTelephonyFeature()
-
-  fun canReadSms(): Boolean = canSearchSms()
+  fun canReadSms(): Boolean = hasReadSmsPermission() && hasTelephonyFeature()
 
   fun hasTelephonyFeature(): Boolean = context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
 
@@ -599,20 +496,14 @@ class SmsManager(
     permissionRequester = requester
   }
 
-  /**
-   * Send an SMS message.
-   *
-   * @param paramsJson JSON with "to" (phone number) and "message" (text) fields
-   * @return SendResult indicating success or failure
-   */
-  suspend fun send(paramsJson: String?): SendResult {
+  suspend fun send(paramsJson: String?): SmsResult {
     if (!hasTelephonyFeature()) {
       return errorResult(
         error = "SMS_UNAVAILABLE: telephony not available",
       )
     }
 
-    if (!ensureSmsPermission()) {
+    if (!ensurePermission(Manifest.permission.SEND_SMS)) {
       return errorResult(
         error = "SMS_PERMISSION_REQUIRED: grant SMS permission",
       )
@@ -623,7 +514,6 @@ class SmsManager(
       return errorResult(
         error = parseResult.error,
         to = parseResult.to,
-        message = parseResult.message,
       )
     }
     val params = (parseResult as ParseResult.Ok).params
@@ -652,32 +542,27 @@ class SmsManager(
         )
       }
 
-      okResult(to = params.to, message = params.message)
+      okResult(to = params.to)
     } catch (e: SecurityException) {
       errorResult(
         error = "SMS_PERMISSION_REQUIRED: ${e.message}",
         to = params.to,
-        message = params.message,
       )
     } catch (e: Throwable) {
       errorResult(
         error = "SMS_SEND_FAILED: ${e.message ?: "unknown error"}",
         to = params.to,
-        message = params.message,
       )
     }
   }
 
-  /**
-   * Search SMS messages with the specified parameters.
-   */
-  suspend fun search(paramsJson: String?): SearchResult =
+  suspend fun search(paramsJson: String?): SmsResult =
     withContext(Dispatchers.IO) {
       if (!hasTelephonyFeature()) {
         return@withContext queryError("SMS_UNAVAILABLE: telephony not available")
       }
 
-      if (!ensureReadSmsPermission()) {
+      if (!ensurePermission(Manifest.permission.READ_SMS)) {
         return@withContext queryError("SMS_PERMISSION_REQUIRED: grant READ_SMS permission")
       }
 
@@ -711,7 +596,7 @@ class SmsManager(
           )
         val phoneNumbers =
           if (!normalizedParams.contactName.isNullOrEmpty()) {
-            if (contactsPermissionGranted || (shouldPromptForContactsPermission && ensureReadContactsPermission())) {
+            if (contactsPermissionGranted || (shouldPromptForContactsPermission && ensurePermission(Manifest.permission.READ_CONTACTS))) {
               getPhoneNumbersFromContactName(normalizedParams.contactName)
             } else if (shouldPromptForContactsPermission) {
               return@withContext queryError("CONTACTS_PERMISSION_REQUIRED: grant READ_CONTACTS permission")
@@ -750,35 +635,17 @@ class SmsManager(
       }
     }
 
-  private suspend fun ensureSmsPermission(): Boolean {
-    if (hasSmsPermission()) return true
+  private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+
+  private suspend fun ensurePermission(permission: String): Boolean {
+    if (hasPermission(permission)) return true
     val requester = permissionRequester ?: return false
-    val results = requester.requestIfMissing(listOf(Manifest.permission.SEND_SMS))
-    return results[Manifest.permission.SEND_SMS] == true
+    return requester.requestIfMissing(listOf(permission))[permission] == true
   }
 
-  private suspend fun ensureReadSmsPermission(): Boolean {
-    if (hasReadSmsPermission()) return true
-    val requester = permissionRequester ?: return false
-    val results = requester.requestIfMissing(listOf(Manifest.permission.READ_SMS))
-    return results[Manifest.permission.READ_SMS] == true
-  }
-
-  private suspend fun ensureReadContactsPermission(): Boolean {
-    if (hasReadContactsPermission()) return true
-    val requester = permissionRequester ?: return false
-    val results = requester.requestIfMissing(listOf(Manifest.permission.READ_CONTACTS))
-    return results[Manifest.permission.READ_CONTACTS] == true
-  }
-
-  private fun okResult(
-    to: String,
-    message: String,
-  ): SendResult =
-    SendResult(
+  private fun okResult(to: String): SmsResult =
+    SmsResult(
       ok = true,
-      to = to,
-      message = message,
       error = null,
       payloadJson = buildPayloadJson(json = json, ok = true, to = to, error = null),
     )
@@ -786,12 +653,9 @@ class SmsManager(
   private fun errorResult(
     error: String,
     to: String = "",
-    message: String? = null,
-  ): SendResult =
-    SendResult(
+  ): SmsResult =
+    SmsResult(
       ok = false,
-      to = to,
-      message = message,
       error = error,
       payloadJson = buildPayloadJson(json = json, ok = false, to = to, error = error),
     )
@@ -799,18 +663,16 @@ class SmsManager(
   private fun queryOk(
     messages: List<SmsMessage>,
     queryMetadata: QueryMetadata? = null,
-  ): SearchResult =
-    SearchResult(
+  ): SmsResult =
+    SmsResult(
       ok = true,
-      messages = messages,
       error = null,
       payloadJson = buildQueryPayloadJson(json, ok = true, messages = messages, queryMetadata = queryMetadata),
     )
 
-  private fun queryError(error: String): SearchResult =
-    SearchResult(
+  private fun queryError(error: String): SmsResult =
+    SmsResult(
       ok = false,
-      messages = emptyList(),
       error = error,
       payloadJson = buildQueryPayloadJson(json, ok = false, messages = emptyList(), error = error),
     )

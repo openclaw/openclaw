@@ -18,6 +18,7 @@ import { deleteMediaBuffer } from "../../media/store.js";
 import {
   isCompletionReportInputProvenance,
   isSubagentCoordinationInputProvenance,
+  normalizeInputProvenance,
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
@@ -33,6 +34,7 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
@@ -40,10 +42,10 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  clientHasAdminScope,
   shouldSuppressAgentPromptPersistence,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
+import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 export type PreparedAgentRunUserTurn = {
@@ -54,6 +56,7 @@ export type PreparedAgentRunUserTurn = {
   execApprovalContinuationPromptRange?: ExecApprovalContinuationPromptRange;
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   message: string;
+  inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
   senderIsOwner: boolean;
   suppressPromptPersistence: boolean;
@@ -130,6 +133,7 @@ export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   assertCompletionCurrent?: () => void;
   privateCompletion?: true;
+  settleWakeReplay?: RequesterSettleWakeReplay;
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
   deferTimeoutCompletion?: (settle: () => void) => boolean;
@@ -209,7 +213,19 @@ export async function prepareAgentRunUserTurn(params: {
 
     const senderIsOwner = params.restoredCronContinuation
       ? true
-      : clientHasAdminScope(params.client);
+      : hasGatewayAdminScope(params.client);
+    const settleWakeReplay = params.settleWakeReplay;
+    if (
+      settleWakeReplay &&
+      (!params.runId.startsWith("announce:") ||
+        params.inputProvenance?.kind !== "inter_session" ||
+        params.inputProvenance.sourceTool !== "subagent_settle" ||
+        !params.inputProvenance.sourceSessionKey ||
+        !settleWakeReplay.sourceSessionKeys.includes(params.inputProvenance.sourceSessionKey))
+    ) {
+      throw new Error("Settle replay requires an exact internal frozen-cohort source");
+    }
+    let inputProvenance = params.inputProvenance;
     if (
       params.privateCompletion &&
       (params.request.deliver !== false ||
@@ -240,8 +256,10 @@ export async function prepareAgentRunUserTurn(params: {
         offloadedRefs: params.offloadedRefs,
         log: params.context.logGateway,
         logContext: "agent",
+        assertCurrent: params.assertCurrent,
       });
       durableMediaIds = persistedMedia.entries.map((entry) => entry.id);
+      params.assertCurrent();
       const media = persistedMedia.entries.map((entry) => entry.fact);
       const slots = persistedMedia.entries.flatMap((entry, factIndex) =>
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
@@ -268,8 +286,10 @@ export async function prepareAgentRunUserTurn(params: {
       };
       recorder = createUserTurnTranscriptRecorder({
         trackInputCompletion: params.privateCompletion,
+        pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
         target: () => {
+          params.assertCurrent();
           const loaded = loadSessionEntry(params.resolvedSessionKey!, {
             agentId: params.activeSessionAgentId,
             clone: false,
@@ -295,7 +315,11 @@ export async function prepareAgentRunUserTurn(params: {
           };
         },
         errorContext: "gateway agent user turn transcript",
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        beforeMessageWrite: (writeContext) => {
+          const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
+          params.assertCurrent();
+          return preparedMessage;
+        },
         onPersistenceError: (error) => {
           params.context.logGateway.warn(
             `gateway agent user transcript persistence failed: ${formatForLog(error)}`,
@@ -305,12 +329,21 @@ export async function prepareAgentRunUserTurn(params: {
       if (
         !(await recorder.stageApproved!({
           runId: params.runId,
-          assertCurrent: params.assertCurrent,
+          assertCurrent: () => {
+            params.assertCurrent();
+            settleWakeReplay?.assertCurrent();
+          },
+          assertAdmittedCurrent: params.assertCurrent,
           assertCompletionCurrent: params.assertCompletionCurrent,
         })) &&
         !recorder.getProcessingCompletion?.()
       ) {
         throw new Error("agent turn was not durably admitted");
+      }
+      // Storage may prove the scheduling source used by a shipped batch. Carry
+      // that exact provenance into execution, not only its transcript receipt.
+      if (settleWakeReplay) {
+        inputProvenance = normalizeInputProvenance(recorder.getPendingInputMessage?.()?.provenance);
       }
     }
 
@@ -361,6 +394,7 @@ export async function prepareAgentRunUserTurn(params: {
         ? { execApprovalContinuationTranscriptPromptRange }
         : {}),
       message,
+      inputProvenance,
       ...(recorder ? { recorder } : {}),
       senderIsOwner,
       suppressPromptPersistence,

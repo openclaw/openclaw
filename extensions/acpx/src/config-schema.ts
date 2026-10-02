@@ -5,7 +5,7 @@
 import { z } from "zod";
 import type { AcpxAgentCommand } from "./command-line.js";
 
-export const ACPX_NATIVE_AGENT_IDS = ["opencode", "qwen", "pi", "kilocode"] as const;
+export const ACPX_NATIVE_AGENT_IDS = ["opencode", "qwen", "pi", "kilocode", "copilot"] as const;
 export type AcpxNativeAgentId = (typeof ACPX_NATIVE_AGENT_IDS)[number];
 export const AcpxNativeAgentsSchema = z
   .strictObject({
@@ -13,6 +13,7 @@ export const AcpxNativeAgentsSchema = z
     qwen: z.boolean().optional(),
     pi: z.boolean().optional(),
     kilocode: z.boolean().optional(),
+    copilot: z.boolean().optional(),
   })
   .optional();
 
@@ -28,11 +29,7 @@ export type AcpxNonInteractivePermissionPolicy = (typeof ACPX_NON_INTERACTIVE_PO
 export const DEFAULT_ACPX_TIMEOUT_SECONDS = 120;
 
 /** Raw MCP server command config accepted from plugin configuration. */
-export type McpServerConfig = {
-  command: string;
-  args?: string[];
-  env?: Record<string, string>;
-};
+export type McpServerConfig = z.output<typeof McpServerConfigSchema>;
 
 /** Normalized MCP server config emitted to the ACPX runtime process. */
 export type AcpxMcpServer = {

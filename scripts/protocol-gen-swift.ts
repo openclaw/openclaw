@@ -1,7 +1,3 @@
-// Protocol Gen Swift script supports OpenClaw repository automation.
-import { promises as fs } from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { ErrorCodes } from "../packages/gateway-protocol/src/schema/error-codes.js";
 import { ProtocolSchemas } from "../packages/gateway-protocol/src/schema/protocol-schemas.js";
 import {
@@ -9,36 +5,8 @@ import {
   MIN_NODE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "../packages/gateway-protocol/src/version.js";
-import { writeGeneratedOutput } from "./lib/generated-output-utils.mts";
+import { type JsonSchema, schemaSignature } from "./lib/protocol-codegen-schema.js";
 
-type JsonSchema = {
-  "~openclawClosedObjectIdentity"?: symbol;
-  type?: string | string[];
-  const?: boolean | number | string | null;
-  properties?: Record<string, JsonSchema>;
-  required?: string[];
-  items?: JsonSchema;
-  enum?: Array<string | null>;
-  patternProperties?: Record<string, JsonSchema>;
-  anyOf?: JsonSchema[];
-  oneOf?: JsonSchema[];
-  additionalProperties?: boolean | JsonSchema;
-};
-
-const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
-const check = process.argv.includes("--check");
-const outPaths = [
-  path.join(
-    repoRoot,
-    "apps",
-    "shared",
-    "OpenClawKit",
-    "Sources",
-    "OpenClawProtocol",
-    "GatewayModels.swift",
-  ),
-];
 const STRICT_LITERAL_STRUCTS = new Set([
   "PluginsSessionActionSuccessResult",
   "PluginsSessionActionFailureResult",
@@ -104,9 +72,6 @@ function safeName(name: string) {
 // Canonical initializer labels must match stored properties; compatibility initializers
 // declare legacy labels separately.
 function swiftStoredPropertyName(structName: string, key: string): string {
-  if (structName === "SessionCompactionCheckpoint" && key === "tokensVersion") {
-    return "tokensVersion";
-  }
   if (structName === "WizardStartParams" && key === "installDaemon") {
     return "installDaemon";
   }
@@ -175,27 +140,8 @@ function resolveSchemaObjectAliases(
   return result;
 }
 
-function stableJson(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map(stableJson);
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted()
-        .map((key) => [key, stableJson(record[key])]),
-    );
-  }
-  return value;
-}
-
-function schemaSignature(schema: JsonSchema): string {
-  return JSON.stringify(stableJson(schema));
-}
-
 function registerNamedSchema(name: string, schema: JsonSchema, objectName: string): void {
-  schemaNameByObject.set(schema as object, objectName);
+  schemaNameByObject.set(schema, objectName);
   const signature = schemaSignature(schema);
   registerUniqueName(schemaNameBySignature, signature, name);
   const identity = schema["~openclawClosedObjectIdentity"];
@@ -220,7 +166,7 @@ function namedSchema(
   identity?: symbol,
 ): string | undefined {
   return (
-    schemaNameByObject.get(schema as object) ??
+    schemaNameByObject.get(schema) ??
     (identity
       ? schemaNamesByIdentity.get(identity)?.get(schemaSignature(schema))
       : allowStructuralFallback
@@ -239,7 +185,7 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
       ? {
           ...schema,
           type: schemaTypes.find((type) => type !== "null"),
-          enum: schema.enum?.filter((value): value is string => value !== null),
+          enum: schema.enum?.filter((value) => value !== null),
           anyOf: schema.anyOf?.filter((branch) => branch.type !== "null"),
           oneOf: schema.oneOf?.filter((branch) => branch.type !== "null"),
         }
@@ -336,60 +282,49 @@ function emitStruct(
 ): string {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
-  const literalProps = Object.entries(props)
-    .map(([key, propSchema]) => ({
-      key,
-      propSchema,
-      literal: literalSchemaValue(propSchema),
-    }))
-    .filter(
-      (
-        entry,
-      ): entry is {
-        key: string;
-        propSchema: JsonSchema;
-        literal: boolean | number | string | null;
-      } => entry.literal !== undefined,
-    );
-  const lines: string[] = [];
+  const literalPropByKey = new Map(
+    Object.entries(props).flatMap(([key, propSchema]) => {
+      const literal = literalSchemaValue(propSchema);
+      return literal === undefined ? [] : [[key, literal] as const];
+    }),
+  );
   if (Object.keys(props).length === 0) {
     return `public struct ${name}: Codable, Sendable {}\n`;
   }
-  if (strictLiterals && literalProps.length > 0) {
-    const literalPropByKey = new Map(literalProps.map((entry) => [entry.key, entry.literal]));
-    lines.push(`public struct ${name}: Codable, Sendable {`);
-    const codingKeys: string[] = [];
-    for (const [key, propSchema] of Object.entries(props)) {
-      const propName = safeName(key);
-      const propType = swiftType(propSchema, required.has(key), true);
-      lines.push(`    public let ${propName}: ${propType}`);
-      if (propName !== key) {
-        codingKeys.push(`        case ${propName} = "${key}"`);
-      } else {
-        codingKeys.push(`        case ${propName}`);
-      }
+  const strict = strictLiterals && literalPropByKey.size > 0;
+  const properties = Object.entries(props).map(([key, propertySchema]) => ({
+    key,
+    schema: propertySchema,
+    name: strict ? safeName(key) : swiftStoredPropertyName(name, key),
+    required: required.has(key),
+  }));
+  const lines = [`public struct ${name}: Codable, Sendable {`];
+  const codingKeys = properties.map((property) =>
+    property.name === property.key
+      ? `        case ${property.name}`
+      : `        case ${property.name} = "${property.key}"`,
+  );
+  for (const property of properties) {
+    lines.push(
+      `    public let ${property.name}: ${swiftType(property.schema, property.required, true)}`,
+    );
+    if (!strict) {
+      lines.push(...swiftCompatibilityPropertyLines(name, property.key));
     }
-    const initializerParams = Object.entries(props)
-      .filter(([key]) => !literalPropByKey.has(key) || !required.has(key))
-      .map(([key, prop]) => {
-        const propName = safeName(key);
-        const req = required.has(key);
-        return `        ${swiftInitializerParam({
-          name: propName,
-          schema: prop,
-          required: req,
-        })}`;
-      });
+  }
+  if (strict) {
+    const initializerParams = properties
+      .filter((property) => !literalPropByKey.has(property.key) || !property.required)
+      .map((property) => `        ${swiftInitializerParam(property)}`);
     const initializerDeclaration =
       initializerParams.length > 0
         ? `\n    public init(\n${initializerParams.join(",\n")}\n    )\n    {\n`
         : "\n    public init()\n    {\n";
     lines.push(
       initializerDeclaration +
-        Object.entries(props)
-          .map(([key]) => {
-            const propName = safeName(key);
-            if (literalPropByKey.has(key) && required.has(key)) {
+        properties
+          .map(({ key, name: propName, required: isRequired }) => {
+            if (literalPropByKey.has(key) && isRequired) {
               return `        self.${propName} = ${swiftLiteralSource(literalPropByKey.get(key)!)}`;
             }
             return `        self.${propName} = ${propName}`;
@@ -426,10 +361,8 @@ function emitStruct(
               const absent = required.has(key) ? "" : `${decodedName} == nil || `;
               return `        let ${decodedName} = ${decodedValue}\n        guard ${absent}${decodedName} == ${swiftLiteralSource(literal)} else {\n            throw DecodingError.dataCorruptedError(\n                forKey: .${propName},\n                in: container,\n                debugDescription: "Expected ${key} to equal ${String(literal)}"\n            )\n        }\n        self.${propName} = ${required.has(key) ? swiftLiteralSource(literal) : decodedName}`;
             }
-            if (required.has(key)) {
-              return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
-            }
-            return `        self.${propName} = try container.decodeIfPresent(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
+            const decode = required.has(key) ? "decode" : "decodeIfPresent";
+            return `        self.${propName} = try container.${decode}(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
           })
           .join("\n") +
         "\n    }\n\n" +
@@ -457,48 +390,23 @@ function emitStruct(
     lines.push("");
     return lines.join("\n");
   }
-  lines.push(`public struct ${name}: Codable, Sendable {`);
-  const codingKeys: string[] = [];
-  let needsCodingKeys = false;
-  for (const [key, propSchema] of Object.entries(props)) {
-    const propName = swiftStoredPropertyName(name, key);
-    const propType = swiftType(propSchema, required.has(key), true);
-    lines.push(`    public let ${propName}: ${propType}`);
-    lines.push(...swiftCompatibilityPropertyLines(name, key));
-    if (propName !== key) {
-      needsCodingKeys = true;
-      codingKeys.push(`        case ${propName} = "${key}"`);
-    } else {
-      codingKeys.push(`        case ${propName}`);
-    }
-  }
+  const needsCodingKeys = properties.some((property) => property.name !== property.key);
   const customCodable = emitStructCustomCodable(name, props, required);
   lines.push(
     "\n    public init(\n" +
-      Object.entries(props)
-        .map(([key, prop]) => {
-          const propName = swiftStoredPropertyName(name, key);
-          const req = required.has(key);
-          if (name === "AgentsUpdateParams" && key === "model") {
+      properties
+        .map((property) => {
+          if (name === "AgentsUpdateParams" && property.key === "model") {
             // Keep the raw nullable value explicit so the source-compatible initializer stays
             // unambiguous when callers omit model.
             return "        modelvalue: AnyCodable?";
           }
-          return `        ${swiftInitializerParam({
-            name: propName,
-            schema: prop,
-            required: req,
-          })}`;
+          return `        ${swiftInitializerParam(property)}`;
         })
         .join(",\n") +
       ")\n" +
       "    {\n" +
-      Object.entries(props)
-        .map(([key]) => {
-          const propName = swiftStoredPropertyName(name, key);
-          return `        self.${propName} = ${propName}`;
-        })
-        .join("\n") +
+      properties.map((property) => `        self.${property.name} = ${property.name}`).join("\n") +
       "\n    }" +
       emitStructCompatibilityInitializer(name, props, required) +
       (needsCodingKeys || customCodable.length > 0
@@ -549,17 +457,13 @@ function emitStructCustomCodable(
       // preserves the Gateway patch distinction between clearing and omitting the model.
       return `        self.${propName} = container.contains(.${propName})\n            ? try container.decode(AnyCodable.self, forKey: .${propName})\n            : nil`;
     }
-    if (required.has(key)) {
-      return `        self.${propName} = try container.decode(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
-    }
-    return `        self.${propName} = try container.decodeIfPresent(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
+    const decode = required.has(key) ? "decode" : "decodeIfPresent";
+    return `        self.${propName} = try container.${decode}(${swiftType(propSchema, true, true)}.self, forKey: .${propName})`;
   });
   const encodedProperties = Object.keys(props).map((key) => {
     const propName = swiftStoredPropertyName(name, key);
-    if (required.has(key)) {
-      return `        try container.encode(${propName}, forKey: .${propName})`;
-    }
-    return `        try container.encodeIfPresent(${propName}, forKey: .${propName})`;
+    const encode = required.has(key) ? "encode" : "encodeIfPresent";
+    return `        try container.${encode}(${propName}, forKey: .${propName})`;
   });
   return (
     "\n\n    public init(from decoder: Decoder) throws {\n" +
@@ -578,66 +482,43 @@ function emitStructCompatibilityInitializer(
   props: Record<string, JsonSchema>,
   required: Set<string>,
 ): string {
-  if (name === "AgentsUpdateParams" && props.model) {
-    const initializerParams = Object.entries(props).map(([key, prop]) => {
-      const propName = swiftStoredPropertyName(name, key);
-      if (key === "model") {
-        return "        model: String? = nil";
-      }
-      return `        ${swiftInitializerParam({
-        name: propName,
-        schema: prop,
-        required: required.has(key),
-      })}`;
-    });
-    const delegatedArgs = Object.keys(props).map((key) => {
-      const propName = swiftStoredPropertyName(name, key);
-      if (key === "model") {
-        return "            modelvalue: model.map { AnyCodable($0) }";
-      }
-      return `            ${propName}: ${propName}`;
-    });
-    return (
-      "\n\n    public init(\n" +
-      initializerParams.join(",\n") +
-      ")\n" +
-      "    {\n" +
-      "        self.init(\n" +
-      delegatedArgs.join(",\n") +
-      ")\n" +
-      "    }"
-    );
-  }
-  if (name !== "ChatSendParams" || !props.fastMode) {
+  const compatibility =
+    name === "AgentsUpdateParams" && props.model
+      ? { key: "model", parameter: "model: String? = nil", value: "model", omitted: [] }
+      : name === "ChatSendParams" && props.fastMode
+        ? {
+            key: "fastMode",
+            parameter: "fastmode: Bool?",
+            value: "fastmode",
+            omitted: ["fastAutoOnSeconds", "fast_seconds"],
+          }
+        : undefined;
+  if (!compatibility) {
     return "";
   }
-  const legacyKeys = Object.keys(props).filter(
-    (key) => key !== "fastAutoOnSeconds" && key !== "fast_seconds",
-  );
-  const initializerParams = legacyKeys.map((key) => {
-    const prop = props[key];
-    if (!prop) {
-      throw new Error(`missing ${name}.${key} schema`);
-    }
-    const propName = swiftStoredPropertyName(name, key);
-    if (key === "fastMode") {
-      return "        fastmode: Bool?";
-    }
-    return `        ${swiftInitializerParam({
-      name: propName,
-      schema: prop,
-      required: required.has(key),
-    })}`;
-  });
+  const initializerParams = Object.entries(props)
+    .filter(([key]) => !compatibility.omitted.includes(key))
+    .map(
+      ([key, schema]) =>
+        `        ${
+          key === compatibility.key
+            ? compatibility.parameter
+            : swiftInitializerParam({
+                name: swiftStoredPropertyName(name, key),
+                schema,
+                required: required.has(key),
+              })
+        }`,
+    );
   const delegatedArgs = Object.keys(props).map((key) => {
     const propName = swiftStoredPropertyName(name, key);
-    if (key === "fastMode") {
-      return "            fastmodevalue: fastmode.map { AnyCodable($0) }";
-    }
-    if (key === "fastAutoOnSeconds" || key === "fast_seconds") {
-      return `            ${propName}: nil`;
-    }
-    return `            ${propName}: ${propName}`;
+    const value =
+      key === compatibility.key
+        ? `${compatibility.value}.map { AnyCodable($0) }`
+        : compatibility.omitted.includes(key)
+          ? "nil"
+          : propName;
+    return `            ${propName}: ${value}`;
   });
   return (
     "\n\n    public init(\n" +
@@ -951,7 +832,10 @@ function emitGatewayFrame(): string {
   ].join("\n");
 }
 
-async function generate() {
+export function generateSwiftProtocol(): string {
+  schemaNameByObject.clear();
+  schemaNameBySignature.clear();
+  schemaNamesByIdentity.clear();
   const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
   const objectAliases = resolveSchemaObjectAliases(definitions);
 
@@ -1003,32 +887,5 @@ async function generate() {
   // Frame enum must come after payload structs
   parts.push(emitGatewayFrame());
 
-  const content = parts.join("\n");
-  for (const outPath of outPaths) {
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    const result = writeGeneratedOutput({
-      repoRoot,
-      outputPath: path.relative(repoRoot, outPath),
-      next: content,
-      check,
-    });
-    const displayPath = path.relative(repoRoot, result.outputPath);
-    if (check && result.changed) {
-      console.error(
-        `[protocol-gen-swift] stale generated output at ${displayPath}; run "pnpm protocol:gen:swift" and commit the result`,
-      );
-      process.exitCode = 1;
-    } else if (!check) {
-      console.log(
-        result.wrote
-          ? `[protocol-gen-swift] wrote ${displayPath}`
-          : `[protocol-gen-swift] unchanged ${displayPath}`,
-      );
-    }
-  }
+  return parts.join("\n");
 }
-
-generate().catch((err: unknown) => {
-  console.error(err);
-  process.exit(1);
-});

@@ -17,7 +17,7 @@ import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
-import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -201,12 +201,12 @@ function redactValue(
         if (context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
           const objectValue = asNonArrayRecord(value);
           if (isSecretRefShape(objectValue)) {
-            result[key] = redactSecretRefId({
-              value: objectValue,
-              values,
-              redactedSentinel: REDACTED_SENTINEL,
-              isConcreteSensitiveString,
-            });
+            const redacted = { ...objectValue };
+            if (isConcreteSensitiveString(objectValue.id)) {
+              values.push(objectValue.id);
+              redacted.id = REDACTED_SENTINEL;
+            }
+            result[key] = redacted;
           } else {
             collectSensitiveStrings(objectValue, values);
             result[key] = REDACTED_SENTINEL;
@@ -393,17 +393,15 @@ function restoreRedactedValuesWithContext(
         humanReadableMessage: err.humanReadableMessage,
       };
     }
-    throw err; // some coding error, pass through
+    throw err;
   }
 }
 
 class RedactionError extends Error {
-  public readonly key: string;
   public readonly humanReadableMessage: string;
 
   constructor(key: string, humanReadableMessage?: string) {
     super("internal error class---should never escape");
-    this.key = key;
     this.humanReadableMessage =
       humanReadableMessage ??
       `Sentinel value "${REDACTED_SENTINEL}" in key ${key} is not valid as real data`;

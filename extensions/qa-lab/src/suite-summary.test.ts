@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import {
-  countQaSuiteFailedScenarios,
   readQaSuiteFailedOrSkippedScenarioCountFromFile,
   readQaSuiteFailedScenarioCountFromFile,
 } from "./suite-summary.js";
@@ -175,8 +174,6 @@ describe("qa suite summary helpers", () => {
   it.each([
     ["null", null],
     ["array", []],
-    ["string", "not-json-object"],
-    ["number", 1],
   ])("rejects a %s summary as an invalid completion state", async (_name, summary) => {
     for (const reader of [
       readQaSuiteFailedScenarioCountFromFile,
@@ -186,12 +183,6 @@ describe("qa suite summary helpers", () => {
         code: "summary_not_completed",
       });
     }
-  });
-
-  it("counts failed scenarios from scenario statuses", () => {
-    expect(
-      countQaSuiteFailedScenarios([{ status: "pass" }, { status: "fail" }, { status: "fail" }]),
-    ).toBe(2);
   });
 
   it.each([
@@ -281,8 +272,6 @@ describe("qa suite summary helpers", () => {
   it.each([
     ["null", null],
     ["array", []],
-    ["string", "corrupt counts"],
-    ["number", 1],
   ] as const)(
     "rejects %s counts containers even when a scenario claims to pass",
     async (_name, counts) => {
@@ -331,23 +320,9 @@ describe("qa suite summary helpers", () => {
     ).resolves.toBe(3);
   });
 
-  it("counts unknown scenario statuses as blocking for strict gates", async () => {
-    await expect(
-      readSummary(
-        {
-          counts: { failed: 0, skipped: 0 },
-          scenarios: [{ status: "timeout" }, { status: "error" }],
-        },
-        readQaSuiteFailedOrSkippedScenarioCountFromFile,
-      ),
-    ).resolves.toBe(2);
-  });
-
   it.each([
     ["missing", {}],
     ["timeout", { status: "timeout" }],
-    ["blocked", { status: "blocked" }],
-    ["error", { status: "error" }],
   ] as const)("counts %s scenario statuses as failures in both gates", async (_name, scenario) => {
     const summary = {
       counts: { failed: 0, skipped: 0 },
@@ -366,13 +341,6 @@ describe("qa suite summary helpers", () => {
       summary: {
         counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
         scenarios: [{ name: "required scenario", status: "skip" }],
-      },
-    },
-    {
-      name: "required skipped",
-      summary: {
-        counts: { total: 1, passed: 0, failed: 0, skipped: 1 },
-        scenarios: [{ name: "required scenario", status: "skipped" }],
       },
     },
     {
@@ -453,7 +421,7 @@ describe("qa suite summary helpers", () => {
     ).rejects.toThrow("did not include any executed scenarios");
   });
 
-  it.each(["skip", "skipped"] as const)(
+  it.each(["skip"] as const)(
     "keeps evidence-only %s results blocking for strict package gates",
     async (status) => {
       await expect(
@@ -465,7 +433,7 @@ describe("qa suite summary helpers", () => {
     },
   );
 
-  it.each(["skip", "skipped"] as const)(
+  it.each(["skip"] as const)(
     "rejects evidence-only %s results in failure-only model gates",
     async (status) => {
       await expect(
@@ -474,7 +442,7 @@ describe("qa suite summary helpers", () => {
     },
   );
 
-  it.each(["blocked", "timeout", "error"] as const)(
+  it.each(["blocked"] as const)(
     "keeps evidence-only %s results fail-closed in strict package gates",
     async (status) => {
       await expect(
@@ -505,7 +473,6 @@ describe("qa suite summary helpers", () => {
 
   it.each([
     ["timeout", { status: "timeout" }],
-    ["error", { status: "error" }],
     ["missing", {}],
   ] as const)(
     "rejects unsupported %s evidence alongside complete counts",

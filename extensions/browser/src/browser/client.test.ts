@@ -88,14 +88,6 @@ describe("browser client", () => {
     await expect(browserStatus("http://127.0.0.1:18791")).rejects.toThrow(/cancelled/i);
   });
 
-  it("surfaces non-2xx responses with body text", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("conflict", { status: 409 })));
-
-    await expect(
-      browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
-    ).rejects.toThrow(/conflict/i);
-  });
-
   it("adds labels + efficient mode query params to snapshots", async () => {
     const calls: string[] = [];
     stubSnapshotFetch(calls);

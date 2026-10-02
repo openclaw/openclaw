@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isPathInside } from "../infra/path-guards.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 
@@ -32,13 +33,24 @@ const resources = resolveGlobalSingleton(
   () => ({
     active: new Set<AgentDatabaseResource>(),
     closing: new Map<AgentDatabaseResource, Promise<void> | undefined>(),
-    selections: new Set<AgentDatabaseCloseSelection>(),
+    selections: new Map<AgentDatabaseCloseSelection, Promise<void>>(),
   }),
 );
 
 /** CLI cleanup can skip loading native database owners when no Worker was admitted. */
 export function hasOpenClawAgentDatabaseAsyncResources(): boolean {
   return resources.active.size > 0 || resources.closing.size > 0;
+}
+
+/** Observe an existing full close without revoking resources or selecting a successor. */
+export function captureAgentDatabaseCloseFence(
+  target: Pick<OpenClawAgentDatabaseAsyncResource, "agentId" | "path">,
+): Promise<void> | undefined {
+  const owned = { agentId: normalizeAgentId(target.agentId), path: path.resolve(target.path) };
+  const pending = [...resources.selections].flatMap(([selection, completion]) =>
+    matchesAgentDatabaseClose(selection, owned) ? [completion] : [],
+  );
+  return pending.length ? Promise.all(pending).then(() => undefined) : undefined;
 }
 
 /** Match captured read custody without inspecting files or inferring their owners. */
@@ -124,7 +136,9 @@ function registerAgentDatabaseResource(resource: AgentDatabaseResource): () => v
     path: path.resolve(resource.path),
   };
   if (
-    [...resources.selections].some((selection) => matchesAgentDatabaseClose(selection, owned)) ||
+    [...resources.selections.keys()].some((selection) =>
+      matchesAgentDatabaseClose(selection, owned),
+    ) ||
     [...resources.closing.keys()].some(
       (closing) =>
         (closing.path === owned.path ||
@@ -212,17 +226,26 @@ export async function drainAgentDatabaseResources<T>(
   selection: AgentDatabaseCloseSelection,
   closeNative: () => Promise<T>,
 ): Promise<T> {
-  resources.selections.add(selection);
+  const ownedSelection = { ...selection };
+  const completion = createDeferredCore();
+  // A close may have no observer; its caller still receives the original failure.
+  void completion.promise.catch(() => {});
+  resources.selections.set(ownedSelection, completion.promise);
   try {
-    const results = await Promise.allSettled(revokeAgentDatabaseResources(selection));
+    const results = await Promise.allSettled(revokeAgentDatabaseResources(ownedSelection));
     const errors = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
     if (errors.length > 0) {
       throw new AggregateError(errors, "Agent database resource drainage failed");
     }
-    return await closeNative();
+    const result = await closeNative();
+    completion.resolve();
+    return result;
+  } catch (error) {
+    completion.reject(error);
+    throw error;
   } finally {
-    resources.selections.delete(selection);
+    resources.selections.delete(ownedSelection);
   }
 }

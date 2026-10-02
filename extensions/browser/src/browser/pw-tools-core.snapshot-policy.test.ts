@@ -30,16 +30,11 @@ vi.mock("./pw-session.js", () => sessionMocks);
 vi.mock("./pw-session.page-cdp.js", () => pageCdpMocks);
 const snapshots = await import("./pw-tools-core.snapshot.js");
 
-const strictNavigationOptions = () =>
-  ({
-    cdpUrl: "http://127.0.0.1:18792",
-    targetId: "tab-1",
-    ssrfPolicy: { allowPrivateNetwork: false },
-  }) as const;
-
-function completedNavigationExpectation() {
-  return { ...strictNavigationOptions(), page: pageState.page, response: null };
-}
+const strictNavigationOptions = {
+  cdpUrl: "http://127.0.0.1:18792",
+  targetId: "tab-1",
+  ssrfPolicy: { allowPrivateNetwork: false },
+};
 
 function createSnapshotPage(overrides: Record<string, unknown>) {
   const mainFrame = {};
@@ -58,14 +53,6 @@ describe("browser snapshot navigation policy", () => {
   });
 
   it.each([
-    {
-      name: "snapshotting AI content",
-      run: snapshots.snapshotAiViaPlaywright,
-      prepare: () => {
-        const ariaSnapshot = vi.fn(async () => 'button "Save"');
-        return { page: createSnapshotPage({ ariaSnapshot }), capture: ariaSnapshot };
-      },
-    },
     {
       name: "role snapshots",
       run: snapshots.snapshotRoleViaPlaywright,
@@ -89,11 +76,13 @@ describe("browser snapshot navigation policy", () => {
     const { page, capture } = prepare();
     pageState.page = { ...page, url: vi.fn(() => "https://example.com") };
 
-    await run(strictNavigationOptions());
+    await run(strictNavigationOptions);
 
-    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith(
-      completedNavigationExpectation(),
-    );
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      ...strictNavigationOptions,
+      page: pageState.page,
+      response: null,
+    });
     expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledBefore(capture);
   });
 });

@@ -246,6 +246,32 @@ const TEST_HOST_CAPABILITIES: SideQuestionParams["hostCapabilities"] = Object.fr
   waitForApproval: async () => undefined,
 });
 
+export function platformPreparedRuntimeAuth(resolvedApiKey?: string) {
+  return {
+    plan: {
+      providerForAuth: "openai",
+      authProfileProviderForAuth: "openai",
+      selectedAuthMode: "api-key",
+      modelRoute: {
+        provider: "openai",
+        modelId: "gpt-5.6",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      },
+    },
+    authProfileStore: {
+      version: 1 as const,
+      profiles: {},
+      order: { openai: [] },
+    },
+    authStorage: {} as never,
+    modelRegistry: {} as never,
+    ...(resolvedApiKey ? { resolvedApiKey } : {}),
+  } satisfies Parameters<typeof runCodexAppServerSideQuestion>[0]["preparedRuntimeAuth"];
+}
+
 function sideParams(overrides: Partial<SideQuestionParams> = {}): SideQuestionParams {
   let hostCapabilities = overrides.hostCapabilities ?? TEST_HOST_CAPABILITIES;
   if (!hostCapabilities.createToolSurface) {

@@ -54,7 +54,7 @@ const failureFamilies = {
     "head-verification-failed",
     "target-sha-mismatch",
   ],
-  schema: ["database-schema-preflight", "invalid-config"],
+  schema: ["database-schema-preflight", "invalid-config", "config-read-failed"],
   doctor: [
     "post-update-failed",
     "doctor-failed",
@@ -89,7 +89,9 @@ function unresolved(message: string, stop = true, nextStep = nextUpdate): Update
 function validateTriagePendingMigrations(
   env: NodeJS.ProcessEnv,
 ): UpdateRepairValidation | undefined {
-  const warnings = readDeferredPluginMigrations({ env }).map(formatDeferredPluginMigration);
+  const warnings = readDeferredPluginMigrations({ env }).map((pending) =>
+    formatDeferredPluginMigration(pending, env),
+  );
   return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
 }
 

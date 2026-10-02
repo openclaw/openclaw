@@ -24,7 +24,6 @@ struct AppleMobileInstanceMetadata: Equatable, Sendable {
         rawModelIdentifier: String?) -> Self
     {
         let versionString = "\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
-        let trimmedModel = rawModelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if isIOSAppOnMac {
             // Keep the iOS protocol family so the gateway applies the mobile
@@ -46,7 +45,7 @@ struct AppleMobileInstanceMetadata: Equatable, Sendable {
         return Self(
             platformString: "\(identity.platform) \(versionString)",
             deviceFamily: identity.family,
-            modelIdentifier: trimmedModel?.isEmpty == false ? trimmedModel : nil)
+            modelIdentifier: rawModelIdentifier?.trimmedNonEmpty)
     }
 }
 
@@ -137,9 +136,7 @@ public enum InstanceIdentity {
         guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
 
         let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-        guard let raw = String(bytes: bytes, encoding: .utf8) else { return nil }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        return String(bytes: bytes, encoding: .utf8)?.trimmedNonEmpty
         #endif
     }()
 
@@ -150,8 +147,7 @@ public enum InstanceIdentity {
         let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
             String(bytes: ptr.prefix { $0 != 0 }, encoding: .utf8)
         }
-        let trimmed = machine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
+        return machine?.trimmedNonEmpty
     }
     #endif
 

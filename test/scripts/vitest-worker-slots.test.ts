@@ -12,7 +12,7 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const ownerPath = "scripts/lib/vitest-worker-run.mts";
 let ownerInputs: string[] | undefined;
 
-function fixture() {
+function fixture(lateMetadata = false) {
   const root = tempDirs.make("vitest-worker-slots-");
   ownerInputs ??= collectRuntimeImportClosure(repoRoot, [ownerPath], {
     includeDynamicImports: true,
@@ -34,11 +34,25 @@ function fixture() {
   fs.writeFileSync(
     probe,
     `import fs from 'node:fs';
-import { createVitestWorkerRun } from ${JSON.stringify(pathToFileURL(path.join(root, ownerPath)).href)};
+import path from 'node:path';
+const originalRmdir = fs.rmdir;
+let metadataTarget;
+let metadataInjected = false;
+if (${JSON.stringify(lateMetadata)}) {
+  fs.rmdir = (target, ...args) => {
+    if (metadataTarget === String(target) && !metadataInjected && fs.readdirSync(target).length === 0) {
+      fs.writeFileSync(path.join(metadataTarget, '.DS_Store'), 'late metadata');
+      metadataInjected = true;
+    }
+    return originalRmdir(target, ...args);
+  };
+}
+const { createVitestWorkerRun } = await import(${JSON.stringify(pathToFileURL(path.join(root, ownerPath)).href)});
 const owners = [];
 let observed;
 try {
   const first = createVitestWorkerRun();
+  metadataTarget = first.descriptor.directory;
   owners.push(first);
   const firstMode = fs.statSync(first.descriptor.directory).mode & 0o777;
   const second = createVitestWorkerRun();
@@ -55,8 +69,10 @@ try {
     third: third.descriptor.directory,
     firstReleased,
     secondAlive,
+    metadataInjected,
   };
 } finally {
+  fs.rmdir = originalRmdir;
   const completions = await Promise.allSettled(owners.map(owner => owner.dispose()));
   const failures = completions.filter(result => result.status === 'rejected');
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Worker owners did not dispose');
@@ -70,19 +86,22 @@ console.log(JSON.stringify(observed));
 }
 
 it.each([
-  { label: "local", ci: "", preload: false, reusesReleasedSlot: true },
-  { label: "CI", ci: "1", preload: false, reusesReleasedSlot: false },
-  { label: "custom loader", ci: "", preload: true, reusesReleasedSlot: false },
+  { label: "local", ci: "", cache: "", preload: false, reusesReleasedSlot: true },
+  { label: "CI", ci: "1", cache: "", preload: false, reusesReleasedSlot: false },
+  { label: "cached CI", ci: "1", cache: "1", preload: false, reusesReleasedSlot: true },
+  { label: "custom loader", ci: "1", cache: "1", preload: true, reusesReleasedSlot: false },
+  { label: "late metadata", ci: "", cache: "", preload: false, reusesReleasedSlot: true },
 ])(
   "preserves occupied generations and applies $label reservation lifetime",
-  async ({ ci, preload, reusesReleasedSlot }) => {
-    const f = fixture();
+  async ({ label, ci, cache, preload, reusesReleasedSlot }) => {
+    const f = fixture(label === "late metadata");
     const result = await runNodeScript(
       f.probe,
       {
         ...process.env,
         CI: ci,
         GITHUB_ACTIONS: "",
+        OPENCLAW_VITEST_WORKER_CACHE: cache,
         NODE_OPTIONS: preload ? `"--im\\port" "${pathToFileURL(f.preload).href}"` : "",
         NODE_PATH: "",
       },
@@ -98,8 +117,10 @@ it.each([
       third: string;
       firstReleased: boolean;
       secondAlive: boolean;
+      metadataInjected: boolean;
     };
     expect(observed.firstReleased).toBe(true);
+    expect(observed.metadataInjected).toBe(label === "late metadata");
     if (process.platform !== "win32") {
       expect(observed.firstMode).toBe(0o700 & ~process.umask());
     }

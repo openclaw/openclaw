@@ -77,6 +77,9 @@ The default artifact directory is `<stateDir>/models/onnx`. Set the plugin's
 accept `--model-dir <path>`. Artifacts are grouped by model ID. Downloads use fixed
 repository revisions, sizes, and SHA256 hashes. Existing mismatched files are
 refused rather than overwritten. `openclaw onnx verify <model>` checks an installation.
+Verification and cached-download checks stream the files, so checking a large
+graph does not require a graph-sized memory buffer. Inference still loads
+verified graph bytes into its worker.
 
 ## Models
 
@@ -140,14 +143,18 @@ rubrics; ordinary state text can contain punctuation.
 
 Up to `maxLoadedModels` selected models warm during plugin service startup. Later
 requests reuse native sessions; the resident cache evicts the least recently
-used model when full. `threads` sets CPU intra-operation parallelism from 1 to 8.
+used model when full. Missing files and failed artifact-integrity checks leave
+warm sessions available. Eviction happens after artifact verification and
+tokenizer preparation, before loading the replacement native session. `threads`
+sets CPU intra-operation parallelism from 1 to 8.
 
-Cold-loading a large model can exceed the host's five-second decision deadline
-on slower machines. When agents use several models, set `maxLoadedModels` to
+Cold-loading a large model can exhaust a request's deadline on slower machines.
+The host allows up to 30 seconds; consumers can request less.
+When agents use several models, set `maxLoadedModels` to
 hold the active models if memory permits, or select a smaller model. The default
 cache holds two models; the maximum is five.
 
-The host still enforces its five-second decision deadline and four-call provider
+The host still enforces its 30-second decision deadline and four-call provider
 limit. The worker serializes native operations. A queued cancellation leaves the
 warm process intact; cancelling active native work terminates and joins that
 process before releasing the request. The next live request starts a fresh worker.

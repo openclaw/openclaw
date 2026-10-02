@@ -5,8 +5,8 @@ import {
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionEntryStatus,
   SessionEntrySummary,
@@ -20,26 +20,14 @@ import {
   hasValidSessionEntryIdentity,
   parseSqliteSessionEntryRecord,
 } from "./session-entry-json.js";
+import {
+  attachSessionEntrySnapshots,
+  sessionEntrySnapshotColumns,
+  sessionEntrySnapshotColumnsForKeys,
+  type SessionEntrySnapshotRow,
+} from "./session-entry-snapshots.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
-
-// SQLite's implicit rowid is queryable but absent from generated declared-column types.
-type SessionStatusDatabase = {
-  session_nodes: OpenClawAgentKyselyDatabase["session_nodes"] & { rowid: number };
-};
-
-// Metadata readers do not own prompt snapshots. Strip those bytes before JS allocation;
-// Malformed/overdepth JSON reaches the parser unchanged. Requiring an identity keeps
-// corrupt prompt-only objects distinct from the retained-window "{}" sentinel.
-// SQLite treats literal NUL as EOF. Plain %s stops there too; comparing encoded
-// byte lengths preserves that fallback across database encodings without an instr scan.
-export const sessionEntryMetadataJson =
-  /* kysely-allow-raw: preserve raw-row parsing while omitting unused prompt payloads. */ sql<string>`CASE WHEN json_valid(entry_json)
-  THEN CASE WHEN json_type(entry_json, '$.sessionId') = 'text'
-      AND length(CAST(entry_json AS BLOB)) = length(CAST(printf('%s', entry_json) AS BLOB))
-    THEN json_remove(entry_json, '$.skillsSnapshot', '$.systemPromptReport')
-    ELSE entry_json END
-  ELSE entry_json END`.as("entry_json");
 
 export function selectSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -48,15 +36,17 @@ export function selectSessionEntryRows(
   // Prepared readers pass the column shape from this operation's fresh schema check.
   ownerColumns?: boolean,
 ) {
-  const metadata = fullEntryKeys.length
-    ? /* kysely-allow-raw: one row snapshot preserves complete selected entries beside sibling metadata. */ sql<string>`CASE WHEN session_key IN ${sqliteStringSet(fullEntryKeys)} THEN entry_json ELSE ${sessionEntryMetadataJson.expression} END`.as(
-        "entry_json",
-      )
-    : sessionEntryMetadataJson;
-  return getNodeSqliteKysely<SessionStatusDatabase>(database.db)
+  return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
     .selectFrom("session_nodes")
     .select("session_key")
-    .select(projection === "full" ? "entry_json" : metadata)
+    .select("entry_json")
+    .$if(projection === "full" || fullEntryKeys.length > 0, (query) =>
+      query.select(
+        projection === "full"
+          ? sessionEntrySnapshotColumns
+          : sessionEntrySnapshotColumnsForKeys(fullEntryKeys),
+      ),
+    )
     .$if(ownerColumns ?? hasSqliteSessionOwnerColumns(database.db), (query) =>
       query.select([
         "owner_actor_type",
@@ -73,9 +63,7 @@ export function selectSessionEntryRows(
 export const sessionEntryInventoryJson =
   /* kysely-allow-raw: reuse the writer-owned validity projection without loading saved prompts. */ sql<
     string | null
-  >`CASE WHEN entry_valid = 1 THEN NULL ELSE ${sessionEntryMetadataJson.expression} END`.as(
-    "entry_json",
-  );
+  >`CASE WHEN entry_valid = 1 THEN NULL ELSE entry_json END`.as("entry_json");
 
 export function normalizeStatus(value: unknown): SessionEntryStatus | null {
   // Keep canonical interruption distinct without changing the derived status index schema.
@@ -98,7 +86,8 @@ export function parseSessionEntryJson(
     current_session_id?: string;
     entry_json: string;
     updated_at?: number;
-  } & SqliteSessionOwnerRow,
+  } & SqliteSessionOwnerRow &
+    SessionEntrySnapshotRow,
   projection: "full" | "list" = "full",
 ): SessionEntry | null {
   const record = parseSqliteSessionEntryRecord(row);
@@ -106,9 +95,12 @@ export function parseSessionEntryJson(
     return null;
   }
   if (projection === "list") {
-    // SQLite-overdepth JSON bypasses SQL projection but must keep the same metadata contract.
+    // Rejected legacy rows may retain unsplit fields; metadata views still omit them.
+    delete record.sessionDiffBaseline;
     delete record.skillsSnapshot;
     delete record.systemPromptReport;
+  } else {
+    attachSessionEntrySnapshots(record, row);
   }
   return projectSqliteSessionOwner(projectCanonicalSessionEntryShape(record), row);
 }
@@ -146,8 +138,12 @@ export function readSessionEntriesByStatus(
   if (selectedStatuses.length === 0) {
     return [];
   }
-  const db = getNodeSqliteKysely<SessionStatusDatabase>(database.db);
-  let query = db.selectFrom("session_nodes").selectAll().where("status", "in", projectedStatuses);
+  const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+  let query = db
+    .selectFrom("session_nodes")
+    .selectAll()
+    .select(sessionEntrySnapshotColumns)
+    .where("status", "in", projectedStatuses);
   if (sessionKeys) {
     query = query.where("session_key", "in", sqliteStringSet(sessionKeys));
   }

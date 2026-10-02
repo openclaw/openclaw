@@ -37,15 +37,14 @@ Runtime and config helpers live under matching focused `*-runtime` subpaths
 `text-utility-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
 `channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
-instead of the broad `config-runtime` compatibility barrel.
+instead of the removed broad `config-runtime` compatibility barrel.
 
 <Info>
-`openclaw/plugin-sdk/channel-lifecycle`, small channel helper facades,
-`openclaw/plugin-sdk/config-runtime`, and `openclaw/plugin-sdk/infra-runtime`
-are deprecated compatibility shims for older plugins. New code should import
-narrower generic primitives instead. The compatibility registry records a
-`removeAfter` date of 2026-10-01 for the `config-runtime`, `infra-runtime`,
-and `channel-lifecycle` subpaths.
+`openclaw/plugin-sdk/channel-lifecycle`, `channel-message`,
+`channel-reply-pipeline`, `config-runtime`, and `infra-runtime` were removed
+with explicit SDK-owner approval on September 30, 2026. Migrate to the
+[focused public contracts](/plugins/sdk-migration/how-to-migrate) before
+upgrading; replacement paths do not export every legacy helper or named type.
 </Info>
 
 Repo-internal entry points (per bundled plugin package root):
@@ -59,6 +58,11 @@ External plugins should only import `openclaw/plugin-sdk/*` subpaths. Never
 import another plugin package's `src/*` from core or from another plugin.
 Facade-loaded entry points prefer the active runtime config snapshot when one
 exists, then fall back to the resolved config file on disk.
+
+Setup and provider-discovery callbacks retain the loader's scoped SDK resolution
+for deferred imports, including private chunks in packaged plugins. These imports
+use the running host's SDK without requiring an `openclaw` dependency link inside
+the plugin. Retiring the owning inventory also retires its callbacks.
 
 Capability-specific subpaths such as `image-generation`, `media-understanding`,
 and `speech` exist because bundled plugins import them. They are not

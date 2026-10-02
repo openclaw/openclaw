@@ -210,6 +210,20 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     return Math.max(-1, ...positions) + 1;
   }
 
+  private moveWidget(widget: BoardWidget, position: number, tabId?: string): Promise<void> {
+    return this.applyOps(
+      [
+        {
+          kind: "widget_move",
+          name: widget.name,
+          position,
+          ...(tabId === undefined ? {} : { tabId }),
+        },
+      ],
+      t("board.announcement.moved", { title: widget.title || widget.name }),
+    );
+  }
+
   private readonly cellCallbacks: BoardWidgetCellCallbacks = {
     appViewGeneration: () => this.callbacks?.appViewGeneration ?? 0,
     grant: async (name: string, decision: BoardGrantDecision) => {
@@ -228,18 +242,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     },
     movePointerDown: (widget, event) => this.beginGesture("move", widget, event),
     resizePointerDown: (widget, event) => this.beginGesture("resize", widget, event),
-    moveToTab: async (widget, tabId) =>
-      this.applyOps(
-        [
-          {
-            kind: "widget_move",
-            name: widget.name,
-            tabId,
-            position: this.nextPosition(tabId),
-          },
-        ],
-        t("board.announcement.moved", { title: widget.title || widget.name }),
-      ),
+    moveToTab: (widget, tabId) => this.moveWidget(widget, this.nextPosition(tabId), tabId),
     resizeTo: async (widget, w, h) =>
       this.applyOps(
         [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h, heightMode: "fixed" }],
@@ -466,33 +469,12 @@ class OpenClawBoardView extends OpenClawLightDomElement {
       if (!hoverTabId && position === widget.position) {
         return;
       }
-      void this.applyOps(
-        [
-          {
-            kind: "widget_move",
-            name: gesture.name,
-            ...(hoverTabId ? { tabId: hoverTabId } : {}),
-            position,
-          },
-        ],
-        t("board.announcement.moved", { title: widget.title || widget.name }),
-      ).catch(() => undefined);
+      void this.moveWidget(widget, position, hoverTabId || undefined).catch(() => undefined);
       return;
     }
     const resized = previewItems?.find((item) => item.name === gesture.name);
     if (resized && (resized.w !== gesture.originW || resized.h !== gesture.originH)) {
-      void this.applyOps(
-        [
-          {
-            kind: "widget_resize",
-            name: gesture.name,
-            sizeW: resized.w,
-            sizeH: resized.h,
-            heightMode: "fixed",
-          },
-        ],
-        t("board.announcement.resized", { title: widget.title || widget.name }),
-      ).catch(() => undefined);
+      void this.cellCallbacks.resizeTo(widget, resized.w, resized.h).catch(() => undefined);
     }
   };
 
@@ -522,10 +504,7 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     if (!moved || moved.order === widget.position) {
       return;
     }
-    await this.applyOps(
-      [{ kind: "widget_move", name: widget.name, position: moved.order }],
-      t("board.announcement.moved", { title: widget.title || widget.name }),
-    );
+    await this.moveWidget(widget, moved.order);
   }
 
   private focusWidget(widget: BoardWidget, direction: BoardGridDirection): void {
@@ -689,7 +668,8 @@ class OpenClawBoardView extends OpenClawLightDomElement {
     const fullWidth = widgets.length === 1 && widgets[0]?.sizeW === BOARD_GRID_COLUMNS;
     const page =
       fullWidth &&
-      (widgets[0]?.pluginKind === "session:website" ||
+      (widgets[0]?.name === this.pageWidgetName ||
+        widgets[0]?.pluginKind === "session:website" ||
         widgets[0]?.pluginKind === "browser:dashboard");
     return html`
       <section

@@ -38,7 +38,6 @@ function catalogTool(params: {
   };
 }
 
-/** Converts Codex's thread-scoped status response into OpenClaw's MCP catalog shape. */
 function buildCodexEffectiveMcpCatalog(
   statuses: readonly CodexMcpServerStatus[],
   toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"],
@@ -138,20 +137,6 @@ async function listCodexMcpServerStatuses(
   throw new Error("Codex mcpServerStatus/list exceeded the bounded page limit");
 }
 
-/** Loads the requested MCP inventory from the exact client/thread already selected for a run. */
-async function loadCodexEffectiveMcpCatalogFromThread(params: {
-  client: Pick<CodexAppServerClient, "request">;
-  threadId: string;
-  mcpServerNames: readonly string[];
-  toolOverrides?: AgentHarnessMcpCatalogParams["toolOverrides"];
-}): Promise<McpToolCatalog> {
-  const allowedServerNames = new Set(params.mcpServerNames);
-  const statuses = (await listCodexMcpServerStatuses(params.client, params.threadId)).filter(
-    (status) => allowedServerNames.has(status.name),
-  );
-  return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
-}
-
 /** Loads MCP inventory from the bound Codex client while retaining its lease through all pages. */
 export async function loadCodexEffectiveMcpCatalog(
   params: AgentHarnessMcpCatalogParams,
@@ -168,18 +153,17 @@ export async function loadCodexEffectiveMcpCatalog(
   if (!binding?.clientId) {
     return undefined;
   }
-  const retained = retainSharedCodexAppServerClientByInstanceId(binding.clientId);
+  const retained = await retainSharedCodexAppServerClientByInstanceId(binding.clientId);
   if (!retained) {
     return undefined;
   }
   try {
-    return await loadCodexEffectiveMcpCatalogFromThread({
-      client: retained.client,
-      threadId: binding.threadId,
-      mcpServerNames: params.mcpServerNames,
-      toolOverrides: params.toolOverrides,
-    });
+    const allowedServerNames = new Set(params.mcpServerNames);
+    const statuses = (await listCodexMcpServerStatuses(retained.client, binding.threadId)).filter(
+      (status) => allowedServerNames.has(status.name),
+    );
+    return buildCodexEffectiveMcpCatalog(statuses, params.toolOverrides);
   } finally {
-    retained.release();
+    await retained.release();
   }
 }

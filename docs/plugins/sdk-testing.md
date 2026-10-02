@@ -64,6 +64,21 @@ runners and registries. These helpers reuse their core owners; register the
 session fixture lifecycle explicitly. Use published runtime subpaths when
 they already expose the needed operation.
 
+After closing retained plugin runtime handles, call `resetPluginRuntimeStateForTest()`
+and await `waitForPluginCacheRetirement(true)` from `plugin-test-runtime` to include
+borrowed cache generations. Assert that
+its `failures` array is empty before deleting fixture files or restoring the
+environment. A rejected or failed retirement must leave the fixture intact.
+
+Await `listChannelIngressQueueAccountIdsForTests` from
+`channel-ingress-test-runtime` or `plugin-state-test-runtime`. It uses the shared
+read-only worker and leaves missing state uncreated. Join asynchronous database
+cleanup before removing a fixture's state directory.
+
+For direct worker fixtures, pair `resolveRuntimeWorkerUrl` from `process-runtime`
+with `resolveRuntimeWorkerThreadExecArgv` from `test-env`. This keeps source and
+built workers on the runtime owner's startup arguments.
+
 ### Available exports
 
 | Export                                                                    | Purpose                                                                                                                                     |
@@ -91,7 +106,6 @@ they already expose the needed operation.
 | `createPluginRuntimeMock`                                                 | Build a mocked plugin runtime surface. Import from `plugin-sdk/plugin-test-runtime`                                                         |
 | `createPluginSetupWizardStatus`                                           | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                                |
 | `createTestWizardPrompter`                                                | Build a mocked setup wizard prompter. Import from `plugin-sdk/plugin-test-runtime`                                                          |
-| `createRuntimeTaskFlow`                                                   | Create isolated runtime task-flow state. Import from `plugin-sdk/plugin-test-runtime`                                                       |
 | `runProviderCatalog`                                                      | Execute a provider catalog hook with test dependencies. Import from `plugin-sdk/plugin-test-runtime`                                        |
 | `resolveProviderModelPickerEntries`                                       | Resolve provider model-picker entries in contract tests. Import from `plugin-sdk/plugin-test-runtime`                                       |
 | `buildProviderPluginMethodChoice`                                         | Build provider wizard choice ids for assertions. Import from `plugin-sdk/plugin-test-runtime`                                               |
@@ -122,6 +136,7 @@ they already expose the needed operation.
 | `withFetchPreconnect`                                                     | Run fetch tests with preconnect hooks installed. Import from `plugin-sdk/test-env`                                                          |
 | `withEnv` / `withEnvAsync`                                                | Temporarily patch environment variables. Import from `plugin-sdk/test-env`                                                                  |
 | `createTempHomeEnv` / `withTempHome` / `withTempDir`                      | Create isolated filesystem test fixtures. Import from `plugin-sdk/test-env`                                                                 |
+| `createStagedInputOwnershipFixture`                                       | Create owner-staged attachment files and unowned lookalikes. Import from `plugin-sdk/test-env`                                              |
 | `createMockServerResponse`                                                | Create a minimal HTTP server response mock. Import from `plugin-sdk/test-env`                                                               |
 | `createProviderUsageFetch`                                                | Build provider usage fetch fixtures. Import from `plugin-sdk/test-env`                                                                      |
 | `useFrozenTime` / `useRealTime`                                           | Freeze and restore timers for time-sensitive tests. Import from `plugin-sdk/test-env`                                                       |
@@ -259,6 +274,11 @@ For bundled catalog tests that resolve provider endpoint capabilities, call
 the plugin's manifest metadata once, installs and clears that snapshot around
 each test, and rejects Jiti loading during assertions. This keeps cold runtime
 discovery out of catalog test deadlines without changing provider behavior.
+
+Pass additional manifest roots when a case exercises another provider's endpoints,
+for example `useProviderCatalogMetadata(new URL(".", import.meta.url), new URL("../google/", import.meta.url))`.
+Assert the endpoint class in route-specific cases so missing metadata cannot turn
+a provider route into an unintended custom-endpoint case.
 
 ```typescript
 import { describe, it, expect } from "vitest";

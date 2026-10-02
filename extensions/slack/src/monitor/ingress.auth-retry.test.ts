@@ -1,12 +1,11 @@
-import { App, type Receiver, type ReceiverEvent } from "@slack/bolt";
 import { WebClient, type WebClientOptions } from "@slack/web-api";
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { describe, expect, it, vi } from "vitest";
-import { createSlackDurableIngress } from "./ingress.js";
-
-type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
-type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
+import {
+  attachBoltIngress,
+  createReceiverEvent,
+  withQueue,
+  type SlackIngressQueue,
+} from "./ingress.test-support.js";
 
 function attachIngress(params: {
   queue: SlackIngressQueue;
@@ -14,62 +13,20 @@ function attachIngress(params: {
   onMessage: () => Promise<void>;
   pollIntervalMs?: number;
 }) {
-  const ingress = createSlackDurableIngress({
-    accountId: "default",
-    queue: params.queue,
-    pollIntervalMs: params.pollIntervalMs ?? 60_000,
-  });
-  let receive: ((event: ReceiverEvent) => Promise<void>) | undefined;
-  const receiver: Receiver = {
-    init: (app) => {
-      receive = (event) => app.processEvent(event);
-    },
-    start: async () => undefined,
-    stop: async () => undefined,
-  };
   const authClient = new WebClient("xoxb-fixture", {
     fetch: params.authFetch,
     retryConfig: { retries: 0 },
     slackApiUrl: "https://slack.test/api/",
   });
-  const app = new App({
-    receiver: ingress.wrapReceiver(receiver),
+  const attached = attachBoltIngress(params.queue, {
+    pollIntervalMs: params.pollIntervalMs ?? 60_000,
     authorize: async () => {
       await authClient.auth.test();
       return { botToken: "xoxb-fixture", botId: "B_TEST", botUserId: "U_BOT", teamId: "T_TEST" };
     },
-    convoStore: false,
-    ignoreSelf: false,
   });
-  app.message(params.onMessage);
-  return {
-    ingress,
-    receive: async (event: ReceiverEvent) => {
-      if (!receive) {
-        throw new Error("Receiver not initialized");
-      }
-      await receive(event);
-    },
-  };
-}
-
-function createEvent(): ReceiverEvent {
-  return {
-    body: {
-      type: "event_callback",
-      event_id: "Ev-auth-retry",
-      team_id: "T_TEST",
-      api_app_id: "A_TEST",
-      event: {
-        type: "message",
-        channel: "C_TEST",
-        user: "U_TEST",
-        ts: "1700000000.004001",
-        text: "hello",
-      },
-    },
-    ack: vi.fn(async () => {}),
-  };
+  attached.app.message(params.onMessage);
+  return attached;
 }
 
 describe("Slack ingress authorization failures", () => {
@@ -78,12 +35,7 @@ describe("Slack ingress authorization failures", () => {
     { name: "service outage", status: 503 },
     { name: "connection reset", status: 0 },
   ])("replays a $name during Bolt authorization after restart", async ({ status }) => {
-    await withOpenClawTestState({ label: "slack-auth-retry" }, async (state) => {
-      const queue = createChannelIngressQueueForTests<SlackIngressPayload>({
-        channelId: "slack",
-        accountId: "default",
-        stateDir: state.stateDir,
-      });
+    await withQueue(async (queue) => {
       let available = false;
       const authFetch = vi.fn<NonNullable<WebClientOptions["fetch"]>>(async () => {
         if (available) {
@@ -104,7 +56,7 @@ describe("Slack ingress authorization failures", () => {
       let restarted: ReturnType<typeof attachIngress> | undefined;
       first.ingress.start();
       try {
-        const event = createEvent();
+        const event = createReceiverEvent();
         await first.receive(event);
         await first.ingress.waitForIdle();
         await first.ingress.stop();
@@ -126,7 +78,7 @@ describe("Slack ingress authorization failures", () => {
           },
           { timeout: 15_000, interval: 100 },
         );
-        await restarted.receive(createEvent());
+        await restarted.receive(createReceiverEvent());
         await restarted.ingress.waitForIdle();
         expect(onMessage).toHaveBeenCalledTimes(1);
         expect(authFetch).toHaveBeenCalledTimes(2);
@@ -138,12 +90,7 @@ describe("Slack ingress authorization failures", () => {
   });
 
   it("still rejects invalid credentials without dispatching or retrying the message", async () => {
-    await withOpenClawTestState({ label: "slack-auth-invalid" }, async (state) => {
-      const queue = createChannelIngressQueueForTests<SlackIngressPayload>({
-        channelId: "slack",
-        accountId: "default",
-        stateDir: state.stateDir,
-      });
+    await withQueue(async (queue) => {
       const authFetch = vi.fn<NonNullable<WebClientOptions["fetch"]>>(async () =>
         Response.json({ ok: false, error: "invalid_auth" }),
       );
@@ -151,7 +98,7 @@ describe("Slack ingress authorization failures", () => {
       const { ingress, receive } = attachIngress({ queue, authFetch, onMessage });
       ingress.start();
       try {
-        await receive(createEvent());
+        await receive(createReceiverEvent());
         await ingress.waitForIdle();
         expect(onMessage).not.toHaveBeenCalled();
         expect(await queue.listPending()).toEqual([]);

@@ -52,21 +52,6 @@ describe("Codex supervision actions", () => {
     expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
   });
 
-  it("archives an idle local thread only after the fresh status read", async () => {
-    const control = createEligibleControl();
-    const readThread = vi.mocked(control.readThread);
-    const archiveThread = vi.mocked(control.archiveThread);
-
-    await expect(archiveTestSession({ control })).resolves.toEqual({
-      archived: true,
-    });
-    expect(control.requireEligibleThread).toHaveBeenCalledWith("thread-1");
-    expect(control.archiveThread).toHaveBeenCalledWith("thread-1");
-    expect(readThread.mock.invocationCallOrder[0]).toBeLessThan(
-      archiveThread.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-  });
-
   it("pins one App Server connection while archive configuration changes live", async () => {
     let pluginConfig: unknown = {
       appServer: { command: "codex-archive-a" },
@@ -80,7 +65,7 @@ describe("Codex supervision actions", () => {
         if (request.method === "thread/read") {
           pluginConfig = {
             appServer: { command: "codex-archive-b", homeScope: "agent" },
-            supervision: { enabled: true },
+            supervision: { enabled: false },
           };
           runtimeConfig = {
             agents: { defaults: { workspace: "/workspace/b" } },

@@ -56,7 +56,7 @@ The path grammar is:
 agent's main session. The other forms encode one immutable session key in one of
 two ways.
 
-The short-id form applies when the session key's rest, everything after
+The short-id form applies to non-Incognito sessions when the key's rest, everything after
 `agent:<agentId>:`, ends in a UUID. `<sessionRef>` is an optional display-name
 slug plus a short id, such as `deploy-monitor-6db92d48`. The short id is the
 authoritative part: at least eight lowercase hexadecimal characters from the
@@ -75,6 +75,14 @@ Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:main:telegram:12345` becomes `/chat/main/telegram/12345`, and
 `agent:main:cron:nightly:run:8821` becomes
 `/chat/main/cron/nightly/run/8821`.
+
+Incognito sessions always use the literal-key form, even when their keys end
+in a UUID. For example, an Incognito link looks like
+`/chat/main/dashboard/incognito-12345678-90ab-cdef-1234-567890abcdef`.
+Incognito sessions are excluded from short-id and display-name discovery;
+their exact links still require administrator access and work only while the
+session exists. Reopen an existing session from the sidebar to replace an old
+short-id link that reports **Session not found**.
 
 Literal rest segments exactly equal to `.` or `..` use `~dot` and `~dotdot` so
 browsers cannot collapse them as relative path segments. A literal segment that
@@ -481,7 +489,6 @@ no route-specific URL parameters.
 | Plugins             | `/plugins`                                     | -                         | -                                                                                 |
 | Plugin settings     | `/settings/plugins`                            | -                         | `?tab=advanced`, `/settings/plugins/<pluginId>`                                   |
 | Automations         | `/automations`                                 | `/cron`                   | `?job=<jobId>`, `?job=<jobId>&run=<runId>`                                        |
-| Tasks               | `/tasks`                                       | -                         | -                                                                                 |
 | Devices             | `/settings/devices`                            | `/nodes`                  | Shared settings parameters below                                                  |
 | Plugin tab host     | `/<slug>` when advertised; `/plugin` otherwise | -                         | Generic host: `?plugin=<pluginId>&id=<tabId>`; tab parameters: `?p.<key>=<value>` |
 

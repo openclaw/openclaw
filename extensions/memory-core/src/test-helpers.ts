@@ -35,7 +35,10 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
-import { recordMemorySessionTombstonesInDatabase } from "./memory-entry-origins.js";
+import {
+  ensureMemorySessionTombstones,
+  recordMemorySessionTombstonesInDatabase,
+} from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import {
   normalizeShortTermPhaseSignalStore,
@@ -51,6 +54,7 @@ export function seedMemoryForgetTombstones(
   params: Parameters<typeof recordMemorySessionTombstonesInDatabase>[1],
 ): number {
   const { db } = openOpenClawAgentDatabase({ agentId: params.agentId });
+  ensureMemorySessionTombstones(db);
   return recordMemorySessionTombstonesInDatabase(db, params);
 }
 
@@ -64,7 +68,7 @@ export async function seedMemoryIndexWithOrphanedProvenance(
       id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
     ) VALUES (
       'orphaned-chunk', 'memory/orphan.md', 'memory', 1, 1,
-      'hash', 'none', 'orphaned memory', '[]', 1
+      'hash', 'none', 'orphaned memory', x'', 1
     );
     INSERT INTO memory_index_chunk_provenance (
       chunk_id, origin_class, session_kind, observed_at

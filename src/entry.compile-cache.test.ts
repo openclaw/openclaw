@@ -2,6 +2,7 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { expectDefined, readStringValue } from "@openclaw/normalization-core";
 import {
@@ -14,6 +15,7 @@ import {
   type Mock,
   type MockInstance,
 } from "vitest";
+import { maintainOpenClawCompileCache } from "../node-compile-cache.mjs";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
 import { mockNodeBuiltinModule } from "./plugin-sdk/test-helpers/node-builtin-mocks.js";
 import { createDeferredCore } from "./shared/deferred.js";
@@ -54,6 +56,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 
 function enabledDirectory(callIndex = 0): string {
   const [directory] = expectDefined(enableCompileCache.mock.calls[callIndex], "cache enable call");
@@ -132,6 +135,9 @@ describe("entry compile cache", () => {
     expect(enableCompileCache).toHaveBeenCalledOnce();
     enableOpenClawCompileCache({ env: { NODE_DISABLE_COMPILE_CACHE: "1" }, installRoot: root });
     expect(enableCompileCache).toHaveBeenCalledOnce();
+    setTestEnvValue("NODE_DISABLE_COMPILE_CACHE", "1");
+    enableOpenClawCompileCache({ installRoot: root });
+    expect(enableCompileCache).toHaveBeenCalledOnce();
   });
 
   it("scopes packaged compile cache by package install metadata", async () => {
@@ -146,7 +152,34 @@ describe("entry compile cache", () => {
     expect(path.basename(directory)).toMatch(/^\d+-\d+$/);
   });
 
-  it("invalidates a replaced installation without deleting shared compile caches", async () => {
+  it("skips cache activation with a warning when Windows TEMP makes the path too long", () => {
+    vi.spyOn(os, "tmpdir").mockReturnValue(path.join(root, "x".repeat(200)));
+    withMockedPlatform("win32", () => {
+      enableOpenClawCompileCache({ env: {}, installRoot: root });
+    });
+    expect(enableCompileCache).not.toHaveBeenCalled();
+    expect(writeStderr).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("Compile cache disabled: Windows cache path exceeds 200 characters"),
+    );
+  });
+
+  it.each([200, 201])("bounds Windows child cache paths at 200 characters: %s", (length) => {
+    const directory = path.join(root, "x".repeat(length - root.length - 1));
+    const env = { NODE_COMPILE_CACHE: directory, KEEP: "unchanged" };
+    withMockedPlatform("win32", () => {
+      const childEnv = resolveNodeCompileCacheEnv(env);
+      if (length === 200) {
+        expect(childEnv).toBe(env);
+        expect(writeStderr).not.toHaveBeenCalled();
+      } else {
+        expect(childEnv).toEqual({ NODE_DISABLE_COMPILE_CACHE: "1", KEEP: "unchanged" });
+        expect(writeStderr).toHaveBeenCalledOnce();
+      }
+    });
+    expect(env.NODE_COMPILE_CACHE).toBe(directory);
+  });
+
+  it("retires a replaced installation without deleting other applications' compile caches", async () => {
     const packageJsonPath = path.join(root, "package.json");
     const env = { NODE_COMPILE_CACHE: path.join(root, ".node-cache") };
     await fs.writeFile(packageJsonPath, '{"version":"2026.4.29"}\n', "utf8");
@@ -155,6 +188,8 @@ describe("entry compile cache", () => {
     await fs.mkdir(originalDirectory, { recursive: true });
     const originalCacheEntry = path.join(originalDirectory, "keep.txt");
     await fs.writeFile(originalCacheEntry, "previous cached installation\n", "utf8");
+    const sharedCacheEntry = path.join(env.NODE_COMPILE_CACHE, "another-application");
+    await fs.writeFile(sharedCacheEntry, "keep\n");
     await fs.writeFile(
       packageJsonPath,
       '{"version":"2026.4.29","installation":"replacement"}\n',
@@ -164,9 +199,9 @@ describe("entry compile cache", () => {
     const replacementDirectory = enabledDirectory(1);
     expect(replacementDirectory).toContain(path.join("openclaw", "2026.4.29"));
     expect(replacementDirectory).not.toBe(originalDirectory);
-    await expect(fs.readFile(originalCacheEntry, "utf8")).resolves.toBe(
-      "previous cached installation\n",
-    );
+    await maintainOpenClawCompileCache(replacementDirectory);
+    await expect(fs.stat(originalDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.readFile(sharedCacheEntry, "utf8")).resolves.toBe("keep\n");
   });
 
   it("runs a one-shot no-cache respawn when source checkout inherits NODE_COMPILE_CACHE", async () => {

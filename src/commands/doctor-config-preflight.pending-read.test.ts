@@ -7,12 +7,10 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
 // Observe real launches without replacing SQLite or the child's lifecycle owner.
 vi.mock("node:child_process", async (importOriginal) => {
@@ -30,75 +28,10 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("reuses Doctor's readonly child for pending records and discovery, then joins it", async () => {
-  await withDoctorConfigPreflightHome(async (home) => {
-    const stateDir = path.join(home, ".openclaw");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
-    );
-    openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
-    await closeOpenClawStateDatabaseAsync();
-
-    const pendingReadLaunches: number[] = [];
-    const readPending = pendingMigrations.readDeferredPluginMigrations;
-    vi.spyOn(pendingMigrations, "readDeferredPluginMigrations").mockImplementation((options) => {
-      const start = vi.mocked(spawnSync).mock.calls.length;
-      const result = readPending(options);
-      pendingReadLaunches.push(
-        vi
-          .mocked(spawnSync)
-          .mock.calls.slice(start)
-          .filter(([, args]) => args?.includes(SQLITE_READONLY_CHILD_ARG)).length,
-      );
-      return result;
-    });
-    const prepareSnapshot = snapshotSource.prepareSqliteReadOnlyLocation;
-    const snapshotChildren: Array<number | undefined> = [];
-    vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocation").mockImplementation(
-      async (...args) => {
-        const prepared = await prepareSnapshot(...args);
-        const sessionIndex = vi
-          .mocked(spawn)
-          .mock.calls.findIndex(([, argv]) => argv?.includes(SQLITE_READONLY_CHILD_ARG));
-        snapshotChildren.push(vi.mocked(spawn).mock.results[sessionIndex]?.value.pid);
-        return prepared;
-      },
-    );
-    try {
-      const result = await runDoctorConfigPreflight({
-        migrateLegacyConfig: false,
-        requireStartupMigrationCheckpoint: true,
-        observe: false,
-      });
-      expect(result.snapshot.valid).toBe(true);
-      expect(pendingReadLaunches.length).toBeGreaterThan(0);
-      expect(pendingReadLaunches.every((count) => count === 0)).toBe(true);
-      expect(snapshotChildren.length).toBeGreaterThanOrEqual(2);
-      expect(snapshotChildren[0]).toBeTypeOf("number");
-      expect(new Set(snapshotChildren).size).toBe(1);
-      const sessions = vi
-        .mocked(spawn)
-        .mock.calls.flatMap(([, argv], index) =>
-          argv?.includes(SQLITE_READONLY_CHILD_ARG)
-            ? [vi.mocked(spawn).mock.results[index]?.value]
-            : [],
-        );
-      expect(sessions).toHaveLength(1);
-      expect(sessions[0]?.exitCode).toBe(0);
-      expect(sessions[0]?.connected).toBe(false);
-      expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-});
-
-it.each([false, true])(
-  "awaits pending inputs before backup selection (startup checkpoint: %s)",
-  async (requireStartupMigrationCheckpoint) => {
+it.each(["Doctor repair", "Gateway readiness"] as const)(
+  "awaits pending inputs before backup selection through %s",
+  async (owner) => {
+    const gateway = owner === "Gateway readiness";
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -121,7 +54,7 @@ it.each([false, true])(
         configPaths: [["legacyFixture"]],
         validationExcludedPaths: [["legacyFixture"]],
       };
-      pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
+      await pendingMigrations.recordDeferredPluginMigrations({ pending: [pending] });
       await closeOpenClawStateDatabaseAsync();
       const held = createDeferredCore();
       const release = createDeferredCore();
@@ -151,16 +84,21 @@ it.each([false, true])(
         },
       );
       const acquire = vi.spyOn(checkpoint, "acquireStartupMigrationLeaseWithWait");
-      const operation = runDoctorConfigPreflight({
-        migrateState: false,
-        migrateLegacyConfig: false,
-        invalidConfigNote: false,
-        observe: false,
-        requireStartupMigrationCheckpoint,
-        validateStartupConfig: () => {
-          snapshotsClosedAtValidation.push(snapshotClosed);
-        },
-      });
+      const operation = gateway
+        ? runStartupConfigPreflight({
+            gateway: true,
+            observe: false,
+            validateStartupConfig: () => {
+              snapshotsClosedAtValidation.push(snapshotClosed);
+            },
+          })
+        : runDoctorConfigPreflight({
+            migrateState: false,
+            migrateLegacyConfig: false,
+            repairPrefixedConfig: true,
+            invalidConfigNote: false,
+            observe: false,
+          });
       const settled = operation.then(() => "settled" as const);
       try {
         expect(await Promise.race([held.promise.then(() => "held" as const), settled])).toBe(
@@ -173,7 +111,7 @@ it.each([false, true])(
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
         release.resolve();
         const result = await operation;
-        expect(snapshotsClosedAtValidation.length > 0).toBe(requireStartupMigrationCheckpoint);
+        expect(snapshotsClosedAtValidation.length > 0).toBe(gateway);
         expect(snapshotsClosedAtValidation).not.toContain(false);
         expect(pendingRead).toHaveBeenCalled();
         expect(snapshotClosed).toBe(true);

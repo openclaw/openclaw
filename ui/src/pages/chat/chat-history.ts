@@ -11,6 +11,7 @@ import { loadChatBranches } from "./chat-history-branches.ts";
 import { hydrateChatHistory } from "./chat-history-hydration.ts";
 import { CHAT_HISTORY_REQUEST_LIMIT } from "./chat-history-request.ts";
 import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
+import { historySessionId } from "./chat-history-snapshot.ts";
 import {
   chatHistoryRequests,
   getChatHistoryLoadState,
@@ -20,7 +21,7 @@ import {
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
 import type { ChatRunStartupPhase } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatState } from "./chat-state-contract.ts";
-import { readChatSessionSnapshot } from "./session-message-cache.ts";
+import { readChatHistoryCursor } from "./session-message-cache.ts";
 
 type LoadChatHistoryOptions = {
   deferBranches?: boolean;
@@ -39,6 +40,9 @@ export async function loadChatHistory(
     ? resolveUiSelectedSessionAgentId(state)
     : undefined;
   const startup = opts.startup === true;
+  const creationPending =
+    state.chatSubmissions?.creation?.sessionKey === sessionKey ||
+    state.hasPendingInitialTurn?.(sessionKey);
   const requests = chatHistoryRequests(state);
   if (!state.client || !state.connected) {
     setChatHistoryLoad(state, { phase: "pending-connection", sessionKey, requestAgentId, startup });
@@ -88,12 +92,7 @@ export async function loadChatHistory(
       }
     }
   }
-  const deltaCursor = state.chatMessagesBySession
-    ? readChatSessionSnapshot(state.chatMessagesBySession, state, {
-        sessionKey,
-        agentId: requestAgentId,
-      })?.deltaCursor
-    : undefined;
+  const deltaCursor = readChatHistoryCursor(state);
   const requestModeKey = deltaCursor === undefined ? "page" : `cursor:${deltaCursor}`;
   const inputRunIds = readChatInputRunIds(state);
   const requestKeyPrefix = JSON.stringify([
@@ -180,6 +179,8 @@ export async function loadChatHistory(
           sessionKey,
           requestAgentId,
           sessionInfo: result.sessionInfo,
+          // A read begun during creation cannot prove that its provisional key expired.
+          sessionId: historySessionId(result) ?? (creationPending ? undefined : null),
         });
       } else if (
         state.sessionKey === sessionKey &&
@@ -264,6 +265,7 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  errorKind?: Extract<ChatEvent, { state: "error" }>["errorKind"];
   errorDetail?: ChatErrorDetail;
   stopReason?: string;
   yielded?: true;

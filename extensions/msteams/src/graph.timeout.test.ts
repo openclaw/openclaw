@@ -18,12 +18,6 @@ vi.mock("./sdk.js", () => ({
   },
 }));
 
-vi.mock("./token-response.js", () => ({
-  readAccessToken(value: unknown) {
-    return typeof value === "string" ? value : null;
-  },
-}));
-
 vi.mock("./token.js", () => ({
   async resolveDelegatedAccessToken() {
     return undefined;

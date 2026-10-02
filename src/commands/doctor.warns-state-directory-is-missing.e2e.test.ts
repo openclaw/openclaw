@@ -9,7 +9,7 @@ import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
-  writeConfigFile,
+  transformConfigFile,
 } from "./doctor.e2e-harness.js";
 import { terminalNoteMock } from "./doctor.note-test-helpers.js";
 import "./doctor.fast-path-mocks.js";
@@ -383,7 +383,7 @@ describe("doctor command", () => {
       title: "Gateway auth",
       messageIncludes: "Doctor will not overwrite gateway.auth.token with a plaintext value.",
     });
-    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(transformConfigFile).not.toHaveBeenCalled();
   });
 
   it("does not let OPENCLAW_GATEWAY_TOKEN hide an unresolved SecretRef-managed token", async () => {

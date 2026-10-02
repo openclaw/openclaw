@@ -104,7 +104,15 @@ to each `exec` child. GitHub CLI must be installed on the worker host; the bundl
 includes the launcher, not `gh`.
 
 Materialized skill files are temporary turn inputs in a private directory separate
-from worker state and its GitHub credentials. A failed per-turn deletion logs
+from worker state and its GitHub credentials. Their directory is scoped to the
+session and workspace, and each skill path uses a short readable name with a digest
+of its name, source, and verified content.
+Unchanged deliveries recreate the same paths in deterministic prompt order, so
+later turns can reuse the provider's prompt prefix and read references from earlier
+turns without rewriting transcript history. Changed skill content receives a new
+path. The worker holds a filesystem lock through cleanup; another live turn cannot
+replace its inputs, and crash recovery only reclaims a definitely dead owner.
+A failed per-turn deletion logs
 `Materialized skill cleanup failed`. Node Claude skill sessions separately report
 `Node Claude skill session cleanup failed` for temporary Workshop configuration. These
 bounded, redacted warnings identify files that may remain. Wait until the worker or
@@ -143,6 +151,14 @@ create a fresh assignment from the gateway's authoritative transcript and
 commit ledger. Likewise, a gateway process restart terminates a pending
 inference turn with a provider error; only a worker WebSocket reconnect can
 reattach to an active same-process inference stream.
+
+The Gateway persists inference admission before acknowledging it and persists
+completion before publishing a terminal message. Gateway shutdown and session
+lifecycle drains also join accepted provider and storage work, including an
+admission that was still waiting when cancellation began.
+If native storage settlement is unknown, the Gateway preserves that failure and
+does not retry the terminal write or replay the affected inference identity.
+Independent shutdown cleanup still runs before the failure is reported.
 
 See [Gateway protocol](/gateway/protocol/handshake#worker-role-and-closed-protocol) for the
 closed worker RPC surface and [Cloud workers](/gateway/cloud-workers) for the

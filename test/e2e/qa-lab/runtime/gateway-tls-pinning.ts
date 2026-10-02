@@ -20,9 +20,11 @@ import { resolveGatewayConnectionTlsFingerprint } from "../../../../src/gateway/
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { loadGatewayTlsServerRuntime } from "../../../../src/infra/tls/gateway.js";
 import { flushLogger, resetLogger } from "../../../../src/logging/logger.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
 import { getDeterministicFreePortBlock, getFreePort } from "../../../../src/test-utils/ports.js";
-import { waitForFile } from "../../../helpers/process-wait.js";
-import { createDeferred } from "../../../helpers/promise.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
+import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const SCENARIO_ID = "gateway-tls-pinning";
@@ -52,6 +54,7 @@ const ENV_KEYS = [
 type ProducerOptions = {
   artifactBase: string;
   repoRoot: string;
+  signal?: AbortSignal;
 };
 
 export type GatewayTlsPinningProof = {
@@ -106,6 +109,7 @@ function captureEnvironment() {
 async function writeDiscoveryProbePlugin(
   pluginDir: string,
   advertisementPath: string,
+  advertisementReadyEvent: string,
 ): Promise<void> {
   await fs.mkdir(pluginDir, { recursive: true });
   await Promise.all([
@@ -141,6 +145,7 @@ module.exports = {
       id: ${JSON.stringify(DISCOVERY_PLUGIN_ID)},
       advertise(context) {
         fs.writeFileSync(${JSON.stringify(advertisementPath)}, JSON.stringify(context), "utf8");
+        process.emit(${JSON.stringify(advertisementReadyEvent)});
       },
     });
   },
@@ -317,21 +322,27 @@ async function proveCleartextMismatch(port: number, tlsFingerprint: string): Pro
   }
 }
 
-export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProof> {
+export async function runGatewayTlsPinningProof(
+  signal?: AbortSignal,
+): Promise<GatewayTlsPinningProof> {
   const restoreEnvironment = captureEnvironment();
   const runtimeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-tls-pinning-"));
   const stateDir = path.join(runtimeRoot, "state");
+  const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
   const configPath = path.join(stateDir, "openclaw.json");
   const certPath = path.join(runtimeRoot, "tls", "gateway-cert.pem");
   const keyPath = path.join(runtimeRoot, "tls", "gateway-key.pem");
   const pluginDir = path.join(runtimeRoot, "discovery-plugin");
   const advertisementPath = path.join(runtimeRoot, "gateway-discovery-advertisement.json");
+  const advertisementReadyEvent = `${DISCOVERY_PLUGIN_ID}:${runtimeRoot}`;
+  const advertisementReady = createDeferred();
   const gatewayLogPath = path.join(runtimeRoot, "gateway.log");
   // Windows symlink creation requires host privileges unrelated to Gateway TLS.
   const symlinkRenewal = process.platform !== "win32";
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
 
-  try {
+  async function runProof(): Promise<GatewayTlsPinningProof> {
+    process.once(advertisementReadyEvent, advertisementReady.resolve);
     process.env.HOME = runtimeRoot;
     process.env.OPENCLAW_CONFIG_PATH = configPath;
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -348,7 +359,7 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
     delete process.env.NODE_ENV;
     delete process.env.OPENCLAW_DISABLE_BONJOUR;
     delete process.env.VITEST;
-    await writeDiscoveryProbePlugin(pluginDir, advertisementPath);
+    await writeDiscoveryProbePlugin(pluginDir, advertisementPath, advertisementReadyEvent);
 
     const preparedTls = await loadGatewayTlsServerRuntime({
       enabled: true,
@@ -433,14 +444,15 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
         });
       }
     };
-    if ((await probeHealth())?.statusCode !== 200) {
-      throw new Error("Initial local TLS health probe failed");
-    }
+    await waitForRenewalFact(
+      async () => ((await probeHealth())?.statusCode === 200 ? true : undefined),
+      "the initial accepted local TLS health listener",
+    );
     const initialTarget = await missedRenewalProbe.resolveWebSocketTarget(port);
     if (initialTarget?.tlsFingerprint !== preparedTls.fingerprintSha256) {
       throw new Error("A WebSocket-first probe did not verify the initial listener pin");
     }
-    await waitForFile(advertisementPath, CONNECTION_TIMEOUT_MS);
+    await (signal ? withinTest(advertisementReady.promise, signal) : advertisementReady.promise);
     const advertisedFingerprint = await readAdvertisedFingerprint(advertisementPath);
     const peerFingerprint = await waitForPeerFingerprint(port);
     if (peerFingerprint !== advertisedFingerprint) {
@@ -679,15 +691,23 @@ export async function runGatewayTlsPinningProof(): Promise<GatewayTlsPinningProo
       coldProbeRejectedUnknownPin: true,
       missedRenewalRejectedUnknownPin: true,
     };
-  } finally {
-    await server?.close({ reason: "Gateway TLS pinning proof complete" }).catch(() => undefined);
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    restoreEnvironment();
-    await flushLogger();
-    resetLogger();
-    await fs.rm(runtimeRoot, { force: true, recursive: true });
   }
+  return await runQaGatewayFixture(
+    runProof,
+    async () => {
+      await server?.close({ reason: "Gateway TLS pinning proof complete" });
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+      await flushLogger();
+      resetLogger();
+      await fs.rm(runtimeRoot, { force: true, recursive: true });
+    },
+    () => {
+      process.off(advertisementReadyEvent, advertisementReady.resolve);
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      restoreEnvironment();
+    },
+  );
 }
 
 export async function runGatewayTlsPinningProducer(
@@ -713,7 +733,7 @@ export async function runGatewayTlsPinningProducer(
   });
   const startedAt = Date.now();
   try {
-    const proof = await runGatewayTlsPinningProof();
+    const proof = await runGatewayTlsPinningProof(options.signal);
     await fs.mkdir(options.artifactBase, { recursive: true });
     const summaryPath = path.join(options.artifactBase, "gateway-tls-pinning-summary.json");
     await fs.writeFile(summaryPath, `${JSON.stringify(proof, null, 2)}\n`, "utf8");

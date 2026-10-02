@@ -3,7 +3,7 @@ import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions"
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import {
@@ -104,18 +104,6 @@ const WikiApplySchema = Type.Object(
   { additionalProperties: false },
 );
 
-async function syncImportedSourcesIfNeeded(
-  config: ResolvedMemoryWikiConfig,
-  appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
-) {
-  await syncMemoryWikiImportedSources({
-    config,
-    appConfig,
-    ...(signal ? { signal } : {}),
-  });
-}
-
 type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
@@ -136,7 +124,7 @@ export function createWikiStatusTool(
       "Inspect the current memory wiki vault mode, health, and Obsidian CLI availability.",
     parameters: WikiStatusSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const status = await resolveMemoryWikiStatus(config, {
         appConfig,
         callerAgentId: memoryContext.agentId,
@@ -158,14 +146,8 @@ export function createWikiSearchTool(
       "Search wiki pages and, when shared search is enabled, the active memory corpus by title, path, id, or body text.",
     parameters: WikiSearchSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = rawParams as {
-        query: string;
-        maxResults?: number;
-        backend?: ResolvedMemoryWikiConfig["search"]["backend"];
-        corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
-        mode?: (typeof WIKI_SEARCH_MODES)[number];
-      };
-      await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
+      const params = rawParams as Static<typeof WikiSearchSchema>;
+      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const results = await searchMemoryWiki({
         config,
         appConfig,
@@ -187,7 +169,7 @@ export function createWikiSearchTool(
 export function createWikiLintTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
+  { signal }: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_lint",
@@ -196,7 +178,7 @@ export function createWikiLintTool(
       "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
     parameters: WikiLintSchema,
     execute: async () => {
-      await syncImportedSourcesIfNeeded(config, appConfig, signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal });
       const result = await lintMemoryWikiVault(config, signal ? { signal } : undefined);
       const contradictions = result.issuesByCategory.contradictions.length;
       const openQuestions = result.issuesByCategory["open-questions"].length;
@@ -227,7 +209,7 @@ export function createWikiLintTool(
 export function createWikiApplyTool(
   config: ResolvedMemoryWikiConfig,
   appConfig?: OpenClawConfig,
-  signal?: AbortSignal,
+  { signal }: WikiToolMemoryContext = {},
 ): AnyAgentTool {
   return {
     name: "wiki_apply",
@@ -237,7 +219,7 @@ export function createWikiApplyTool(
     parameters: WikiApplySchema,
     execute: async (_toolCallId, rawParams) => {
       const mutation = normalizeMemoryWikiMutationInput(rawParams);
-      await syncImportedSourcesIfNeeded(config, appConfig, signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal });
       const result = await applyMemoryWikiMutation({
         config,
         mutation,
@@ -260,18 +242,12 @@ export function createWikiGetTool(
       "Read a wiki page by id or relative path, or fall back to the active memory corpus when shared search is enabled.",
     parameters: WikiGetSchema,
     execute: async (_toolCallId, rawParams) => {
-      const params = asNonArrayRecord(rawParams) as {
-        lookup?: string;
-        fromLine?: number;
-        lineCount?: number;
-        backend?: ResolvedMemoryWikiConfig["search"]["backend"];
-        corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
-      };
+      const params = asNonArrayRecord(rawParams) as Partial<Static<typeof WikiGetSchema>>;
       const lookup = typeof params.lookup === "string" ? params.lookup.trim() : "";
       if (!lookup) {
         return textResult("wiki_get requires a non-empty `lookup` path or id.", { found: false });
       }
-      await syncImportedSourcesIfNeeded(config, appConfig, memoryContext.signal);
+      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
       const result = await getMemoryWikiPage({
         config,
         appConfig,

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -25,32 +26,36 @@ async function readPaletteBackdrop(page: import("playwright").Page) {
 }
 
 suite.define(() => {
-  it("preloads the palette before the shortcut without blocking chat", async () => {
+  it("loads the palette on the shortcut without adding work to chat startup", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const sessionKey = "agent:main:dashboard:palette-preload";
+      const sessionKey = "agent:main:dashboard:palette-on-demand";
       const foregroundDraft = "Keep the foreground draft.";
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
         await composer.fill(foregroundDraft);
-        await expect.poll(paletteModule.requests).toBe(1);
+        expect(paletteModule.requests()).toBe(0);
         expect(await page.locator(".cmd-palette").count()).toBe(0);
 
-        paletteModule.release();
-        await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
-        expect(await page.locator(".cmd-palette").count()).toBe(0);
         await page.keyboard.press("ControlOrMeta+K");
         const input = page.locator(".cmd-palette__input:not([disabled])");
         await input.waitFor({ state: "visible" });
+        await paletteModule.request;
+        await input.fill("appearance");
+        expect(paletteModule.requests()).toBe(1);
+        paletteModule.release();
+        await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
+        await page
+          .locator("openclaw-command-palette .cmd-palette__input")
+          .waitFor({ state: "visible" });
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        await page.keyboard.type("appearance");
         expect(await input.inputValue()).toBe("appearance");
         expect(await composer.inputValue()).toBe(foregroundDraft);
         expect(paletteModule.requests()).toBe(1);
@@ -68,7 +73,7 @@ suite.define(() => {
         await installMockGateway(page, { sessionKey });
         const paletteModule = await holdModuleResponse(
           page,
-          /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
         );
         try {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -166,7 +171,7 @@ suite.define(() => {
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -229,7 +234,7 @@ suite.define(() => {
       await installMockGateway(page, { sessionKey });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -268,15 +273,18 @@ suite.define(() => {
     { height: 844, width: 390 },
   ])("shows the palette shell while its module loads at $width px", async (viewport) => {
     await suite.withPage({ viewport }, async ({ page }) => {
-      await installMockGateway(page);
+      await installMockGateway(page, {
+        // The held chat route module prevents foreground readiness and roster loading.
+        awaitInitialRoster: false,
+      });
       const paletteModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       // Keep an unrelated route loader present so palette assertions cannot depend on it.
       const chatModule = await holdModuleResponse(
         page,
-        /\/assets\/route-entry-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
       );
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:dashboard:cold-shell"));
       try {

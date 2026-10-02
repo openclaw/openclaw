@@ -1,4 +1,3 @@
-// Policy plugin sandbox posture evidence.
 import { splitSandboxBindSpec } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   asNonArrayRecord,
@@ -99,9 +98,7 @@ function pushSandboxDockerPosture(
   params: SandboxPostureParams,
 ): void {
   const localDocker = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.docker) : {};
-  const inheritedDocker = isRecord(params.inheritedSandbox.docker)
-    ? params.inheritedSandbox.docker
-    : {};
+  const inheritedDocker = asNonArrayRecord(params.inheritedSandbox.docker);
   const localNetwork = readString(localDocker.network);
   const inheritedNetwork = readString(inheritedDocker.network);
   pushSandboxPostureValue(entries, params, {
@@ -189,9 +186,7 @@ function pushSandboxBrowserPosture(
   params: SandboxPostureParams,
 ): void {
   const localBrowser = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.browser) : {};
-  const inheritedBrowser = isRecord(params.inheritedSandbox.browser)
-    ? params.inheritedSandbox.browser
-    : {};
+  const inheritedBrowser = asNonArrayRecord(params.inheritedSandbox.browser);
   const localEnabled = readBoolean(localBrowser.enabled);
   const inheritedEnabled = readBoolean(inheritedBrowser.enabled);
   const enabled = localEnabled ?? inheritedEnabled ?? false;
@@ -247,9 +242,7 @@ function pushSandboxBrowserPosture(
     });
   } else if (params.effectiveBackend !== "docker" && params.effectiveBackend !== "podman") {
     const localDocker = !params.sharedSandboxScope ? asNonArrayRecord(params.sandbox.docker) : {};
-    const inheritedDocker = isRecord(params.inheritedSandbox.docker)
-      ? params.inheritedSandbox.docker
-      : {};
+    const inheritedDocker = asNonArrayRecord(params.inheritedSandbox.docker);
     pushSandboxBindPosture(entries, params, {
       inheritedBinds: readStringArray(inheritedDocker.binds),
       localBinds: readStringArray(localDocker.binds),
@@ -265,13 +258,7 @@ function sandboxScopeIsShared(
 ): boolean {
   const localScope = readString(sandbox.scope);
   const inheritedScope = readString(inheritedSandbox.scope);
-  const configuredScope = localScope ?? inheritedScope;
-  if (configuredScope !== undefined) {
-    return configuredScope === "shared";
-  }
-  const localPerSession = readBoolean(sandbox.perSession);
-  const inheritedPerSession = readBoolean(inheritedSandbox.perSession);
-  return (localPerSession ?? inheritedPerSession) === false;
+  return (localScope ?? inheritedScope) === "shared";
 }
 
 function pushSandboxPostureValue(

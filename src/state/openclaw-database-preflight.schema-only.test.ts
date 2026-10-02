@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -26,13 +25,9 @@ afterEach(() => {
 });
 
 describe("schema-only agent preflight", () => {
-  it.each(
-    ["DELETE", "WAL"].flatMap((mode) =>
-      [false, true].map((verifyCurrentSchemaShape) => ({ mode, verifyCurrentSchemaShape })),
-    ),
-  )(
-    "checks fresh $mode metadata without space for an agent snapshot (shape=$verifyCurrentSchemaShape)",
-    async ({ mode, verifyCurrentSchemaShape }) => {
+  it.each(["DELETE", "WAL"])(
+    "checks fresh %s metadata without space for an agent snapshot",
+    async (mode) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-only-preflight-") };
       const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
       closeOpenClawAgentDatabasesForTest();
@@ -60,7 +55,7 @@ describe("schema-only agent preflight", () => {
           operation,
           configuredAgentDatabaseTargets: [{ agentId: "worker", path: agentPath }],
         });
-      const inspect = () =>
+      const inspect = (verifyCurrentSchemaShape: boolean) =>
         preflightOpenClawDatabaseSchemas({
           env,
           verifyCurrentSchemaShape,
@@ -74,7 +69,15 @@ describe("schema-only agent preflight", () => {
         await expect(ready("doctor")).resolves.toBeUndefined();
         await expect(ready("gateway-restart")).resolves.toBeUndefined();
         await expect(ready("gateway-startup")).resolves.toBeUndefined();
-        expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            await inspect(verifyCurrentSchemaShape),
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toEqual({
+            incompatible: [],
+            indeterminate: [],
+          });
+        }
         writer.exec("BEGIN IMMEDIATE; PRAGMA user_version=999;");
         try {
           await expect(ready("doctor")).resolves.toBeUndefined();
@@ -84,24 +87,37 @@ describe("schema-only agent preflight", () => {
           writer.exec("ROLLBACK;");
         }
         writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
-        expect(await inspect()).toMatchObject({
-          incompatible: [
-            {
-              kind: "agent",
-              path: agentPath,
-              foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
-              writerAppVersion: "inspection-fixture",
-            },
-          ],
-          indeterminate: [],
-        });
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            await inspect(verifyCurrentSchemaShape),
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toMatchObject({
+            incompatible: [
+              {
+                kind: "agent",
+                path: agentPath,
+                foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+                writerAppVersion: "inspection-fixture",
+              },
+            ],
+            indeterminate: [],
+          });
+        }
         writer.exec(`PRAGMA user_version=${OPENCLAW_AGENT_SCHEMA_VERSION};`);
         writer
           .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
           .run("foreign");
-        expect((await inspect()).agentRefusals).toEqual([
-          expect.objectContaining({ agentId: "worker", code: "agent-database-ownership-mismatch" }),
-        ]);
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            (await inspect(verifyCurrentSchemaShape)).agentRefusals,
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toEqual([
+            expect.objectContaining({
+              agentId: "worker",
+              code: "agent-database-ownership-mismatch",
+            }),
+          ]);
+        }
         await expect(ready("doctor")).rejects.toThrow("belongs to agent foreign");
         await expect(ready("gateway-restart")).rejects.toThrow("belongs to agent foreign");
         await expect(ready("gateway-startup")).rejects.toThrow("belongs to agent foreign");
@@ -109,25 +125,28 @@ describe("schema-only agent preflight", () => {
           .prepare("UPDATE schema_meta SET agent_id = ? WHERE meta_key = 'primary'")
           .run("worker");
         writer.exec("DROP INDEX idx_agent_cache_expiry;");
-        expect(await inspect()).toMatchObject({
-          incompatible: [],
-          indeterminate: verifyCurrentSchemaShape
-            ? [
-                {
-                  kind: "agent",
-                  path: agentPath,
-                  reason: expect.stringContaining("idx_agent_cache_expiry"),
-                },
-              ]
-            : [],
-        });
-        if (!verifyCurrentSchemaShape) {
-          writer.exec("ALTER TABLE schema_meta RENAME COLUMN agent_id TO retired_agent_id;");
-          expect(await inspect()).toMatchObject({
+        for (const verifyCurrentSchemaShape of [false, true]) {
+          expect(
+            await inspect(verifyCurrentSchemaShape),
+            `shape=${verifyCurrentSchemaShape}`,
+          ).toMatchObject({
             incompatible: [],
-            indeterminate: [expect.objectContaining({ kind: "agent", path: agentPath })],
+            indeterminate: verifyCurrentSchemaShape
+              ? [
+                  {
+                    kind: "agent",
+                    path: agentPath,
+                    reason: expect.stringContaining("idx_agent_cache_expiry"),
+                  },
+                ]
+              : [],
           });
         }
+        writer.exec("ALTER TABLE schema_meta RENAME COLUMN agent_id TO retired_agent_id;");
+        expect(await inspect(false), "shape=false").toMatchObject({
+          incompatible: [],
+          indeterminate: [expect.objectContaining({ kind: "agent", path: agentPath })],
+        });
       } finally {
         writer.close();
       }
@@ -140,7 +159,7 @@ it.each(
     (["false", "reject"] as const).map((cleanupFailure) => ({ mode, cleanupFailure })),
   ),
 )(
-  "finishes sibling inspections after mutation-owner cleanup $cleanupFailure ($mode)",
+  "finishes sibling inspections after private snapshot cleanup $cleanupFailure ($mode)",
   async ({ mode, cleanupFailure }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-owned-snapshot-") };
     const agentPath = openOpenClawAgentDatabase({ agentId: "worker", env }).path;
@@ -151,87 +170,78 @@ it.each(
     closeOpenClawStateDatabaseForTest();
     const snapshotPath = path.join(tempDirs.make("schema-owned-copy-"), "snapshot.sqlite");
     fs.copyFileSync(agentPath, snapshotPath);
-    const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: agentPath });
     const cleanup = vi.fn(() => true);
     const controller = new AbortController();
     const onAgentInspection = vi.fn();
     const rejectedCleanup = new Error("snapshot cleanup failed: fixture removal rejected");
-    try {
-      await exclusion.runWithCanonicalMutation(
-        () => exclusion.assertCurrent(),
-        async () => {
-          const inspect = () => {
-            const run = () =>
-              preflightOpenClawDatabaseSchemas({
-                env,
-                verifyCurrentSchemaShape: mode !== "header",
-                requireStartupMigrationReadiness: mode === "startup",
-                signal: controller.signal,
-                onAgentInspection,
-                supportedVersions: {
-                  state: OPENCLAW_STATE_SCHEMA_VERSION,
-                  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-                },
-              });
-            return mode === "startup" ? withAgentDatabaseStartupAdmission(run) : run();
-          };
-          expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
-          if (cleanupFailure === "false") {
-            cleanup.mockReturnValue(false);
-          } else {
-            cleanup.mockImplementation(() => {
-              throw rejectedCleanup;
-            });
+    const prepare = snapshots.prepareSqliteReadOnlyLocation;
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
+      async (pathname, options) => {
+        if (path.resolve(pathname) !== agentPath) {
+          return prepare(pathname, options);
+        }
+        return { location: snapshotPath, cleanup, cleanupAsync: async () => cleanup() };
+      },
+    );
+    const inspect = () => {
+      const run = () =>
+        preflightOpenClawDatabaseSchemas({
+          env,
+          verifyCurrentSchemaShape: mode !== "header",
+          requireStartupMigrationReadiness: mode === "startup",
+          signal: controller.signal,
+          onAgentInspection,
+          supportedVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+        });
+      return mode === "startup" ? withAgentDatabaseStartupAdmission(run) : run();
+    };
+    expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+    if (cleanupFailure === "false") {
+      cleanup.mockReturnValue(false);
+    } else {
+      cleanup.mockImplementation(() => {
+        throw rejectedCleanup;
+      });
+    }
+    onAgentInspection.mockClear();
+    expect(await inspect()).toEqual({
+      incompatible: [],
+      indeterminate:
+        mode === "startup"
+          ? []
+          : [
+              {
+                kind: "agent",
+                path: agentPath,
+                reason: expect.stringContaining("snapshot cleanup failed"),
+              },
+            ],
+      ...(mode === "startup"
+        ? {
+            agentRefusals: [
+              expect.objectContaining({
+                agentId: "worker",
+                paths: [agentPath],
+                code: "agent-database-inspection-failed",
+                reason: expect.stringContaining("snapshot cleanup failed"),
+              }),
+            ],
           }
-          onAgentInspection.mockClear();
-          expect(await inspect()).toEqual({
-            incompatible: [],
-            indeterminate:
-              mode === "startup"
-                ? []
-                : [
-                    {
-                      kind: "agent",
-                      path: agentPath,
-                      reason: expect.stringContaining("snapshot cleanup failed"),
-                    },
-                  ],
-            ...(mode === "startup"
-              ? {
-                  agentRefusals: [
-                    expect.objectContaining({
-                      agentId: "worker",
-                      paths: [agentPath],
-                      code: "agent-database-inspection-failed",
-                      reason: expect.stringContaining("snapshot cleanup failed"),
-                    }),
-                  ],
-                }
-              : {}),
-          });
-          expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ schemaInspectionCount: 3 }),
-          );
-          if (cleanupFailure === "reject") {
-            const cancelled = new Error("caller stopped during cleanup");
-            cleanup.mockImplementation(() => {
-              controller.abort(cancelled);
-              throw rejectedCleanup;
-            });
-            await expect(inspect()).rejects.toBe(cancelled);
-          }
-        },
-        async (assertCurrent) => {
-          assertCurrent();
-          return {
-            location: snapshotPath,
-            cleanup,
-            cleanupAsync: async () => cleanup(),
-          };
-        },
-      );
-    } finally {
-      exclusion.release();
+        : {}),
+    });
+    expect(onAgentInspection).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ schemaInspectionCount: 3 }),
+    );
+    if (cleanupFailure === "reject") {
+      const cancelled = new Error("caller stopped during cleanup");
+      cleanup.mockImplementation(() => {
+        controller.abort(cancelled);
+        throw rejectedCleanup;
+      });
+      await expect(inspect()).rejects.toBe(cancelled);
     }
     expect(cleanup).toHaveBeenCalledTimes(cleanupFailure === "reject" ? 3 : 2);
   },

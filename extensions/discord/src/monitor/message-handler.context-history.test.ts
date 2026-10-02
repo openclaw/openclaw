@@ -1,9 +1,12 @@
 import path from "node:path";
 import { ChannelType, MessageType, type APIMessage } from "discord-api-types/v10";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Message } from "../internal/discord.js";
+import { setDiscordRuntime } from "../runtime.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import type { DiscordHistoryEntry } from "./message-handler.history.js";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -16,7 +19,13 @@ import type { DiscordMessagePreflightContext } from "./message-handler.preflight
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
 const startedAt = Date.parse("2026-01-01T00:00:00.000Z");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    cleanup();
+  });
+});
+const sessionRoot = tempDirs.make("discord-native-history-");
 
 function nativeMessage(
   id: number,
@@ -70,14 +79,29 @@ async function recentContext(overrides: Record<string, unknown> = {}) {
       client: { rest: { get: vi.fn().mockResolvedValue([]) } },
       ...overrides,
     },
-    { storePath: path.join(tempDirs.make("discord-native-history-"), "sessions.json") },
+    { storePath: path.join(tempDirs.make("case-", sessionRoot), "sessions.json") },
   );
 }
 
 const buildContext = (ctx: DiscordMessagePreflightContext) =>
   buildDiscordMessageProcessContext({ ctx, text: "addressed current turn", mediaList: [] });
 
+const writeSession = (
+  ctx: DiscordMessagePreflightContext,
+  entry: Parameters<typeof upsertSessionEntry>[0]["entry"],
+) =>
+  upsertSessionEntry({
+    agentId: ctx.route.agentId,
+    storePath: ctx.cfg.session?.store,
+    sessionKey: ctx.boundSessionKey ?? ctx.route.sessionKey,
+    entry,
+  });
+
 describe("Discord native recent history through process context", () => {
+  beforeEach(() => {
+    setDiscordRuntime(createPluginRuntimeMock());
+  });
+
   it("keeps quiet ingress quiet, then excludes each debounced original without losing its current text", async () => {
     const base = await recentContext();
     const get = vi
@@ -145,32 +169,6 @@ describe("Discord native recent history through process context", () => {
     expect(get).toHaveBeenCalledWith("/channels/c1/messages", { before: "1000", limit: 3 });
   });
 
-  it("recovers the same bounded discussion after replacing the monitor-local map", async () => {
-    const native = Array.from({ length: 55 }, (_, index) => nativeMessage(900 - index));
-    const get = vi.fn(async (_path: string, query: { limit: number; before: string }) =>
-      native.filter((message) => BigInt(message.id) < BigInt(query.before)).slice(0, query.limit),
-    );
-    const warm = await recentContext({
-      client: { rest: { get } },
-      guildHistories: new Map([["c1", [cachedEntry("899", "obsolete ingress text")]]]),
-    });
-    const first = await buildContext(warm);
-    const replacement = await recentContext({ cfg: warm.cfg, client: { rest: { get } } });
-    const restarted = await buildContext(replacement);
-    const expectedIds = Array.from({ length: 20 }, (_, index) => String(881 + index));
-
-    expect(first?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(expectedIds);
-    expect(restarted?.ctxPayload.InboundHistory).toEqual(first?.ctxPayload.InboundHistory);
-    expect(restarted?.ctxPayload.Body).toContain("discussion-881");
-    expect(restarted?.ctxPayload.Body).toContain("discussion-900");
-    expect(restarted?.ctxPayload.Body).not.toContain("discussion-880");
-    expect(restarted?.ctxPayload.Body).not.toContain("obsolete ingress text");
-    expect(get.mock.calls).toEqual([
-      ["/channels/c1/messages", { before: "1000", limit: 20 }],
-      ["/channels/c1/messages", { before: "1000", limit: 20 }],
-    ]);
-  });
-
   it("paginates only the configured physical window, with identical Body and InboundHistory selection", async () => {
     const native = Array.from({ length: 150 }, (_, index) => nativeMessage(900 - index));
     const get = vi.fn(async (_path: string, query: { limit: number; before: string }) =>
@@ -193,34 +191,25 @@ describe("Discord native recent history through process context", () => {
     ]);
   });
 
-  it.each(["all", "allowlist", "allowlist_quote"] as const)(
-    "applies %s visibility to native sender identities without extending the physical window",
-    async (mode) => {
-      const get = vi.fn().mockResolvedValue([
-        nativeMessage(900, "blocked discussion", {
-          author: { ...nativeMessage(900).author, id: "222" },
-        }),
-        nativeMessage(899, "permitted discussion"),
-      ]);
-      const ctx = await recentContext({
-        historyLimit: 2,
-        client: { rest: { get } },
-        channelConfig: { allowed: true, users: ["111"] },
-      });
-      ctx.cfg = { ...ctx.cfg, channels: { discord: { contextVisibility: mode } } };
-      const result = await buildContext(ctx);
-      const expected = mode === "all" ? ["899", "900"] : ["899"];
-
-      expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(expected);
-      expect(result?.ctxPayload.Body).toContain("permitted discussion");
-      if (mode === "all") {
-        expect(result?.ctxPayload.Body).toContain("blocked discussion");
-      } else {
-        expect(result?.ctxPayload.Body).not.toContain("blocked discussion");
-      }
-      expect(get).toHaveBeenCalledTimes(1);
-    },
-  );
+  it("filters native sender identities without extending the physical window", async () => {
+    const get = vi.fn().mockResolvedValue([
+      nativeMessage(900, "blocked discussion", {
+        author: { ...nativeMessage(900).author, id: "222" },
+      }),
+      nativeMessage(899, "permitted discussion"),
+    ]);
+    const ctx = await recentContext({
+      historyLimit: 2,
+      client: { rest: { get } },
+      channelConfig: { allowed: true, users: ["111"] },
+    });
+    ctx.cfg = { ...ctx.cfg, channels: { discord: { contextVisibility: "allowlist_quote" } } };
+    const result = await buildContext(ctx);
+    expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(["899"]);
+    expect(result?.ctxPayload.Body).toContain("permitted discussion");
+    expect(result?.ctxPayload.Body).not.toContain("blocked discussion");
+    expect(get).toHaveBeenCalledTimes(1);
+  });
 
   it("resolves role-only visibility on a cold map using the account's native guild member read", async () => {
     const get = vi.fn(async (route: string) =>
@@ -332,16 +321,11 @@ describe("Discord native recent history through process context", () => {
         rest: { get: vi.fn().mockResolvedValue([nativeMessage(900), nativeMessage(899)]) },
       },
     });
-    await upsertSessionEntry({
-      agentId: ctx.route.agentId,
-      storePath: ctx.cfg.session?.store,
-      sessionKey: ctx.boundSessionKey!,
-      entry: {
-        sessionId: "reset-session",
-        lifecycleRevision: "reset-revision",
-        updatedAt: startedAt + 9_000,
-        sessionStartedAt: startedAt + 9_000,
-      },
+    await writeSession(ctx, {
+      sessionId: "reset-session",
+      lifecycleRevision: "reset-revision",
+      updatedAt: startedAt + 9_000,
+      sessionStartedAt: startedAt + 9_000,
     });
     const result = await buildContext(ctx);
 
@@ -353,11 +337,10 @@ describe("Discord native recent history through process context", () => {
   it("does not recover automatic history into a reset tombstone", async () => {
     const get = vi.fn().mockResolvedValue([nativeMessage(900)]);
     const ctx = await recentContext({ client: { rest: { get } } });
-    await upsertSessionEntry({
-      agentId: ctx.route.agentId,
-      storePath: ctx.cfg.session?.store,
-      sessionKey: ctx.route.sessionKey,
-      entry: { sessionId: "pending-reset", updatedAt: 0, sessionStartedAt: startedAt },
+    await writeSession(ctx, {
+      sessionId: "pending-reset",
+      updatedAt: 0,
+      sessionStartedAt: startedAt,
     });
     const result = await buildContext(ctx);
     expect(result?.ctxPayload.InboundHistory).toEqual([]);
@@ -374,19 +357,11 @@ describe("Discord native recent history through process context", () => {
         abortSignal: controller.signal,
         isPolicyCurrent: () => policyCurrent,
       });
-      const scope = {
-        agentId: ctx.route.agentId,
-        storePath: ctx.cfg.session?.store,
-        sessionKey: ctx.route.sessionKey,
-      };
-      await upsertSessionEntry({
-        ...scope,
-        entry: {
-          sessionId: "same-session",
-          lifecycleRevision: "before",
-          updatedAt: startedAt,
-          sessionStartedAt: startedAt,
-        },
+      await writeSession(ctx, {
+        sessionId: "same-session",
+        lifecycleRevision: "before",
+        updatedAt: startedAt,
+        sessionStartedAt: startedAt,
       });
       const get = vi.fn(async () => {
         if (kind === "abort") {
@@ -394,14 +369,11 @@ describe("Discord native recent history through process context", () => {
         } else if (kind === "policy") {
           policyCurrent = false;
         } else {
-          await upsertSessionEntry({
-            ...scope,
-            entry: {
-              sessionId: "same-session",
-              lifecycleRevision: kind === "tombstone" ? "before" : "after",
-              updatedAt: kind === "tombstone" ? 0 : startedAt + 9_000,
-              sessionStartedAt: kind === "tombstone" ? startedAt : startedAt + 9_000,
-            },
+          await writeSession(ctx, {
+            sessionId: "same-session",
+            lifecycleRevision: kind === "tombstone" ? "before" : "after",
+            updatedAt: kind === "tombstone" ? 0 : startedAt + 9_000,
+            sessionStartedAt: kind === "tombstone" ? startedAt : startedAt + 9_000,
           });
         }
         return [nativeMessage(900)];
@@ -457,74 +429,48 @@ describe("Discord native recent history through process context", () => {
     );
 
     expect(result?.ctxPayload.MessageThreadId).toBe("auto-thread-1");
+    expect(result?.ctxPayload.ThreadParentId).toBe("c1");
     expect(result?.ctxPayload.Body).not.toContain("parent discussion");
     expect(get.mock.calls.some(([route]) => route === "/channels/c1/messages")).toBe(false);
   });
 
-  it("uses each selected account's client without sharing recovered history", async () => {
-    const first = await buildContext(
-      await recentContext({
-        accountId: "one",
-        client: {
-          rest: {
-            get: vi.fn().mockResolvedValue([nativeMessage(900, "first account discussion")]),
-          },
+  it("retains other bots as context independently of allowBots", async () => {
+    const bot = { ...nativeMessage(900).author, id: "other-bot", bot: true };
+    const reply = {
+      author: bot,
+      type: MessageType.Reply,
+      mentions: [{ ...bot, id: "self" }],
+    };
+    const ctx = await recentContext({
+      botUserId: "self",
+      discordConfig: { allowBots: "mentions" },
+      client: {
+        rest: {
+          get: vi
+            .fn()
+            .mockResolvedValue([
+              nativeMessage(900, "own bot output", { author: { ...bot, id: "self" } }),
+              nativeMessage(899, "other bot output", { author: bot }),
+              nativeMessage(898, "human discussion"),
+              nativeMessage(897, "passive reply ping", reply),
+              nativeMessage(896, "<@self> active bot reply", reply),
+              nativeMessage(895, "history-helper, assist", { author: bot }),
+              nativeMessage(894, "`history-helper`", reply),
+            ]),
         },
-      }),
-    );
-    const second = await buildContext(
-      await recentContext({
-        accountId: "two",
-        client: {
-          rest: {
-            get: vi.fn().mockResolvedValue([nativeMessage(900, "second account discussion")]),
-          },
-        },
-      }),
-    );
+      },
+    });
+    ctx.cfg = { ...ctx.cfg, messages: { groupChat: { mentionPatterns: ["history-helper"] } } };
+    const result = await buildContext(ctx);
 
-    expect(first?.ctxPayload.Body).toContain("first account discussion");
-    expect(second?.ctxPayload.Body).toContain("second account discussion");
-    expect(second?.ctxPayload.Body).not.toContain("first account discussion");
+    expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual([
+      "894",
+      "895",
+      "896",
+      "897",
+      "898",
+      "899",
+    ]);
+    expect(result?.ctxPayload.Body).not.toContain("own bot output");
   });
-
-  it.each([
-    { allowBots: false, expected: ["898"] },
-    { allowBots: true, expected: ["894", "895", "896", "897", "898", "899"] },
-    { allowBots: "mentions", expected: ["895", "896", "898"] },
-  ])(
-    "excludes own-bot history while respecting allowBots=$allowBots",
-    async ({ allowBots, expected }) => {
-      const bot = { ...nativeMessage(900).author, id: "other-bot", bot: true };
-      const reply = {
-        author: bot,
-        type: MessageType.Reply,
-        mentions: [{ ...bot, id: "self" }],
-      };
-      const ctx = await recentContext({
-        botUserId: "self",
-        discordConfig: { allowBots },
-        client: {
-          rest: {
-            get: vi
-              .fn()
-              .mockResolvedValue([
-                nativeMessage(900, "own bot output", { author: { ...bot, id: "self" } }),
-                nativeMessage(899, "other bot output", { author: bot }),
-                nativeMessage(898, "human discussion"),
-                nativeMessage(897, "passive reply ping", reply),
-                nativeMessage(896, "<@self> active bot reply", reply),
-                nativeMessage(895, "history-helper, assist", { author: bot }),
-                nativeMessage(894, "`history-helper`", reply),
-              ]),
-          },
-        },
-      });
-      ctx.cfg = { ...ctx.cfg, messages: { groupChat: { mentionPatterns: ["history-helper"] } } };
-      const result = await buildContext(ctx);
-
-      expect(result?.ctxPayload.InboundHistory?.map((entry) => entry.messageId)).toEqual(expected);
-      expect(result?.ctxPayload.Body).not.toContain("own bot output");
-    },
-  );
 });

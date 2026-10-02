@@ -26,10 +26,16 @@ Persist changes with `api.runtime.config.mutateConfigFile(...)` or `api.runtime.
 
 The mutation helpers return `afterWrite` plus a typed `followUp` summary so callers can log or test whether they requested a restart. The gateway still owns when that restart actually happens.
 
+Owner-authorized commands pass their captured `ctx.assertOwnerCurrent` as
+`writeOptions.assertCurrent`. The config writer rechecks it after asynchronous
+preparation and before publication, then completes settlement of an accepted
+write. Do not replace it with an earlier `senderIsOwner` boolean or check it only
+after the mutation returns.
+
 Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 
-For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
+For direct SDK imports, use `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. The broad `openclaw/plugin-sdk/config-runtime` compatibility barrel has been removed. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly.
 
 When using the direct `config-mutation` import to replace a source snapshot, pass
 the edited config as `sourceConfig` to `replaceConfigFile`, retaining its `snapshot`,
@@ -66,6 +72,15 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+For libraries that accept a Node HTTP agent, use `createNodeProxyAgent` from
+`openclaw/plugin-sdk/fetch-runtime`. With `mode: "env"`, supply `targetUrl` for
+a fixed destination, or omit it when the library selects destinations itself
+(for example, media upload hosts). The reusable form snapshots the proxy
+environment and evaluates `NO_PROXY` for every request, including redirects.
+Managed proxy CA trust applies only to the matching proxy connection. Call
+`agent?.destroy()` when the owning connection closes. Undici dispatchers from
+the same SDK entrypoint belong in fetch's `dispatcher` option, not Node's `agent`.
+
 Import `execPolicy` from `openclaw/plugin-sdk/agent-harness-runtime` for the
 host's exec mode algebra. `execPolicy.resolveExecModePolicy({ mode, security, ask })`
 returns the mode, security, ask, and auto-review settings. An explicit mode
@@ -89,8 +104,19 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+For a subprocess that requires Node.js, use `resolveNodeRuntimeExecutable` from
+the same subpath. It reuses the current Node executable and resolves a real Node
+binary when the host runs under Bun, skipping Bun's `node` shim. An unavailable
+Node runtime returns `undefined`; the caller reports the missing requirement.
+
 Interactive process adapters can use `spawnTerminalPty` from the same subpath.
-It owns platform-specific terminal creation, including the Node helper on Bun.
+It owns platform-specific terminal creation. On macOS and Linux, Bun uses its
+native PTY without Node only on builds providing `Bun.Terminal.pause()` and
+`resume()`, such as the OpenClaw Bun fork builds that also carry the macOS
+child-exit fix. Other Bun releases use the Node helper and require an installed
+Node runtime; OpenClaw skips Bun's `node` shim when selecting it. Node and
+Windows keep `node-pty`. See
+[Bun compatibility](/install/bun-compatibility#known-limitations).
 Pass the caller's construction signal and current-authority check through its
 second argument. The caller owns output subscriptions, termination, and waiting
 for the terminal's exit before releasing its backend resources.
@@ -284,3 +310,12 @@ function diagnosticsEnabled() {
 Recheck the gates when emitting a delayed summary. Keep fields bounded and
 content-free, and preserve the operation's result if the diagnostic sink fails.
 This predicate does not enable or authorize [audit identity collection](/gateway/audit).
+
+`onInternalDiagnosticEvent(listener, interest?)` filters events before copying
+their payload for the listener. `include` and `exclude` apply to every event;
+the optional `includeTrusted` list further restricts only events marked trusted
+by the dispatcher. Omitting it preserves existing behavior, and an empty list
+accepts only untrusted events that pass `include`/`exclude`. Event payload fields
+cannot override the dispatcher's trust metadata. Accepted events retain their
+individual frozen copies; this filter does not change diagnostic collection or
+queue behavior.

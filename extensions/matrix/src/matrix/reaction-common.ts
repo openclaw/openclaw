@@ -96,16 +96,12 @@ export function extractMatrixReactionAnnotation(
   };
 }
 
-function extractMatrixReactionKey(content: unknown): string | undefined {
-  return extractMatrixReactionAnnotation(content)?.key;
-}
-
 export function summarizeMatrixReactionEvents(
   events: Iterable<Pick<MatrixReactionEventLike, "content" | "sender">>,
 ): MatrixReactionSummary[] {
   const summaries = new Map<string, MatrixReactionSummary>();
   for (const event of events) {
-    const key = extractMatrixReactionKey(event.content);
+    const key = extractMatrixReactionAnnotation(event.content)?.key;
     if (!key) {
       continue;
     }
@@ -135,7 +131,7 @@ export function selectOwnMatrixReactionEventIds(
     if ((normalizeOptionalString(event.sender) ?? "") !== senderId) {
       continue;
     }
-    if (targetEmoji && extractMatrixReactionKey(event.content) !== targetEmoji) {
+    if (targetEmoji && extractMatrixReactionAnnotation(event.content)?.key !== targetEmoji) {
       continue;
     }
     const eventId = normalizeOptionalString(event.event_id);

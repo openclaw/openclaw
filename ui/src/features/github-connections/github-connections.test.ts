@@ -31,7 +31,6 @@ const disconnected = {
   pending: null,
 } as const;
 function mount(scopes: string[], profileId: string | null, request: ReturnType<typeof vi.fn>) {
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const snapshot = {
     client: { request } as unknown as GatewayBrowserClient,
     phase: "connected",
@@ -64,10 +63,7 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
     navigate: vi.fn(),
     gateway: {
       snapshot,
-      subscribe: (listener: (snapshot: ApplicationGatewaySnapshot) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: () => () => undefined,
     },
     agents,
     settingsAgentSelection,
@@ -85,12 +81,6 @@ function mount(scopes: string[], profileId: string | null, request: ReturnType<t
   return {
     element,
     context,
-    update: (patch: Partial<ApplicationGatewaySnapshot>) => {
-      Object.assign(snapshot, patch);
-      for (const listener of listeners) {
-        listener({ ...snapshot });
-      }
-    },
   };
 }
 afterEach(() => {
@@ -263,7 +253,7 @@ it.each([
   ["managed-pat", "configured_unavailable", "Configured, but unavailable"],
   ["managed-oauth", "available", "Verified"],
 ] as const)(
-  "shows %s %s without confusing native and managed lookup",
+  "shows %s %s without extra native-account explanation",
   async (credentialKind, credentialState, label) => {
     const request = vi.fn(async () => ({
       personal: disconnected,
@@ -278,12 +268,7 @@ it.each([
     const { element } = mount(["operator.read"], "profile-a", request);
     const row = () => element.querySelector('[data-github-connection="system"]');
     await waitForFast(() => expect(row()?.textContent).toContain(label));
-    if (credentialKind === "native") {
-      expect(row()?.textContent).toContain("OS account running the Gateway");
-      expect(row()?.textContent).toContain("Other OS users' logins are separate.");
-    } else {
-      expect(row()?.textContent).not.toContain("OS account running the Gateway");
-    }
+    expect(row()?.textContent).not.toContain("OS account running the Gateway");
     if (credentialState !== "unavailable") {
       expect(row()?.textContent).not.toContain("No credentials");
     }

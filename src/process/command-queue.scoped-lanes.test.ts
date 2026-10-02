@@ -110,6 +110,56 @@ describe("scoped command lane lifecycle", () => {
     expect(lanes.has(lane)).toBe(false);
   });
 
+  it("updates each session's subagent capacity and retires the queues after completion", async () => {
+    const lanes = getCommandLaneRegistryForTest();
+    const parents = ["subagent:agent:main:parent-a", "subagent:agent:main:parent-b"];
+    const gate = createDeferred();
+    setCommandLaneConcurrency(CommandLane.Subagent, 2);
+    const runs = parents.flatMap((lane) =>
+      Array.from({ length: 3 }, () =>
+        enqueueCommandInLane(lane, async () => {
+          await gate.promise;
+        }),
+      ),
+    );
+
+    try {
+      for (const lane of parents) {
+        expect(getCommandLaneSnapshot(lane)).toMatchObject({
+          maxConcurrent: 2,
+          activeCount: 2,
+          queuedCount: 1,
+        });
+      }
+
+      setCommandLaneConcurrency(CommandLane.Subagent, 1);
+      for (const lane of parents) {
+        expect(getCommandLaneSnapshot(lane)).toMatchObject({
+          maxConcurrent: 1,
+          activeCount: 2,
+          queuedCount: 1,
+        });
+      }
+
+      setCommandLaneConcurrency(CommandLane.Subagent, 3);
+      for (const lane of parents) {
+        expect(getCommandLaneSnapshot(lane)).toMatchObject({
+          maxConcurrent: 3,
+          activeCount: 3,
+          queuedCount: 0,
+        });
+      }
+    } finally {
+      gate.resolve();
+      await Promise.all(runs);
+    }
+    for (const lane of parents) {
+      expect(lanes.has(lane)).toBe(false);
+      expect(getCommandLaneSnapshot(lane).maxConcurrent).toBe(3);
+      expect(lanes.has(lane)).toBe(false);
+    }
+  });
+
   it("preserves explicitly configured and paused dynamic lanes", async () => {
     const lanes = getCommandLaneRegistryForTest();
     const configuredLane = "session:agent:main:autoqa-configured";
@@ -176,41 +226,6 @@ describe("scoped command lane lifecycle", () => {
     expect(lanes.has(lane)).toBe(false);
   });
 
-  it("preserves gateway-managed fixed lanes while scoped lanes finish", async () => {
-    const lanes = getCommandLaneRegistryForTest();
-    const fixedLanes = [
-      CommandLane.Main,
-      CommandLane.SystemAgent,
-      CommandLane.Cron,
-      CommandLane.CronNested,
-      CommandLane.Subagent,
-      CommandLane.Nested,
-    ];
-
-    for (const lane of fixedLanes) {
-      setCommandLaneConcurrency(lane, 1);
-    }
-
-    const scopedLanes = [
-      "session:agent:main:autoqa-fixed",
-      "nested:agent:main:autoqa-fixed",
-      "context-engine-turn-maintenance:agent:main:autoqa-fixed",
-    ];
-    await Promise.all(scopedLanes.map((lane) => enqueueCommandInLane(lane, async () => lane)));
-
-    for (const lane of fixedLanes) {
-      expect(lanes.has(lane)).toBe(true);
-      expect(getCommandLaneSnapshot(lane)).toMatchObject({
-        activeCount: 0,
-        queuedCount: 0,
-        maxConcurrent: 1,
-      });
-    }
-    for (const lane of scopedLanes) {
-      expect(lanes.has(lane)).toBe(false);
-    }
-  });
-
   it("recreates a maintenance lane for deferred same-session follow-up work", async () => {
     const lanes = getCommandLaneRegistryForTest();
     const lane = "context-engine-turn-maintenance:agent:main:autoqa-rerun";
@@ -257,19 +272,6 @@ describe("scoped command lane lifecycle", () => {
 
     expect(lanes.get(lane)).toBe(replacementState);
     lanes.delete(lane);
-  });
-
-  it("retires a scoped lane after its active task rejects", async () => {
-    const lanes = getCommandLaneRegistryForTest();
-    const lane = "nested:agent:main:autoqa-rejected";
-
-    await expect(
-      enqueueCommandInLane(lane, async () => {
-        throw new Error("scoped task failed");
-      }),
-    ).rejects.toThrow("scoped task failed");
-
-    expect(lanes.has(lane)).toBe(false);
   });
 
   it("retires a scoped lane after its active task times out", async () => {

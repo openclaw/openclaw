@@ -1,8 +1,3 @@
-/**
- * Bundled channel plugin loader.
- *
- * Loads generated bundled channel entries, setup metadata, secrets, and legacy migration hooks.
- */
 import path from "node:path";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";

@@ -21,15 +21,23 @@ const getLatestSubagentRunMock = vi.fn((sessionKey: string) => graph[sessionKey]
 const loadSessionEntryMock = vi.fn(
   (scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored,
 );
-const buildLatestSubagentRunReadIndexMock = vi.fn(() => ({
+const buildLatestSubagentSessionListReadIndexMock = vi.fn(() => ({
   getLatestSubagentRun: getLatestSubagentRunMock,
 }));
+const prepareRegistryMock = vi.fn(async () => true);
+const registrySnapshot = {};
+const registrySnapshotMock = vi.fn<() => object | undefined>(() => registrySnapshot);
 
 vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => getRuntimeConfigMock(),
 }));
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", () => ({
-  buildLatestSubagentRunReadIndex: () => buildLatestSubagentRunReadIndexMock(),
+  buildLatestSubagentSessionListReadIndex: () => buildLatestSubagentSessionListReadIndexMock(),
+  getLatestLiveSubagentRunByChildSessionKey: (key: string) => getLatestSubagentRunMock(key),
+}));
+vi.mock("../agents/subagents/registry/subagent-registry-state.js", () => ({
+  prepareOptionalSubagentSessionListReadCache: () => prepareRegistryMock(),
+  getSubagentSessionListReadSnapshotIdentity: () => registrySnapshotMock(),
 }));
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntry: (scope: { sessionKey: string }) => loadSessionEntryMock(scope),
@@ -45,19 +53,21 @@ beforeEach(() => {
   loadSessionEntryMock
     .mockReset()
     .mockImplementation((scope: { sessionKey: string }) => graph[scope.sessionKey]?.stored);
-  buildLatestSubagentRunReadIndexMock.mockReset().mockReturnValue({
+  buildLatestSubagentSessionListReadIndexMock.mockReset().mockReturnValue({
     getLatestSubagentRun: getLatestSubagentRunMock,
   });
+  prepareRegistryMock.mockReset().mockResolvedValue(true);
+  registrySnapshotMock.mockReset().mockReturnValue(registrySnapshot);
 });
 
 describe("resolveApprovalSessionAudienceWithFallback", () => {
-  it("keeps the canonical source first when it has no ancestors", () => {
-    expect(resolveApprovalSessionAudienceWithFallback(" Child ", "work")).toEqual([
+  it("keeps the canonical source first when it has no ancestors", async () => {
+    expect(await resolveApprovalSessionAudienceWithFallback(" Child ", "work")).toEqual([
       "agent:work:child",
     ]);
   });
 
-  it("walks registry controller and requester branches breadth-first", () => {
+  it("walks registry controller and requester branches breadth-first", async () => {
     graph = {
       "agent:work:child": {
         registry: {
@@ -70,7 +80,7 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       "agent:work:requester": { stored: { parentSessionKey: "requester-root" } },
     };
 
-    expect(resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
+    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
       "agent:work:child",
       "agent:work:controller",
       "agent:work:requester",
@@ -79,7 +89,7 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
     ]);
   });
 
-  it("falls back to stored lineage when registry lineage is unusable", () => {
+  it("falls back to stored lineage when registry lineage is unusable", async () => {
     graph = {
       "agent:work:child": {
         registry: { controllerSessionKey: " ", requesterSessionKey: null },
@@ -88,14 +98,14 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       "agent:work:dashboard-parent": { stored: { spawnedBy: "root" } },
     };
 
-    expect(resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
+    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
       "agent:work:child",
       "agent:work:dashboard-parent",
       "agent:work:root",
     ]);
   });
 
-  it("scopes relative aliases while preserving explicit cross-agent parents", () => {
+  it("scopes relative aliases while preserving explicit cross-agent parents", async () => {
     graph = {
       "agent:work:child": {
         registry: {
@@ -105,14 +115,14 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       },
     };
 
-    expect(resolveApprovalSessionAudienceWithFallback("agent:work:child", "work")).toEqual([
+    expect(await resolveApprovalSessionAudienceWithFallback("agent:work:child", "work")).toEqual([
       "agent:work:child",
       "agent:work:main",
       "agent:ops:main",
     ]);
   });
 
-  it("guards cycles and includes each session once", () => {
+  it("guards cycles and includes each session once", async () => {
     graph = {
       "agent:work:child": {
         registry: { controllerSessionKey: "parent", requesterSessionKey: "child" },
@@ -120,13 +130,13 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       "agent:work:parent": { stored: { parentSessionKey: "child" } },
     };
 
-    expect(resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
+    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
       "agent:work:child",
       "agent:work:parent",
     ]);
   });
 
-  it("caps a malformed lineage graph at 64 sessions", () => {
+  it("caps a malformed lineage graph at 64 sessions", async () => {
     graph = Object.fromEntries(
       Array.from({ length: 70 }, (_, index) => [
         `agent:work:session-${index}`,
@@ -134,30 +144,72 @@ describe("resolveApprovalSessionAudienceWithFallback", () => {
       ]),
     );
 
-    const audience = resolveApprovalSessionAudienceWithFallback("session-0", "work");
+    const audience = await resolveApprovalSessionAudienceWithFallback("session-0", "work");
 
     expect(audience).toHaveLength(64);
     expect(audience[0]).toBe("agent:work:session-0");
     expect(audience.at(-1)).toBe("agent:work:session-63");
   });
 
-  it("canonicalizes configured main-key aliases when lineage lookup throws", () => {
+  it("canonicalizes configured main-key aliases when lineage lookup throws", async () => {
     getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "boss" } });
-    buildLatestSubagentRunReadIndexMock.mockImplementationOnce(() => {
-      throw new Error("registry unavailable");
+    loadSessionEntryMock.mockImplementationOnce(() => {
+      throw new Error("session lineage unavailable");
     });
 
-    expect(resolveApprovalSessionAudienceWithFallback("main", "work")).toEqual(["agent:work:boss"]);
+    expect(await resolveApprovalSessionAudienceWithFallback("main", "work")).toEqual([
+      "agent:work:boss",
+    ]);
   });
 
-  it("scopes unscoped aliases even when config loading throws", () => {
+  it("scopes unscoped aliases even when config loading throws", async () => {
     getRuntimeConfigMock.mockImplementation(() => {
       throw new Error("config unavailable");
     });
 
-    expect(resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
+    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
       "agent:work:child",
     ]);
+  });
+
+  it("retains live and stored ancestors when the optional registry query is unavailable", async () => {
+    prepareRegistryMock.mockResolvedValue(false);
+    graph = {
+      "agent:work:child": { registry: { requesterSessionKey: "parent" } },
+      "agent:work:parent": { stored: { parentSessionKey: "root" } },
+    };
+
+    expect(await resolveApprovalSessionAudienceWithFallback("child", "work")).toEqual([
+      "agent:work:child",
+      "agent:work:parent",
+      "agent:work:root",
+    ]);
+    expect(buildLatestSubagentSessionListReadIndexMock).not.toHaveBeenCalled();
+  });
+
+  it("rechecks registry readiness and current aliases after preparation settles", async () => {
+    getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "old" } });
+    registrySnapshotMock.mockReturnValueOnce(undefined);
+    prepareRegistryMock
+      .mockImplementationOnce(async () => true)
+      .mockImplementationOnce(async () => {
+        getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "current" } });
+        return true;
+      });
+
+    expect(await resolveApprovalSessionAudienceWithFallback("main", "work")).toEqual([
+      "agent:work:current",
+    ]);
+  });
+
+  it.each([
+    new Error("registry admission retired"),
+    new AggregateError([new Error("query"), new Error("cleanup")], "read cleanup failed"),
+  ])("does not hide preparation failure: %s", async (error) => {
+    prepareRegistryMock.mockRejectedValue(error);
+
+    await expect(resolveApprovalSessionAudienceWithFallback("child", "work")).rejects.toBe(error);
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 });
 

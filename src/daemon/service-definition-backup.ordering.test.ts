@@ -4,6 +4,7 @@ import { PassThrough } from "node:stream";
 import { DOMParser } from "linkedom";
 import { expect, it, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import * as pidAlive from "../shared/pid-alive.js";
 import { installLaunchAgent } from "./launchd-install.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
@@ -214,6 +215,8 @@ it.each(["publication", "activation"])(
     const f = await fixture("darwin");
     let candidate: Buffer | undefined;
     let loaded = false;
+    // Fixture bootout ends PID 42 with its job; never consult the host process table.
+    vi.spyOn(pidAlive, "isPidDefinitelyDead").mockImplementation((pid) => pid === 42 && !loaded);
     native.launchctl.mockImplementation(async (args) => {
       if (args[0] === "bootstrap") {
         loaded = true;
@@ -223,7 +226,12 @@ it.each(["publication", "activation"])(
         loaded = false;
       }
       if (args[0] !== "print" || loaded) {
-        return { code: 0, stdout: "state = running\npid = 42", stderr: "", termination: "exit" };
+        return {
+          code: 0,
+          stdout: `${args[1]} = {\n\tstate = running\n\tpid = 42\n}`,
+          stderr: "",
+          termination: "exit",
+        };
       }
       return { code: 113, stdout: "", stderr: "Could not find service", termination: "exit" };
     });

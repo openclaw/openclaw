@@ -1,5 +1,4 @@
-// Builds compact plugin health summaries for chat status surfaces.
-import type { PluginDiagnosticCode } from "../plugins/manifest-types.js";
+import type { PluginDiagnostic } from "../plugins/manifest-types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 
 type StatusPluginDependencyStatus = {
@@ -17,12 +16,10 @@ export type PluginHealthRecord = {
   failurePhase?: string;
 };
 
-export type PluginDiagnosticRecord = {
-  level: "warn" | "error";
-  message: string;
-  pluginId?: string;
-  code?: PluginDiagnosticCode;
-};
+export type PluginDiagnosticRecord = Pick<
+  PluginDiagnostic,
+  "level" | "message" | "pluginId" | "code"
+>;
 
 type ContextEngineQuarantineRecord = {
   engineId: string;
@@ -60,23 +57,12 @@ export type StatusPluginHealthSnapshot = {
   runtimeToolQuarantines?: RuntimeToolQuarantineRecord[];
   compatibilityNotices?: PluginCompatibilityHealthNotice[];
   channelPluginFailures?: ChannelPluginFailureRecord[];
-  // Plugin ids confirmed loaded in the active runtime registry (status "loaded").
-  // Lets detailed status separate runtime-loaded plugins from installed/discovered
-  // inventory (the disk scan marks config-enabled plugins "loaded" before runtime
-  // load). Absent on hand-built/compact snapshots, where detailed rendering falls
-  // back to the merged status filter.
+  // Runtime-confirmed ids; disk discovery also labels enabled plugins "loaded".
+  // Absent snapshots fall back to the merged status filter.
   runtimeLoadedPluginIds?: string[];
-  // Eager should-run plugin ids from the gateway startup plan (deferred channel
-  // plugins already excluded). Paired with runtimeLoadedPluginIds, it lets detailed
-  // status flag desired-vs-observed drift: a plugin the gateway planned to start that
-  // is not in the runtime-loaded set. Absent on compact/hand-built snapshots, where
-  // no drift line is rendered (back-compat).
+  // Eager startup-plan ids, excluding deferred channels. Drift needs both sets.
   shouldRunPluginIds?: string[];
-  // Configured memory embedding providers (memorySearch provider/fallback) that no
-  // loaded plugin registers, so semantic memory recall silently falls back to
-  // keyword/FTS-only. Detailed-status only; absent on compact/hand-built snapshots and
-  // whenever the live runtime registry is unavailable, so no line renders (back-compat).
-  // `source` mirrors MemoryEmbeddingStartupProviderSource ("provider" | "fallback").
+  // Configured embedding providers absent from a live registry imply FTS-only recall.
   unregisteredMemoryEmbeddingProviders?: Array<{
     configuredId: string;
     source: "provider" | "fallback";
@@ -251,18 +237,11 @@ function byLocale(left: string, right: string): number {
 
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
   const statusLoaded = snapshot.plugins.filter((plugin) => plugin.status === "loaded");
-  // "Loaded" must mean runtime-confirmed loaded. When the snapshot carries runtime
-  // provenance, render that authoritative root-registry id set directly;
-  // installed-but-not-active is then the status-loaded records the runtime did
-  // not load. Fall back to the raw status when provenance is absent.
+  // Runtime provenance overrides disk discovery's optimistic "loaded" status.
   const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
   const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
   const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);
-  // Desired-vs-observed drift: ids the gateway's eager startup plan says should run
-  // but that are absent from the runtime-loaded set and not already explained by an
-  // error/disabled record (those surface in their own sections). Computed only when
-  // both the should-run set and runtime provenance are present, so compact/hand-built
-  // snapshots render exactly as before.
+  // Do not report startup drift already explained by error/disabled sections.
   const explainedPluginIds = new Set(
     snapshot.plugins
       .filter((plugin) => plugin.status === "error" || plugin.status === "disabled")
@@ -319,11 +298,19 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     `Disabled: ${disabledPlugins.length}`,
   ];
 
+  // Keep full counts while bounding each detailed category to eight rendered rows.
+  function appendSection<T>(
+    label: string,
+    entries: readonly T[],
+    format: (entry: T) => string,
+  ): void {
+    if (entries.length > 0) {
+      lines.push(`${label}: ${entries.length}`, ...entries.slice(0, 8).map(format));
+    }
+  }
+
   if (disabledPlugins.length > 0) {
-    // Disable decisions record their reason on `error` (config off, allow/denylist,
-    // overridden-by/memory-slot arbitration). Group ids per distinct reason so the
-    // detailed view answers "why is this plugin off" without a /plugins round-trip,
-    // and a restrictive allowlist folds into one bounded line instead of dozens.
+    // Disabled records store their reason on `error`; group ids to bound repeated reasons.
     const disabledByReason = new Map<string, string[]>();
     for (const plugin of disabledPlugins) {
       const reason = plugin.error ?? "disabled";
@@ -350,28 +337,21 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
   }
 
   if (installedNotActive.length > 0) {
-    // Installed/discovered plugins not loaded in the runtime registry. Neutral
-    // inventory, not an error: the gateway only starts the plugins its startup
-    // plan requires, so configured-but-not-started is a normal steady state.
+    // Configured-but-not-started plugins can be normal; keep this inventory neutral.
     lines.push(
       `Installed (not active): ${installedNotActive.length} (${formatPluginList(installedNotActive, 8)})`,
     );
   }
 
   if (shouldRunNotLoaded.length > 0) {
-    // Planned for eager startup but missing from the live runtime-loaded set (e.g.,
-    // config changed since the gateway started, or a planned plugin did not come up).
-    // Observer-only signal, distinct from neutral inventory; not an error chip and
-    // not counted in the compact line.
+    // Startup drift is diagnostic only and does not affect the compact error count.
     lines.push(
       `Configured to run but not loaded: ${shouldRunNotLoaded.length} (${formatPluginList(shouldRunNotLoaded, 8)})`,
     );
   }
 
   if (unregisteredMemoryProviders.length > 0) {
-    // A configured memory embedding provider that no loaded plugin registers: semantic
-    // memory recall silently falls back to keyword/FTS-only. Observer-only signal, distinct
-    // from plugin load/error state and not counted in the compact line.
+    // Missing embeddings do not affect the compact plugin error count.
     const display = unregisteredMemoryProviders.map(
       (entry) => `${entry.configuredId} (memorySearch.${entry.source})`,
     );
@@ -380,76 +360,55 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     );
   }
 
-  if (errors.length > 0) {
-    lines.push(
-      `Errors: ${errors.length}`,
-      ...errors.slice(0, 8).map((plugin) => {
-        const phase = plugin.failurePhase ? ` [${plugin.failurePhase}]` : "";
-        return `- ${plugin.id}${phase}: ${plugin.error ?? "failed to load"}`;
-      }),
-    );
-  }
+  appendSection("Errors", errors, (plugin) => {
+    const phase = plugin.failurePhase ? ` [${plugin.failurePhase}]` : "";
+    return `- ${plugin.id}${phase}: ${plugin.error ?? "failed to load"}`;
+  });
 
-  if (contextEngineQuarantines.length > 0) {
-    lines.push(
-      `Context engine quarantines: ${contextEngineQuarantines.length}`,
-      ...contextEngineQuarantines.slice(0, 8).map((entry) => {
-        const owner = entry.owner ? ` owner=${entry.owner}` : "";
-        return `- ${entry.engineId}${owner} during ${entry.operation}: ${entry.reason}`;
-      }),
-    );
-  }
+  appendSection("Context engine quarantines", contextEngineQuarantines, (entry) => {
+    const owner = entry.owner ? ` owner=${entry.owner}` : "";
+    return `- ${entry.engineId}${owner} during ${entry.operation}: ${entry.reason}`;
+  });
 
-  if (runtimeToolQuarantines.length > 0) {
-    lines.push(
-      `Runtime tool quarantines: ${runtimeToolQuarantines.length}`,
-      ...runtimeToolQuarantines.slice(0, 8).map((entry) => {
-        const owner = entry.owner ? ` owner=${entry.owner}` : "";
-        return `- ${entry.toolName}${owner}: ${entry.reason}`;
-      }),
-    );
-  }
+  appendSection("Runtime tool quarantines", runtimeToolQuarantines, (entry) => {
+    const owner = entry.owner ? ` owner=${entry.owner}` : "";
+    return `- ${entry.toolName}${owner}: ${entry.reason}`;
+  });
 
-  if (channelPluginFailures.length > 0) {
-    lines.push(
-      `Channel plugin failures: ${channelPluginFailures.length}`,
-      ...channelPluginFailures.slice(0, 8).map((entry) => {
-        const plugin = entry.pluginId ? ` plugin=${entry.pluginId}` : "";
-        const source = entry.source ? ` [${entry.source}]` : "";
-        return `- ${entry.channelId}${plugin}${source}: ${entry.message}`;
-      }),
-    );
-  }
+  appendSection("Channel plugin failures", channelPluginFailures, (entry) => {
+    const plugin = entry.pluginId ? ` plugin=${entry.pluginId}` : "";
+    const source = entry.source ? ` [${entry.source}]` : "";
+    return `- ${entry.channelId}${plugin}${source}: ${entry.message}`;
+  });
 
-  if (dependencyIssues.length > 0) {
-    lines.push(
-      `Dependency issues: ${dependencyIssues.length}`,
-      ...dependencyIssues.slice(0, 8).map((plugin) => {
-        const missing = plugin.dependencyStatus?.missing ?? [];
-        return `- ${plugin.id}: missing ${missing.join(", ") || "required dependencies"}`;
-      }),
-    );
-  }
+  appendSection("Dependency issues", dependencyIssues, (plugin) => {
+    const missing = plugin.dependencyStatus?.missing ?? [];
+    return `- ${plugin.id}: missing ${missing.join(", ") || "required dependencies"}`;
+  });
 
   if (diagnosticCounts.errors > 0 || diagnosticCounts.warnings > 0) {
     lines.push(
       `Diagnostics: ${diagnosticCounts.errors} errors · ${diagnosticCounts.warnings} warnings`,
     );
-    for (const diagnostic of diagnostics.slice(0, 8)) {
+    for (const diagnostic of diagnostics.filter((entry) => entry.level !== "info").slice(0, 8)) {
       const target = diagnostic.pluginId ? `${diagnostic.pluginId}: ` : "";
       lines.push(`- ${diagnostic.level.toUpperCase()} ${target}${diagnostic.message}`);
     }
   }
 
-  if (compatibilityNotices.length > 0) {
-    lines.push(
-      `Compatibility notices: ${compatibilityNotices.length}`,
-      ...compatibilityNotices.slice(0, 8).map((notice) => {
-        const code = notice.code ? ` [${notice.code}]` : "";
-        return `- ${notice.severity.toUpperCase()} ${notice.pluginId}${code}: ${notice.message}`;
-      }),
-    );
-  }
+  appendSection(
+    "Information",
+    diagnostics.filter((entry) => entry.level === "info"),
+    (diagnostic) => {
+      const target = diagnostic.pluginId ? `${diagnostic.pluginId}: ` : "";
+      return `- INFO ${target}${diagnostic.message}`;
+    },
+  );
+
+  appendSection("Compatibility notices", compatibilityNotices, (notice) => {
+    const code = notice.code ? ` [${notice.code}]` : "";
+    return `- ${notice.severity.toUpperCase()} ${notice.pluginId}${code}: ${notice.message}`;
+  });
 
   lines.push("Full inventory: /plugins list");
   return lines.join("\n");

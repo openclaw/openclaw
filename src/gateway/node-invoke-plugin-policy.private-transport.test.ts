@@ -4,7 +4,7 @@ import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js"
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
-import { createTestApprovalManager } from "./exec-approval-manager.test-support.js";
+import { createTestApprovalFixture } from "./exec-approval-manager.test-support.js";
 import {
   applyPluginNodeInvokePolicy,
   type PluginNodeInvokePrivateTransport,
@@ -39,58 +39,66 @@ describe("private node policy transport", () => {
   afterEach(resetPluginRuntimeStateForTest);
 
   it("uses the registered risk and approval policy without advertising the private capability", async (testContext) => {
-    const manager = createTestApprovalManager<PluginApprovalRequestPayload>(testContext, {
+    const fixture = createTestApprovalFixture<PluginApprovalRequestPayload>(testContext, {
       approvalKind: "plugin",
     });
-    const reviewer = createOperatorClient();
-    const handle = vi.fn(async (policyContext: OpenClawPluginNodeInvokePolicyContext) => {
-      expect(policyContext.risk).toEqual({ level: "high", family: "fixture_mutation" });
-      const decision = await policyContext.approvals?.request({
-        title: "Private desktop action",
-        description: "Approve this action on the selected session desktop",
+    const { manager } = fixture;
+    await fixture.run(async () => {
+      const reviewer = createOperatorClient();
+      const handle = vi.fn(async (policyContext: OpenClawPluginNodeInvokePolicyContext) => {
+        expect(policyContext.risk).toEqual({ level: "high", family: "fixture_mutation" });
+        const decision = await policyContext.approvals?.request({
+          title: "Private desktop action",
+          description: "Approve this action on the selected session desktop",
+        });
+        if (decision?.decision !== "allow-once") {
+          return { ok: false as const, message: "approval required" };
+        }
+        return await policyContext.invokeNode();
       });
-      if (decision?.decision !== "allow-once") {
-        return { ok: false as const, message: "approval required" };
-      }
-      return await policyContext.invokeNode();
+      const registration = createDemoPolicy(handle);
+      registration.policy.classifyRisk = vi.fn<
+        NonNullable<typeof registration.policy.classifyRisk>
+      >(() => ({ level: "high", family: "fixture_mutation" }));
+      setDangerousDemoCommandRegistry([registration]);
+      const node = createNodeSession();
+      node.commands = [];
+      const { context, invoke } = createContext({
+        nodeSession: node,
+        pluginApprovalManager: manager,
+        getApprovalClientConnIds: createApprovalClientLookup([reviewer]),
+      });
+      const privateTransport = createPrivateTransport();
+      const onNodeCommandDispatched = vi.fn();
+      const { record: approval, pending: result } = await expectSinglePendingApproval(
+        manager,
+        context,
+        () =>
+          fixture.track(
+            applyPluginNodeInvokePolicy({
+              context,
+              client: reviewer,
+              nodeSession: node,
+              command: DEMO_COMMAND,
+              params: DEMO_PARAMS,
+              privateTransport,
+              deadlineAtMs: performance.now() + 5_000,
+              onNodeCommandDispatched,
+            }),
+          ),
+      );
+      expect(privateTransport.invoke).not.toHaveBeenCalled();
+      expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
+      await expect(result).resolves.toMatchObject({ ok: true, payload: { completed: true } });
+      expect(registration.policy.classifyRisk).toHaveBeenCalledOnce();
+      expect(handle).toHaveBeenCalledOnce();
+      expect(privateTransport.invoke).toHaveBeenCalledOnce();
+      expect(privateTransport.invoke.mock.calls[0]?.[0]).not.toHaveProperty("deadlineAtMs");
+      expect(onNodeCommandDispatched).toHaveBeenCalledOnce();
+      expect((await manager.getSnapshot(approval.id))?.consumedDecision).toBe("allow-once");
+      expect(node.commands).toEqual([]);
+      expect(invoke).not.toHaveBeenCalled();
     });
-    const registration = createDemoPolicy(handle);
-    registration.policy.classifyRisk = vi.fn<NonNullable<typeof registration.policy.classifyRisk>>(
-      () => ({ level: "high", family: "fixture_mutation" }),
-    );
-    setDangerousDemoCommandRegistry([registration]);
-    const node = createNodeSession();
-    node.commands = [];
-    const { context, invoke } = createContext({
-      nodeSession: node,
-      pluginApprovalManager: manager,
-      getApprovalClientConnIds: createApprovalClientLookup([reviewer]),
-    });
-    const privateTransport = createPrivateTransport();
-    const onNodeCommandDispatched = vi.fn();
-    const result = applyPluginNodeInvokePolicy({
-      context,
-      client: reviewer,
-      nodeSession: node,
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      privateTransport,
-      deadlineAtMs: performance.now() + 5_000,
-      onNodeCommandDispatched,
-    });
-
-    const approval = await expectSinglePendingApproval(manager);
-    expect(privateTransport.invoke).not.toHaveBeenCalled();
-    expect(manager.resolve(approval.id, "allow-once")).toBe(true);
-    await expect(result).resolves.toMatchObject({ ok: true, payload: { completed: true } });
-    expect(registration.policy.classifyRisk).toHaveBeenCalledOnce();
-    expect(handle).toHaveBeenCalledOnce();
-    expect(privateTransport.invoke).toHaveBeenCalledOnce();
-    expect(privateTransport.invoke.mock.calls[0]?.[0]).not.toHaveProperty("deadlineAtMs");
-    expect(onNodeCommandDispatched).toHaveBeenCalledOnce();
-    expect(manager.getSnapshot(approval.id)?.consumedDecision).toBe("allow-once");
-    expect(node.commands).toEqual([]);
-    expect(invoke).not.toHaveBeenCalled();
   });
 
   it.each(["missing-policy", "invalid-risk"] as const)(

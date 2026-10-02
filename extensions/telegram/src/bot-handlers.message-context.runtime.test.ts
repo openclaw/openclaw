@@ -74,7 +74,7 @@ describe("resolveCachedMessageThreadSpec", () => {
     resetTelegramMessageCacheForTest();
   });
 
-  it("keeps account cache ownership separate from a topic-routed session owner", () => {
+  it("keeps account cache ownership separate from a topic-routed session owner", async () => {
     const resolveStorePath = vi.fn(
       (_store, options: { agentId?: string }) =>
         `/tmp/openclaw-telegram-owner-${options.agentId}.json`,
@@ -104,7 +104,7 @@ describe("resolveCachedMessageThreadSpec", () => {
       } as unknown as RegisterTelegramHandlerParams["telegramDeps"],
     });
 
-    const session = sessionRuntime.resolveTelegramSessionState({
+    const session = await sessionRuntime.resolveTelegramSessionState({
       chatId: CHAT_ID,
       isGroup: true,
       threadSpec: { id: TOPIC_ID, scope: "forum" },
@@ -296,24 +296,31 @@ describe("automatic Telegram retained history workload", () => {
     await state.cleanup();
   });
 
-  it("reads only a physical window for the default 50 messages from a markerless archive", async () => {
-    const { runtime, cfg, telegramCfg } = historyRuntime();
-    const msg = archivedMessage(archiveSize + 1);
-    const context = await runtime.buildPromptContextForMessage(
-      { message: msg, getFile: vi.fn() },
-      msg,
-      [],
-      cfg,
-      telegramCfg,
-    );
-    expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
-      Array.from({ length: 51 }, (_, index) => String(50_462 + index)).filter(
-        (id) => id !== "50500",
-      ),
-    );
-    expect(reads.rows).toBeLessThanOrEqual(256);
-    expect(reads.pages).toBeLessThanOrEqual(2);
-  });
+  it.each([
+    { historyLimit: undefined, limit: 50 },
+    { historyLimit: Number.MAX_SAFE_INTEGER, limit: 50 },
+    { historyLimit: 5000, limit: 200 },
+  ])(
+    "bounds the automatic window to $limit for configured $historyLimit",
+    async ({ historyLimit, limit }) => {
+      const { runtime, cfg, telegramCfg } = historyRuntime({ groupPolicy: "open", historyLimit });
+      const msg = archivedMessage(archiveSize + 1);
+      const context = await runtime.buildPromptContextForMessage(
+        { message: msg, getFile: vi.fn() },
+        msg,
+        [],
+        cfg,
+        telegramCfg,
+      );
+      expect(telegramPromptContextHistory(context).map((entry) => entry.messageId)).toEqual(
+        Array.from({ length: limit + 1 }, (_, index) => String(archiveSize - limit + index)).filter(
+          (id) => id !== "50500",
+        ),
+      );
+      expect(reads.rows).toBeLessThanOrEqual(256);
+      expect(reads.pages).toBeLessThanOrEqual(2);
+    },
+  );
 
   it("does not read storage when automatic history is zero and there is no reply", async () => {
     const { runtime, cfg, telegramCfg } = historyRuntime({ groupPolicy: "open", historyLimit: 0 });

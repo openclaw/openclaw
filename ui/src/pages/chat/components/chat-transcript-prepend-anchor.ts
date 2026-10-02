@@ -42,11 +42,20 @@ export class TranscriptPrependAnchor {
     );
   }
 
-  /** Capture only a committed prepend that is not superseded by a scroll command. */
-  capture(element: HTMLDivElement | null, commanded: boolean): void {
-    const anchor = commanded
-      ? null
-      : captureTranscriptPrependAnchor(element, this.firstMessageKey, this.messageKeys);
+  /** Retain a reader through committed history or row-projection changes. */
+  capture(
+    element: HTMLDivElement | null,
+    commanded: boolean,
+    readingProjectionChanged = false,
+  ): void {
+    // A second projection may commit before measurement settles. Keep the
+    // original reader target rather than recapturing an already shifted bubble.
+    const retained =
+      this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
+    const anchor =
+      !commanded && (this.hasPrepend || readingProjectionChanged)
+        ? (retained ?? captureTranscriptPrependAnchor(element, this.messageKeys))
+        : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
     }
@@ -93,14 +102,12 @@ export class TranscriptPrependAnchor {
   }
 }
 
-/** Capture the message being read before older history changes its containing row. */
+/** Capture a retained message before history or regrouping changes its row. */
 function captureTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
-  previousFirstMessageKey: string | undefined,
   next: TranscriptMessageKeys,
 ): ChatTranscriptPrependAnchor | null {
-  const first = previousFirstMessageKey;
-  if (!scrollElement || !first || first === next.keys().next().value || !next.has(first)) {
+  if (!scrollElement) {
     return null;
   }
   const viewport = scrollElement.getBoundingClientRect();

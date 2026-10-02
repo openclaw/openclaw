@@ -45,8 +45,8 @@ flow:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
-            senderId: qa-approver
-            senderName: QA Approver
+            senderId: qa-operator
+            senderName: QA Operator
             text: { ref: config.prototypeCommandText }
         - waitForOutbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
@@ -73,8 +73,8 @@ flow:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }
-            senderId: qa-approver
-            senderName: QA Approver
+            senderId: qa-operator
+            senderName: QA Operator
             text: { ref: config.realCommandText }
         - waitForOutbound:
             conversation: { id: { ref: config.conversationId }, kind: direct }

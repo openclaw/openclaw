@@ -1,3 +1,4 @@
+import "../src/test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -125,8 +126,10 @@ describe("cli json stdout contract", () => {
         expect(Object.keys(parsed).toSorted((a, b) => a.localeCompare(b))).toEqual([
           "availability",
           "channel",
+          "recoverySets",
           "update",
         ]);
+        expect(parsed).toHaveProperty("recoverySets", []);
         expect(stdout).not.toContain("Doctor warnings");
         expect(stdout).not.toContain("Doctor changes");
         expect(stdout).not.toContain("Config invalid");

@@ -266,8 +266,9 @@ suite.define(() => {
               expect(retry.params).toEqual({
                 key,
                 expectedSessionId: row.sessionId,
-                model: "fixture/synthetic-model",
-                agentRuntime: "opencode",
+                ...(entrypoint === "selection"
+                  ? { model: "fixture/synthetic-model", agentRuntime: "opencode" }
+                  : {}),
                 nativeRuntimeConsent: "opencode",
                 permissionMode: "full",
                 sandboxMode: "off",
@@ -297,8 +298,9 @@ suite.define(() => {
                   sandboxMode: "off",
                   nativeRuntimeConsent: "opencode",
                   agentRuntimeOverride: "opencode",
-                  providerOverride: "fixture",
-                  modelOverride: row.model,
+                  ...(entrypoint === "selection"
+                    ? { providerOverride: "fixture", modelOverride: row.model }
+                    : {}),
                   updatedAt: 2,
                 },
                 resolved: {

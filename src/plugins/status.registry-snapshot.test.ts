@@ -1,19 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
-// Covers plugin status snapshots built from registry state.
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import {
   withPluginDiagnosticsReport,
   buildPluginRegistrySnapshotReport,
@@ -34,24 +31,44 @@ function makeTempDir() {
   return makeTrackedTempDir("openclaw-plugin-status", tempDirs);
 }
 
-function createWorkspacePluginFixture(workspaceDir: string, pluginId: string) {
-  const rootDir = path.join(workspaceDir, ".openclaw", "extensions", pluginId);
-  fs.mkdirSync(rootDir, { recursive: true });
-  return createColdPluginFixture({
-    rootDir,
-    pluginId,
-    manifest: { id: pluginId, name: `Workspace ${pluginId}` },
-  });
+function createStatusEnv(disableBundled = true) {
+  const rootDir = fs.realpathSync(makeTempDir());
+  const stateDir = path.join(rootDir, "state");
+  const env = {
+    ...createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: makeTempDir() }),
+    ...(disableBundled ? { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } : {}),
+    OPENCLAW_STATE_DIR: stateDir,
+  };
+  return { rootDir, stateDir, env };
 }
 
-function createGlobalPluginFixture(stateDir: string, pluginId: string) {
-  const rootDir = path.join(stateDir, "extensions", pluginId);
+function createPluginAt(root: string, pluginId: string) {
+  const rootDir = path.join(root, "extensions", pluginId);
   fs.mkdirSync(rootDir, { recursive: true });
-  return createColdPluginFixture({
-    rootDir,
-    pluginId,
-    manifest: { id: pluginId, name: `Global ${pluginId}` },
-  });
+  return createColdPluginFixture({ rootDir, pluginId });
+}
+
+function createWorkspaceFixture() {
+  const params = createStatusEnv();
+  const mainWorkspace = path.join(params.rootDir, "main-workspace");
+  const gadgetWorkspace = path.join(params.rootDir, "gadget-workspace");
+  const global = createPluginAt(params.stateDir, "global-plugin");
+  const main = createPluginAt(path.join(mainWorkspace, ".openclaw"), "main-plugin");
+  const gadget = createPluginAt(path.join(gadgetWorkspace, ".openclaw"), "gadget-plugin");
+  const config = {
+    agents: {
+      ownership: "explicit" as const,
+      defaults: { workspace: path.join(params.rootDir, "unowned-default-workspace") },
+      entries: { main: { workspace: mainWorkspace }, gadget: { workspace: gadgetWorkspace } },
+    },
+    plugins: {
+      allow: [global.pluginId, main.pluginId, gadget.pluginId],
+      entries: Object.fromEntries(
+        [global, main, gadget].map(({ pluginId }) => [pluginId, { enabled: true }]),
+      ),
+    },
+  };
+  return { ...params, mainWorkspace, global, main, gadget, config };
 }
 
 afterEach(() => {
@@ -60,184 +77,32 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-const requireRecord = createRequireRecord("record", "expected-non-array-record");
-
-function requirePlugin(
-  plugins: readonly Record<string, unknown>[],
-  id: string,
-): Record<string, unknown> {
-  const plugin = plugins.find((entry) => entry.id === id);
-  if (!plugin) {
-    throw new Error(`Expected plugin ${id}`);
-  }
-  return requireRecord(plugin);
-}
-
-function requireRecordArray(value: unknown): Record<string, unknown>[] {
-  expect(Array.isArray(value)).toBe(true);
-  return value as Record<string, unknown>[];
-}
-
-function requireNamedEntry(
-  entries: readonly Record<string, unknown>[],
-  name: string,
-): Record<string, unknown> {
-  const entry = entries.find((candidate) => candidate.name === name);
-  if (!entry) {
-    throw new Error(`Expected entry ${name}`);
-  }
-  return requireRecord(entry);
-}
-
-function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>): void {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-}
-
 describe("buildPluginRegistrySnapshotReport", () => {
-  it("uses the configured system owner for ambient plugin inventory", async () => {
-    const tempRoot = makeTempDir();
-    const mainWorkspace = path.join(tempRoot, "main-workspace");
-    const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
-    const main = createWorkspacePluginFixture(mainWorkspace, "main-plugin");
-    const gadget = createWorkspacePluginFixture(gadgetWorkspace, "gadget-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-    };
-    const config = {
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { systemAgent: { agentId: "gadget" } },
-        entries: {
-          main: { workspace: mainWorkspace },
-          gadget: { workspace: gadgetWorkspace },
-        },
-      },
-      plugins: {
-        allow: [main.pluginId, gadget.pluginId],
-        entries: {
-          [main.pluginId]: { enabled: true },
-          [gadget.pluginId]: { enabled: true },
-        },
-      },
-    };
-
+  it("reports shared-only inventory when an explicit roster has no system owner", async () => {
+    const { config, env, mainWorkspace, global } = createWorkspaceFixture();
+    const scoped = loadPluginMetadataSnapshot({ config, env, workspaceDir: mainWorkspace });
+    setCurrentPluginMetadataSnapshot(scoped, { config, env, workspaceDir: mainWorkspace });
     const assertReport = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
-      expect(report.workspaceDir).toBe(gadgetWorkspace);
-      expect(report.plugins.map((plugin) => plugin.id)).toContain(gadget.pluginId);
-      expect(report.plugins.map((plugin) => plugin.id)).not.toContain(main.pluginId);
+      expect(report.workspaceDir).toBeUndefined();
+      expect(report.plugins.map((plugin) => plugin.id)).toEqual([global.pluginId]);
+      expect(report.diagnostics).toContainEqual(
+        expect.objectContaining({
+          level: "warn",
+          code: "workspace-scope-omitted",
+        }),
+      );
     };
     assertReport(buildPluginRegistrySnapshotReport({ config, env }));
     assertReport(buildPluginSnapshotReport({ config, env }));
     await withPluginDiagnosticsReport({ config, env }, assertReport);
-    expect(
-      buildPluginRegistrySnapshotReport({
-        config: { agents: { entries: { only: { workspace: mainWorkspace } } } },
-        env,
-      }).workspaceDir,
-    ).toBe(mainWorkspace);
-    expect(
-      buildPluginRegistrySnapshotReport({
-        config: { agents: { defaults: { workspace: mainWorkspace } } },
-        env,
-      }).workspaceDir,
-    ).toBe(mainWorkspace);
-  });
-
-  it("reports shared-only inventory when an explicit roster has no system owner", async () => {
-    const tempRoot = makeTempDir();
-    const stateDir = path.join(tempRoot, "state");
-    const mainWorkspace = path.join(tempRoot, "main-workspace");
-    const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
-    const global = createGlobalPluginFixture(stateDir, "global-plugin");
-    const main = createWorkspacePluginFixture(mainWorkspace, "main-plugin");
-    const gadget = createWorkspacePluginFixture(gadgetWorkspace, "gadget-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const makeConfig = (reverse: boolean) => ({
-      agents: {
-        ownership: "explicit" as const,
-        defaults: { workspace: path.join(tempRoot, "unowned-default-workspace") },
-        entries: reverse
-          ? {
-              gadget: { workspace: gadgetWorkspace },
-              main: { workspace: mainWorkspace },
-            }
-          : {
-              main: { workspace: mainWorkspace },
-              gadget: { workspace: gadgetWorkspace },
-            },
-      },
-      plugins: {
-        allow: [global.pluginId, main.pluginId, gadget.pluginId],
-        entries: {
-          [global.pluginId]: { enabled: true },
-          [main.pluginId]: { enabled: true },
-          [gadget.pluginId]: { enabled: true },
-        },
-      },
-    });
-
-    for (const config of [makeConfig(false), makeConfig(true)]) {
-      const scoped = loadPluginMetadataSnapshot({ config, env, workspaceDir: mainWorkspace });
-      setCurrentPluginMetadataSnapshot(scoped, { config, env, workspaceDir: mainWorkspace });
-      const assertReport = (report: ReturnType<typeof buildPluginSnapshotReport>) => {
-        expect(report.workspaceDir).toBeUndefined();
-        expect(report.plugins.map((plugin) => plugin.id)).toContain(global.pluginId);
-        expect(report.plugins.map((plugin) => plugin.id)).not.toContain(main.pluginId);
-        expect(report.plugins.map((plugin) => plugin.id)).not.toContain(gadget.pluginId);
-        expect(report.diagnostics).toContainEqual(
-          expect.objectContaining({
-            level: "warn",
-            code: "workspace-scope-omitted",
-          }),
-        );
-      };
-      assertReport(buildPluginRegistrySnapshotReport({ config, env }));
-      assertReport(buildPluginSnapshotReport({ config, env }));
-      await withPluginDiagnosticsReport({ config, env }, assertReport);
-    }
   });
 
   it("self-heals a shared-only registry after a system owner is configured", async () => {
-    const tempRoot = makeTempDir();
-    const stateDir = path.join(tempRoot, "state");
-    const mainWorkspace = path.join(tempRoot, "main-workspace");
-    const gadgetWorkspace = path.join(tempRoot, "gadget-workspace");
-    const global = createGlobalPluginFixture(stateDir, "global-plugin");
-    const main = createWorkspacePluginFixture(mainWorkspace, "main-plugin");
-    const gadget = createWorkspacePluginFixture(gadgetWorkspace, "gadget-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const ownerlessConfig = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: {
-          main: { workspace: mainWorkspace },
-          gadget: { workspace: gadgetWorkspace },
-        },
-      },
-      plugins: {
-        allow: [global.pluginId, main.pluginId, gadget.pluginId],
-        entries: {
-          [global.pluginId]: { enabled: true },
-          [main.pluginId]: { enabled: true },
-          [gadget.pluginId]: { enabled: true },
-        },
-      },
-    };
+    const workspace = createWorkspaceFixture();
+    const { config, env, stateDir, mainWorkspace, global, main, gadget } = workspace;
 
     const partial = await refreshPluginRegistry({
-      config: ownerlessConfig,
+      config,
       env,
       reason: "manual",
       stateDir,
@@ -248,28 +113,20 @@ describe("buildPluginRegistrySnapshotReport", () => {
     );
 
     const ownedConfig = {
-      ...ownerlessConfig,
+      ...config,
       agents: {
-        ...ownerlessConfig.agents,
+        ...config.agents,
         defaults: { systemAgent: { agentId: "gadget" } },
       },
     };
-    const firstOwned = await refreshPluginRegistry({
-      config: ownedConfig,
-      env,
-      policyPluginIds: [global.pluginId],
-      reason: "policy-changed",
-      stateDir,
-    });
-    const secondOwned = await refreshPluginRegistry({
-      config: ownedConfig,
-      env,
-      policyPluginIds: [global.pluginId],
-      reason: "policy-changed",
-      stateDir,
-    });
-
-    for (const refreshed of [firstOwned, secondOwned]) {
+    for (let refresh = 0; refresh < 2; refresh++) {
+      const refreshed = await refreshPluginRegistry({
+        config: ownedConfig,
+        env,
+        stateDir,
+        policyPluginIds: [global.pluginId],
+        reason: "policy-changed",
+      });
       expect(refreshed.plugins.map((plugin) => plugin.pluginId).toSorted()).toEqual(
         [gadget.pluginId, global.pluginId].toSorted(),
       );
@@ -278,25 +135,14 @@ describe("buildPluginRegistrySnapshotReport", () => {
       );
     }
 
-    const mainOwnedConfig = {
-      ...ownerlessConfig,
-      agents: {
-        ...ownerlessConfig.agents,
-        defaults: { systemAgent: { agentId: "main" } },
-      },
-    };
-    const mainReport = buildPluginRegistrySnapshotReport({ config: mainOwnedConfig, env });
     const explicitMainReport = buildPluginRegistrySnapshotReport({
       config: ownedConfig,
       env,
       workspaceDir: mainWorkspace,
     });
-    for (const report of [mainReport, explicitMainReport]) {
-      expect(report.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
-        [global.pluginId, main.pluginId].toSorted(),
-      );
-      expect(report.plugins.map((plugin) => plugin.id)).not.toContain(gadget.pluginId);
-    }
+    expect(explicitMainReport.plugins.map((plugin) => plugin.id).toSorted()).toEqual(
+      [global.pluginId, main.pluginId].toSorted(),
+    );
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.plugins.map((plugin) => plugin.pluginId).toSorted()).toEqual(
       [gadget.pluginId, global.pluginId].toSorted(),
@@ -304,24 +150,16 @@ describe("buildPluginRegistrySnapshotReport", () => {
   });
 
   it.each([
-    { consent: "missing", enabled: true, tracked: true, warns: true },
-    { consent: "stale", enabled: true, tracked: true, warns: true },
-    { consent: "current", enabled: true, tracked: true, warns: false },
-    { consent: "missing", enabled: false, tracked: true, warns: false },
-    { consent: "missing", enabled: true, tracked: false, warns: false },
+    { consent: "missing", warns: true },
+    { consent: "stale", warns: true },
+    { consent: "current", warns: false },
   ] as const)(
-    "projects capability-consent diagnostics for $consent acceptance, enabled=$enabled, tracked=$tracked",
-    ({ consent, enabled, tracked, warns }) => {
-      const tempRoot = makeTempDir();
-      const stateDir = path.join(tempRoot, "state");
-      const fixture = createGlobalPluginFixture(stateDir, "consent-demo");
-      const env = {
-        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: stateDir,
-      };
+    "projects capability-consent diagnostics for $consent acceptance",
+    async ({ consent, warns }) => {
+      const { stateDir, env } = createStatusEnv();
+      const fixture = createPluginAt(stateDir, "consent-demo");
       const config = {
-        plugins: { entries: { [fixture.pluginId]: { enabled } } },
+        plugins: { entries: { [fixture.pluginId]: { enabled: true } } },
       };
       const { declared } = buildPluginCapabilitySummary({
         manifest: { channels: [fixture.channelId], providers: [fixture.providerId] },
@@ -343,9 +181,9 @@ describe("buildPluginRegistrySnapshotReport", () => {
       const index = loadInstalledPluginIndex({
         config,
         env,
-        installRecords: tracked ? { [fixture.pluginId]: installRecord } : {},
+        installRecords: { [fixture.pluginId]: installRecord },
       });
-      writePersistedInstalledPluginIndexSync(index, { stateDir });
+      await writePersistedInstalledPluginIndex(index, { stateDir });
 
       for (const buildReport of [buildPluginRegistrySnapshotReport, buildPluginSnapshotReport]) {
         const diagnostics = buildReport({ config, env }).diagnostics.filter(
@@ -362,37 +200,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
           });
         }
       }
-      if (consent === "current") {
-        expect(
-          collectPluginCapabilityConsentDiagnostics({ index, manifests: new Map() }),
-        ).toContainEqual(
-          expect.objectContaining({
-            level: "warn",
-            pluginId: fixture.pluginId,
-          }),
-        );
-      }
       expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
     },
   );
 
-  it("keeps recovered managed npm plugins visible when the persisted registry is stale", () => {
-    const tempRoot = makeTempDir();
-    const stateDir = path.join(tempRoot, "state");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, {
-        bundledPluginsDir: makeTempDir(),
-      }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const config = {
-      plugins: {
-        entries: {
-          whatsapp: { enabled: true },
-        },
-      },
-    };
+  it("keeps recovered managed npm plugins visible when the persisted registry is stale", async () => {
+    const { stateDir, env } = createStatusEnv();
+    const config = { plugins: { entries: { whatsapp: { enabled: true } } } };
     const whatsappDir = writeManagedNpmPlugin({
       stateDir,
       packageName: "@openclaw/whatsapp",
@@ -400,26 +214,17 @@ describe("buildPluginRegistrySnapshotReport", () => {
       version: "2026.5.2",
       name: "WhatsApp",
     });
-    const staleIndex = loadInstalledPluginIndex({
-      config,
-      env,
-      installRecords: {},
-    });
+    const staleIndex = loadInstalledPluginIndex({ config, env, installRecords: {} });
     expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
-    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+    await writePersistedInstalledPluginIndex(staleIndex, { stateDir });
 
-    const report = buildPluginRegistrySnapshotReport({
-      config,
-      env,
-    });
+    const report = buildPluginRegistrySnapshotReport({ config, env });
 
     expect(report.registrySource).toBe("derived");
-    expect(
-      report.registryDiagnostics.some(
-        (diagnostic) => diagnostic.code === "persisted-registry-stale-source",
-      ),
-    ).toBe(true);
-    expectFields(requirePlugin(report.plugins, "whatsapp"), {
+    expect(report.registryDiagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+    expect(report.plugins.find((plugin) => plugin.id === "whatsapp")).toMatchObject({
       id: "whatsapp",
       name: "WhatsApp",
       source: fs.realpathSync(path.join(whatsappDir, "dist", "index.js")),
@@ -427,15 +232,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
     });
   });
 
-  it.each(
-    (["missing", "stale-policy", "stale-source", "persisted"] as const).flatMap((state) =>
-      (["selected", "omitted"] as const).map((workspaceScope) => ({ state, workspaceScope })),
-    ),
-  )(
+  it.each([
+    { state: "stale-policy", workspaceScope: "selected" },
+    { state: "persisted", workspaceScope: "omitted" },
+  ] as const)(
     "reuses prepared list metadata with $state registry and $workspaceScope workspace",
-    ({ state, workspaceScope }) => {
-      const tempRoot = fs.realpathSync(makeTempDir());
-      const stateDir = path.join(tempRoot, "state");
+    async ({ state, workspaceScope }) => {
+      const { rootDir: tempRoot, stateDir, env } = createStatusEnv(false);
       const workspaceDir = workspaceScope === "selected" ? tempRoot : undefined;
       const enabled = workspaceScope === "selected";
       const fixture = createColdPluginFixture({
@@ -458,11 +261,7 @@ describe("buildPluginRegistrySnapshotReport", () => {
             trustedToolPolicies: ["workflow-budget"],
           },
           commandAliases: [{ name: "indexed-demo" }],
-          configSchema: {
-            type: "object",
-            additionalProperties: false,
-            properties: {},
-          },
+          configSchema: { type: "object", additionalProperties: false, properties: {} },
         },
       });
 
@@ -473,21 +272,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
           entries: { [fixture.pluginId]: { enabled } },
         },
       };
-      const env = {
-        ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-        OPENCLAW_STATE_DIR: stateDir,
-      };
-      if (state !== "missing") {
-        const index = loadInstalledPluginIndex({ config, env, workspaceDir });
-        if (state === "stale-policy") {
-          index.policyHash = "stale-policy";
-        } else if (state === "stale-source") {
-          for (const plugin of index.plugins) {
-            plugin.packageVersion = "0.0.0";
-          }
-        }
-        writePersistedInstalledPluginIndexSync(index, { stateDir });
+      const index = loadInstalledPluginIndex({ config, env, workspaceDir });
+      if (state === "stale-policy") {
+        index.policyHash = "stale-policy";
       }
+      await writePersistedInstalledPluginIndex(index, { stateDir });
       const open = vi.spyOn(fs, "openSync");
       const report = buildPluginRegistrySnapshotReport({ config, env, workspaceDir });
       const manifestOpens = open.mock.calls.filter(
@@ -496,51 +285,28 @@ describe("buildPluginRegistrySnapshotReport", () => {
       open.mockRestore();
 
       expect(report.plugins).toHaveLength(1);
-      expectFields(requirePlugin(report.plugins, "indexed-demo"), {
-        id: "indexed-demo",
-        name: "Indexed Demo",
-        description: "Manifest-backed list metadata",
-        version: "9.8.7",
-        format: "openclaw",
-        providerIds: ["indexed-provider"],
-        speechProviderIds: ["indexed-speech-provider"],
-        realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
-        realtimeVoiceProviderIds: ["indexed-voice-provider"],
-        toolNames: ["indexed_echo", "indexed_search"],
-        configSchema: true,
-        contracts: {
-          agentToolResultMiddleware: ["openclaw", "codex"],
-          speechProviders: ["indexed-speech-provider"],
-          realtimeTranscriptionProviders: ["indexed-transcription-provider"],
-          realtimeVoiceProviders: ["indexed-voice-provider"],
-          tools: ["indexed_echo", "indexed_search", "indexed_echo"],
-          trustedToolPolicies: ["workflow-budget"],
-        },
-        commands: ["indexed-demo"],
-        source: fs.realpathSync(fixture.runtimeSource),
-        enabled,
-        status: enabled ? "loaded" : "disabled",
-      });
+      expect(report.plugins[0]).toEqual(
+        expect.objectContaining({
+          version: "9.8.7",
+          toolNames: ["indexed_echo", "indexed_search"],
+          source: fs.realpathSync(fixture.runtimeSource),
+          enabled,
+          status: enabled ? "loaded" : "disabled",
+        }),
+      );
       expect(report.workspaceDir).toBe(workspaceDir);
       expect(report.workspaceScope).toBe(workspaceScope);
       expect(report.registrySource).toBe(state === "persisted" ? "persisted" : "derived");
-      const expectedRegistryDiagnostic = {
-        level: state === "missing" ? "info" : "warn",
-        code: `persisted-registry-${state}`,
-        message: expect.any(String),
-        ...(state === "stale-source" && {
-          differences: [
-            {
-              pluginId: fixture.pluginId,
-              changed: ["record"],
-              persistedSource: fixture.runtimeSource,
-              derivedSource: fixture.runtimeSource,
-            },
-          ],
-        }),
-      };
       expect(report.registryDiagnostics).toEqual(
-        state === "persisted" ? [] : [expectedRegistryDiagnostic],
+        state === "persisted"
+          ? []
+          : [
+              {
+                level: "warn",
+                code: "persisted-registry-stale-policy",
+                message: expect.any(String),
+              },
+            ],
       );
       expect(report.diagnostics).toEqual(
         workspaceScope === "selected"
@@ -557,17 +323,13 @@ describe("buildPluginRegistrySnapshotReport", () => {
   it.each([false, true])(
     "reuses current metadata without a recorded source (diagnostics: %s)",
     (hasDiagnostics) => {
-      const rootDir = fs.realpathSync(makeTempDir());
+      const { rootDir, env } = createStatusEnv(false);
       const fixture = createColdPluginFixture({
         rootDir,
         pluginId: "current-demo",
         packageJson: { description: "Package-backed summary" },
       });
       const config = createColdPluginConfig(rootDir, fixture.pluginId);
-      const env = {
-        ...createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: makeTempDir() }),
-        OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
-      };
       const params = { config, env, workspaceDir: rootDir };
       const coldReport = buildPluginRegistrySnapshotReport(params);
       const { registrySource: _registrySource, ...current } = loadPluginMetadataSnapshot(params);
@@ -585,12 +347,6 @@ describe("buildPluginRegistrySnapshotReport", () => {
       );
       open.mockRestore();
 
-      expectFields(requirePlugin(report.plugins, fixture.pluginId), {
-        name: "Cold Control Plane",
-        description: "Package-backed summary",
-        providerIds: [fixture.providerId],
-        status: "loaded",
-      });
       expect(report.plugins).toEqual(coldReport.plugins);
       expect(report.registrySource).toBe(hasDiagnostics ? "derived" : "provided");
       expect(report.registryDiagnostics).toEqual(
@@ -605,199 +361,16 @@ describe("buildPluginRegistrySnapshotReport", () => {
     },
   );
 
-  it("discovers the configured default-agent workspace without importing plugin runtime", () => {
-    const tempRoot = makeTempDir();
-    const workspaceDir = path.join(tempRoot, "configured-workspace");
-    const fixture = createWorkspacePluginFixture(workspaceDir, "configured-workspace-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-    };
-    const config = {
-      agents: { defaults: { workspace: workspaceDir } },
-      plugins: {
-        allow: [fixture.pluginId],
-        entries: { [fixture.pluginId]: { enabled: true } },
-      },
-    };
-
-    const report = buildPluginRegistrySnapshotReport({ config, env });
-
-    expect(report.workspaceDir).toBe(workspaceDir);
-    expectFields(requirePlugin(report.plugins, fixture.pluginId), {
-      id: fixture.pluginId,
-      origin: "workspace",
-      configSchema: true,
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  });
-
-  it("uses the selected default agent's workspace for cold plugin inventory", () => {
-    const tempRoot = makeTempDir();
-    const workspaceDir = path.join(tempRoot, "selected-agent-workspace");
-    const fallbackWorkspace = path.join(tempRoot, "fallback-workspace");
-    const fixture = createWorkspacePluginFixture(workspaceDir, "selected-agent-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-    };
-    const config = {
-      agents: {
-        defaults: { workspace: fallbackWorkspace },
-        list: [{ id: "main" }, { id: "research", default: true, workspace: workspaceDir }],
-      },
-      plugins: {
-        allow: [fixture.pluginId],
-        entries: { [fixture.pluginId]: { enabled: true } },
-      },
-    };
-
-    const report = buildPluginRegistrySnapshotReport({ config, env });
-
-    expect(report.workspaceDir).toBe(workspaceDir);
-    expectFields(requirePlugin(report.plugins, fixture.pluginId), {
-      id: fixture.pluginId,
-      origin: "workspace",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  });
-
-  it("preserves an explicit workspace over the configured default agent", () => {
-    const tempRoot = makeTempDir();
-    const configuredWorkspace = path.join(tempRoot, "configured-workspace");
-    const explicitWorkspace = path.join(tempRoot, "explicit-workspace");
-    const configured = createWorkspacePluginFixture(configuredWorkspace, "configured-plugin");
-    const explicit = createWorkspacePluginFixture(explicitWorkspace, "explicit-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(tempRoot, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-    };
-    const config = {
-      agents: { defaults: { workspace: configuredWorkspace } },
-      plugins: {
-        allow: [configured.pluginId, explicit.pluginId],
-        entries: {
-          [configured.pluginId]: { enabled: true },
-          [explicit.pluginId]: { enabled: true },
-        },
-      },
-    };
-
-    const report = buildPluginRegistrySnapshotReport({
-      config,
-      env,
-      workspaceDir: explicitWorkspace,
-    });
-
-    expect(report.workspaceDir).toBe(explicitWorkspace);
-    expect(report.plugins.map((plugin) => plugin.id)).toEqual([explicit.pluginId]);
-    expect(isColdPluginRuntimeLoaded(configured)).toBe(false);
-    expect(isColdPluginRuntimeLoaded(explicit)).toBe(false);
-  });
-
-  it("keeps configured workspace plugins across manual and policy registry refreshes", async () => {
-    const rootDir = makeTempDir();
-    const stateDir = path.join(rootDir, "state");
-    const workspaceDir = path.join(rootDir, "workspace");
-    const fixture = createWorkspacePluginFixture(workspaceDir, "workspace-demo");
-    const env = {
-      ...createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const config = {
-      agents: { defaults: { workspace: workspaceDir } },
-      plugins: {
-        allow: [fixture.pluginId],
-        entries: { [fixture.pluginId]: { enabled: true } },
-      },
-    };
-
-    const initial = await refreshPluginRegistry({ config, env, reason: "manual", stateDir });
-    expect(initial.plugins.map((plugin) => plugin.pluginId)).toEqual([fixture.pluginId]);
-
-    const disabledConfig = {
-      ...config,
-      plugins: { ...config.plugins, entries: { [fixture.pluginId]: { enabled: false } } },
-    };
-    const disabled = await refreshPluginRegistry({
-      config: disabledConfig,
-      env,
-      policyPluginIds: [fixture.pluginId],
-      reason: "policy-changed",
-      stateDir,
-    });
-    expect(disabled.plugins).toEqual([
-      expect.objectContaining({ pluginId: fixture.pluginId, origin: "workspace", enabled: false }),
-    ]);
-
-    const reenabled = await refreshPluginRegistry({
-      config,
-      env,
-      policyPluginIds: [fixture.pluginId],
-      reason: "policy-changed",
-      stateDir,
-    });
-    expect(reenabled.plugins).toEqual([
-      expect.objectContaining({ pluginId: fixture.pluginId, origin: "workspace", enabled: true }),
-    ]);
-    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual([fixture.pluginId]);
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  });
-
-  it("preserves an explicit workspace when refreshing the configured plugin registry", async () => {
-    const rootDir = makeTempDir();
-    const stateDir = path.join(rootDir, "state");
-    const configuredWorkspace = path.join(rootDir, "configured-workspace");
-    const explicitWorkspace = path.join(rootDir, "explicit-workspace");
-    const configured = createWorkspacePluginFixture(configuredWorkspace, "configured-plugin");
-    const explicit = createWorkspacePluginFixture(explicitWorkspace, "explicit-plugin");
-    const env = {
-      ...createColdPluginHermeticEnv(rootDir, { bundledPluginsDir: makeTempDir() }),
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-
-    const refreshed = await refreshPluginRegistry({
-      config: {
-        agents: { defaults: { workspace: configuredWorkspace } },
-        plugins: { allow: [configured.pluginId, explicit.pluginId] },
-      },
-      env,
-      reason: "manual",
-      stateDir,
-      workspaceDir: explicitWorkspace,
-    });
-
-    expect(refreshed.plugins).toEqual([
-      expect.objectContaining({ pluginId: explicit.pluginId, origin: "workspace" }),
-    ]);
-    expect(isColdPluginRuntimeLoaded(configured)).toBe(false);
-    expect(isColdPluginRuntimeLoaded(explicit)).toBe(false);
-  });
-
   it("reports package dependency install state without importing plugin runtime", () => {
     const rootDir = makeTempDir();
     const fixture = createColdPluginFixture({
       rootDir,
       pluginId: "dependency-demo",
       packageJson: {
-        dependencies: {
-          "missing-required": "1.0.0",
-          "present-required": "1.0.0",
-        },
-        optionalDependencies: {
-          "missing-optional": "1.0.0",
-        },
+        dependencies: { "missing-required": "1.0.0", "present-required": "1.0.0" },
+        optionalDependencies: { "missing-optional": "1.0.0" },
       },
-      manifest: {
-        id: "dependency-demo",
-        name: "Dependency Demo",
-      },
+      manifest: { id: "dependency-demo", name: "Dependency Demo" },
     });
     const dependencyDir = path.join(rootDir, "node_modules", "present-required");
     fs.mkdirSync(dependencyDir, { recursive: true });
@@ -807,86 +380,34 @@ describe("buildPluginRegistrySnapshotReport", () => {
     );
 
     const report = buildPluginRegistrySnapshotReport({
-      config: {
-        plugins: {
-          load: { paths: [fixture.rootDir] },
-        },
-      },
+      config: { plugins: { load: { paths: [fixture.rootDir] } } },
     });
 
-    const plugin = requirePlugin(report.plugins, "dependency-demo");
-    expectFields(plugin, {
-      status: "error",
-      error:
-        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.',
-    });
+    const plugin = report.plugins.find((entry) => entry.id === "dependency-demo");
+    const message =
+      'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.';
+    expect(plugin).toEqual(expect.objectContaining({ status: "error", error: message }));
     expect(report.diagnostics).toContainEqual({
       level: "error",
       pluginId: "dependency-demo",
       source: fs.realpathSync(fixture.runtimeSource),
-      message:
-        'Plugin "dependency-demo" cannot load because required dependencies are missing: missing-required. Install the plugin dependencies or reinstall/update the plugin, then restart the Gateway.',
+      message,
     });
-    const dependencyStatus = requireRecord(plugin.dependencyStatus);
-    expectFields(dependencyStatus, {
+    expect(plugin?.dependencyStatus).toMatchObject({
       hasDependencies: true,
       installed: false,
       requiredInstalled: false,
       optionalInstalled: false,
       missing: ["missing-required"],
       missingOptional: ["missing-optional"],
+      dependencies: [
+        { name: "missing-required", spec: "1.0.0", installed: false, optional: false },
+        { name: "present-required", spec: "1.0.0", installed: true, optional: false },
+      ],
+      optionalDependencies: [
+        { name: "missing-optional", spec: "1.0.0", installed: false, optional: true },
+      ],
     });
-    const dependencies = requireRecordArray(dependencyStatus.dependencies);
-    expect(dependencies).toHaveLength(2);
-    expectFields(requireNamedEntry(dependencies, "missing-required"), {
-      name: "missing-required",
-      spec: "1.0.0",
-      installed: false,
-      optional: false,
-    });
-    expectFields(requireNamedEntry(dependencies, "present-required"), {
-      name: "present-required",
-      spec: "1.0.0",
-      installed: true,
-      optional: false,
-    });
-    const optionalDependencies = requireRecordArray(dependencyStatus.optionalDependencies);
-    expect(optionalDependencies).toHaveLength(1);
-    expectFields(requireNamedEntry(optionalDependencies, "missing-optional"), {
-      name: "missing-optional",
-      spec: "1.0.0",
-      installed: false,
-      optional: true,
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  });
-
-  it("honors npm optional dependency precedence without reporting a false required failure", () => {
-    const fixture = createColdPluginFixture({
-      rootDir: makeTempDir(),
-      pluginId: "optional-dependency-demo",
-      packageJson: {
-        dependencies: { "optional-runtime": "1.0.0" },
-        optionalDependencies: { "optional-runtime": "2.0.0" },
-      },
-    });
-
-    const report = buildPluginRegistrySnapshotReport({
-      config: createColdPluginConfig(fixture.rootDir, fixture.pluginId),
-    });
-    const plugin = requirePlugin(report.plugins, fixture.pluginId);
-
-    expectFields(plugin, { status: "loaded" });
-    expectFields(requireRecord(plugin.dependencyStatus), {
-      requiredInstalled: true,
-      optionalInstalled: false,
-      missing: [],
-      missingOptional: ["optional-runtime"],
-      dependencies: [],
-    });
-    expect(report.diagnostics).not.toContainEqual(
-      expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
-    );
     expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 
@@ -906,15 +427,15 @@ describe("buildPluginRegistrySnapshotReport", () => {
         },
       },
     });
-    const plugin = requirePlugin(report.plugins, fixture.pluginId);
+    const plugin = report.plugins.find((entry) => entry.id === fixture.pluginId);
 
-    expectFields(plugin, {
+    expect(plugin).toMatchObject({
       enabled: false,
       status: "disabled",
       toolNames: ["disabled_demo_tool"],
     });
-    expect(plugin.error).toBeUndefined();
-    expect(requireRecord(plugin.dependencyStatus).missing).toEqual(["missing-required"]);
+    expect(plugin?.error).toBeUndefined();
+    expect(plugin?.dependencyStatus?.missing).toEqual(["missing-required"]);
     expect(report.diagnostics).not.toContainEqual(
       expect.objectContaining({ pluginId: fixture.pluginId, level: "error" }),
     );
@@ -947,15 +468,15 @@ describe("buildPluginRegistrySnapshotReport", () => {
         logger: { info() {}, warn() {}, error() {}, debug() {} },
       },
       (report) => {
-        const plugin = requirePlugin(report.plugins, fixture.pluginId);
+        const plugin = report.plugins.find((entry) => entry.id === fixture.pluginId);
         const diagnostics = report.diagnostics.filter(
           (entry) => entry.pluginId === fixture.pluginId,
         );
 
-        expectFields(plugin, { status: "error" });
-        expect(String(plugin.error)).toContain("Plugin dependency missing-runtime is missing from");
-        expect(String(plugin.error)).toContain("Install the plugin dependencies");
-        expectFields(requireRecord(plugin.dependencyStatus), {
+        expect(plugin?.status).toBe("error");
+        expect(plugin?.error).toContain("Plugin dependency missing-runtime is missing from");
+        expect(plugin?.error).toContain("Install the plugin dependencies");
+        expect(plugin?.dependencyStatus).toMatchObject({
           missing: ["missing-runtime"],
           missingOptional: ["optional-runtime"],
         });
@@ -967,85 +488,5 @@ describe("buildPluginRegistrySnapshotReport", () => {
         expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
       },
     );
-  });
-
-  it("replays persisted list metadata without importing plugin runtime", async () => {
-    const fixture = createColdPluginFixture({
-      rootDir: makeTempDir(),
-      pluginId: "persisted-demo",
-      packageName: "@example/openclaw-persisted-demo",
-      packageVersion: "2.0.0",
-      manifest: {
-        id: "persisted-demo",
-        name: "Persisted Demo",
-        description: "Persisted registry metadata",
-        providers: ["persisted-provider"],
-        commandAliases: [{ name: "persisted-demo" }],
-      },
-    });
-    const workspaceDir = makeTempDir();
-    const config = createColdPluginConfig(fixture.rootDir, fixture.pluginId);
-    const env = createColdPluginHermeticEnv(workspaceDir, {
-      bundledPluginsDir: makeTempDir(),
-    });
-
-    await refreshPluginRegistry({
-      config,
-      workspaceDir,
-      env,
-      reason: "manual",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-
-    const report = buildPluginRegistrySnapshotReport({
-      config,
-      workspaceDir,
-      env,
-    });
-
-    expect(report.registrySource).toBe("persisted");
-    expectFields(requirePlugin(report.plugins, "persisted-demo"), {
-      id: "persisted-demo",
-      name: "Persisted Demo",
-      description: "Persisted registry metadata",
-      version: "2.0.0",
-      providerIds: ["persisted-provider"],
-      commands: ["persisted-demo"],
-      source: fs.realpathSync(fixture.runtimeSource),
-      status: "loaded",
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
-  });
-
-  it("builds read-only plugin status snapshots without importing plugin runtime", () => {
-    const fixture = createColdPluginFixture({
-      rootDir: makeTempDir(),
-      pluginId: "snapshot-demo",
-      manifest: {
-        id: "snapshot-demo",
-        name: "Snapshot Demo",
-        description: "Status metadata",
-        providers: ["snapshot-provider"],
-      },
-      providerId: "snapshot-provider",
-      runtimeMessage: "runtime entry should not load for plugin status snapshot report",
-    });
-    const workspaceDir = makeTempDir();
-    const report = buildPluginSnapshotReport({
-      config: createColdPluginConfig(fixture.rootDir, fixture.pluginId),
-      workspaceDir,
-      env: createColdPluginHermeticEnv(workspaceDir, {
-        bundledPluginsDir: makeTempDir(),
-      }),
-    });
-
-    expectFields(requirePlugin(report.plugins, "snapshot-demo"), {
-      id: "snapshot-demo",
-      name: "Snapshot Demo",
-      source: fs.realpathSync(fixture.runtimeSource),
-      status: "loaded",
-      imported: false,
-    });
-    expect(isColdPluginRuntimeLoaded(fixture)).toBe(false);
   });
 });

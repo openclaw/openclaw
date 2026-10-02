@@ -46,7 +46,6 @@ export const WebPushNotificationCategorySchema = Type.String({
     "agent-question",
     "human-mentioned",
     "scheduled-task-failed",
-    "background-task-failed",
   ],
 });
 
@@ -60,7 +59,6 @@ const WebPushCategoryPreferencesSchema = closedObject({
   agentQuestion: Type.Boolean(),
   humanMentioned: Type.Optional(Type.Boolean()),
   scheduledTaskFailed: Type.Boolean(),
-  backgroundTaskFailed: Type.Boolean(),
 });
 
 const WebPushQuietHoursSchema = closedObject({
@@ -87,7 +85,6 @@ export const WebPushDevicePreferencesSchema = closedObject({
       agentQuestion: Type.Optional(Type.Boolean()),
       humanMentioned: Type.Optional(Type.Boolean()),
       scheduledTaskFailed: Type.Optional(Type.Boolean()),
-      backgroundTaskFailed: Type.Optional(Type.Boolean()),
     }),
   ),
   detailLevel: Type.Optional(WebPushDetailLevelSchema),

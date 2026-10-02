@@ -3,11 +3,25 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
+import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { UpdateDoctorError } from "../infra/update-doctor-result.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
+
+export const postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]> =
+  {
+    status: "advisory",
+    advisory: {
+      kind: "package-post-install-doctor",
+      message: "recoverable plugin repair",
+      reason: "deferred-configured-plugin-repair",
+      details: ["plugin repair deferred"],
+    },
+  };
 
 const mocks = vi.hoisted(() => ({
   outro: vi.fn(),
@@ -15,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
   writeUpdatePostInstallDoctorResult: vi.fn(),
   service: vi.fn(),
+  resident: vi.fn<() => { pid: number } | undefined>(),
   probePortUsage: vi.fn<(typeof import("../infra/ports-probe.js"))["probePortUsage"]>(),
   inspectGatewayRestart:
     vi.fn<(typeof import("../cli/daemon-cli/restart-health.js"))["inspectGatewayRestart"]>(),
@@ -31,6 +46,7 @@ const mocks = vi.hoisted(() => ({
 
 const runtimeDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
+  mocks.resident.mockReset();
   mocks.runtimeTmpDir.mockReturnValue(runtimeDirs.make("openclaw-doctor-runtime-"));
   mocks.inspectGatewayRestart.mockReset().mockImplementation(async (params) => ({
     runtime: await params.service.readRuntime(params.env ?? process.env),
@@ -58,6 +74,35 @@ beforeEach(() => {
   });
 });
 
+vi.mock("../gateway/call.js", async (original) => {
+  const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../gateway/call.js")>()),
+    callGatewayCli: gatewayMaintenanceResponse(() => mocks.resident()),
+  };
+});
+
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/service-process-membership.js")>();
+  return {
+    ...actual,
+    // The in-memory manager models Doctor as an external caller, not a host service member.
+    inspectServiceProcessMembershipSync: (
+      ...args: Parameters<typeof actual.inspectServiceProcessMembershipSync>
+    ) =>
+      mocks.emulateNativeInstall ? "outside" : actual.inspectServiceProcessMembershipSync(...args),
+  };
+});
+
+vi.mock("../daemon/systemd-exec.js", async (original) => {
+  const { gatewayMaintenanceSystemdShow } =
+    await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../daemon/systemd-exec.js")>()),
+    execSystemctlUser: gatewayMaintenanceSystemdShow,
+  };
+});
+
 // The synthetic manager's leases and locks belong to its private fixture root.
 vi.mock("../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tmp-openclaw-dir.js")>()),
@@ -68,10 +113,6 @@ vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   note: vi.fn(),
   outro: mocks.outro,
-}));
-
-vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({ confirm: async () => true }),
 }));
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
@@ -132,13 +173,20 @@ vi.mock("../cli/update-cli/update-command-service-maintenance.js", async (import
   };
 });
 
-vi.mock("../cli/update-cli/update-command-service-plan.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../cli/update-cli/update-command-service-plan.js")>()),
-  // The fixture owns an in-memory manager; native machine profile policy is
-  // covered at the updater boundary and must not select a host service here.
-  assertGatewayServiceManagementAllowedForUpdate: () => undefined,
-  resolveGatewayServiceManagementBlockMessageForUpdate: () => undefined,
-}));
+vi.mock("../infra/gateway-supervision.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/gateway-supervision.js")>();
+  return {
+    ...actual,
+    // Emulate only the fixture's native manager; keep updater readers and policy wrappers real.
+    assertGatewayServiceMutationAllowed: (
+      ...args: Parameters<typeof actual.assertGatewayServiceMutationAllowed>
+    ) => {
+      if (!mocks.emulateNativeInstall) {
+        actual.assertGatewayServiceMutationAllowed(...args);
+      }
+    },
+  };
+});
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
@@ -161,6 +209,7 @@ vi.mock("../commands/doctor-install.js", () => ({
 
 vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
   noteStalePluginRuntimeSymlinks: async () => undefined,
+  removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
@@ -210,9 +259,7 @@ export const doctorServiceInspectionCases = [
   "absent-busy-port",
   "absent-unknown-port",
   "windows-ready",
-  "windows-disabled",
   "windows-queued",
-  "windows-running",
   "windows-startup-stopped",
   "windows-startup-unknown",
 ].flatMap((kind) => [
@@ -232,9 +279,19 @@ export function seedMaintenanceStartupFailure(openDatabase: () => OpenClawStateD
 
 export function registerDoctorConfigReceiptTests(
   runDoctorHealthFlow: typeof import("./doctor-health.js").runDoctorHealthFlow,
-  postInstallAdvisory: NonNullable<DoctorHealthFlowContext["postInstallDoctorResult"]>,
 ) {
-  it.each(["unchanged", "ok", "error", "advisory", "interleaved"] as const)(
+  it.each([
+    "unchanged",
+    "ok",
+    "error",
+    "advisory",
+    "interleaved",
+    "partial-config",
+    "unrestored-config",
+    "restored-config",
+    "schema-refusal",
+    "wrapped-refusal",
+  ] as const)(
     "reports the consumed input and last committed Doctor config hash before exiting (%s)",
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -245,7 +302,41 @@ export function registerDoctorConfigReceiptTests(
         const expectedInputHash = hashConfigRaw(
           fs.existsSync(state.configPath) ? fs.readFileSync(state.configPath, "utf8") : null,
         );
-        const failure = new Error("health check failed after config commit");
+        const configFailure = (
+          publication: "partial" | "complete",
+          rollbackStatus: "unknown" | "not-restored" | "restored",
+        ) =>
+          new ConfigWritePostCommitError({
+            configPath: state.configPath,
+            publication,
+            rollbackStatus,
+            cause: new Error("fixture config publication failed"),
+          });
+        const failures: Partial<Record<typeof outcome, Error>> = {
+          error: new Error("health check failed after config commit"),
+          "partial-config": new AggregateError(
+            [configFailure("partial", "unknown")],
+            "maintenance failed",
+          ),
+          "unrestored-config": configFailure("complete", "not-restored"),
+          "restored-config": configFailure("partial", "restored"),
+          "schema-refusal": new UpdateSchemaRefusalError([], "2026.9.2", {
+            targetVersion: "2026.9.5",
+          }),
+          "wrapped-refusal": new AggregateError(
+            [
+              new UpdateDoctorError("Doctor could not stop its writer", [
+                {
+                  check: "gateway-stop",
+                  code: "stale-gateway-stop-failed",
+                  message: "Doctor could not stop its writer",
+                },
+              ]),
+            ],
+            "Maintenance admission and recovery failed",
+          ),
+        };
+        const failure = failures[outcome];
         mocks.runContributions.mockImplementation(async (ctx) => {
           if (outcome === "unchanged") {
             return;
@@ -260,7 +351,7 @@ export function registerDoctorConfigReceiptTests(
             }
           }
           fs.appendFileSync(state.configPath, "\n// operator saved after Doctor\n");
-          if (outcome === "error") {
+          if (failure) {
             throw failure;
           }
           if (outcome === "advisory") {
@@ -268,7 +359,7 @@ export function registerDoctorConfigReceiptTests(
           }
         });
         const completed = runDoctorHealthFlow(runtime, { nonInteractive: true });
-        if (outcome === "error") {
+        if (failure) {
           await expect(completed).rejects.toBe(failure);
         } else {
           await completed;
@@ -278,12 +369,35 @@ export function registerDoctorConfigReceiptTests(
           result: {
             ...(outcome === "advisory"
               ? postInstallAdvisory
-              : { status: outcome === "error" ? "error" : "ok" }),
+              : { status: failure ? "error" : "ok" }),
+            ...(outcome === "partial-config" || outcome === "unrestored-config"
+              ? { maintenanceRefusal: { kind: "data-at-risk", reason: "gateway-state-unverified" } }
+              : outcome === "schema-refusal"
+                ? { maintenanceRefusal: { kind: "data-at-risk", reason: "incomplete-migration" } }
+                : {}),
             configHash: expectedHash,
-            ...(outcome === "error"
+            ...(failure
               ? {
                   failureFacts: [
-                    { check: "doctor", code: "doctor-failed", message: failure.message },
+                    {
+                      check:
+                        outcome === "partial-config" || outcome === "unrestored-config"
+                          ? "config-write"
+                          : outcome === "schema-refusal"
+                            ? "database-schema-preflight"
+                            : outcome === "wrapped-refusal"
+                              ? "gateway-stop"
+                              : "doctor",
+                      code:
+                        outcome === "partial-config" || outcome === "unrestored-config"
+                          ? "rollback-state-unverified"
+                          : outcome === "schema-refusal"
+                            ? "update-schema-bump-unfenced"
+                            : outcome === "wrapped-refusal"
+                              ? "stale-gateway-stop-failed"
+                              : "doctor-failed",
+                      message: outcome === "error" ? failure.message : expect.any(String),
+                    },
                   ],
                 }
               : {}),
@@ -314,6 +428,7 @@ export function registerDoctorConfigReceiptTests(
     "preserves health warnings in the update result (advisory=%s)",
     async (advisory) => {
       mocks.runContributions.mockImplementation(async (ctx) => {
+        ctx.configResult.warnings = ['Plugin "fixture" config repair failed; config preserved.'];
         await createDoctorHealthContribution({
           id: "doctor:fixture-warning",
           label: "Fixture warning",
@@ -345,7 +460,10 @@ export function registerDoctorConfigReceiptTests(
         result: {
           ...(advisory ? postInstallAdvisory : { status: "ok" }),
           configHash: "unchanged",
-          warnings: ["core/doctor/fixture-warning: optional maintenance incomplete"],
+          warnings: [
+            'Plugin "fixture" config repair failed; config preserved.',
+            "core/doctor/fixture-warning: optional maintenance incomplete",
+          ],
         },
       });
       expect(runtime.exit).not.toHaveBeenCalledWith(1);

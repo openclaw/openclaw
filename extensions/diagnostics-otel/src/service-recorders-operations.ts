@@ -3,12 +3,12 @@ import {
   normalizeDiagnosticValue,
   normalizeDiagnosticLane,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
-import { redactSensitiveText } from "../api.js";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticEventPrivateData,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOtelErrorMessage } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
 import type { SessionRecoveryDiagnosticEvent, TalkDiagnosticEvent } from "./service-types.js";
@@ -249,7 +249,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     if (!tracesEnabled) {
       return;
     }
-    const span = spanWithDuration("openclaw.tool.loop", attrs, 0, { endTimeMs: evt.ts });
+    const spanAttrs: Record<string, string | number | boolean> = { ...attrs };
+    addRunAttrs(spanAttrs, evt);
+    const span = spanWithDuration("openclaw.tool.loop", spanAttrs, 0, { endTimeMs: evt.ts });
     if (evt.level === "critical" || evt.action === "block") {
       span.setStatus({
         code: SpanStatusCode.ERROR,
@@ -271,12 +273,6 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     memoryHeapTotalHistogram.record(evt.memory.heapTotalBytes, attrs);
     memoryExternalHistogram.record(evt.memory.externalBytes, attrs);
     memoryArrayBuffersHistogram.record(evt.memory.arrayBuffersBytes, attrs);
-  };
-
-  const recordMemorySample = (
-    evt: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>,
-  ) => {
-    recordMemoryUsageMetrics(evt);
   };
 
   const recordMemoryPressure = (
@@ -324,20 +320,16 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     asyncQueueDroppedCounter.add(evt.droppedEvents, {
       "openclaw.diagnostic.async_queue.drop_class": "total",
     });
-    if (evt.droppedTrustedEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedTrustedEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "trusted",
-      });
-    }
-    if (evt.droppedUntrustedEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedUntrustedEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "untrusted",
-      });
-    }
-    if (evt.droppedPriorityEvents !== undefined) {
-      asyncQueueDroppedCounter.add(evt.droppedPriorityEvents, {
-        "openclaw.diagnostic.async_queue.drop_class": "priority",
-      });
+    for (const [dropClass, field] of [
+      ["trusted", "droppedTrustedEvents"],
+      ["untrusted", "droppedUntrustedEvents"],
+      ["priority", "droppedPriorityEvents"],
+    ] as const) {
+      if (evt[field] !== undefined) {
+        asyncQueueDroppedCounter.add(evt[field], {
+          "openclaw.diagnostic.async_queue.drop_class": dropClass,
+        });
+      }
     }
   };
 
@@ -395,11 +387,7 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         ...(message ? { message } : {}),
       });
     }
-    if (trackedSpan && trustedTrace?.spanId) {
-      completeTrackedLifecycleSpan(trustedTrace, trackedSpan, evt.ts);
-      return;
-    }
-    span.end(evt.ts);
+    completeTrackedLifecycleSpan(trackedSpan ? trustedTrace : undefined, span, evt.ts);
   };
 
   return {
@@ -415,7 +403,6 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
     recordRunAttempt,
     recordToolLoop,
     recordMemoryUsageMetrics,
-    recordMemorySample,
     recordMemoryPressure,
     recordAsyncQueueDropped,
     recordRunCompleted,

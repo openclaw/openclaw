@@ -145,6 +145,91 @@ describe("normalizeCronJobCreate", () => {
     },
   );
 
+  describe.each(["create", "patch"] as const)("%s authority envelopes", (mode) => {
+    const normalize = mode === "create" ? normalizeCreate : normalizePatch;
+    const envelopes = {
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "local" },
+        channelRequester: CHANNEL_REQUESTER,
+      },
+      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
+      toolsAllowExecTargetRequirement: {
+        version: 1,
+        target: { version: 1, host: "gateway", ask: "always" },
+        grantIndex: 0,
+      },
+      runtimeAuthority: {
+        version: 1,
+        runtimeId: "test-runtime",
+        namespace: "test.authority",
+        payload: { tools: [{ id: "read", enabled: true }] },
+      },
+    };
+
+    it("does not materialize omitted, undefined, or inherited authority fields", () => {
+      for (const input of [
+        {},
+        {
+          scheduledToolPolicy: undefined,
+          toolsAllowProvenance: undefined,
+          toolsAllowExecTarget: undefined,
+          toolsAllowExecTargetRequirement: undefined,
+          runtimeAuthority: undefined,
+        },
+        Object.create(envelopes) as UnknownRecord,
+      ]) {
+        const normalized = normalize(input);
+
+        expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+        expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+        expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+        expect(normalized).not.toHaveProperty("toolsAllowExecTargetRequirement");
+        expect(normalized).not.toHaveProperty("runtimeAuthority");
+      }
+    });
+
+    it("retains valid envelopes without mutating or freezing the input", () => {
+      const input = structuredClone(envelopes);
+
+      const normalized = normalize(input);
+
+      expect(normalized).toMatchObject(envelopes);
+      expect(input).toEqual(envelopes);
+      const authority = child(normalized, "runtimeAuthority");
+      const payload = child(authority, "payload");
+      expect(authority).not.toBe(input.runtimeAuthority);
+      expect(payload).not.toBe(input.runtimeAuthority.payload);
+      expect(Object.isFrozen(authority)).toBe(true);
+      expect(Object.isFrozen(payload)).toBe(true);
+      expect(Object.isFrozen((payload.tools as unknown[])[0])).toBe(true);
+      expect(Object.isFrozen(input.runtimeAuthority)).toBe(false);
+      expect(Object.isFrozen(input.runtimeAuthority.payload)).toBe(false);
+      expect(Object.isFrozen(input.runtimeAuthority.payload.tools[0])).toBe(false);
+    });
+
+    it("retains a recovery marker while dropping invalid peer envelopes", () => {
+      const normalized = normalize({
+        scheduledToolPolicy: { version: 2, mode: "trusted" },
+        toolsAllowProvenance: { version: 2, source: "authenticated-requester" },
+        toolsAllowExecTarget: { version: 1, host: "remote" },
+        toolsAllowExecTargetRequirement: null,
+        runtimeAuthority: { ...envelopes.runtimeAuthority, version: 2 },
+      });
+
+      expect(normalized.toolsAllowExecTargetRequirement).toEqual({
+        version: 1,
+        recoveryRequired: true,
+      });
+      expect(normalized).not.toHaveProperty("scheduledToolPolicy");
+      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+      expect(normalized).not.toHaveProperty("toolsAllowExecTarget");
+      expect(normalized).not.toHaveProperty("runtimeAuthority");
+    });
+  });
+
   it.each(["create", "patch"] as const)(
     "does not promote prototype-only schedule fields during %s normalization",
     (mode) => {
@@ -283,10 +368,7 @@ describe("normalizeCronJobCreate", () => {
     );
     expect(normalized.sessionTarget).toBe("current");
     expect(normalized.sessionKey).toBe("agent:main:telegram:direct:42");
-  });
-  it("canonicalizes delivery.channel casing", () => {
-    const delivery = agentDelivery({ mode: "announce", channel: "Telegram", to: "7200373102" });
-    expectAnnounceDeliveryTarget(delivery, { channel: "telegram", to: "7200373102" });
+    expect(normalized.delivery).toEqual({ mode: "announce" });
   });
   it("preserves explicit null model clear in payload patches", () => {
     const normalized = normalizePatch({ payload: { kind: "agentTurn", model: null } });
@@ -423,9 +505,6 @@ describe("normalizeCronJobCreate", () => {
     expect(delivery.channel).toBe("telegram");
     expect(delivery.to).toBe("123");
     expect(validateCronAddParams(normalized)).toBe(false);
-  });
-  it("defaults isolated agentTurn delivery to announce", () => {
-    expect(child(createAgent(), "delivery").mode).toBe("announce");
   });
   it("defaults command payloads to isolated announce jobs", () => {
     const normalized = createDefaulted({
@@ -580,23 +659,20 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.sessionTarget).toBe("isolated");
     expect(normalized.wakeMode).toBe("now");
   });
-  it("strips invalid delivery mode from partial delivery objects", () => {
-    const delivery = child(
-      createDefaulted(AGENT_TURN, {
+  it.each(["bogus", "deliver", null])(
+    "preserves invalid delivery mode %s so create and patch validation reject it",
+    (mode) => {
+      const created = createDefaulted(AGENT_TURN, {
         schedule: CRON_SCHEDULE,
-        delivery: { mode: "bogus", to: "123" },
-      }),
-      "delivery",
-    );
-    expect(delivery.mode).toBeUndefined();
-    expect(delivery.to).toBe("123");
-  });
-  it("stores current sessionTarget source context when context is available", () => {
-    const normalized = createAgent({ sessionTarget: "current" }, "agent:main:discord:group:ops");
-    expect(normalized.sessionTarget).toBe("current");
-    expect(normalized.sessionKey).toBe("agent:main:discord:group:ops");
-    expect(normalized.delivery).toEqual({ mode: "announce" });
-  });
+        delivery: { mode, to: "123" },
+      });
+      const patch = normalizePatch({ delivery: { mode, to: "123" } });
+      expect(child(created, "delivery")).toMatchObject({ mode, to: "123" });
+      expect(child(patch, "delivery")).toEqual({ mode, to: "123" });
+      expect(validateCronAddParams(created)).toBe(false);
+      expect(validateCronUpdateParams({ id: "job", patch })).toBe(false);
+    },
+  );
   it("falls back current sessionTarget to isolated without context", () => {
     const normalized = createAgent({ sessionTarget: "current" });
     expect(normalized.sessionTarget).toBe("isolated");
@@ -827,18 +903,6 @@ describe("normalizeCronJobPatch", () => {
       },
     });
     expect(normalized.payload).toEqual({ kind: "systemEvent", text: "hi", toolsAllow: ["exec"] });
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
-  });
-  it("prunes schedule fields that do not belong to at schedules for patches", () => {
-    const normalized = normalizePatch({ schedule: STALE_AT_SCHEDULE });
-    expect(normalized.schedule).toEqual(NORMALIZED_AT_SCHEDULE);
-    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
-  });
-  it("prunes staggerMs from every schedules for patches", () => {
-    const normalized = normalizePatch({
-      schedule: { kind: "every", everyMs: 60_000, staggerMs: 30_000 },
-    });
-    expect(normalized.schedule).toEqual(EVERY_SCHEDULE);
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 });

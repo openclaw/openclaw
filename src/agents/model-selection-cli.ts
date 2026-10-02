@@ -34,10 +34,7 @@ export function isCliProvider(
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
-  if (
-    resolvePluginSetupCliBackendDescriptor({ backend: normalized, config: cfg, metadataSnapshot })
-  ) {
-    return true;
-  }
-  return false;
+  return Boolean(
+    resolvePluginSetupCliBackendDescriptor({ backend: normalized, config: cfg, metadataSnapshot }),
+  );
 }

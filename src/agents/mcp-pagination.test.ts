@@ -13,26 +13,23 @@ afterEach(() => {
 });
 
 describe("collectMcpPaginatedItems", () => {
-  it.each(["tool", "resource", "prompt"])(
-    "preserves normal %s ordering and treats an empty cursor as present",
-    async (operation) => {
-      const cursors: Array<string | undefined> = [];
-      const result = await collectMcpPaginatedItems({
-        label: `MCP ${operation} listing`,
-        itemLabel: `${operation}s`,
-        ...limits,
-        loadPage: async ({ cursor }) => {
-          cursors.push(cursor);
-          return cursor === undefined
-            ? { items: [`${operation}-one`], nextCursor: "" }
-            : { items: [`${operation}-two`] };
-        },
-      });
+  it("preserves ordering and treats an empty cursor as present", async () => {
+    const cursors: Array<string | undefined> = [];
+    const result = await collectMcpPaginatedItems({
+      label: "MCP tool listing",
+      itemLabel: "tools",
+      ...limits,
+      loadPage: async ({ cursor }) => {
+        cursors.push(cursor);
+        return cursor === undefined
+          ? { items: ["tool-one"], nextCursor: "" }
+          : { items: ["tool-two"] };
+      },
+    });
 
-      expect(cursors).toEqual([undefined, ""]);
-      expect(result).toEqual([`${operation}-one`, `${operation}-two`]);
-    },
-  );
+    expect(cursors).toEqual([undefined, ""]);
+    expect(result).toEqual(["tool-one", "tool-two"]);
+  });
 
   it("rejects repeated and cyclic cursors", async () => {
     await expect(

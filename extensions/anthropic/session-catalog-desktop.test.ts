@@ -71,7 +71,7 @@ describe("Claude Desktop overlay cache", () => {
 
   it("keeps an absent Desktop store cached until the sixty-second backstop", async () => {
     const absent = await readDesktopOverlay(home);
-    expect(absent.available).toBe(false);
+    expect(absent.active.size).toBe(0);
     expect(closeWatch).toHaveBeenCalledOnce();
 
     await writeDesktopMetadata(home, "Created");
@@ -80,7 +80,6 @@ describe("Claude Desktop overlay cache", () => {
 
     now += 1;
     const refreshed = await readDesktopOverlay(home);
-    expect(refreshed.available).toBe(true);
     expect(refreshed.active.get("fixture-session")?.title).toBe("Created");
   });
 });

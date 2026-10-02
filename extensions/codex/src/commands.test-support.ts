@@ -1,13 +1,92 @@
+import path from "node:path";
+import { clearRuntimeAuthProfileStoreSnapshots } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  clearSessionStoreCacheForTest,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { CodexAppServerStartOptions } from "./app-server/config.js";
 import type { CodexAppServerThreadBinding } from "./app-server/session-binding.js";
 import {
   buildCodexSupervisionTestConnectionFingerprint,
+  resetCodexTestBindingStore,
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
+import { resetSharedCodexAppServerClientForTests } from "./app-server/shared-client.js";
+import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
+import { codexDiagnosticsFeedbackState } from "./command-diagnostics-state.js";
+import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
+
+export function useCodexCommandTestState(options: {
+  onSetup: (tempDir: string) => void;
+  beforeCleanup?: () => void;
+}): void {
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      options.beforeCleanup?.();
+      codexDiagnosticsFeedbackState.clear();
+      resetSharedCodexAppServerClientForTests();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
+      clearRuntimeAuthProfileStoreSnapshots();
+      clearSessionStoreCacheForTest();
+      vi.unstubAllEnvs();
+      cleanup();
+    }),
+  );
+
+  beforeEach(() => {
+    resetCodexTestBindingStore();
+    const tempDir = tempDirs.make("openclaw-codex-command-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    options.onSetup(tempDir);
+  });
+}
+
+export function createThreadResumeResponse(params: {
+  threadId: string;
+  cwd?: string;
+  model?: string;
+  modelProvider?: string;
+  canAcceptDirectInput?: boolean | null;
+}) {
+  const cwd = params.cwd ?? "/repo";
+  const modelProvider = params.modelProvider ?? "openai";
+  return {
+    thread: {
+      id: params.threadId,
+      sessionId: params.threadId,
+      projectId: null,
+      cliVersion: CODEX_APP_SERVER_VERSION,
+      createdAt: 1,
+      updatedAt: 1,
+      cwd,
+      ephemeral: false,
+      modelProvider,
+      preview: "",
+      source: "appServer",
+      ...(params.canAcceptDirectInput !== undefined
+        ? { canAcceptDirectInput: params.canAcceptDirectInput }
+        : {}),
+      status: { type: "idle" },
+      turns: [],
+    },
+    model: params.model ?? "gpt-5.4",
+    modelProvider,
+    cwd,
+    approvalPolicy: "never",
+    approvalsReviewer: "user",
+    sandbox: { type: "dangerFullAccess" },
+  };
+}
 
 export function createContext(
   args: string,
@@ -146,4 +225,41 @@ export function expectedDiagnosticsTargetBlock(params: {
     `Codex thread id: \`${params.threadId}\``,
     `Inspect locally: \`codex resume ${params.threadId}\``,
   ];
+}
+
+export async function createCodexRuntimeContextOverrides(
+  tempDir: string,
+  sessionKey = "agent:main:test:codex-compact",
+): Promise<{
+  config: PluginCommandContext["config"];
+  sessionKey: string;
+  sessionTarget: NonNullable<PluginCommandContext["sessionTarget"]>;
+}> {
+  const storePath = path.join(tempDir, "codex-runtime-sessions.json");
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      agentHarnessId: "codex",
+    },
+  });
+  return {
+    config: { session: { store: storePath } },
+    sessionKey,
+    sessionTarget: { agentId: "main", sessionId: "session-1", sessionKey, storePath },
+  };
+}
+
+export function runCommand(
+  args: string,
+  deps: Partial<CodexCommandDeps> = {},
+  context: Partial<PluginCommandContext> = {},
+  options: Omit<Parameters<typeof dispatchCodexCommand>[1], "deps"> = {},
+) {
+  return dispatchCodexCommand(createContext(args, undefined, context), {
+    ...options,
+    deps: createDeps(deps),
+  });
 }

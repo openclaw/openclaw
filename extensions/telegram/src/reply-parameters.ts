@@ -95,16 +95,9 @@ export function buildTelegramThreadReplyParams(opts?: {
   return params;
 }
 
-export function buildTelegramSendParams(opts?: {
-  replyToMessageId?: number;
-  replyQuoteMessageId?: number;
-  replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
-  thread?: TelegramThreadSpec | null;
-  silent?: boolean;
-  useReplyIdAsQuoteSource?: boolean;
-}): Record<string, unknown> {
+export function buildTelegramSendParams(
+  opts?: NonNullable<Parameters<typeof buildTelegramThreadReplyParams>[0]> & { silent?: boolean },
+): Record<string, unknown> {
   const params: Record<string, unknown> = { ...buildTelegramThreadReplyParams(opts) };
   if (opts?.silent === true) {
     params.disable_notification = true;

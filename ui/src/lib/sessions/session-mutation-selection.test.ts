@@ -13,6 +13,7 @@ it.each(["rename", "archive", "delete", "category"] as const)(
   "%s completion preserves loaded and queued foreground queries and reconciles affected managed lists",
   async (operation) => {
     for (const foreground of ["loaded", "queued", "global"] as const) {
+      vi.useFakeTimers();
       const row = {
         key: "agent:main:original",
         sessionId: "original",
@@ -103,10 +104,11 @@ it.each(["rename", "archive", "delete", "category"] as const)(
                 },
               },
         );
+        await vi.advanceTimersByTimeAsync(5_000);
         if (foreground === "queued") {
           // The mutation has reached reconciliation while the old primary request
           // still holds the foreground selection in the roster queue.
-          await vi.waitFor(() => expect(sessions.listSnapshot(managed).result?.ts).toBe(2));
+          expect(sessions.listSnapshot(managed).result?.ts).toBe(2);
         }
         blocked.resolve(sessionsResult([row], 1));
         await pendingRead;
@@ -116,7 +118,7 @@ it.each(["rename", "archive", "delete", "category"] as const)(
         if (foreground !== "global") {
           expect(sessions.state.result?.sessions.map(({ key }) => key)).toEqual([writer.key]);
         }
-        await vi.waitFor(() => expect(sessions.listSnapshot(managed).result?.ts).toBe(2));
+        expect(sessions.listSnapshot(managed).result?.ts).toBe(2);
         const affected = sessions.listSnapshot(managed).result?.sessions ?? [];
         if (operation === "delete") {
           expect(affected).toEqual([]);
@@ -142,6 +144,7 @@ it.each(["rename", "archive", "delete", "category"] as const)(
         await Promise.allSettled([mutation, pendingRead, selecting]);
         stop();
         sessions.dispose();
+        vi.useRealTimers();
       }
     }
   },

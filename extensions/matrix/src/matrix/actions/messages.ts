@@ -312,7 +312,7 @@ function isMatrixThreadRelationsStartCursor(raw: string | undefined, threadId: s
 }
 
 async function fetchDisplayableThreadRootSummary(
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>,
+  client: NonNullable<MatrixActionClientOpts["client"]>,
   resolvedRoom: string,
   threadId: string,
 ): Promise<MatrixMessageSummary | undefined> {
@@ -344,7 +344,7 @@ function isMatrixThreadEvent(event: MatrixRawEvent): boolean {
 }
 
 async function isMatrixPollRootThreaded(params: {
-  client: MatrixActionClientOpts["client"] & NonNullable<MatrixActionClientOpts["client"]>;
+  client: NonNullable<MatrixActionClientOpts["client"]>;
   event: MatrixRawEvent;
   pollRootId: string;
   resolvedRoom: string;

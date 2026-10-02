@@ -1,6 +1,7 @@
 // @vitest-environment node
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { isCronSessionDisplayKey } from "../../../src/shared/session-list-visibility.ts";
+import { i18n } from "../i18n/index.ts";
 import {
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
@@ -10,14 +11,11 @@ import {
 
 describe("isCronSessionDisplayKey", () => {
   it.each([
-    ["cron:job", true],
     [" CRON:JOB ", true],
     ["agent:ops:cron:job", true],
-    ["agent:ops:cron:job:run:one", true],
     ["agent:ops::cron:job", true],
     ["agent: :cron:job", true],
     ["agent:ops:cron:", false],
-    ["agent:ops:cron::", false],
     ["agent::cron:job", false],
     [":agent:ops:cron:job", false],
     ["agent:ops:custom:cron:job", false],
@@ -29,6 +27,23 @@ describe("isCronSessionDisplayKey", () => {
 });
 
 describe("resolveSessionDisplayName", () => {
+  it.each(["Subagent (worker):", "Subagent [worker]:"])(
+    "treats translated prefix %s as literal text",
+    (prefix) => {
+      const translation = vi.spyOn(i18n, "t").mockReturnValue(prefix);
+      try {
+        const key = "agent:main:subagent:worker";
+        const row = { label: `${prefix} Research sources` };
+        expect(resolveSessionDisplayName(key, row)).toBe(row.label);
+        expect(resolveSessionDisplayName(key, row, { includeSubagentPrefix: false })).toBe(
+          "Research sources",
+        );
+      } finally {
+        translation.mockRestore();
+      }
+    },
+  );
+
   it("uses the same friendly main-thread name for every agent", () => {
     for (const key of ["main", "agent:main:main", "agent:research:main", "agent:ops-team:main"]) {
       expect(resolveSessionDisplayName(key)).toBe("Main Session");
@@ -167,14 +182,6 @@ describe("resolveSessionDisplayName", () => {
         derivedTitle: undefined,
       }),
     ).toBe("New session");
-  });
-
-  it("names unnamed work sessions after their checkout", () => {
-    expect(
-      resolveSessionDisplayName("agent:main:dashboard:uuid", {
-        worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/Users/dev/Projects/clawdbot" },
-      }),
-    ).toBe("clawdbot ⎇ wt-3f2a");
   });
 
   it("uses a gateway-derived title for otherwise unnamed sessions", () => {

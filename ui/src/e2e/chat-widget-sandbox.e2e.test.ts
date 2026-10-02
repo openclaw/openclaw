@@ -14,8 +14,8 @@ import {
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
-  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -442,6 +442,15 @@ suite.define(() => {
               inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
             )
             .toBe("dark");
+          // A light proxy between dark documents paints an opaque UA canvas.
+          await expect
+            .poll(() =>
+              outer
+                .contentFrame()
+                .locator("html")
+                .evaluate((root) => getComputedStyle(root).colorScheme),
+            )
+            .toBe("dark");
           await expect
             .poll(() =>
               board.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
@@ -472,6 +481,93 @@ suite.define(() => {
               2,
             ),
           );
+          // Saved HTML has no generated wrapper; the sandbox runtime owns shortcuts.
+          await page.route(`${new URL(boardPath, proxy.baseUrl).href}?*`, (route) =>
+            route.fulfill({
+              contentType: "text/html",
+              body: `<!doctype html><input aria-label="Saved dashboard note">
+                <button onclick="parent.postMessage({type:'openclaw:widget-command-palette',
+                  nonce:window.shortcutNonce||window.scrollNonce},'*');
+                  parent.postMessage({type:'fixture-shortcut-attempted'},'*');">Attempt shortcut</button>
+                <script>window.addEventListener('message',event=>{
+                  if(event.data?.type==='openclaw:widget-board-host')window.scrollNonce=event.data.nonce;
+                  if(event.data?.type==='openclaw:widget-shortcut-host')window.shortcutNonce=event.data.nonce;
+                });</script>`,
+            }),
+          );
+          await gateway.setMethodResponse("board.get", {
+            ...snapshot,
+            revision: 2,
+            widgets: [{ ...snapshot.widgets[0], revision: 2 }],
+          });
+          await gateway.emitGatewayEvent("board.changed", { sessionKey });
+          const savedNote = board.getByRole("textbox", { name: "Saved dashboard note" });
+          await savedNote.fill("Saved draft");
+          expect(
+            await savedNote.evaluate((element) => {
+              const event = new KeyboardEvent("keydown", {
+                key: "k",
+                code: "KeyK",
+                ctrlKey: true,
+                bubbles: true,
+                cancelable: true,
+              });
+              element.dispatchEvent(event);
+              return event.defaultPrevented;
+            }),
+          ).toBe(false);
+          await page.keyboard.press("ControlOrMeta+K");
+          const paletteInput = page.locator(".cmd-palette__input");
+          await paletteInput.waitFor();
+          await page.keyboard.type("Settings");
+          expect(await paletteInput.inputValue()).toBe("Settings");
+          await page.keyboard.press("Escape");
+          await paletteInput.waitFor({ state: "hidden" });
+          await expect
+            .poll(() =>
+              savedNote.evaluate(
+                (element) => document.hasFocus() && document.activeElement === element,
+              ),
+            )
+            .toBe(true);
+          await page.keyboard.type("!");
+          expect(await savedNote.inputValue()).toBe("Saved draft!");
+          await expect
+            .poll(() => savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce"))))
+            .toBe(true);
+          await page.evaluate(() => {
+            window.addEventListener("message", function settle(event) {
+              if (event.data?.type === "fixture-shortcut-attempted") {
+                window.removeEventListener("message", settle);
+                Reflect.set(window, "shortcutForgerySettled", true);
+              }
+            });
+          });
+          await board.getByRole("button", { name: "Attempt shortcut", exact: true }).click();
+          await page.waitForFunction(() => Reflect.get(window, "shortcutForgerySettled") === true);
+          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          await savedNote.focus();
+          await savedNote.evaluate(() => {
+            Reflect.set(
+              window,
+              "keyboardDescriptors",
+              Object.getOwnPropertyDescriptors(KeyboardEvent.prototype),
+            );
+            Object.defineProperties(KeyboardEvent.prototype, {
+              key: { configurable: true, get: () => "k" },
+              ctrlKey: { configurable: true, get: () => true },
+              metaKey: { configurable: true, get: () => false },
+            });
+          });
+          await page.keyboard.press("j");
+          expect(await savedNote.inputValue()).toBe("Saved draft!j");
+          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          await savedNote.evaluate(() => {
+            Object.defineProperties(
+              KeyboardEvent.prototype,
+              Reflect.get(window, "keyboardDescriptors"),
+            );
+          });
           completed = true;
         },
         async ({ page }) => {

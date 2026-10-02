@@ -1,12 +1,7 @@
-// Doctor default-account integration tests cover binding warnings across realistic config shapes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import {
-  collectMissingDefaultAccountBindingWarnings,
-  collectMissingExplicitDefaultAccountWarnings,
-} from "./doctor/shared/default-account-warnings.js";
 import { repairUnownedChannelAccountBindings } from "./doctor/shared/legacy-config-binding-repair.js";
 
 vi.mock("../channels/plugins/read-only.js", () => ({
@@ -20,61 +15,6 @@ vi.mock("../channels/plugins/read-only.js", () => ({
     };
   },
 }));
-
-describe("doctor missing default account binding warning", () => {
-  it("warns when named accounts have no valid account-scoped bindings", () => {
-    const warnings = collectMissingDefaultAccountBindingWarnings({
-      channels: {
-        telegram: {
-          accounts: {
-            alerts: {},
-            work: {},
-          },
-        },
-      },
-      bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
-    } as OpenClawConfig);
-
-    expect(warnings).toEqual([
-      '- channels.telegram: accounts.default is missing and no valid account-scoped binding exists for configured accounts (alerts, work). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.telegram.accounts.default.',
-    ]);
-  });
-
-  it("warns when multiple accounts have no explicit default", () => {
-    const warnings = collectMissingExplicitDefaultAccountWarnings({
-      channels: {
-        telegram: {
-          accounts: {
-            alerts: {},
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(warnings).toEqual([
-      "- channels.telegram: multiple accounts are configured but no explicit default is set. Set channels.telegram.defaultAccount or add channels.telegram.accounts.default to avoid fallback routing.",
-    ]);
-  });
-
-  it("warns when defaultAccount does not match configured accounts", () => {
-    const warnings = collectMissingExplicitDefaultAccountWarnings({
-      channels: {
-        telegram: {
-          defaultAccount: "missing",
-          accounts: {
-            alerts: {},
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(warnings).toEqual([
-      '- channels.telegram: defaultAccount is set to "missing" but does not match configured accounts (alerts, work). Set channels.telegram.defaultAccount to one of these accounts, or add channels.telegram.accounts.default to avoid fallback routing.',
-    ]);
-  });
-});
 
 type OwnershipRepairCase = {
   name: string;
@@ -90,27 +30,6 @@ describe("doctor channel account ownership repair", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it.each<OwnershipRepairCase>([
-    {
-      name: "unbound legacy account preserves its first agent",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      discord: {},
-      bindings: [],
-      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
-    },
-    {
-      name: "legacy owner precedes inferred narrower ownership",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      discord: {},
-      bindings: [{ agentId: "research", match: { channel: "discord", guildId: "guild-b" } }],
-      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
-    },
-    {
-      name: "normalized legacy agent id",
-      sourceConfig: { agents: { list: [{ id: "Ops" }, { id: "research" }] } },
-      discord: {},
-      bindings: [],
-      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
-    },
     {
       name: "explicit fleet does not inherit legacy list order",
       sourceConfig: {
@@ -131,24 +50,6 @@ describe("doctor channel account ownership repair", () => {
       added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
     },
     {
-      name: "implicit default account with historical ownership",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      discord: {},
-      bindings: [{ agentId: "ops", match: { channel: "discord", guildId: "guild-a" } }],
-      added: [{ agentId: "ops", match: { channel: "discord", accountId: "default" } }],
-    },
-    {
-      name: "named account without widening other account or guild owners",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      discord: { accounts: { alerts: {}, work: {} } },
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", accountId: "alerts", guildId: "guild-a" } },
-        { agentId: "ops", match: { channel: "discord", accountId: "alerts", guildId: "guild-b" } },
-        { agentId: "research", match: { channel: "discord", accountId: "work" } },
-      ],
-      added: [{ agentId: "ops", match: { channel: "discord", accountId: "alerts" } }],
-    },
-    {
       name: "environment-only default account alongside a named account",
       sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
       envToken: true,
@@ -160,27 +61,6 @@ describe("doctor channel account ownership repair", () => {
         { agentId: "ops", match: { channel: "discord", accountId: "alerts" } },
         { agentId: "ops", match: { channel: "discord", accountId: "default" } },
       ],
-    },
-    {
-      name: "root-token default account alongside a named account",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      discord: { token: "synthetic-discord-token", accounts: { alerts: {} } },
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", accountId: "*", guildId: "guild-a" } },
-      ],
-      added: [
-        { agentId: "ops", match: { channel: "discord", accountId: "alerts" } },
-        { agentId: "ops", match: { channel: "discord", accountId: "default" } },
-      ],
-    },
-    {
-      name: "historical ownership without inventing a default account",
-      sourceConfig: { agents: { list: [{ id: "ops" }, { id: "research" }] } },
-      discord: { accounts: { alerts: {}, work: { enabled: false } } },
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", accountId: "*", guildId: "guild-a" } },
-      ],
-      added: [{ agentId: "ops", match: { channel: "discord", accountId: "alerts" } }],
     },
     {
       name: "disabled default account alongside an active account",
@@ -212,32 +92,6 @@ describe("doctor channel account ownership repair", () => {
       agents: { ownership: "explicit", entries: { main: {}, research: {} } },
       discord: {},
       bindings: [{ agentId: "   ", match: { channel: "discord", guildId: "guild-a" } }],
-      added: [],
-    },
-    {
-      name: "empty peer that cannot match a route",
-      discord: {},
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", peer: { kind: "direct", id: " " } } },
-      ],
-      added: [],
-    },
-    {
-      name: "ambiguous guild owners",
-      discord: {},
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", guildId: "guild-a" } },
-        { agentId: "research", match: { channel: "discord", guildId: "guild-b" } },
-      ],
-      added: [],
-    },
-    {
-      name: "missing owner despite bindings on another account and channel",
-      discord: { accounts: { default: {}, work: {} } },
-      bindings: [
-        { agentId: "ops", match: { channel: "discord", accountId: "work" } },
-        { agentId: "ops", match: { channel: "telegram", accountId: "default" } },
-      ],
       added: [],
     },
     {

@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { importSessionCatalogHistory } from "./session-catalog-history-import.js";
+import {
+  importSessionCatalogHistory,
+  readBoundedSessionCatalogHistory,
+  SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
+} from "./session-catalog-history-import.js";
 import { listSessionCatalogEntries } from "./session-catalog.js";
 
 const transcript = vi.hoisted(() => ({
@@ -222,7 +226,7 @@ describe("importSessionCatalogHistory", () => {
     const { read, result } = importHistory(items);
     await result;
 
-    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenCalledTimes(4);
     expect(transcript.messages).toHaveLength(200);
     expect(messageText(transcript.messages[0]!)).toBe("message-5");
     expect(messageText(transcript.messages.at(-1)!)).toBe("message-204");
@@ -301,5 +305,59 @@ describe("importSessionCatalogHistory", () => {
       idempotencyKey: "pi-catalog:thread-1:continuation-notice",
     });
     expect(commitGuard).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("readBoundedSessionCatalogHistory", () => {
+  it("retains the import ceiling independently from the continuation seed and reports older history", async () => {
+    const items: TranscriptItem[] = Array.from({ length: 50_001 }, (_, index) => ({
+      type: "agentMessage",
+      text: String(index),
+    }));
+    const history = await readBoundedSessionCatalogHistory({
+      read: catalogReader(items),
+      limits: SESSION_CATALOG_TRANSCRIPT_IMPORT_LIMITS,
+    });
+
+    expect(history.items).toHaveLength(50_000);
+    expect(history.items[0]?.text).toBe("1");
+    expect(history.items.at(-1)?.text).toBe("50000");
+    expect(history.totalItems).toBe(50_000);
+    expect(history.complete).toBe(false);
+  });
+
+  it("counts fetched items past a byte cutoff and distinguishes an exactly complete page", async () => {
+    const items: TranscriptItem[] = [
+      { type: "userMessage", text: "older" },
+      { type: "userMessage", text: "newer" },
+    ];
+    const itemBytes = Buffer.byteLength(JSON.stringify(items[0]), "utf8");
+    const read = catalogReader(items);
+
+    expect(
+      await readBoundedSessionCatalogHistory({
+        read,
+        limits: { maxItems: 2, maxBytes: 2 * itemBytes - 1 },
+      }),
+    ).toEqual({ items: [items[1]], totalItems: 2, complete: false });
+    expect(
+      await readBoundedSessionCatalogHistory({
+        read,
+        limits: { maxItems: 2, maxBytes: 2 * itemBytes },
+      }),
+    ).toEqual({ items, totalItems: 2, complete: true });
+  });
+
+  it("reports when the newest item itself must be truncated to fit", async () => {
+    const history = await readBoundedSessionCatalogHistory({
+      read: catalogReader([{ type: "toolResult", text: "🙂".repeat(100) }]),
+      limits: { maxItems: 10, maxBytes: 100 },
+    });
+
+    expect(history).toMatchObject({ totalItems: 1, complete: false });
+    expect(history.items).toHaveLength(1);
+    expect(history.items[0]).toMatchObject({ type: "toolResult", truncated: true });
+    expect(history.items[0]?.text).toMatch(/🙂…$/u);
+    expect(Buffer.byteLength(JSON.stringify(history.items[0]), "utf8")).toBeLessThanOrEqual(100);
   });
 });

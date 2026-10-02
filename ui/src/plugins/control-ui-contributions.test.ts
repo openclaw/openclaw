@@ -29,7 +29,7 @@ type ContributionsElement = LitElement & {
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
 
-it("opens customization once and retains reload state across close and reopen", async () => {
+it("renders customization inline and retains pending reload state", async () => {
   const listeners = new Set<() => void>();
   const replacement = {
     key: "fixture/composer",
@@ -80,26 +80,18 @@ it("opens customization once and retains reload state across close and reopen", 
     }
     return found;
   };
-  let mostDialogs = 0;
-  const observer = new MutationObserver(() => {
-    mostDialogs = Math.max(mostDialogs, manager.querySelectorAll("openclaw-modal-dialog").length);
-  });
-  observer.observe(manager, { childList: true, subtree: true });
   provider.append(manager);
   document.body.append(provider);
   try {
     await manager.updateComplete;
     expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
-    button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
-    expect(mostDialogs).toBe(1);
     expect(manager.querySelector('[role="alert"]')).toBeNull();
+    expect(manager.querySelector('[role="status"]')?.textContent).toContain("custom-review");
     const labs = manager.querySelector<HTMLAnchorElement>('a[href="/console/settings/labs"]');
     expect(labs?.textContent?.trim()).toBe("Open Labs");
     labs?.click();
     expect(navigate).toHaveBeenCalledExactlyOnceWith("labs");
-    await vi.waitFor(() => expect(manager.querySelector("openclaw-modal-dialog")).toBeNull());
-    button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(manager.querySelector("select")).not.toBeNull());
 
     const select = manager.querySelector<HTMLSelectElement>("select");
@@ -115,10 +107,9 @@ it("opens customization once and retains reload state across close and reopen", 
 
     button(t("pluginUi.reload")).click();
     expect(plugins.reload).toHaveBeenCalledOnce();
-    button(t("common.close")).click();
-    await vi.waitFor(() => expect(manager.querySelector("openclaw-modal-dialog")).toBeNull());
-    button(t("pluginUi.customize")).click();
     await vi.waitFor(() => expect(button(t("pluginUi.reload")).disabled).toBe(true));
+    button(t("pluginUi.reload")).click();
+    expect(plugins.reload).toHaveBeenCalledOnce();
     pendingReload.reject(new Error("Synthetic reload failure"));
     await vi.waitFor(() =>
       expect(manager.querySelector('[role="alert"]')?.textContent).toContain(
@@ -128,9 +119,8 @@ it("opens customization once and retains reload state across close and reopen", 
     expect(button(t("pluginUi.reload")).disabled).toBe(false);
     button(t("common.retry")).click();
     expect(plugins.refresh).toHaveBeenCalledOnce();
-    expect(mostDialogs).toBe(1);
+    expect(manager.querySelector("openclaw-modal-dialog")).toBeNull();
   } finally {
-    observer.disconnect();
     pendingReload.resolve();
   }
 });
@@ -254,121 +244,110 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
-  it.each(["header", "composer"] as const)(
-    "keeps %s metadata scoped to its pane agent when the global key is shared",
-    async (placement) => {
-      const { element, sessions, run, resolve, request } = await mountActions({
-        placement,
-        agentId: "writer",
-        session: { key: "global", kind: "global", agentId: "main", updatedAt: 1, label: "Main" },
-      });
-      const button = () => element.querySelector<HTMLButtonElement>("button");
-      expect(button()?.textContent?.trim()).toBe("Review unavailable");
-      button()?.click();
-      expect(run).toHaveBeenCalledOnce();
-      expect(run.mock.calls[0]?.[0].session).toBeUndefined();
-      expect(resolve).toHaveBeenLastCalledWith({
-        sessionKey: "global",
-        agentId: "writer",
-        session: undefined,
-      });
-      expect(run.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "global", agentId: "writer" });
+  it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
+    const { element, sessions, run, resolve, request } = await mountActions({
+      placement: "header",
+      agentId: "writer",
+      session: { key: "global", kind: "global", agentId: "main", updatedAt: 1, label: "Main" },
+    });
+    const button = () => element.querySelector<HTMLButtonElement>("button");
+    expect(button()?.textContent?.trim()).toBe("Review unavailable");
+    button()?.click();
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]?.[0].session).toBeUndefined();
+    expect(resolve).toHaveBeenLastCalledWith({
+      sessionKey: "global",
+      agentId: "writer",
+      session: undefined,
+    });
+    expect(run.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "global", agentId: "writer" });
 
-      request.mockResolvedValueOnce(
-        sessionsResult(
-          [{ key: "global", kind: "global", agentId: "writer", updatedAt: 2, label: "Writer" }],
-          2,
-        ),
-      );
-      await sessions.refresh({ agentId: "writer", force: true });
-      await element.updateComplete;
-      expect(button()?.textContent?.trim()).toBe("Review Writer");
-      button()?.click();
-      expect(run).toHaveBeenCalledTimes(2);
-      expect(run.mock.calls[1]?.[0].session).toMatchObject({
-        key: "global",
-        agentId: "writer",
-        label: "Writer",
-      });
-    },
-  );
+    request.mockResolvedValueOnce(
+      sessionsResult(
+        [{ key: "global", kind: "global", agentId: "writer", updatedAt: 2, label: "Writer" }],
+        2,
+      ),
+    );
+    await sessions.refresh({ agentId: "writer", force: true });
+    await element.updateComplete;
+    expect(button()?.textContent?.trim()).toBe("Review Writer");
+    button()?.click();
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0].session).toMatchObject({
+      key: "global",
+      agentId: "writer",
+      label: "Writer",
+    });
+  });
 
-  it.each(["header", "composer"] as const)(
-    "retires a %s invocation when only its pane agent changes",
-    async (placement) => {
-      const { element, run, request } = await mountActions({
-        placement,
-        agentId: "main",
-        session: { key: "global", kind: "global", agentId: "main", updatedAt: 1, label: "Main" },
-      });
-      element.querySelector<HTMLButtonElement>("button")?.click();
-      const invocation = run.mock.calls[0]?.[0];
-      if (!invocation) {
-        throw new Error("Expected the pane's plugin action to run");
-      }
-      expect(invocation.session).toMatchObject({ key: "global", agentId: "main" });
-      await invocation.host.request("fixture.current-owner");
+  it("retires a composer invocation when only its pane agent changes", async () => {
+    const { element, run, request } = await mountActions({
+      placement: "composer",
+      agentId: "main",
+      session: { key: "global", kind: "global", agentId: "main", updatedAt: 1, label: "Main" },
+    });
+    element.querySelector<HTMLButtonElement>("button")?.click();
+    const invocation = run.mock.calls[0]?.[0];
+    if (!invocation) {
+      throw new Error("Expected the pane's plugin action to run");
+    }
+    expect(invocation.session).toMatchObject({ key: "global", agentId: "main" });
+    await invocation.host.request("fixture.current-owner");
 
-      element.agentId = "writer";
-      expect(invocation.signal.aborted).toBe(true);
-      await expect(invocation.host.request("fixture.retired-owner")).rejects.toThrow(
-        "view has ended",
-      );
-      expect(request.mock.calls.filter(([method]) => method === "fixture.retired-owner")).toEqual(
-        [],
-      );
-      await element.updateComplete;
-    },
-  );
+    element.agentId = "writer";
+    expect(invocation.signal.aborted).toBe(true);
+    await expect(invocation.host.request("fixture.retired-owner")).rejects.toThrow(
+      "view has ended",
+    );
+    expect(request.mock.calls.filter(([method]) => method === "fixture.retired-owner")).toEqual([]);
+    await element.updateComplete;
+  });
 
-  it.each(["header", "composer"] as const)(
-    "retires a hidden %s action across a same-turn hide/show and admits a fresh action",
-    async (placement) => {
-      const { element, run, navigate, setSessionKey } = await mountActions({ placement });
-      const destination = { sessionKey: "agent:writer:resumed", agentId: "writer" };
-      const release = createDeferred();
-      run.mockImplementationOnce(async ({ host }) => {
-        await release.promise;
-        host.sessions.open(destination);
-      });
-      const retained = element.querySelector<HTMLButtonElement>("button")!;
-      retained.click();
-      const invocation = run.mock.calls[0]?.[0];
-      if (!invocation) {
-        throw new Error("Expected the visible plugin action to run");
-      }
-      const pending = Promise.resolve(run.mock.results[0]?.value);
+  it("retires a hidden header action across a same-turn hide/show and admits a fresh action", async () => {
+    const { element, run, navigate, setSessionKey } = await mountActions({ placement: "header" });
+    const destination = { sessionKey: "agent:writer:resumed", agentId: "writer" };
+    const release = createDeferred();
+    run.mockImplementationOnce(async ({ host }) => {
+      await release.promise;
+      host.sessions.open(destination);
+    });
+    const retained = element.querySelector<HTMLButtonElement>("button")!;
+    retained.click();
+    const invocation = run.mock.calls[0]?.[0];
+    if (!invocation) {
+      throw new Error("Expected the visible plugin action to run");
+    }
+    const pending = Promise.resolve(run.mock.results[0]?.value);
 
-      // Neither a retained button nor an immediate reshow revives the old action.
-      element.presented = false;
-      retained.click();
-      element.presented = true;
-      release.resolve();
-      const completionError = await pending.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(navigate).not.toHaveBeenCalled();
-      expect(setSessionKey).not.toHaveBeenCalled();
-      expect(run).toHaveBeenCalledOnce();
-      expect(invocation.signal.aborted).toBe(true);
-      expect(completionError).toMatchObject({ message: "This plugin UI view has ended." });
-      expect(() => invocation.host.sessions.open(destination)).toThrow("view has ended");
-      await element.updateComplete;
-      expect(element.querySelector('[role="alert"]')).toBeNull();
+    // Neither a retained button nor an immediate reshow revives the old action.
+    element.presented = false;
+    retained.click();
+    element.presented = true;
+    release.resolve();
+    const completionError = await pending.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(navigate).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledOnce();
+    expect(invocation.signal.aborted).toBe(true);
+    expect(completionError).toMatchObject({ message: "This plugin UI view has ended." });
+    expect(() => invocation.host.sessions.open(destination)).toThrow("view has ended");
+    await element.updateComplete;
+    expect(element.querySelector('[role="alert"]')).toBeNull();
 
-      run.mockImplementationOnce(({ host }) => {
-        host.sessions.open(destination);
-      });
-      retained.click();
-      expect(run).toHaveBeenCalledTimes(2);
-      expect(run.mock.calls[1]?.[0].signal.aborted).toBe(false);
-      expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(destination.sessionKey);
-      expect(navigate).toHaveBeenCalledOnce();
-      expect(navigate.mock.calls[0]?.[0]).toBe("chat");
-      expect(invocation.signal.aborted).toBe(true);
-    },
-  );
+    run.mockImplementationOnce(({ host }) => {
+      host.sessions.open(destination);
+    });
+    retained.click();
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0].signal.aborted).toBe(false);
+    expect(setSessionKey).toHaveBeenCalledExactlyOnceWith(destination.sessionKey);
+    expect(navigate).toHaveBeenCalledOnce();
+    expect(navigate.mock.calls[0]?.[0]).toBe("chat");
+    expect(invocation.signal.aborted).toBe(true);
+  });
 
   it("revokes a removed action before its pending render", async () => {
     const { element, run, unregister } = await mountActions();
@@ -394,65 +373,64 @@ describe("native plugin session actions", () => {
     expect(element.querySelector("button")).toBeNull();
   });
 
-  it.each(["header", "composer"] as const)(
-    "updates %s action presentation and retires hidden invocations",
-    async (placement) => {
-      const { element, sessions, run, navigate, setSessionKey } = await mountActions({ placement });
-      const button = () => element.querySelector<HTMLButtonElement>("button");
-      expect(button()?.textContent?.trim()).toBe("Review Ready");
-      expect(button()?.disabled).toBe(false);
-      const pending = createDeferred();
-      run.mockImplementationOnce(async ({ host }) => {
-        await pending.promise;
-        host.sessions.open({ sessionKey: "agent:writer:resumed", agentId: "writer" });
-      });
-      button()?.click();
-      const invocation = run.mock.calls[0]?.[0];
-      if (!invocation) {
-        throw new Error("Expected the visible action to run");
-      }
-      const completion = Promise.resolve(run.mock.results[0]?.value).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+  it("updates composer action presentation and retires hidden invocations", async () => {
+    const { element, sessions, run, navigate, setSessionKey } = await mountActions({
+      placement: "composer",
+    });
+    const button = () => element.querySelector<HTMLButtonElement>("button");
+    expect(button()?.textContent?.trim()).toBe("Review Ready");
+    expect(button()?.disabled).toBe(false);
+    const pending = createDeferred();
+    run.mockImplementationOnce(async ({ host }) => {
+      await pending.promise;
+      host.sessions.open({ sessionKey: "agent:writer:resumed", agentId: "writer" });
+    });
+    button()?.click();
+    const invocation = run.mock.calls[0]?.[0];
+    if (!invocation) {
+      throw new Error("Expected the visible action to run");
+    }
+    const completion = Promise.resolve(run.mock.results[0]?.value).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
-      sessions.patchRowLocal(sessionKey, { label: "Busy", hasActiveRun: true });
-      await element.updateComplete;
-      expect(button()?.textContent?.trim()).toBe("Review Busy");
-      expect(button()?.disabled).toBe(true);
-      expect(invocation.signal.aborted).toBe(false);
+    sessions.patchRowLocal(sessionKey, { label: "Busy", hasActiveRun: true });
+    await element.updateComplete;
+    expect(button()?.textContent?.trim()).toBe("Review Busy");
+    expect(button()?.disabled).toBe(true);
+    expect(invocation.signal.aborted).toBe(false);
 
-      sessions.patchRowLocal(sessionKey, { archived: true });
-      const hiddenBeforeRender = invocation.signal.aborted;
-      pending.resolve();
-      const completionError = await completion;
-      expect(hiddenBeforeRender).toBe(true);
-      expect(navigate).not.toHaveBeenCalled();
-      expect(setSessionKey).not.toHaveBeenCalled();
-      expect(completionError).toMatchObject({ message: "This plugin UI view has ended." });
-      await element.updateComplete;
-      expect(button()).toBeNull();
+    sessions.patchRowLocal(sessionKey, { archived: true });
+    const hiddenBeforeRender = invocation.signal.aborted;
+    pending.resolve();
+    const completionError = await completion;
+    expect(hiddenBeforeRender).toBe(true);
+    expect(navigate).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(completionError).toMatchObject({ message: "This plugin UI view has ended." });
+    await element.updateComplete;
+    expect(button()).toBeNull();
 
-      sessions.patchRowLocal(sessionKey, {
-        label: "Resumed",
-        archived: false,
-        hasActiveRun: false,
-      });
-      await element.updateComplete;
-      const retained = button()!;
-      expect(retained.textContent?.trim()).toBe("Review Resumed");
-      expect(retained.disabled).toBe(false);
-      expect(invocation.signal.aborted).toBe(true);
+    sessions.patchRowLocal(sessionKey, {
+      label: "Resumed",
+      archived: false,
+      hasActiveRun: false,
+    });
+    await element.updateComplete;
+    const retained = button()!;
+    expect(retained.textContent?.trim()).toBe("Review Resumed");
+    expect(retained.disabled).toBe(false);
+    expect(invocation.signal.aborted).toBe(true);
 
-      element.remove();
-      sessions.patchRowLocal(sessionKey, { label: "Detached", hasActiveRun: true });
-      await element.updateComplete;
-      expect(retained.textContent?.trim()).toBe("Review Resumed");
-      expect(retained.disabled).toBe(false);
-      retained.click();
-      expect(run.mock.calls.length).toBe(1);
-    },
-  );
+    element.remove();
+    sessions.patchRowLocal(sessionKey, { label: "Detached", hasActiveRun: true });
+    await element.updateComplete;
+    expect(retained.textContent?.trim()).toBe("Review Resumed");
+    expect(retained.disabled).toBe(false);
+    retained.click();
+    expect(run.mock.calls.length).toBe(1);
+  });
 
   it("rechecks eligibility and passes the current session before a pending render", async () => {
     const { element, sessions, run, request } = await mountActions();

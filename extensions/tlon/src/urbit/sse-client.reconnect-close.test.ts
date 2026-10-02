@@ -1,4 +1,4 @@
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -20,7 +20,6 @@ async function startUrbitChannelServer(options: { holdStream?: boolean } = {}) {
     requests: [],
     unauthorizedRequests: 0,
   };
-  const heldStreams = new Set<ServerResponse>();
   const server = createServer((request, response) => {
     if (!(request.headers.cookie ?? "").includes(proofCookie)) {
       proof.unauthorizedRequests += 1;
@@ -34,8 +33,6 @@ async function startUrbitChannelServer(options: { holdStream?: boolean } = {}) {
         "Content-Type": "text/event-stream",
       });
       if (options.holdStream) {
-        heldStreams.add(response);
-        response.once("close", () => heldStreams.delete(response));
         response.write(": connected\n\n");
       } else {
         response.end();

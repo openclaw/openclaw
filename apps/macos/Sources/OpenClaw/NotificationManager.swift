@@ -52,7 +52,6 @@ struct NotificationManager {
             content.sound = UNNotificationSound(named: UNNotificationSoundName(soundName))
         }
 
-        // Set interruption level based on priority
         if let priority {
             switch priority {
             case .passive:

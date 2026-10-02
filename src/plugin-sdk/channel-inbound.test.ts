@@ -3,17 +3,21 @@
  */
 import { afterEach, describe, expect, expectTypeOf, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  configureChannelAdmissionEvidenceCollection,
-  readChannelContextAdmissionEvidence,
-} from "../channels/message-access/admission-evidence.js";
+import { readChannelContextAdmissionEvidence } from "../channels/message-access/admission-evidence.js";
 import { recordInboundSession } from "../channels/session.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   buildChannelInboundEventContext,
   buildChannelTurnContext,
@@ -57,10 +61,14 @@ function createInboundParams(
 
 describe("channel-inbound public helpers", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(() => {
+    afterEach(async () => {
+      // Maintenance admits a reclamation Worker; its lease release must finish in this case.
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       cleanup();
+      expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
     }),
   );
 
@@ -224,28 +232,23 @@ describe("channel-inbound public helpers", () => {
   });
 
   it("keeps public resolver and builder paths non-authoritative", async () => {
-    const cleanup = configureChannelAdmissionEvidenceCollection(true);
-    try {
-      const channelIngress = await channelIngressRuntime.resolveStableChannelMessageIngress({
-        channelId: "test",
-        accountId: "default",
-        subject: { stableId: "u1" },
-        conversation: { kind: "group", id: "room-1" },
-        dmPolicy: "open",
-        groupPolicy: "open",
-      });
-      const ctx = buildChannelTurnContext({
-        ...createInboundParams({ channelIngress }),
-        message: {
-          rawBody: "hello",
-          inboundTurnKind: "user_request",
-        },
-      });
+    const channelIngress = await channelIngressRuntime.resolveStableChannelMessageIngress({
+      channelId: "test",
+      accountId: "default",
+      subject: { stableId: "u1" },
+      conversation: { kind: "group", id: "room-1" },
+      dmPolicy: "open",
+      groupPolicy: "open",
+    });
+    const ctx = buildChannelTurnContext({
+      ...createInboundParams({ channelIngress }),
+      message: {
+        rawBody: "hello",
+        inboundTurnKind: "user_request",
+      },
+    });
 
-      expect(ctx.InboundTurnKind).toBe("user_request");
-      expect(readChannelContextAdmissionEvidence(ctx)).toBeUndefined();
-    } finally {
-      cleanup();
-    }
+    expect(ctx.InboundTurnKind).toBe("user_request");
+    expect(readChannelContextAdmissionEvidence(ctx)).toBeUndefined();
   });
 });

@@ -10,6 +10,7 @@ import { compileSafeRegex } from "../security/safe-regex.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { matchCronStreamLines } from "./cron-stream-matcher.js";
 import {
+  readCronStreamChunk,
   remainingCronStreamLines,
   type BufferedOutput,
   type DroppedTail,
@@ -26,20 +27,30 @@ const INTAKE_CAP_MULTIPLIER = 4;
 type InFlightBatch = {
   batch: string;
   sourceIdentity: string;
-  startedAtMs: number;
   promise: Promise<CronStreamFireDisposition>;
   handled: boolean;
 };
 
-type FireDisposition = "fired" | "disabled" | "dropped" | "busy" | "error" | "not-run";
-type OwnerState = "idle" | "starting" | "running" | "stopping" | "stopped" | "backoff";
 type Log = (obj: unknown, msg?: string) => void;
 type CronStreamOutputStopState = { sourceBatchLost: boolean; pendingBatchLost: boolean };
+type FireOutcome = { disposition: CronStreamFireDisposition } | { error: unknown };
 
 export type CronStreamJob = CronJob & { schedule: CronStreamSchedule };
-export type CronStreamFireDisposition = FireDisposition;
+export type CronStreamFireDisposition =
+  | "fired"
+  | "disabled"
+  | "dropped"
+  | "busy"
+  | "error"
+  | "not-run";
 export type CronStreamLossReason = "gate-drop" | "coalesced" | "not-running" | "payload-error";
-export type CronStreamOwnerState = OwnerState;
+export type CronStreamOwnerState =
+  | "idle"
+  | "starting"
+  | "running"
+  | "stopping"
+  | "stopped"
+  | "backoff";
 export type CronStreamLogger = { info: Log; warn: Log };
 
 type CronStreamOutputParams = {
@@ -66,8 +77,6 @@ type CronStreamOutputParams = {
   logger: CronStreamLogger;
 };
 
-const clearTimer = (timer: NodeJS.Timeout | undefined): void => clearTimeout(timer);
-
 function appendBatch(left: string | undefined, right: string, maxBytes: number): string {
   return left === undefined ? right : truncateCronStreamBatch(`${left}\n${right}`, maxBytes);
 }
@@ -89,7 +98,7 @@ async function waitForInFlightBatch(
       }),
     ]);
   } finally {
-    clearTimer(timeout);
+    clearTimeout(timeout);
   }
 }
 
@@ -120,11 +129,9 @@ export class CronStreamOutput {
     stdout: false,
     stderr: false,
   };
-  private batch = "";
-  private batchHasLines = false;
+  private batch?: string;
   private pendingBatch?: string;
   private firing?: InFlightBatch;
-  private lastFireStartedAtMs: number;
   private nextEligibleAttemptAtMs: number;
 
   constructor({ job, scheduleKey, sourceIdentity, ...params }: CronStreamOutputParams) {
@@ -133,10 +140,7 @@ export class CronStreamOutput {
     this.scheduleKey = scheduleKey;
     this.sourceIdentity = sourceIdentity;
     this.matcher = this.compileMatcher(job.schedule);
-    this.lastFireStartedAtMs = job.state.lastRunAtMs ?? 0;
-    this.nextEligibleAttemptAtMs = job.state.lastRunAtMs
-      ? job.state.lastRunAtMs + params.minIntervalMs
-      : 0;
+    this.nextEligibleAttemptAtMs = (job.state.lastRunAtMs ?? 0) + params.minIntervalMs;
   }
 
   updateSource(job: CronStreamJob, scheduleKey: string, sourceIdentity: string): void {
@@ -164,11 +168,13 @@ export class CronStreamOutput {
     }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
     const remaining = maxBatchBytes * INTAKE_CAP_MULTIPLIER - this.bufferedOutputBytes;
-    if (
+    const accepted =
       this.outputOverflowGenerations.has(generation) ||
       remaining <= 0 ||
       this.bufferedOutput.length >= MAX_BUFFERED_OUTPUT_SEGMENTS
-    ) {
+        ? ""
+        : truncateUtf8Prefix(chunk, remaining);
+    if (!accepted) {
       // The last drop wins: a terminal newline in the dropped data closes the
       // broken line, so the next accepted fragment starts a clean line.
       this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
@@ -176,16 +182,9 @@ export class CronStreamOutput {
       this.queueOutputDrain(generation);
       return;
     }
-    const accepted = truncateUtf8Prefix(chunk, remaining);
     const truncatedTail = accepted !== chunk;
     const truncatedTailContinuesLine = truncatedTail && !chunk.endsWith("\n");
     const acceptedBytes = Buffer.byteLength(accepted, "utf8");
-    if (acceptedBytes === 0 && chunk.length > 0) {
-      this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
-      this.outputOverflowGenerations.add(generation);
-      this.queueOutputDrain(generation);
-      return;
-    }
     const precededByDrop = this.droppedChunkTail[channel];
     this.droppedChunkTail[channel] = false;
     const last = this.bufferedOutput.at(-1);
@@ -256,20 +255,17 @@ export class CronStreamOutput {
       this.discardUntilNewline[channel] = false;
       this.droppedChunkTail[channel] = false;
     }
-    clearTimer(this.quietTimer);
-    this.quietTimer = undefined;
-    const batch = this.takeOpenBatch();
-    if (batch !== undefined) {
-      await this.handleClosedBatch(batch, generation);
-    }
+    await this.flushBatch(generation);
   }
 
   async beginStop(): Promise<CronStreamOutputStopState> {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     this.rateTimer = undefined;
     ++this.rateEpoch;
     const state = {
-      sourceBatchLost: this.matchFailed ? this.batchHasLines : await this.hasAcceptedSourceInput(),
+      sourceBatchLost: this.matchFailed
+        ? this.batch !== undefined
+        : await this.hasAcceptedSourceInput(),
       pendingBatchLost: this.pendingBatch !== undefined,
     };
     this.pendingBatch = undefined;
@@ -294,22 +290,15 @@ export class CronStreamOutput {
       if (!result.settled) {
         await this.params.recordLoss("not-running");
         firing.handled = true;
-      } else if ("error" in result) {
-        this.params.logger.warn(
-          { jobId: this.job.id, err: String(result.error) },
-          "cron-stream: batch fire failed during stop",
-        );
-        await this.params.recordLoss("payload-error");
-        firing.handled = true;
       } else {
-        await this.classifyFireDisposition(firing, result.disposition, true);
+        await this.classifyFireOutcome(firing, result, true);
       }
     }
     this.firing = undefined;
   }
 
   async dropPendingForTerminalStop(): Promise<void> {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     this.rateTimer = undefined;
     ++this.rateEpoch;
     if (this.pendingBatch === undefined) {
@@ -326,14 +315,13 @@ export class CronStreamOutput {
   }
 
   private resetSourceBuffers(): void {
-    clearTimer(this.quietTimer);
+    clearTimeout(this.quietTimer);
     this.quietTimer = undefined;
     ++this.quietEpoch;
     this.partialLines = { stdout: "", stderr: "" };
     this.discardUntilNewline = { stdout: false, stderr: false };
     this.droppedChunkTail = { stdout: false, stderr: false };
-    this.batch = "";
-    this.batchHasLines = false;
+    this.batch = undefined;
     this.bufferedOutput = [];
     this.interruptedOutput = [];
     this.bufferedOutputBytes = 0;
@@ -345,11 +333,10 @@ export class CronStreamOutput {
     if (this.pendingBatch === undefined || this.params.getState() !== "running") {
       return;
     }
-    const nextAt = Math.max(
-      this.nextEligibleAttemptAtMs,
-      this.lastFireStartedAtMs + this.params.minIntervalMs,
+    this.schedulePendingFire(
+      Math.max(0, this.nextEligibleAttemptAtMs - this.params.nowMs()),
+      generation,
     );
-    this.schedulePendingFire(Math.max(0, nextAt - this.params.nowMs()), generation);
   }
 
   private queueOutputDrain(generation: number): void {
@@ -374,65 +361,25 @@ export class CronStreamOutput {
   }
 
   private async acceptChunk(entry: BufferedOutput): Promise<void> {
-    const { channel, chunk, truncatedTail, truncatedTailContinuesLine, generation } = entry;
-    if (entry.precededByDrop) {
-      // The dropped gap severed the retained partial line; never synthesize a
-      // line across it. Only a midline drop leaves this fragment's head inside
-      // an unknown line — after a clean drop it starts a fresh line.
-      this.partialLines[channel] = "";
-      this.discardUntilNewline[channel] = entry.precededByDrop === "midline";
-    }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
-    // The per-line byte cap is the raw-intake bound, not the delivery cap, and
-    // it applies while assembling the line: a line must match identically
-    // whether pipe callbacks split it or not, and a line over the bound is an
-    // unprovable prefix no matter how its fragments arrived.
-    const partialCapBytes = maxBatchBytes * INTAKE_CAP_MULTIPLIER;
-    let text = `${this.partialLines[channel]}${chunk}`;
-    this.partialLines[channel] = "";
-    for (;;) {
-      const newline = text.indexOf("\n");
-      if (newline < 0) {
-        break;
-      }
-      const rawLine = text.slice(0, newline);
-      text = text.slice(newline + 1);
-      if (this.discardUntilNewline[channel]) {
-        this.discardUntilNewline[channel] = false;
-        continue;
-      }
-      const overCap = Buffer.byteLength(rawLine, "utf8") > partialCapBytes;
-      const boundedLine = overCap ? truncateUtf8Prefix(rawLine, partialCapBytes) : rawLine;
-      const processed = await this.acceptLine(
-        boundedLine.endsWith("\r") ? boundedLine.slice(0, -1) : boundedLine,
-        generation,
-        overCap,
-      );
-      if (!this.params.isDesiredRunning()) {
+    // Bound raw lines independently of delivery batches so matching does not
+    // depend on how pipe callbacks split the source text.
+    const lines = readCronStreamChunk(
+      { partialLines: this.partialLines, discardUntilNewline: this.discardUntilNewline },
+      entry,
+      maxBatchBytes * INTAKE_CAP_MULTIPLIER,
+    );
+    for (const { line, truncated, replay } of lines) {
+      const processed = await this.acceptLine(line, entry.generation, truncated);
+      if (replay && !this.params.isDesiredRunning()) {
         this.interruptedOutput.push({
           ...entry,
-          chunk: processed ? text : `${rawLine}\n${text}`,
+          chunk: processed ? replay.remaining : `${replay.rawLine}\n${replay.remaining}`,
           precededByDrop: false,
         });
         return;
       }
     }
-    if (this.discardUntilNewline[channel]) {
-      return;
-    }
-    if (truncatedTail || Buffer.byteLength(text, "utf8") > partialCapBytes) {
-      const rawLine = truncateUtf8Prefix(text, partialCapBytes);
-      if (rawLine) {
-        await this.acceptLine(
-          rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine,
-          generation,
-          true,
-        );
-      }
-      this.discardUntilNewline[channel] = truncatedTail ? truncatedTailContinuesLine : true;
-      return;
-    }
-    this.partialLines[channel] = text;
   }
 
   private async acceptLine(line: string, generation: number, truncated: boolean): Promise<boolean> {
@@ -469,18 +416,12 @@ export class CronStreamOutput {
     }
     const { batchMs, maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
     const renderedLine = truncated ? markCronStreamBatchTruncated(line, maxBatchBytes) : line;
-    const candidate = this.batchHasLines ? `${this.batch}\n${renderedLine}` : renderedLine;
+    const candidate = this.batch === undefined ? renderedLine : `${this.batch}\n${renderedLine}`;
     const capped = truncateCronStreamBatch(candidate, maxBatchBytes);
     this.batch = capped;
-    this.batchHasLines = true;
     ++this.quietEpoch;
     if (capped !== candidate || Buffer.byteLength(capped, "utf8") >= maxBatchBytes) {
-      clearTimer(this.quietTimer);
-      this.quietTimer = undefined;
-      const batch = this.takeOpenBatch();
-      if (batch !== undefined) {
-        await this.handleClosedBatch(batch, generation);
-      }
+      await this.flushBatch(generation);
       return true;
     }
     if (this.quietTimer) {
@@ -503,30 +444,25 @@ export class CronStreamOutput {
         if (
           this.params.getState() !== "stopped" &&
           epoch === this.quietEpoch &&
-          this.batchHasLines
+          this.batch !== undefined
         ) {
-          this.takeOpenBatch();
+          this.batch = undefined;
           await this.params.recordLoss("not-running");
         }
         return;
       }
-      clearTimer(this.quietTimer);
-      this.quietTimer = undefined;
-      const batch = this.takeOpenBatch();
-      if (batch !== undefined) {
-        await this.handleClosedBatch(batch, generation);
-      }
+      await this.flushBatch(generation);
     });
   }
 
-  private takeOpenBatch(): string | undefined {
-    if (!this.batchHasLines) {
-      return undefined;
-    }
+  private async flushBatch(generation: number): Promise<void> {
+    clearTimeout(this.quietTimer);
+    this.quietTimer = undefined;
     const batch = this.batch;
-    this.batch = "";
-    this.batchHasLines = false;
-    return batch;
+    this.batch = undefined;
+    if (batch !== undefined) {
+      await this.handleClosedBatch(batch, generation);
+    }
   }
 
   private async handleClosedBatch(batch: string, generation: number): Promise<void> {
@@ -542,9 +478,7 @@ export class CronStreamOutput {
     }
 
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);
-    const spacingRemaining =
-      Math.max(this.nextEligibleAttemptAtMs, this.lastFireStartedAtMs + this.params.minIntervalMs) -
-      this.params.nowMs();
+    const spacingRemaining = this.nextEligibleAttemptAtMs - this.params.nowMs();
     if (this.firing || spacingRemaining > 0 || this.pendingBatch !== undefined) {
       this.pendingBatch = appendBatch(this.pendingBatch, batch, maxBatchBytes);
       await this.params.recordLoss("coalesced");
@@ -569,14 +503,13 @@ export class CronStreamOutput {
     const firing: InFlightBatch = {
       batch,
       sourceIdentity: this.sourceIdentity,
-      startedAtMs: attemptStartedAtMs,
       promise: this.params.fireBatch(this.job, batch, this.scheduleKey, this.sourceIdentity),
       handled: false,
     };
     this.firing = firing;
     void firing.promise.then(
-      (disposition) => this.fireCompleted(firing, disposition),
-      (error: unknown) => this.fireRejected(firing, error),
+      (disposition) => this.fireSettled(firing, { disposition }),
+      (error: unknown) => this.fireSettled(firing, { error }),
     );
   }
 
@@ -594,48 +527,41 @@ export class CronStreamOutput {
     return false;
   }
 
-  private fireCompleted(
-    firing: InFlightBatch,
-    disposition: CronStreamFireDisposition,
-  ): Promise<void> {
-    return this.params.enqueue("fire-completed", async () => {
-      if (!this.ownsFiring(firing)) {
-        return;
-      }
-      await this.classifyFireDisposition(firing, disposition, false);
-      this.firing = undefined;
-      this.schedulePendingIfNeeded(this.params.getGeneration());
-    });
+  private fireSettled(firing: InFlightBatch, outcome: FireOutcome): Promise<void> {
+    return this.params.enqueue(
+      "error" in outcome ? "fire-rejected" : "fire-completed",
+      async () => {
+        if (!this.ownsFiring(firing)) {
+          return;
+        }
+        await this.classifyFireOutcome(firing, outcome, false);
+        this.firing = undefined;
+        this.schedulePendingIfNeeded(this.params.getGeneration());
+      },
+    );
   }
 
-  private fireRejected(firing: InFlightBatch, error: unknown): Promise<void> {
-    return this.params.enqueue("fire-rejected", async () => {
-      if (!this.ownsFiring(firing)) {
-        return;
-      }
-      this.params.logger.warn(
-        { jobId: this.job.id, err: String(error) },
-        "cron-stream: batch fire failed",
-      );
-      await this.params.recordLoss("payload-error");
-      firing.handled = true;
-      this.firing = undefined;
-      this.schedulePendingIfNeeded(this.params.getGeneration());
-    });
-  }
-
-  private async classifyFireDisposition(
+  private async classifyFireOutcome(
     firing: InFlightBatch,
-    disposition: CronStreamFireDisposition,
+    outcome: FireOutcome,
     stopping: boolean,
   ): Promise<void> {
     if (firing.handled) {
       return;
     }
+    if ("error" in outcome) {
+      this.params.logger.warn(
+        { jobId: this.job.id, err: String(outcome.error) },
+        `cron-stream: batch fire failed${stopping ? " during stop" : ""}`,
+      );
+      await this.params.recordLoss("payload-error");
+      firing.handled = true;
+      return;
+    }
     firing.handled = true;
+    const { disposition } = outcome;
     if (disposition === "fired" || disposition === "disabled") {
       // `disabled` means the batch fired and a once-trigger disabled the job.
-      this.lastFireStartedAtMs = firing.startedAtMs;
       if (disposition === "disabled" && !stopping) {
         this.params.requestTriggerDisabledStop();
       }
@@ -662,7 +588,7 @@ export class CronStreamOutput {
   }
 
   private schedulePendingFire(delayMs: number, generation: number): void {
-    clearTimer(this.rateTimer);
+    clearTimeout(this.rateTimer);
     const rateEpoch = ++this.rateEpoch;
     this.rateTimer = setTimeout(() => {
       void this.attemptPendingFire(generation, rateEpoch);
@@ -707,11 +633,7 @@ export class CronStreamOutput {
       if (this.firing) {
         return;
       }
-      const spacingRemaining =
-        Math.max(
-          this.nextEligibleAttemptAtMs,
-          this.lastFireStartedAtMs + this.params.minIntervalMs,
-        ) - this.params.nowMs();
+      const spacingRemaining = this.nextEligibleAttemptAtMs - this.params.nowMs();
       if (spacingRemaining > 0) {
         this.schedulePendingFire(spacingRemaining, generation);
         return;
@@ -729,7 +651,7 @@ export class CronStreamOutput {
   }
 
   private async hasAcceptedSourceInput(): Promise<boolean> {
-    if (this.batchHasLines) {
+    if (this.batch !== undefined) {
       return true;
     }
     const { maxBatchBytes } = resolveCronStreamBatching(this.job.schedule);

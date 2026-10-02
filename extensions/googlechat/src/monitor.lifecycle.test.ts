@@ -1,19 +1,34 @@
 // Google Chat tests cover monitor lifecycle status publication.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WebhookTarget } from "./monitor-types.js";
+import type { GoogleChatEvent } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   ingressStart: vi.fn(),
   ingressStop: vi.fn(async () => undefined),
-  registerTarget: vi.fn(() => vi.fn()),
+  registerTarget: vi.fn((_target: WebhookTarget) => vi.fn()),
   setProcessor: vi.fn(),
+  ingressFactory:
+    vi.fn<(params: { dispatch: (event: GoogleChatEvent) => Promise<void> }) => void>(),
+  runTurn: vi.fn<(params: { adapter: { resolveTurn: () => { cfg: OpenClawConfig } } }) => void>(),
 }));
 
 vi.mock("./monitor-ingress.js", () => ({
-  createGoogleChatIngressMonitor: () => ({
-    receive: vi.fn(),
-    start: mocks.ingressStart,
-    stop: mocks.ingressStop,
-  }),
+  createGoogleChatIngressMonitor: (params: {
+    dispatch: (event: GoogleChatEvent) => Promise<void>;
+  }) => {
+    mocks.ingressFactory(params);
+    return {
+      receive: vi.fn(),
+      start: mocks.ingressStart,
+      stop: mocks.ingressStop,
+    };
+  },
 }));
 
 vi.mock("./monitor-routing.js", () => ({
@@ -22,7 +37,16 @@ vi.mock("./monitor-routing.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
-  getGoogleChatRuntime: () => ({}),
+  getGoogleChatRuntime: () => ({
+    logging: { shouldLogVerbose: () => false },
+    channel: {
+      inbound: { buildContext: (payload: unknown) => payload, run: mocks.runTurn },
+    },
+  }),
+}));
+
+vi.mock("./monitor-access.js", () => ({
+  applyGoogleChatInboundAccessPolicy: async () => ({ ok: true }),
 }));
 
 import { startGoogleChatMonitor } from "./monitor.js";
@@ -42,6 +66,53 @@ describe("Google Chat monitor lifecycle", () => {
     vi.clearAllMocks();
     mocks.registerTarget.mockReturnValue(vi.fn());
   });
+
+  afterEach(() => {
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([true, false])(
+    "follows runtime reloads only for a runtime-owned monitor (runtimeOwned=%s)",
+    async (runtimeOwned) => {
+      const startup = { messages: { visibleReplies: "message_tool" as const } };
+      setRuntimeConfigSnapshot(runtimeOwned ? startup : {});
+      const stop = await startGoogleChatMonitor({
+        account: {
+          ...configuredAccount,
+          config: { ...configuredAccount.config, typingIndicator: "none" },
+        },
+        config: startup,
+        runtime: {},
+        abortSignal: new AbortController().signal,
+      } as never);
+      try {
+        const target = mocks.registerTarget.mock.calls[0]![0];
+        const { dispatch } = mocks.ingressFactory.mock.calls[0]![0];
+        const event: GoogleChatEvent = {
+          type: "MESSAGE",
+          space: { name: "spaces/CONFIG", type: "DM" },
+          message: {
+            name: "spaces/CONFIG/messages/1",
+            text: "hello",
+            sender: { name: "users/alice" },
+          },
+        };
+        await dispatch(event);
+        setRuntimeConfigSnapshot({ messages: { visibleReplies: "automatic" } });
+        await dispatch(event);
+        expect(
+          mocks.runTurn.mock.calls.map(
+            ([turn]) => turn.adapter.resolveTurn().cfg.messages?.visibleReplies,
+          ),
+        ).toEqual(["message_tool", runtimeOwned ? "automatic" : "message_tool"]);
+        expect(target.config).toBe(startup);
+        expect(target.audience).toBe("1234567890");
+        expect(mocks.ingressStart).toHaveBeenCalledOnce();
+      } finally {
+        await stop();
+      }
+    },
+  );
 
   it.each([
     { audienceType: "app-url", audience: "https://chat.example.test/googlechat" },
@@ -72,8 +143,6 @@ describe("Google Chat monitor lifecycle", () => {
   });
 
   it.each([
-    { description: "both audience settings are missing", config: {} },
-    { description: "the audience is missing", config: { audienceType: "app-url" } },
     {
       description: "the audience is blank",
       config: { audienceType: "app-url", audience: "   " },

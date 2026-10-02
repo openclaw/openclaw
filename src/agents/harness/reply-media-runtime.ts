@@ -7,6 +7,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
 import { createBoundedOutboundMediaReadFile } from "../../media/bounded-read-file.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { resolveOutboundAttachmentFromBuffer } from "../../media/outbound-attachment.js";
 import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { toRelativeWorkspacePath } from "../path-policy.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
@@ -31,6 +32,18 @@ export async function prepareHarnessReplyMedia(params: {
     channel: context.messageProvider,
     accountId: context.accountId,
   });
+  if (request.kind === "artifact") {
+    // Provider artifacts already have byte custody. Preserve their exact bytes;
+    // workspace-file MIME policy and image transformations do not apply here.
+    const saved = await resolveOutboundAttachmentFromBuffer(request.buffer, maxBytes, {
+      filename: request.fileName,
+    });
+    assertCurrent();
+    return {
+      kind: "payload",
+      payload: { mediaUrl: saved.path, mediaUrls: [saved.path], trustedLocalMedia: true },
+    };
+  }
   const prepare = createReplyMediaSourcePreparer({
     ...context,
     workspaceMediaRoot: request.workspaceRoot ?? context.workspaceDir,

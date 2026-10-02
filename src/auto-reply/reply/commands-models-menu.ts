@@ -14,7 +14,7 @@ const MODEL_PROVIDER_ROUTE_DETAILS = {
 export type ModelsProviderMenu = { available: number; notice: string };
 export type ModelReadiness = Pick<
   ModelAuthAvailabilityEvaluation,
-  "availability" | "unavailableReason"
+  "availability" | "unavailableReason" | "runtimeAuth"
 > & {
   runtimeId?: string;
 };
@@ -28,6 +28,7 @@ export function buildModelsMenu(data: {
   modelNames: ReadonlyMap<string, string>;
   modelAvailability: ReadonlyMap<string, ModelReadiness>;
   loginProviders: ReadonlySet<string>;
+  pendingProviders?: readonly string[];
 }): ModelsMenu {
   const modelNames = new Map(data.modelNames);
   const byProvider = new Map<string, ModelsProviderMenu>();
@@ -40,6 +41,7 @@ export function buildModelsMenu(data: {
     let available = 0;
     const loginSupported = data.loginProviders.has(id);
     const loginCommand = formatProviderLoginCommand(id);
+    const pending = data.pendingProviders?.includes(id) === true;
     for (const model of models) {
       const key = `${id}/${model}`;
       const state = data.modelAvailability.get(key)!;
@@ -55,29 +57,38 @@ export function buildModelsMenu(data: {
       }
       let label: string;
       let recovery: string;
-      switch (state.unavailableReason) {
-        case "missing-auth":
-          label = "Sign-in needed";
-          recovery = loginSupported ? `Connect with ${loginCommand}.` : CUSTOM_MODEL_SETUP_GUIDANCE;
-          break;
-        case "auth-failed":
-          label = "Sign-in failed";
-          recovery = loginSupported
-            ? `Sign in again with ${loginCommand}.`
-            : CUSTOM_MODEL_SETUP_GUIDANCE;
-          break;
-        case "cooldown":
-          label = "Temporarily unavailable";
-          recovery = "Try again later or choose another model.";
-          break;
-        default:
-          label = state.availability === false ? "Unavailable" : "Connection not confirmed";
-          recovery =
-            state.availability === false
-              ? "Run /models again or choose another model."
-              : loginSupported
-                ? `Connect with ${loginCommand}, or choose another model.`
-                : CUSTOM_MODEL_SETUP_GUIDANCE;
+      if (state.runtimeAuth?.source === "native" && state.availability === undefined) {
+        label = pending ? "Checking native agent" : "Connection not confirmed";
+        recovery = pending
+          ? "Run /models again when discovery finishes."
+          : "Check the native app on the Gateway host, then run /models again.";
+      } else {
+        switch (state.unavailableReason) {
+          case "missing-auth":
+            label = "Sign-in needed";
+            recovery = loginSupported
+              ? `Connect with ${loginCommand}.`
+              : CUSTOM_MODEL_SETUP_GUIDANCE;
+            break;
+          case "auth-failed":
+            label = "Sign-in failed";
+            recovery = loginSupported
+              ? `Sign in again with ${loginCommand}.`
+              : CUSTOM_MODEL_SETUP_GUIDANCE;
+            break;
+          case "cooldown":
+            label = "Temporarily unavailable";
+            recovery = "Try again later or choose another model.";
+            break;
+          default:
+            label = state.availability === false ? "Unavailable" : "Connection not confirmed";
+            recovery =
+              state.availability === false
+                ? "Run /models again or choose another model."
+                : loginSupported
+                  ? `Connect with ${loginCommand}, or choose another model.`
+                  : CUSTOM_MODEL_SETUP_GUIDANCE;
+        }
       }
       modelNames.set(key, `${label} — ${modelNames.get(key) ?? model}`);
       notices.add(`${id}: ${label}. ${recovery}`);

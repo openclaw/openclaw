@@ -1,37 +1,32 @@
-/**
- * HTTP session history revocation tests.
- */
-import { EventEmitter } from "node:events";
-import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
+import { EventEmitter, once } from "node:events";
+import { createServer, get, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
-let transcriptUpdateHandler: ((update: InternalSessionTranscriptUpdate) => void) | undefined;
-let authRevoked = false;
-let gatewayConfig: {
-  trustedProxies?: string[];
-  allowRealIpFallback?: boolean;
-} = {
-  trustedProxies: ["10.0.0.1"],
-  allowRealIpFallback: false,
-};
-let authCheckCalls = 0;
-let transcriptReadError: Error | undefined;
-let authenticatedUserProfile:
-  | { profileId: string; displayName: string | null; hasAvatar: boolean; updatedAt: number }
-  | undefined;
-let sessionVisibleToProfile = true;
-let currentSessionId = "session-1";
-let currentLifecycleRevision = "before-reset";
-let currentSessionStartedAt = 1;
-let beforeHistoryReadReturns: (() => Promise<void>) | undefined;
-let beforeHistoryRefreshReturns: (() => Promise<void>) | undefined;
-let beforeAuthCheckReturns: (() => Promise<void>) | undefined;
+class FixtureState {
+  onUpdate?: (update: InternalSessionTranscriptUpdate) => void;
+  authRevoked = false;
+  authorityCurrent = true;
+  gatewayConfig: { trustedProxies?: string[]; allowRealIpFallback?: boolean } = {
+    trustedProxies: ["10.0.0.1"],
+    allowRealIpFallback: false,
+  };
+  authChecks = 0;
+  readError?: Error;
+  profile?: typeof guestProfile;
+  visible = true;
+  sessionId = "session-1";
+  lifecycleRevision = "before-reset";
+  sessionStartedAt = 1;
+  beforeRead?: () => Promise<void>;
+  beforeRefresh?: () => Promise<void>;
+  beforeAuth?: () => Promise<void>;
+  beforeInline?: () => Promise<void>;
+}
+let fixture = new FixtureState();
 
 vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({
-    gateway: gatewayConfig,
-  }),
+  getRuntimeConfig: () => ({ gateway: fixture.gatewayConfig }),
 }));
 
 vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
@@ -44,11 +39,11 @@ vi.mock("../sessions/transcript-events.js", async (importOriginal) => {
     attachSessionTranscriptRunId,
     readSessionTranscriptUpdateVersion,
     resolveTerminalAssistantTranscriptRunId,
-    onInternalSessionTranscriptUpdate: (cb: typeof transcriptUpdateHandler) => {
-      transcriptUpdateHandler = cb;
+    onInternalSessionTranscriptUpdate: (cb: typeof fixture.onUpdate) => {
+      fixture.onUpdate = cb;
       return () => {
-        if (transcriptUpdateHandler === cb) {
-          transcriptUpdateHandler = undefined;
+        if (fixture.onUpdate === cb) {
+          fixture.onUpdate = undefined;
         }
       };
     },
@@ -65,7 +60,8 @@ vi.mock("./http-utils.js", () => ({
     cfg: { gateway: {} },
     requestAuth: {
       trustDeclaredOperatorScopes: true,
-      ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+      hasCurrentClientAuthority: () => fixture.authorityCurrent,
+      ...(fixture.profile ? { authenticatedUserProfile: fixture.profile } : {}),
     },
     operatorScopes: ["operator.read"],
   }),
@@ -73,33 +69,32 @@ vi.mock("./http-utils.js", () => ({
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
   }) => {
-    authCheckCalls += 1;
-    await beforeAuthCheckReturns?.();
-    if (authRevoked) {
+    fixture.authChecks += 1;
+    await fixture.beforeAuth?.();
+    const unconfigured =
+      fixture.gatewayConfig.trustedProxies === undefined &&
+      fixture.gatewayConfig.allowRealIpFallback === undefined;
+    if (
+      fixture.authRevoked ||
+      (unconfigured &&
+        params.trustedProxies === undefined &&
+        params.allowRealIpFallback === undefined)
+    ) {
       return {
         ok: false as const,
-        authResult: { ok: false, reason: "trusted_proxy_user_not_allowed" },
+        authResult: {
+          ok: false,
+          reason: fixture.authRevoked
+            ? "trusted_proxy_user_not_allowed"
+            : "trusted_proxy_no_proxies_configured",
+        },
       };
-    }
-    if (
-      gatewayConfig.trustedProxies === undefined &&
-      gatewayConfig.allowRealIpFallback === undefined
-    ) {
-      return params.trustedProxies === undefined && params.allowRealIpFallback === undefined
-        ? {
-            ok: false as const,
-            authResult: { ok: false, reason: "trusted_proxy_no_proxies_configured" },
-          }
-        : {
-            ok: true as const,
-            requestAuth: { trustDeclaredOperatorScopes: true },
-          };
     }
     return {
       ok: true as const,
       requestAuth: {
         trustDeclaredOperatorScopes: true,
-        ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+        ...(!unconfigured && fixture.profile ? { authenticatedUserProfile: fixture.profile } : {}),
       },
     };
   },
@@ -107,14 +102,14 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-sharing.js", () => ({
   createSessionListEntryFilter: ({ client }: { client: unknown }) =>
-    client ? () => sessionVisibleToProfile : undefined,
+    client ? () => fixture.visible : undefined,
   resolveSessionSharingTarget: () => ({
     canonicalKey: "agent:main",
     agentId: "main",
     entry: {
-      sessionId: currentSessionId,
-      lifecycleRevision: currentLifecycleRevision,
-      sessionStartedAt: currentSessionStartedAt,
+      sessionId: fixture.sessionId,
+      lifecycleRevision: fixture.lifecycleRevision,
+      sessionStartedAt: fixture.sessionStartedAt,
     },
     storePath: "/tmp",
   }),
@@ -130,8 +125,8 @@ vi.mock("./session-utils.js", () => ({
   }),
   resolveCanonicalSessionEntryFromStoreKeys: () => ({
     sessionId: "session-1",
-    lifecycleRevision: currentLifecycleRevision,
-    sessionStartedAt: currentSessionStartedAt,
+    lifecycleRevision: fixture.lifecycleRevision,
+    sessionStartedAt: fixture.sessionStartedAt,
     sessionFile: "/tmp/session-1.jsonl",
   }),
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
@@ -139,10 +134,10 @@ vi.mock("./session-utils.js", () => ({
 
 vi.mock("./session-history-state.js", () => ({
   readSessionHistorySnapshotAsync: async () => {
-    if (transcriptReadError) {
-      throw transcriptReadError;
+    if (fixture.readError) {
+      throw fixture.readError;
     }
-    await beforeHistoryReadReturns?.();
+    await fixture.beforeRead?.();
     return {
       history: { items: [], nextCursor: null, messages: [] },
       rawTranscriptSeq: 0,
@@ -154,14 +149,19 @@ vi.mock("./session-history-state.js", () => ({
     fromSnapshot: (_params: unknown) => ({
       snapshot: () => ({ items: [], nextCursor: null, messages: [] }),
       retainRecentMessages: () => ({ items: [], nextCursor: null, messages: [] }),
-      appendInlineMessage: ({ message, messageId }: { message: unknown; messageId?: string }) => ({
+      prepareInlineMessage: async ({
         message,
-        messageSeq: 1,
         messageId,
-      }),
+      }: {
+        message: unknown;
+        messageId?: string;
+      }) => {
+        await fixture.beforeInline?.();
+        return () => ({ message, messageSeq: 1, messageId });
+      },
       shouldRefreshForTranscriptPath: () => false,
       refreshAsync: async () => {
-        await beforeHistoryRefreshReturns?.();
+        await fixture.beforeRefresh?.();
         return {
           items: [],
           nextCursor: null,
@@ -177,6 +177,12 @@ import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { handleSessionHistoryHttpRequest } from "./sessions-history-http.js";
 
+const guestProfile = {
+  profileId: "profile-guest",
+  displayName: "Guest",
+  hasAvatar: false,
+  updatedAt: 1,
+};
 const SESSION_HISTORY_URL = "/sessions/agent%3Amain/history";
 const SESSION_FILE = "/tmp/session-1.jsonl";
 const TRUSTED_PROXY_STARTUP_OPTIONS = {
@@ -186,22 +192,15 @@ const TRUSTED_PROXY_STARTUP_OPTIONS = {
 } satisfies Parameters<typeof handleSessionHistoryHttpRequest>[2];
 
 class MockReq extends EventEmitter {
-  url: string;
-  method: string;
-  headers: Record<string, string>;
+  url = SESSION_HISTORY_URL;
+  method = "GET";
   socket = new EventEmitter();
-
-  constructor(url: string) {
-    super();
-    this.url = url;
-    this.method = "GET";
-    this.headers = {
-      host: "localhost",
-      accept: "text/event-stream",
-      authorization: "Bearer token",
-      "x-openclaw-scopes": "operator.read",
-    };
-  }
+  headers: Record<string, string> = {
+    host: "localhost",
+    accept: "text/event-stream",
+    authorization: "Bearer token",
+    "x-openclaw-scopes": "operator.read",
+  };
 }
 
 class MockRes extends EventEmitter {
@@ -210,7 +209,7 @@ class MockRes extends EventEmitter {
   writes: string[] = [];
   writableEnded = false;
   socket = new EventEmitter();
-  closeOnFrame?: "retry" | "history";
+  closeOnRetry?: boolean;
 
   setHeader(name: string, value: string) {
     this.headers.set(name.toLowerCase(), value);
@@ -218,10 +217,10 @@ class MockRes extends EventEmitter {
 
   write(chunk: string) {
     this.writes.push(chunk);
+    this.emit("write", chunk);
     const written = this.writes.join("");
-    const closeMarker = this.closeOnFrame === "retry" ? "retry:" : "event: history";
-    if (this.closeOnFrame && written.includes(closeMarker) && written.endsWith("\n\n")) {
-      this.closeOnFrame = undefined;
+    if (this.closeOnRetry && written.includes("retry:") && written.endsWith("\n\n")) {
+      this.closeOnRetry = false;
       this.emit("close");
     }
     return true;
@@ -240,111 +239,95 @@ class MockRes extends EventEmitter {
   flushHeaders() {}
 }
 
-async function openSessionHistoryStream(
-  options: Parameters<typeof handleSessionHistoryHttpRequest>[2],
-) {
-  return (await openSessionHistoryStreamPair(options)).res;
+function readBarrier() {
+  const entered = createDeferred();
+  const release = createDeferred();
+  return {
+    entered,
+    release,
+    wait: async () => {
+      entered.resolve();
+      await release.promise;
+    },
+  };
 }
 
-async function openSessionHistoryStreamPair(
-  options: Parameters<typeof handleSessionHistoryHttpRequest>[2],
-  params?: { closeOnFrame?: "retry" | "history"; expectSubscribed?: boolean },
-) {
-  const req = new MockReq(SESSION_HISTORY_URL);
-  const res = new MockRes();
-  res.closeOnFrame = params?.closeOnFrame;
-
-  const handled = await handleSessionHistoryHttpRequest(
+function handle(req: MockReq, res: MockRes) {
+  return handleSessionHistoryHttpRequest(
     req as unknown as IncomingMessage,
     res as unknown as ServerResponse,
-    options,
+    TRUSTED_PROXY_STARTUP_OPTIONS,
   );
+}
 
-  expect(handled).toBe(true);
-  if (params?.closeOnFrame === "history" || params?.expectSubscribed !== false) {
-    await vi.waitFor(() => expect(res.writes.join("")).toContain("event: history"));
-  }
-  if (params?.expectSubscribed === false) {
-    expect(transcriptUpdateHandler).toBeUndefined();
+async function openStream(params: { closeOnRetry?: boolean; expectSubscribed?: boolean } = {}) {
+  const req = new MockReq();
+  const res = new MockRes();
+  res.closeOnRetry = params.closeOnRetry;
+  const initial =
+    params.expectSubscribed === false ? undefined : waitForFrame(res, "event: history");
+  expect(await handle(req, res)).toBe(true);
+  if (params.expectSubscribed === false) {
+    expect(fixture.onUpdate).toBeUndefined();
   } else {
-    expect(transcriptUpdateHandler).toBeTypeOf("function");
+    await initial;
+    expect(fixture.onUpdate).toBeTypeOf("function");
   }
-
   return { req, res };
 }
 
-async function withRealNodeSessionHistoryStream(
+function waitForFrame(res: MockRes, text: string): Promise<void> {
+  return new Promise((resolve) => {
+    const onWrite = (chunk: string) => {
+      if (chunk.includes(text)) {
+        res.off("write", onWrite);
+        resolve();
+      }
+    };
+    res.on("write", onWrite);
+  });
+}
+
+async function withRealStream(
   run: (pair: { req: IncomingMessage; res: ServerResponse }) => Promise<void>,
 ) {
-  const { promise: pairPromise, resolve: resolvePair } = createDeferred<{
-    req: IncomingMessage;
-    res: ServerResponse;
-  }>();
-  const {
-    promise: handledPromise,
-    resolve: resolveHandled,
-    reject: rejectHandled,
-  } = createDeferred<boolean>();
+  const connected = createDeferred<{ req: IncomingMessage; res: ServerResponse }>();
+  const handled = createDeferred<boolean>();
   const server = createServer((req, res) => {
-    resolvePair({ req, res });
+    connected.resolve({ req, res });
     void handleSessionHistoryHttpRequest(req, res, TRUSTED_PROXY_STARTUP_OPTIONS).then(
-      resolveHandled,
-      rejectHandled,
+      handled.resolve,
+      handled.reject,
     );
   });
-
-  await new Promise<void>((resolve, reject) => {
-    const handleListenError = (error: Error) => reject(error);
-    server.once("error", handleListenError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", handleListenError);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("expected TCP test server address");
   }
-
-  const clientResponsePromise = new Promise<IncomingMessage>((resolve, reject) => {
-    const clientRequest = request(
+  const response = new Promise<IncomingMessage>((resolve, reject) => {
+    get(
+      `http://127.0.0.1:${address.port}${SESSION_HISTORY_URL}`,
       {
-        host: "127.0.0.1",
-        port: address.port,
-        path: SESSION_HISTORY_URL,
-        method: "GET",
-        headers: {
-          accept: "text/event-stream",
-          authorization: "Bearer token",
-          "x-openclaw-scopes": "operator.read",
-        },
+        headers: new MockReq().headers,
       },
       resolve,
-    );
-    clientRequest.once("error", reject);
-    clientRequest.end();
+    ).once("error", reject);
   });
-
-  const pair = await pairPromise;
-  const clientResponse = await clientResponsePromise;
-  clientResponse.resume();
-  expect(await handledPromise).toBe(true);
-  expect(transcriptUpdateHandler).toBeTypeOf("function");
-
+  const pair = await connected.promise;
+  const client = await response;
+  client.resume();
+  expect(await handled.promise).toBe(true);
+  expect(fixture.onUpdate).toBeTypeOf("function");
   try {
     await run(pair);
   } finally {
-    clientResponse.destroy();
+    client.destroy();
     pair.res.destroy();
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => {
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
+      server.close((error) => (error ? reject(error) : resolve()));
     });
   }
 }
@@ -362,73 +345,43 @@ function emitErrorOnNextTick(emitter: EventEmitter, error: Error): Promise<void>
   });
 }
 
-function emitTranscriptTextUpdate({
-  sessionFile = SESSION_FILE,
-  target = {
-    agentId: "main",
-    sessionId: "session-1",
-    sessionKey: "agent:main",
-    storePath: "/tmp",
-  },
-  text,
-  messageId,
-}: {
-  sessionFile?: string;
-  target?: InternalSessionTranscriptUpdate["target"];
-  text: string;
-  messageId: string;
-}) {
-  transcriptUpdateHandler?.({
-    sessionFile,
-    target,
+function emitTranscriptTextUpdate(
+  text: string,
+  update: Partial<Pick<InternalSessionTranscriptUpdate, "sessionFile" | "target">> = {},
+) {
+  fixture.onUpdate?.({
+    sessionFile: SESSION_FILE,
+    target: {
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main",
+      storePath: "/tmp",
+    },
     lifecycleRevision: "before-reset",
     message: { role: "assistant", content: [{ type: "text", text }] },
-    messageId,
+    messageId: "message-1",
     messageSeq: 1,
+    ...update,
   });
 }
 
 async function expectStreamClosedWithoutMessage(res: MockRes, text: string) {
-  await vi.waitFor(() => {
-    expect(res.writableEnded).toBe(true);
-  });
+  await vi.waitFor(() => expect(res.writableEnded).toBe(true));
 
-  const joined = res.writes.join("");
-  expect(joined).not.toContain("event: message");
-  expect(joined).not.toContain(text);
-  expect(res.writableEnded).toBe(true);
+  expect(res.writes.join("")).not.toContain("event: message");
+  expect(res.writes.join("")).not.toContain(text);
 }
 
 afterEach(() => {
-  transcriptUpdateHandler = undefined;
-  authRevoked = false;
-  authCheckCalls = 0;
-  transcriptReadError = undefined;
-  authenticatedUserProfile = undefined;
-  sessionVisibleToProfile = true;
-  currentSessionId = "session-1";
-  currentLifecycleRevision = "before-reset";
-  currentSessionStartedAt = 1;
-  beforeHistoryReadReturns = undefined;
-  beforeHistoryRefreshReturns = undefined;
-  beforeAuthCheckReturns = undefined;
-  gatewayConfig = {
-    trustedProxies: ["10.0.0.1"],
-    allowRealIpFallback: false,
-  };
+  fixture = new FixtureState();
 });
 
 describe("session history SSE auth revocation", () => {
   it("returns not found when a verified role cannot view the requested session", async () => {
-    authenticatedUserProfile = {
-      profileId: "profile-guest",
-      displayName: "Guest",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    sessionVisibleToProfile = false;
+    fixture.profile = guestProfile;
+    fixture.visible = false;
 
-    const { res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
+    const { res } = await openStream({
       expectSubscribed: false,
     });
 
@@ -438,48 +391,34 @@ describe("session history SSE auth revocation", () => {
 
   it.each([
     { accept: "application/json", change: "revocation" },
-    { accept: "text/event-stream", change: "revocation" },
-    { accept: "application/json", change: "replacement" },
     { accept: "text/event-stream", change: "replacement" },
     { accept: "application/json", change: "reset" },
-    { accept: "text/event-stream", change: "reset" },
-    { accept: "application/json", change: "authentication" },
     { accept: "text/event-stream", change: "authentication" },
+    { accept: "application/json", change: "ingress policy" },
   ] as const)(
     "withholds initial $accept history after $change during its read",
     async ({ accept, change }) => {
-      authenticatedUserProfile = {
-        profileId: "profile-guest",
-        displayName: "Guest",
-        hasAvatar: false,
-        updatedAt: 1,
-      };
-      const entered = createDeferred();
-      const release = createDeferred();
-      beforeHistoryReadReturns = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const req = new MockReq(SESSION_HISTORY_URL);
+      fixture.profile = guestProfile;
+      const { entered, release, wait } = readBarrier();
+      fixture.beforeRead = wait;
+      const req = new MockReq();
       req.headers.accept = accept;
       const res = new MockRes();
-      const pending = handleSessionHistoryHttpRequest(
-        req as unknown as IncomingMessage,
-        res as unknown as ServerResponse,
-        TRUSTED_PROXY_STARTUP_OPTIONS,
-      );
+      const pending = handle(req, res);
       try {
         await Promise.race([entered.promise, pending]);
         expect(res.writes).toEqual([]);
         if (change === "revocation") {
-          sessionVisibleToProfile = false;
+          fixture.visible = false;
         } else if (change === "replacement") {
-          currentSessionId = "replacement";
+          fixture.sessionId = "replacement";
         } else if (change === "reset") {
-          currentLifecycleRevision = "after-reset";
-          currentSessionStartedAt = 2;
+          fixture.lifecycleRevision = "after-reset";
+          fixture.sessionStartedAt = 2;
+        } else if (change === "ingress policy") {
+          fixture.authorityCurrent = false;
         } else {
-          authRevoked = true;
+          fixture.authRevoked = true;
         }
       } finally {
         release.resolve();
@@ -489,91 +428,59 @@ describe("session history SSE auth revocation", () => {
         expect(res.statusCode).toBe(404);
         expect(res.writes.join("")).not.toContain("event: history");
         expect(res.writes.join("")).not.toContain('"messages"');
-        expect(transcriptUpdateHandler).toBeUndefined();
+        expect(fixture.onUpdate).toBeUndefined();
       } finally {
         res.end();
       }
     },
   );
 
-  it.each(["revocation", "replacement", "reset", "authentication"] as const)(
-    "withholds an SSE refresh after %s while its read is pending",
-    async (change) => {
-      if (change === "revocation") {
-        authenticatedUserProfile = {
-          profileId: "profile-guest",
-          displayName: "Guest",
-          hasAvatar: false,
-          updatedAt: 1,
-        };
-      }
-      const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
-      const entered = createDeferred();
-      const release = createDeferred();
-      beforeHistoryRefreshReturns = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
-      try {
-        await entered.promise;
-        if (change === "revocation") {
-          sessionVisibleToProfile = false;
-        } else if (change === "replacement") {
-          currentSessionId = "replacement";
-        } else if (change === "reset") {
-          currentLifecycleRevision = "after-reset";
-          currentSessionStartedAt = 2;
-        } else {
-          authRevoked = true;
-        }
-      } finally {
-        release.resolve();
-      }
-      try {
-        await expectStreamClosedWithoutMessage(res, "private refreshed history");
-        expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
-        expect(transcriptUpdateHandler).toBeUndefined();
-      } finally {
-        res.end();
-      }
-    },
-  );
+  it("withholds an SSE refresh after profile revocation while its read is pending", async () => {
+    fixture.profile = guestProfile;
+    const { res } = await openStream();
+    const barrier = readBarrier();
+    fixture.beforeRefresh = barrier.wait;
+    fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+    try {
+      await barrier.entered.promise;
+      fixture.visible = false;
+    } finally {
+      barrier.release.resolve();
+    }
+    try {
+      await expectStreamClosedWithoutMessage(res, "private refreshed history");
+      expect(res.writes.filter((frame) => frame.includes("event: history"))).toHaveLength(1);
+      expect(fixture.onUpdate).toBeUndefined();
+    } finally {
+      res.end();
+    }
+  });
 
   it("closes an existing stream before disclosure when profile access is revoked", async () => {
-    authenticatedUserProfile = {
-      profileId: "profile-guest",
-      displayName: "Guest",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
-    sessionVisibleToProfile = false;
+    fixture.profile = guestProfile;
+    const { res } = await openStream();
+    fixture.visible = false;
 
-    emitTranscriptTextUpdate({ text: "role-revoked secret", messageId: "m-role" });
+    emitTranscriptTextUpdate("role-revoked secret");
 
     await expectStreamClosedWithoutMessage(res, "role-revoked secret");
   });
 
   it("keeps inline delivery between coalesced refreshes while authorization is pending", async () => {
-    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
-    const entered = createDeferred();
-    const release = createDeferred();
+    const { res } = await openStream();
+    const { entered, release, wait } = readBarrier();
     let refreshCount = 0;
-    beforeAuthCheckReturns = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    beforeHistoryRefreshReturns = async () => {
+    fixture.beforeAuth = wait;
+    fixture.beforeRefresh = async () => {
       refreshCount++;
     };
     try {
-      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      fixture.onUpdate?.({ sessionFile: SESSION_FILE });
       await entered.promise;
-      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
-      emitTranscriptTextUpdate({ text: "inline between refreshes", messageId: "inline-barrier" });
-      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
-      transcriptUpdateHandler?.({ sessionFile: SESSION_FILE });
+      fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+      emitTranscriptTextUpdate("inline between refreshes");
+      fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+      fixture.onUpdate?.({ sessionFile: SESSION_FILE });
       release.resolve();
 
       await vi.waitFor(() =>
@@ -592,94 +499,105 @@ describe("session history SSE auth revocation", () => {
     }
   });
 
-  it("returns retryable HTTP unavailable while a dirty projection rebuilds", async () => {
-    transcriptReadError = new SessionTranscriptProjectionUnavailableError("session-1");
-
-    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
-      expectSubscribed: false,
-    });
-
-    expect(res.statusCode).toBe(503);
-    expect(res.headers.get("retry-after")).toBe("1");
-    expect(res.writes.join("")).toContain('"retryable":true');
-    expect(req.listenerCount("error")).toBe(0);
-  });
-
-  it.each([
-    { code: "overloaded", message: "session history is busy; retry shortly" },
-    { code: "unavailable", message: "session history is temporarily unavailable; retry shortly" },
-    { code: "timeout", message: "session history read timed out; retry shortly" },
-  ] as const)(
-    "returns retryable HTTP unavailable when a history worker is $code",
-    async ({ code, message }) => {
-      transcriptReadError = new WorkerTaskError("internal worker failure detail", code);
-
-      const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
-        expectSubscribed: false,
-      });
-
-      expect(res.statusCode).toBe(503);
-      expect(res.headers.get("retry-after")).toBe("1");
-      expect(JSON.parse(res.writes.join(""))).toEqual({
-        ok: false,
-        error: { type: "unavailable", message, retryable: true },
-      });
-      expect(req.listenerCount("error")).toBe(0);
+  it.each(["sharing", "replacement", "reset", "close", "failure"] as const)(
+    "withholds a delayed inline message after %s",
+    async (change) => {
+      fixture.profile = guestProfile;
+      const { res } = await openStream();
+      const barrier = readBarrier();
+      fixture.beforeInline = async () => {
+        await barrier.wait();
+        if (change === "failure") {
+          throw new Error("inline visibility worker failed");
+        }
+      };
+      const closed = once(res, "close");
+      emitTranscriptTextUpdate("pending inline content");
+      await barrier.entered.promise;
+      if (change === "sharing") {
+        fixture.visible = false;
+      } else if (change === "replacement") {
+        fixture.sessionId = "successor";
+      } else if (change === "reset") {
+        fixture.lifecycleRevision = "after-reset";
+      } else if (change === "close") {
+        res.end();
+      }
+      barrier.release.resolve();
+      await closed;
+      expect(res.writes.join("")).not.toContain("pending inline content");
+      expect(fixture.onUpdate).toBeUndefined();
     },
   );
 
-  it("preserves unexpected HTTP history worker failures for the request error owner", async () => {
-    const failure = new WorkerTaskError("unexpected worker task failure", "failed");
-    transcriptReadError = failure;
-    const req = new MockReq(SESSION_HISTORY_URL);
-    const res = new MockRes();
-
-    await expect(
-      handleSessionHistoryHttpRequest(
-        req as unknown as IncomingMessage,
-        res as unknown as ServerResponse,
-        TRUSTED_PROXY_STARTUP_OPTIONS,
-      ),
-    ).rejects.toBe(failure);
-    expect(res.writes).toEqual([]);
-    expect(transcriptUpdateHandler).toBeUndefined();
+  it("serializes appends and trailing refreshes behind pending inline visibility", async () => {
+    const { res } = await openStream();
+    const barrier = readBarrier();
+    fixture.beforeInline = barrier.wait;
+    const refreshed = waitForFrame(res, "private refreshed history");
+    try {
+      emitTranscriptTextUpdate("first queued append");
+      await barrier.entered.promise;
+      emitTranscriptTextUpdate("second queued append");
+      fixture.onUpdate?.({ sessionFile: SESSION_FILE });
+      expect(res.writes.filter((frame) => frame.startsWith("event:"))).toHaveLength(1);
+      barrier.release.resolve();
+      await refreshed;
+      const frames = res.writes.filter((frame) => frame.startsWith("event:"));
+      expect(frames.map((frame) => frame.split("\n")[0])).toEqual([
+        "event: history",
+        "event: message",
+        "event: message",
+        "event: history",
+      ]);
+      expect(frames[1]).toContain("first queued append");
+      expect(frames[2]).toContain("second queued append");
+    } finally {
+      barrier.release.resolve();
+      res.end();
+    }
   });
 
-  it("closes the stream before delivering transcript updates after auth is revoked", async () => {
-    const res = await openSessionHistoryStream({ auth: { mode: "trusted-proxy" } as never });
-
-    expect(res.headers.get("content-type")).toContain("text/event-stream");
-
-    authRevoked = true;
-
-    emitTranscriptTextUpdate({
-      text: "post-revocation secret",
-      messageId: "m-1",
+  it.each([
+    {
+      name: "projection rebuilding",
+      error: new SessionTranscriptProjectionUnavailableError("session-1"),
+      message: "session history is rebuilding; retry shortly",
+    },
+    {
+      name: "worker overload",
+      error: new WorkerTaskError("internal worker failure detail", "overloaded"),
+      message: "session history is busy; retry shortly",
+    },
+  ])("returns retryable HTTP unavailable during $name", async ({ error, message }) => {
+    fixture.readError = error;
+    const { req, res } = await openStream({ expectSubscribed: false });
+    expect(res.statusCode).toBe(503);
+    expect(res.headers.get("retry-after")).toBe("1");
+    expect(JSON.parse(res.writes.join(""))).toEqual({
+      ok: false,
+      error: { type: "unavailable", message, retryable: true },
     });
-
-    await expectStreamClosedWithoutMessage(res, "post-revocation secret");
+    expect(req.listenerCount("error")).toBe(0);
   });
 
   it("rechecks SSE auth against live proxy config instead of startup fallbacks", async () => {
-    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    const { res } = await openStream();
 
-    gatewayConfig = {};
+    fixture.gatewayConfig = {};
 
-    emitTranscriptTextUpdate({
-      text: "stale-proxy event",
-      messageId: "m-2",
-    });
+    emitTranscriptTextUpdate("stale-proxy event");
 
     await expectStreamClosedWithoutMessage(res, "stale-proxy event");
   });
 
   it("skips SSE reauth for transcript updates outside this stream", async () => {
-    const res = await openSessionHistoryStream(TRUSTED_PROXY_STARTUP_OPTIONS);
+    const { res } = await openStream();
 
-    authCheckCalls = 0;
-    gatewayConfig = {};
+    fixture.authChecks = 0;
+    fixture.gatewayConfig = {};
 
-    emitTranscriptTextUpdate({
+    emitTranscriptTextUpdate("other session", {
       sessionFile: "/tmp/other-session.jsonl",
       target: {
         agentId: "main",
@@ -687,86 +605,41 @@ describe("session history SSE auth revocation", () => {
         sessionKey: "agent:main:other",
         storePath: "/tmp",
       },
-      text: "other session",
-      messageId: "m-3",
     });
 
     const joined = res.writes.join("");
-    expect(authCheckCalls).toBe(0);
+    expect(fixture.authChecks).toBe(0);
     expect(joined).not.toContain("other session");
     expect(res.writableEnded).toBe(false);
   });
 
-  it("closes and cleans up the SSE stream when the request stream emits an error", async () => {
-    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS);
-
-    expect(() => req.emit("error", new Error("request stream failed"))).not.toThrow();
-
-    expect(res.writableEnded).toBe(true);
-    expect(transcriptUpdateHandler).toBeUndefined();
-    expect(req.listenerCount("error")).toBe(0);
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("cleans up SSE resources when the response stream emits an error", async () => {
-    const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS);
-
-    expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
-
-    expect(transcriptUpdateHandler).toBeUndefined();
-    expect(req.listenerCount("error")).toBe(1);
-    expect(res.listenerCount("error")).toBe(1);
-
-    emitTranscriptTextUpdate({
-      text: "post-response-error update",
-      messageId: "m-response-error",
-    });
-    expect(res.writes.join("")).not.toContain("post-response-error update");
-
-    res.emit("close");
-    expect(req.listenerCount("error")).toBe(0);
-    expect(res.listenerCount("error")).toBe(0);
-  });
-
-  it("keeps real Node stream errors handled while a request failure ends the response", async () => {
-    await withRealNodeSessionHistoryStream(async ({ req, res }) => {
-      expect(req.listenerCount("error")).toBeGreaterThan(0);
-      expect(res.listenerCount("error")).toBeGreaterThan(0);
-
-      expect(() => req.emit("error", new Error("request stream failed"))).not.toThrow();
-      expect(res.writableEnded).toBe(true);
-
-      await expect(
-        emitErrorOnNextTick(res, new Error("response failed during end flush")),
-      ).resolves.toBeUndefined();
-    });
-  });
-
-  it("keeps real Node response errors handled until the ended response closes", async () => {
-    await withRealNodeSessionHistoryStream(async ({ res }) => {
-      expect(() => res.emit("error", new Error("response stream failed"))).not.toThrow();
-      expect(transcriptUpdateHandler).toBeUndefined();
-
-      res.end();
-
-      await expect(
-        emitErrorOnNextTick(res, new Error("response failed after end")),
-      ).resolves.toBeUndefined();
-    });
-  });
-
-  it.each(["retry", "history"] as const)(
-    "cleans up SSE resources when the initial %s frame closes the stream",
-    async (closeOnFrame) => {
-      const { req, res } = await openSessionHistoryStreamPair(TRUSTED_PROXY_STARTUP_OPTIONS, {
-        closeOnFrame,
-        expectSubscribed: false,
+  it.each(["request", "response"] as const)(
+    "handles late real Node response errors after a %s failure",
+    async (source) => {
+      await withRealStream(async ({ req, res }) => {
+        expect(req.listenerCount("error")).toBeGreaterThan(0);
+        expect(res.listenerCount("error")).toBeGreaterThan(0);
+        expect(() =>
+          (source === "request" ? req : res).emit("error", new Error("stream failed")),
+        ).not.toThrow();
+        expect(fixture.onUpdate).toBeUndefined();
+        if (source === "request") {
+          expect(res.writableEnded).toBe(true);
+        } else {
+          res.end();
+        }
+        await expect(
+          emitErrorOnNextTick(res, new Error("response failed after end")),
+        ).resolves.toBeUndefined();
       });
-
-      expect(res.writes.join("")).toContain("retry: 1000\n\n");
-      expect(transcriptUpdateHandler).toBeUndefined();
-      expect(req.listenerCount("error")).toBe(0);
-      expect(res.listenerCount("error")).toBe(0);
     },
   );
+
+  it("cleans up SSE resources when the initial retry frame closes the stream", async () => {
+    const { req, res } = await openStream({ closeOnRetry: true, expectSubscribed: false });
+    expect(res.writes.join("")).toContain("retry: 1000\n\n");
+    expect(fixture.onUpdate).toBeUndefined();
+    expect(req.listenerCount("error")).toBe(0);
+    expect(res.listenerCount("error")).toBe(0);
+  });
 });

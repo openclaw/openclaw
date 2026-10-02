@@ -48,8 +48,8 @@ it("records a Doctor refusal before reporting standalone finalization", async ()
     result: { status: "error", mode: "unknown", steps: [], durationMs: 1 },
   });
   expect(report.body).toContain("Reason code: doctor-failed");
-  expect(report.body).toContain(`Failed phase finalize:doctor: ${message}`);
-  expect(report.body).not.toContain("Failed phase finalize:doctor: exit unknown");
+  expect(report.body).toContain(`Failed phase finalize-doctor: ${message}`);
+  expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
 });
 
 it.each([

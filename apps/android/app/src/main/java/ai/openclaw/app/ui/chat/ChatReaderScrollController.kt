@@ -81,8 +81,6 @@ internal fun createChatReaderStateSaver(expectedSessionKey: String? = null) =
     },
   )
 
-internal val ChatReaderStateSaver = createChatReaderStateSaver()
-
 internal data class ChatReaderTransition(
   val state: ChatReaderState,
   val scrollIndex: Int? = null,
@@ -383,6 +381,12 @@ internal fun ChatReaderState.onTimelineChanged(
   if (timeline.latestContentVersion == latestContentVersion) {
     return ChatReaderTransition(state = this)
   }
+  val updated =
+    copy(
+      latestUserMessageId = timeline.latestUserMessageId,
+      latestUserMessageVersion = timeline.latestUserMessageVersion,
+      latestContentVersion = timeline.latestContentVersion,
+    )
   val previousUserStillPresent =
     if (latestUserMessageVersion == null) {
       latestUserMessageId == null
@@ -393,12 +397,9 @@ internal fun ChatReaderState.onTimelineChanged(
   if (!previousUserStillPresent) {
     return ChatReaderTransition(
       state =
-        copy(
+        updated.copy(
           followTarget = null,
           hasNewerContent = false,
-          latestUserMessageId = timeline.latestUserMessageId,
-          latestUserMessageVersion = timeline.latestUserMessageVersion,
-          latestContentVersion = timeline.latestContentVersion,
         ),
     )
   }
@@ -410,12 +411,9 @@ internal fun ChatReaderState.onTimelineChanged(
     // below the fold behind a jump pill.
     return ChatReaderTransition(
       state =
-        copy(
+        updated.copy(
           followTarget = ChatScrollFollowTarget.LatestContent,
           hasNewerContent = false,
-          latestUserMessageId = timeline.latestUserMessageId,
-          latestUserMessageVersion = timeline.latestUserMessageVersion,
-          latestContentVersion = timeline.latestContentVersion,
         ),
       scrollIndex = timeline.latestContentIndex ?: timeline.readAnchorIndex,
       animated = true,
@@ -424,25 +422,14 @@ internal fun ChatReaderState.onTimelineChanged(
 
   val target = followTarget
   if (target == null) {
-    return ChatReaderTransition(
-      state =
-        copy(
-          hasNewerContent = true,
-          latestUserMessageId = timeline.latestUserMessageId,
-          latestUserMessageVersion = timeline.latestUserMessageVersion,
-          latestContentVersion = timeline.latestContentVersion,
-        ),
-    )
+    return ChatReaderTransition(state = updated.copy(hasNewerContent = true))
   }
 
   val targetIndex = timeline.indexForFollowTarget(target)
   return ChatReaderTransition(
     state =
-      copy(
+      updated.copy(
         hasNewerContent = target == ChatScrollFollowTarget.ReadAnchor && targetIndex != timeline.latestContentIndex,
-        latestUserMessageId = timeline.latestUserMessageId,
-        latestUserMessageVersion = timeline.latestUserMessageVersion,
-        latestContentVersion = timeline.latestContentVersion,
       ),
     scrollIndex = targetIndex,
   )
@@ -479,10 +466,7 @@ private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): I
     ChatScrollFollowTarget.LatestContent -> latestContentIndex
   }
 
-private fun ChatTimeline.containsMessage(id: String): Boolean =
-  items
-    .filterIsInstance<ChatTimelineItem.Message>()
-    .any { item -> item.message.id == id }
+private fun ChatTimeline.containsMessage(id: String): Boolean = items.any { it is ChatTimelineItem.Message && it.message.id == id }
 
 private fun isAtTarget(
   index: Int,

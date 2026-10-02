@@ -5,6 +5,7 @@ import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isRenderablePayload,
   isReplyPayloadTerminalContent,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -13,8 +14,11 @@ import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../t
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
-import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
-import { isRenderablePayload } from "./reply-payloads.js";
+import {
+  ReplyDispatchDeliveryError,
+  resolveReplyDispatchErrorOutcome,
+  shouldRetryReplyDispatch,
+} from "./reply-dispatch-outcome.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type ReplyDirectiveParseMode = "always" | "auto" | "never";
@@ -98,6 +102,7 @@ async function sendDirectBlockReply(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   directBlockDeliveries: DirectBlockDelivery[];
   payload: ReplyPayload;
+  context?: BlockReplyContext;
 }) {
   const attempt: DirectBlockDelivery = {
     payload: params.payload,
@@ -105,14 +110,23 @@ async function sendDirectBlockReply(params: {
     pending: true,
   };
   params.directBlockDeliveries.push(attempt);
-  const delivery = await deliverBlockReply(() => params.onBlockReply(params.payload)).catch(
-    (error: unknown) => {
-      attempt.outcome = resolveReplyDispatchErrorOutcome(error);
-      attempt.pending = false;
-      throw error;
-    },
-  );
+  const delivery = await deliverBlockReply(() =>
+    params.context
+      ? params.onBlockReply(params.payload, params.context)
+      : params.onBlockReply(params.payload),
+  ).catch((error: unknown) => {
+    attempt.outcome = resolveReplyDispatchErrorOutcome(error);
+    attempt.pending = false;
+    throw error;
+  });
   Object.assign(attempt, delivery, { pending: delivery.pending === true });
+  if (
+    params.context?.deliveryIntentId !== undefined &&
+    !delivery.pending &&
+    shouldRetryReplyDispatch(delivery.outcome)
+  ) {
+    throw new ReplyDispatchDeliveryError(delivery.outcome);
+  }
   if (
     delivery.outcome === "delivered" &&
     !delivery.pending &&
@@ -137,8 +151,11 @@ export function createBlockReplyDeliveryHandler(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   directBlockDeliveries: DirectBlockDelivery[];
-}): (payload: ReplyPayload) => Promise<void> {
-  return async (payload) => {
+}): (
+  payload: ReplyPayload,
+  options?: BlockReplyContext & { completed?: boolean },
+) => Promise<void> {
+  return async (payload, options) => {
     // Suppressed display lanes must not enter delivery bookkeeping: callers use
     // that evidence to decide whether an otherwise empty turn needs a fallback.
     if (
@@ -160,13 +177,9 @@ export function createBlockReplyDeliveryHandler(params: {
       return;
     }
 
-    const implicitCurrentMessageAllowed =
-      payload.replyToCurrent === true
-        ? true
-        : payload.replyToCurrent === false
-          ? false
-          : params.replyThreading?.implicitCurrentMessage !== "deny";
     // Reply-to-current is implicit for block replies unless per-turn threading disables it.
+    const implicitCurrentMessageAllowed =
+      payload.replyToCurrent ?? params.replyThreading?.implicitCurrentMessage !== "deny";
 
     const normalizedText = text ? trimTextPreservingCode(text, "start") : undefined;
     const normalizedPayload = copyReplyPayloadMetadata(payload, {
@@ -194,7 +207,10 @@ export function createBlockReplyDeliveryHandler(params: {
       params.applyReplyToMode(mediaNormalizedPayload),
     );
     if (blockPayload.text?.trim() !== payload.text?.trim()) {
-      setReplyPayloadMetadata(blockPayload, { blockSourceText: undefined });
+      setReplyPayloadMetadata(blockPayload, {
+        blockSourceText: undefined,
+        blockSourceRange: undefined,
+      });
     }
     const blockHasNonTextContent = hasOutboundReplyContent({ ...blockPayload, text: undefined });
 
@@ -209,23 +225,38 @@ export function createBlockReplyDeliveryHandler(params: {
       });
     }
 
-    // Use pipeline if available (block streaming enabled), otherwise send directly.
-    if (params.blockStreamingEnabled && params.blockReplyPipeline) {
-      params.blockReplyPipeline.enqueue(blockPayload);
-    } else if (
-      params.blockStreamingEnabled ||
-      blockHasNonTextContent ||
-      blockPayload.isReasoning === true ||
-      blockPayload.isCommentary === true
-    ) {
-      // Enabled display lanes never merge into final text, so deliver them directly
-      // even when block streaming is off.
-      await sendDirectBlockReply({
-        onBlockReply: params.onBlockReply,
-        directBlockDeliveries: params.directBlockDeliveries,
-        payload: blockPayload,
+    // Independent messages keep their own delivery identity and never join answer chunks.
+    if (options?.deliveryIntentId !== undefined) {
+      setReplyPayloadMetadata(blockPayload, {
+        independentDeliveryIntentId: options.deliveryIntentId,
       });
+    } else if (params.blockStreamingEnabled && params.blockReplyPipeline) {
+      if (options?.completed) {
+        // A completed answer is a delivery boundary, not another streaming chunk.
+        // Keep prior commentary separate and do not wait for a size/idle threshold.
+        await params.blockReplyPipeline.flush({ force: true });
+      }
+      params.blockReplyPipeline.enqueue(blockPayload);
+      if (options?.completed) {
+        await params.blockReplyPipeline.flush({ force: true });
+      }
+      return;
+    } else if (
+      !params.blockStreamingEnabled &&
+      options?.completed !== true &&
+      !blockHasNonTextContent &&
+      blockPayload.isReasoning !== true &&
+      blockPayload.isCommentary !== true
+    ) {
+      // With streaming off, text-only blocks are accumulated in final text.
+      return;
     }
-    // When streaming is disabled entirely, text-only blocks are accumulated in final text.
+    // Enabled display lanes never merge into final text, even with streaming off.
+    await sendDirectBlockReply({
+      onBlockReply: params.onBlockReply,
+      directBlockDeliveries: params.directBlockDeliveries,
+      payload: blockPayload,
+      context: options?.deliveryIntentId !== undefined ? options : undefined,
+    });
   };
 }

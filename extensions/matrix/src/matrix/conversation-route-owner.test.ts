@@ -287,3 +287,88 @@ describe.each(["per-user", "per-room"] as const)(
     });
   },
 );
+
+describe("inactive Matrix account scopes", () => {
+  beforeEach(() => {
+    for (const key of Object.keys(process.env).filter((name) => name.startsWith("MATRIX_"))) {
+      vi.stubEnv(key, undefined);
+    }
+    resetPluginRuntimeStateForTest();
+    resetPluginStateStoreForTests();
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "matrix", source: "test", plugin: matrixPlugin }]),
+    );
+  });
+
+  it.each([
+    {
+      name: "removed account",
+      accountId: "retired",
+      matrix: { accounts: { default: {} } },
+    },
+    {
+      name: "removed default account",
+      accountId: "default",
+      matrix: { enabled: true, accounts: { secondary: {} } },
+    },
+    {
+      name: "disabled account",
+      accountId: "default",
+      matrix: { accounts: { default: { enabled: false } } },
+    },
+    {
+      name: "disabled channel",
+      accountId: "default",
+      matrix: { enabled: false, accounts: { default: { enabled: true } } },
+    },
+  ] satisfies Array<{
+    name: string;
+    accountId: string;
+    matrix: NonNullable<OpenClawConfig["channels"]>["matrix"];
+  }>)("rejects a $name without requiring a runtime binding owner", ({ accountId, matrix }) => {
+    const cfg: OpenClawConfig = { channels: { matrix } };
+    installMatrixTestRuntime({ cfg });
+
+    expect(
+      resolveOwner({
+        cfg,
+        accountId,
+        conversation: { kind: "channel", peerId: "!room:example.org" },
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps a cached-credential-capable default without reading credentials", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        matrix: {
+          homeserver: "https://matrix.example.org",
+          userId: "@proof:example.org",
+          accounts: { secondary: {} },
+        },
+      },
+    };
+    installMatrixTestRuntime({ cfg });
+    expect(
+      resolveOwner({
+        cfg,
+        accountId: "default",
+        conversation: { kind: "channel", peerId: "!room:example.org" },
+      }),
+    ).toEqual({ kind: "unavailable" });
+  });
+
+  it("rejects an empty scoped environment account", () => {
+    vi.stubEnv("MATRIX_RETIRED_HOMESERVER", "");
+    const cfg: OpenClawConfig = { channels: { matrix: { accounts: { secondary: {} } } } };
+    installMatrixTestRuntime({ cfg });
+    expect(
+      resolveOwner({
+        cfg,
+        accountId: "retired",
+        conversation: { kind: "channel", peerId: "!room:example.org" },
+      }),
+    ).toBeNull();
+  });
+});

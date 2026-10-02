@@ -2,6 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import {
+  readSqliteTranscriptPayload,
+  sqliteTranscriptPayloadColumns,
+} from "../../lib/sqlite-transcript-payload.mjs";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 type SessionLogMentionLimits = {
@@ -223,12 +227,12 @@ async function countSqliteTranscriptMentions(params: {
     if (!hasTranscriptEvents) {
       return counts;
     }
-    const rows = db.prepare("SELECT event_json FROM transcript_events ORDER BY session_id, seq");
-    for (const row of rows.iterate() as Iterable<{ event_json?: unknown }>) {
-      if (typeof row.event_json !== "string") {
-        continue;
-      }
-      const byteCount = Buffer.byteLength(row.event_json, "utf8");
+    const rows = db.prepare(
+      `SELECT ${sqliteTranscriptPayloadColumns(db)} FROM transcript_events ORDER BY session_id, seq`,
+    );
+    for (const row of rows.iterate()) {
+      const eventJson = readSqliteTranscriptPayload(row);
+      const byteCount = Buffer.byteLength(eventJson, "utf8");
       assertWithinLimit({
         byteCount,
         filePath: sqlitePath,
@@ -241,7 +245,7 @@ async function countSqliteTranscriptMentions(params: {
         label: "total",
         limit: params.limits.totalMaxBytes,
       });
-      const scanText = sessionLogScanText(row.event_json);
+      const scanText = sessionLogScanText(eventJson);
       if (scanText === null) {
         continue;
       }

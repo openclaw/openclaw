@@ -20,7 +20,6 @@ import { processResponsesStream } from "../../packages/ai/src/transports/openai-
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
-  buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   enforceCodeModeResponsesToolSurface,
   getCompat,
@@ -31,7 +30,6 @@ export const testing = {
   assertCodeModeResponsesToolSurface,
   buildOpenAIResponsesParams,
   buildOpenAIClientHeaders,
-  buildOpenAISdkClientOptions,
   buildOpenAISdkRequestOptions,
   createOpenAIResponsesClient,
   enforceCodeModeResponsesToolSurface,

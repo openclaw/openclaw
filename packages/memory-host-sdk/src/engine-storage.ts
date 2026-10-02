@@ -6,6 +6,8 @@ export {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
   extractProjectKeysFromCuratedEntry,
   ensureDir,
   hashText,
@@ -101,5 +103,6 @@ export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   requireNodeSqlite,
+  stopMemorySqliteWalMaintenance,
 } from "./host/sqlite.js";
 export { isFileMissingError, statRegularFile } from "./host/fs-utils.js";

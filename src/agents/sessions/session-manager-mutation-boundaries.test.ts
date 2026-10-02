@@ -67,7 +67,7 @@ it("publishes the rewritten view before commit observers append", async () => {
   database.db.exec(
     "CREATE TRIGGER append_from_observer AFTER INSERT ON transcript_events WHEN json_extract(NEW.event_json, '$.message.content') = 'replacement' BEGIN SELECT queue_observer_append(); END;",
   );
-  rewriteTranscriptEntriesInSessionManager({
+  await rewriteTranscriptEntriesInSessionManager({
     sessionManager: manager,
     replacements: [
       { entryId: first, message: { role: "user", content: "replacement", timestamp: 1 } },
@@ -144,10 +144,10 @@ it("does not certify stale navigation with a post-commit replacement version", a
         { entryId: kept, message: { role: "user", content: "replacement", timestamp: 3 } },
       ],
     });
-  expect(rewrite).toThrow("Session transcript changed");
+  await expect(rewrite()).rejects.toThrow("Session transcript changed");
   expect(loadTranscriptEventsSync(scope)).toEqual(committed);
   manager.reloadPersistedTranscript();
-  expect(rewrite().changed).toBe(true);
+  expect((await rewrite()).changed).toBe(true);
   expect(SessionManager.open(scope).getBranch()).toMatchObject([
     { message: { content: "first" } },
     { message: { content: "second" } },
@@ -177,7 +177,7 @@ it.each(["compaction", "reset"] as const)(
     full.appendMessage({ role: "user", content: "last", timestamp: 3 });
     const manager = SessionManager.openBounded(scope, { maxEvents: 10, maxBytes: 16384 });
     expect(manager.getBoundaryCount()).toBe(1);
-    rewriteTranscriptEntriesInSessionManager({
+    await rewriteTranscriptEntriesInSessionManager({
       sessionManager: manager,
       replacements: [
         { entryId: first, message: { role: "user", content: "rewritten", timestamp: 1 } },

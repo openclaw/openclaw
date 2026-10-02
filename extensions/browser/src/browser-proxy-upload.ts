@@ -6,7 +6,9 @@
  */
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf8Prefix } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -30,8 +32,6 @@ const BROWSER_PROXY_UPLOAD_MAX_RETAINED_BYTES = 256 * 1024 * 1024;
 const BROWSER_PROXY_UPLOAD_MAX_RETAINED_DIRECTORIES = 64;
 const BROWSER_PROXY_MAX_ENCODED_FILE_LENGTH = Math.ceil(BROWSER_PROXY_MAX_FILE_BYTES / 3) * 4;
 const MAX_STAGED_NAME_BYTES = 180;
-const PORTABLE_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*", "%", "!"]);
-const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const recoveryPromises = new Map<string, Promise<void>>();
 const recoveryRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -40,13 +40,9 @@ let activeCleanup = 0;
 let activeRecovery = 0;
 
 export function hasBrowserProxyUploadWork(): boolean {
-  return (
-    activeCleanup > 0 ||
-    activeRecovery > 0 ||
-    cleanupTimers.size > 0 ||
-    recoveryRetryTimers.size > 0 ||
-    stagingLocks.size > 0
-  );
+  // Timers retain recoverable upload artifacts, not a live request. A replacement
+  // process restores them; only in-flight filesystem work must delay an update.
+  return activeCleanup > 0 || activeRecovery > 0 || stagingLocks.size > 0;
 }
 
 type PreparedBrowserProxyUploadRequest = {
@@ -164,19 +160,10 @@ export async function prepareBrowserProxyUploadRequest(params: {
 }
 
 function sanitizeUploadName(name: string): string {
-  const basename = path.posix.basename(name.replaceAll("\\", "/"));
-  const cleaned = Array.from(basename, (character) => {
-    const codePoint = character.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || codePoint === 0x7f || PORTABLE_NAME_FORBIDDEN.has(character)
-      ? "_"
-      : character;
-  })
-    .join("")
-    .trim()
-    .replace(/[. ]+$/u, "");
-  const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;
-  const safe = portable && portable !== "." && portable !== ".." ? portable : "upload";
-  return truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES) || "upload";
+  const safe = sanitizeUntrustedFileName(name, "upload").replace(/[!%]/gu, "_");
+  const bounded = truncateUtf8Prefix(safe, MAX_STAGED_NAME_BYTES).replace(/[.\s]+$/u, "");
+  // Bounding can expose a Windows device name that was hidden by trailing padding.
+  return sanitizeUntrustedFileName(bounded, "upload");
 }
 
 function decodedBase64Size(value: string): number {
@@ -215,8 +202,20 @@ async function removeStagedUpload(directory: string): Promise<void> {
     cleanupTimers.delete(directory);
   }
   try {
+    // Keep the ownership marker until every payload is gone: recursive rm can
+    // unlink the marker before a child fails, hiding the remainder after restart.
+    if ((await fs.lstat(directory)).isDirectory()) {
+      for (const entry of await fs.readdir(directory)) {
+        if (entry !== BROWSER_PROXY_UPLOAD_MARKER_NAME) {
+          await fs.rm(path.join(directory, entry), { recursive: true, force: true });
+        }
+      }
+    }
     await fs.rm(directory, { recursive: true, force: true });
   } catch (error) {
+    if (extractErrorCode(error) === "ENOENT") {
+      return;
+    }
     logger.warn(`browser proxy upload cleanup failed; retrying: ${String(error)}`);
     scheduleCleanup(directory, BROWSER_PROXY_UPLOAD_CLEANUP_RETRY_MS);
   } finally {
@@ -360,8 +359,7 @@ function scheduleRecoveryRetry(uploadDir: string, retentionMs: number): void {
   }
   const timer = setTimeout(() => {
     recoveryRetryTimers.delete(uploadDir);
-    recoveryPromises.delete(uploadDir);
-    void ensureBrowserProxyUploadCleanup({ uploadDir, retentionMs });
+    recoveryPromises.set(uploadDir, ensureBrowserProxyUploadCleanup({ uploadDir, retentionMs }));
   }, BROWSER_PROXY_UPLOAD_CLEANUP_RETRY_MS);
   recoveryRetryTimers.set(uploadDir, timer);
   timer.unref?.();
@@ -413,11 +411,7 @@ export function ensureBrowserProxyUploadCleanup(options?: {
   if (existing) {
     return existing;
   }
-  const recovery = runRecovery({ uploadDir, retentionMs, nowMs, limits }).finally(() => {
-    if (recoveryRetryTimers.has(uploadDir)) {
-      recoveryPromises.delete(uploadDir);
-    }
-  });
+  const recovery = runRecovery({ uploadDir, retentionMs, nowMs, limits });
   recoveryPromises.set(uploadDir, recovery);
   return recovery;
 }
@@ -460,14 +454,17 @@ async function withStagingLock<T>(
   });
   const tail = previous.then(() => current);
   stagingLocks.set(uploadDir, tail);
+  // A cancelled waiter must keep its predecessor visible until the entire tail settles.
+  void tail.then(() => {
+    if (stagingLocks.get(uploadDir) === tail) {
+      stagingLocks.delete(uploadDir);
+    }
+  });
   try {
     await waitForStagingLock(previous, signal);
     return await task();
   } finally {
     release();
-    if (stagingLocks.get(uploadDir) === tail) {
-      stagingLocks.delete(uploadDir);
-    }
   }
 }
 
@@ -511,6 +508,12 @@ export async function stageBrowserProxyUploadRequest(params: {
   const stagingRoot = path.join(uploadDir, BROWSER_PROXY_UPLOAD_ROOT_NAME);
   await fs.mkdir(stagingRoot, { recursive: true, mode: 0o700 });
   params.signal?.throwIfAborted();
+  // An actual upload must reclaim recoverable old copies before quota admission;
+  // ordinary browser commands reuse the scheduled recovery instead of rescanning.
+  if (recoveryRetryTimers.has(uploadDir)) {
+    clearRecoveryRetry(uploadDir);
+    recoveryPromises.delete(uploadDir);
+  }
   await ensureBrowserProxyUploadCleanup({ uploadDir });
   params.signal?.throwIfAborted();
   const decodedFiles: Array<{ buffer: Buffer; name: string }> = [];

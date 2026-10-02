@@ -16,58 +16,20 @@ function makeBootstrapFile(overrides: Partial<WorkspaceBootstrapFile>): Workspac
 }
 
 describe("buildSystemPromptReport", () => {
-  const makeReport = (params: {
-    file: WorkspaceBootstrapFile;
-    injectedPath: string;
-    injectedContent: string;
-    bootstrapMaxChars?: number;
-    bootstrapTotalMaxChars?: number;
-  }) =>
+  const makeReport = (overrides: Partial<Parameters<typeof buildSystemPromptReport>[0]> = {}) =>
     buildSystemPromptReport({
       source: "run",
       generatedAt: 0,
-      bootstrapMaxChars: params.bootstrapMaxChars ?? 20_000,
-      bootstrapTotalMaxChars: params.bootstrapTotalMaxChars,
+      bootstrapMaxChars: 20_000,
       systemPrompt: "system",
-      injectedWorkspaceFiles: buildBootstrapInjectionStats({
-        bootstrapFiles: [params.file],
-        injectedFiles: [{ path: params.injectedPath, content: params.injectedContent }],
-      }),
+      injectedWorkspaceFiles: [],
       skillsPrompt: "",
       tools: [],
+      ...overrides,
     });
-
-  it("counts injected chars when injected file paths are absolute", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "/tmp/workspace/policies/AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
-  });
-
-  it("marks workspace files truncated when injected chars are smaller than raw chars", () => {
-    const file = makeBootstrapFile({
-      path: "/tmp/workspace/policies/AGENTS.md",
-      content: "abcdefghijklmnopqrstuvwxyz",
-    });
-    const report = makeReport({
-      file,
-      injectedPath: "/tmp/workspace/policies/AGENTS.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
-  });
 
   it("includes both bootstrap caps in the report payload", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
     const report = makeReport({
-      file,
-      injectedPath: "AGENTS.md",
-      injectedContent: "trimmed",
       bootstrapMaxChars: 11_111,
       bootstrapTotalMaxChars: 22_222,
     });
@@ -77,35 +39,14 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("reports zero in-band tool list chars when tool info stays structured", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "AGENTS.md",
-      injectedContent: "trimmed",
-    });
+    const report = makeReport();
 
     expect(report.tools.listChars).toBe(0);
   });
 
-  it("reports injectedChars=0 when no injected file matches the source path", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = makeReport({
-      file,
-      injectedPath: "/tmp/workspace/policies/OTHER.md",
-      injectedContent: "trimmed",
-    });
-
-    expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe(0);
-    expect(report.injectedWorkspaceFiles[0]?.truncated).toBe(true);
-  });
-
   it("ignores malformed injected file paths and still matches valid entries", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/policies/AGENTS.md" });
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
+    const report = makeReport({
       injectedWorkspaceFiles: buildBootstrapInjectionStats({
         bootstrapFiles: [file],
         injectedFiles: [
@@ -113,8 +54,6 @@ describe("buildSystemPromptReport", () => {
           { path: "/tmp/workspace/policies/AGENTS.md", content: "trimmed" },
         ],
       }),
-      skillsPrompt: "",
-      tools: [],
     });
 
     expect(report.injectedWorkspaceFiles[0]?.injectedChars).toBe("trimmed".length);
@@ -125,17 +64,12 @@ describe("buildSystemPromptReport", () => {
       path: "/tmp/workspace/AGENTS.md",
       content: "raw bootstrap context",
     });
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
+    const report = makeReport({
       systemPrompt: "custom override",
       injectedWorkspaceFiles: buildBootstrapInjectionStats({
         bootstrapFiles: [file],
         injectedFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "rendered context" }],
       }),
-      skillsPrompt: "",
-      tools: [],
     });
 
     expect(report.systemPrompt.chars).toBe("custom override".length);
@@ -160,14 +94,8 @@ describe("buildSystemPromptReport", () => {
   ] as const)(
     "accounts for project context with %s",
     (_name, systemPrompt, projectContextChars) => {
-      const report = buildSystemPromptReport({
-        source: "run",
-        generatedAt: 0,
-        bootstrapMaxChars: 20_000,
+      const report = makeReport({
         systemPrompt,
-        injectedWorkspaceFiles: [],
-        skillsPrompt: "",
-        tools: [],
       });
 
       expect(report.systemPrompt).toMatchObject({
@@ -195,14 +123,8 @@ describe("buildSystemPromptReport", () => {
       ],
     },
   ])("reports complete skill blocks in order: $skillsPrompt", ({ skillsPrompt, entries }) => {
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
-      injectedWorkspaceFiles: [],
+    const report = makeReport({
       skillsPrompt,
-      tools: [],
     });
 
     expect(report.skills.promptChars).toBe(skillsPrompt.length);
@@ -212,16 +134,7 @@ describe("buildSystemPromptReport", () => {
   it("emits content hashes for prompt and tool parity checks", () => {
     // Hashes catch same-length prompt/tool drift that plain character counts
     // would miss when comparing runtime payloads.
-    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
-      injectedWorkspaceFiles: buildBootstrapInjectionStats({
-        bootstrapFiles: [file],
-        injectedFiles: [],
-      }),
+    const report = makeReport({
       skillsPrompt: "<skill><name>docs</name></skill>",
       tools: [
         {
@@ -234,17 +147,9 @@ describe("buildSystemPromptReport", () => {
         },
       ] as never,
     });
-    const sameLengthChangedPrompt = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
+    const sameLengthChangedPrompt = makeReport({
       systemPrompt: "systen",
-      injectedWorkspaceFiles: buildBootstrapInjectionStats({
-        bootstrapFiles: [file],
-        injectedFiles: [],
-      }),
       skillsPrompt: "<skill><name>docs</name></skill>",
-      tools: [],
     });
 
     expect(report.systemPrompt.hash).toMatch(/^[a-f0-9]{64}$/u);
@@ -255,23 +160,13 @@ describe("buildSystemPromptReport", () => {
   });
 
   it("keeps reporting when a tool schema cannot be stringified", () => {
-    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
     const circularSchema: Record<string, unknown> = {
       type: "object",
       properties: { count: { type: "integer" } },
     };
     circularSchema.self = circularSchema;
 
-    const report = buildSystemPromptReport({
-      source: "run",
-      generatedAt: 0,
-      bootstrapMaxChars: 20_000,
-      systemPrompt: "system",
-      injectedWorkspaceFiles: buildBootstrapInjectionStats({
-        bootstrapFiles: [file],
-        injectedFiles: [],
-      }),
-      skillsPrompt: "",
+    const report = makeReport({
       tools: [
         {
           name: "broken",

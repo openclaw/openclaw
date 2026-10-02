@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
+import type { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";
 
@@ -70,7 +72,8 @@ vi.mock("../../infra/install-source-utils.js", async (importOriginal) => ({
   resolveNpmSpecMetadata: mocks.npmMetadata,
 }));
 
-vi.mock("../../infra/update-runner-git-recovery.js", () => ({
+vi.mock("../../infra/update-runner-git-recovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-runner-git-recovery.js")>()),
   readCurrentGitUpdateRecovery: mocks.readGitRecovery,
 }));
 
@@ -78,7 +81,8 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: { error: mocks.runtimeError },
 }));
 
-vi.mock("./schema-preflight.js", () => ({
+vi.mock("./schema-preflight.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./schema-preflight.js")>()),
   captureTargetDatabaseSchemaContext: mocks.captureSchemaContext,
   checkTargetDatabaseSchemasForContexts: mocks.checkTargetSchemas,
   formatSchemaRefusalLines: mocks.formatSchemaRefusalLines,
@@ -116,7 +120,7 @@ vi.mock("./update-command-service.js", async () => {
   return {
     maybeRestartServiceAfterFailedMutableUpdate: mocks.maybeRestartService,
     maybeStopManagedServiceBeforeMutableUpdate: mocks.maybeStopService,
-    shouldBlockMutableUpdateFromGatewayServiceEnv: mocks.shouldBlockServiceUpdate,
+    mutableUpdateGatewayServiceBlock: mocks.shouldBlockServiceUpdate,
     UpdateCommandAbort: actual.UpdateCommandAbort,
     resolveUpdatedGatewayRestartPort,
   };
@@ -134,7 +138,7 @@ const successfulUpdate: UpdateRunResult = {
 
 function executionParams(
   updateInstallKind: "git" | "package",
-): Parameters<typeof executeMutableUpdate>[0] {
+): Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards"> {
   return {
     root: "/opt/openclaw",
     installKind: updateInstallKind,
@@ -156,6 +160,19 @@ function executionParams(
     recoveryState: { triageTarget: { env: {} } },
     prepareMutableUpdate: mocks.prepareMutableUpdate,
     packageTargetSchemaVersions: { state: 15, agent: 19 },
+  };
+}
+
+async function bindExecutionGuards(
+  params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">,
+): Promise<Parameters<typeof executeMutableUpdate>[0]> {
+  const finalParams = { ...params };
+  const createGuards: typeof createUpdateCommandExecutionGuards = (
+    await import("./update-command-execution-guards.js")
+  ).createUpdateCommandExecutionGuards;
+  return {
+    ...finalParams,
+    executionGuards: createGuards(finalParams.opts, finalParams.root),
   };
 }
 
@@ -206,6 +223,7 @@ function inspectOrStopService(phase: "inspect" | "prepare" = "prepare"): PreMana
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([]);
   mocks.serviceStopped = false;
   mocks.validateCanary.mockResolvedValue({
     status: "ok",
@@ -234,4 +252,11 @@ beforeEach(() => {
   mocks.verifyPackageRecovery.mockResolvedValue({ serviceRestartSafe: true });
 });
 
-export { executionParams, inspectOrStopService, mocks, schemaContext, successfulUpdate };
+export {
+  bindExecutionGuards,
+  executionParams,
+  inspectOrStopService,
+  mocks,
+  schemaContext,
+  successfulUpdate,
+};

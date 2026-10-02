@@ -38,7 +38,6 @@ import {
   type PluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
-import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   createPluginToolFactoryContext,
   type PluginToolOwnerContinuation,
@@ -521,6 +520,7 @@ function resolvePluginToolsFromRegistry(
     }
     toolOwners.delete(pluginId);
     const { registry, tools: registrations } = owner;
+    let trustedLocalMediaNames: Set<string> | undefined;
     const reportError = (entry: PluginToolRegistration, message: string) => {
       context.logger.error(message);
       recordToolDiagnostic(registry, {
@@ -563,7 +563,7 @@ function resolvePluginToolsFromRegistry(
       const manifestPlugin = snapshot.byPluginId.get(entry.pluginId);
       const declaredNames = entry.names ?? [];
       const availabilityNames =
-        declaredNames.length > 0 ? declaredNames : (entry.declaredNames ?? []);
+        declaredNames.length > 0 ? declaredNames : Array.from(entry.declaredNames ?? []);
       const allowlistNames = manifestPlugin
         ? filterManifestToolNamesForAvailability({
             plugin: manifestPlugin,
@@ -680,14 +680,8 @@ function resolvePluginToolsFromRegistry(
           continue;
         }
         const tool = inspected.tool;
-        const undeclared = entry.declaredNames
-          ? findUndeclaredPluginToolNames({
-              declaredNames: entry.declaredNames,
-              toolNames: [name],
-            })
-          : [];
-        if (undeclared.length > 0) {
-          const message = `plugin tool is undeclared (${entry.pluginId}): ${undeclared.join(", ")}`;
+        if (entry.declaredNames && !entry.declaredNames.has(toolName)) {
+          const message = `plugin tool is undeclared (${entry.pluginId}): ${toolName}`;
           reportError(entry, message);
           continue;
         }
@@ -710,7 +704,7 @@ function resolvePluginToolsFromRegistry(
           sideEffecting: metadata?.sideEffecting === true,
           trustedLocalMedia:
             manifestPlugin?.origin === "bundled" &&
-            manifestPlugin.contracts?.tools?.includes(name) === true,
+            (trustedLocalMediaNames ??= new Set(manifestPlugin.contracts?.tools)).has(name),
         });
         tools.push(tool);
       }

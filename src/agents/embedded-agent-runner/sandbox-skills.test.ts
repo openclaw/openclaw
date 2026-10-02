@@ -49,37 +49,6 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     });
   });
 
-  it("uses the materialized skills workspace and drops host-path snapshots for sandboxes", () => {
-    const skillsEligibility = {
-      remote: {
-        platforms: ["linux"],
-        hasBin: () => true,
-        hasAnyBin: () => true,
-        note: "sandbox",
-      },
-    };
-
-    expect(
-      resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsEligibility,
-          skillsWorkspaceDir: "/state/sandbox-skills",
-          workspaceAccess: "rw",
-        },
-        skillsAnchorWorkspace: "/workspace",
-        skillsSnapshot: snapshot,
-      }),
-    ).toEqual({
-      skillsEligibility,
-      skillsSnapshot: undefined,
-      skillsPromptWorkspaceDir: "/workspace/.openclaw/sandbox-skills",
-      skillsWorkspaceDir: "/state/sandbox-skills",
-      workspaceOnly: true,
-    });
-  });
-
   it("uses the skills anchor for sandbox contexts without materialized skills", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({

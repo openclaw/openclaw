@@ -14,12 +14,12 @@ function fillRandomBytes(bytes: Uint8Array): void {
 
 /** Generate a monotonic UUIDv7 string. */
 export function uuidv7(): string {
-  const random = new Uint8Array(16);
-  fillRandomBytes(random);
+  const bytes = new Uint8Array(16);
+  fillRandomBytes(bytes);
   const timestamp = Date.now();
 
   if (timestamp > lastTimestamp) {
-    sequence = new DataView(random.buffer, random.byteOffset + 6, 4).getUint32(0);
+    sequence = new DataView(bytes.buffer, bytes.byteOffset + 6, 4).getUint32(0);
     lastTimestamp = timestamp;
   } else {
     sequence = (sequence + 1) >>> 0;
@@ -28,7 +28,6 @@ export function uuidv7(): string {
     }
   }
 
-  const bytes = new Uint8Array(16);
   bytes[0] = (lastTimestamp / 0x10000000000) & 0xff;
   bytes[1] = (lastTimestamp / 0x100000000) & 0xff;
   bytes[2] = (lastTimestamp / 0x1000000) & 0xff;
@@ -39,12 +38,11 @@ export function uuidv7(): string {
   bytes[7] = (sequence >>> 20) & 0xff;
   bytes[8] = 0x80 | ((sequence >>> 14) & 0x3f);
   bytes[9] = (sequence >>> 6) & 0xff;
-  const randomLowBits = random.at(10);
+  const randomLowBits = bytes.at(10);
   if (randomLowBits === undefined) {
     throw new Error("UUID random buffer is shorter than 11 bytes");
   }
   bytes[10] = ((sequence & 0x3f) << 2) | (randomLowBits & 0x03);
-  bytes.set(random.subarray(11), 11);
 
   return formatUuid(bytes);
 }

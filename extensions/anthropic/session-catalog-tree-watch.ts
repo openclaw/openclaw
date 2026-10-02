@@ -21,7 +21,7 @@ export function createDirtyDirectoryWatch(root: string): DirtyDirectoryWatch {
   let rootWatch: FSWatcher | undefined;
   let dirty: "all" | Set<string> = new Set();
   let retryAt = 0;
-  let attachedAt = 0;
+  let armAt = 0;
   let armed = false;
   let closed = false;
   const closeWatchers = () => {
@@ -74,7 +74,7 @@ export function createDirtyDirectoryWatch(root: string): DirtyDirectoryWatch {
   };
   const attachRoot = () => {
     rootWatch = attach();
-    attachedAt = performance.now();
+    armAt = performance.now() + WATCH_ARM_MS;
     armed = false;
     dirty = rootWatch ? new Set() : "all";
   };
@@ -88,7 +88,7 @@ export function createDirtyDirectoryWatch(root: string): DirtyDirectoryWatch {
         return "all";
       }
       if (!armed) {
-        armed = performance.now() - attachedAt >= WATCH_ARM_MS;
+        armed = performance.now() >= armAt;
         return "all";
       }
       const result = dirty;

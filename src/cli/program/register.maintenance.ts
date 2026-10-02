@@ -1,15 +1,16 @@
-// Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
-import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
+import { formatDocsHelp } from "../help-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
+import { installCliDoctorSignalExitHandlers } from "../signal-exit-barrier.js";
 import type { ProgramContext } from "./context.js";
+import { collectOption } from "./helpers.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
@@ -44,7 +45,6 @@ function exitDoctorError(error: unknown, json: boolean): never {
   exitCliAfterOutput(defaultRuntime, 2);
 }
 
-/** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(
   program: Command,
   ctx?: Pick<ProgramContext, "doctorDatabasePreflight">,
@@ -52,11 +52,7 @@ export function registerMaintenanceCommands(
   const doctor = program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/doctor", "docs.openclaw.ai/cli/doctor")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/doctor"))
     .option("--no-workspace-suggestions", "Disable workspace memory system suggestions", true)
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
@@ -103,19 +99,17 @@ export function registerMaintenanceCommands(
       "With --lint: drop findings below this severity (info|warning|error)",
     )
     .option("--all", "With --lint: run all registered checks, including opt-in checks", false)
-    .option(
-      "--skip <id>",
-      "With --lint: skip a specific check id (repeatable)",
-      (v: string, prev: string[]) => [...prev, v],
-      [],
-    )
+    .option("--skip <id>", "With --lint: skip a specific check id (repeatable)", collectOption, [])
     .option(
       "--only <id>",
       "With --lint: run only the specified check id (repeatable)",
-      (v: string, prev: string[]) => [...prev, v],
+      collectOption,
       [],
     )
     .action(async (opts, command) => {
+      if (hasCliProcessScope()) {
+        installCliDoctorSignalExitHandlers();
+      }
       if (
         typeof opts.stateSqlite === "string" &&
         hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
@@ -240,7 +234,7 @@ export function registerMaintenanceCommands(
           throw error;
         }
         if (lintMode && (opts.json === true || !process.stdout.isTTY)) {
-          const { formatDoctorLintFailure } = await import("../../commands/doctor-lint.js");
+          const { formatDoctorLintFailure } = await import("../../commands/doctor-lint-output.js");
           defaultRuntime.writeJson(formatDoctorLintFailure(error));
           exitCliAfterOutput(defaultRuntime, 2);
         }
@@ -252,11 +246,7 @@ export function registerMaintenanceCommands(
   program
     .command("triage")
     .description("Collect sanitized diagnostics and open a local coding agent for repair")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/triage", "docs.openclaw.ai/cli/triage")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/triage"))
     .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
     .option("--no-export", "Skip the sanitized diagnostics archive")
     .option(
@@ -318,11 +308,7 @@ export function registerMaintenanceCommands(
   program
     .command("dashboard")
     .description("Open the Control UI with your current token")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/dashboard"))
     .option("--no-open", "Print URL but do not launch a browser")
     .option("--json", "Output dashboard connection details as JSON", false)
     .option("--yes", "Start/install the gateway without prompting when needed", false)
@@ -340,11 +326,7 @@ export function registerMaintenanceCommands(
   program
     .command("reset")
     .description("Reset local config/state (keeps the CLI installed)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/reset", "docs.openclaw.ai/cli/reset")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/reset"))
     .option("--scope <scope>", "config|config+creds+sessions|full (default: interactive prompt)")
     .option("--yes", "Skip confirmation prompts", false)
     .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
@@ -352,23 +334,14 @@ export function registerMaintenanceCommands(
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { resetCommand } = await import("../../commands/reset.js");
-        await resetCommand(defaultRuntime, {
-          scope: opts.scope,
-          yes: Boolean(opts.yes),
-          nonInteractive: Boolean(opts.nonInteractive),
-          dryRun: Boolean(opts.dryRun),
-        });
+        await resetCommand(defaultRuntime, opts);
       });
     });
 
   program
     .command("uninstall")
     .description("Uninstall the gateway service + local data")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/uninstall", "docs.openclaw.ai/cli/uninstall")}\n`,
-    )
+    .addHelpText("after", () => formatDocsHelp("/cli/uninstall"))
     .option("--service", "Remove the gateway service", false)
     .option("--state", "Remove state + config", false)
     .option("--workspace", "Remove workspace dirs", false)
@@ -380,16 +353,7 @@ export function registerMaintenanceCommands(
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { uninstallCommand } = await import("../../commands/uninstall.js");
-        await uninstallCommand(defaultRuntime, {
-          service: Boolean(opts.service),
-          state: Boolean(opts.state),
-          workspace: Boolean(opts.workspace),
-          app: Boolean(opts.app),
-          all: Boolean(opts.all),
-          yes: Boolean(opts.yes),
-          nonInteractive: Boolean(opts.nonInteractive),
-          dryRun: Boolean(opts.dryRun),
-        });
+        await uninstallCommand(defaultRuntime, opts);
       });
     });
 }

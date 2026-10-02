@@ -228,12 +228,8 @@ final class ComputerScreenActionExecutor {
     }
 
     private func peekabooClick(at point: CGPoint, action: OpenClawComputerAction) async throws {
-        let clickType: ClickType = switch action {
-        case .rightClick: .right
-        case .doubleClick: .double
-        default: .single
-        }
-        try await self.automation.click(target: .coordinates(point), clickType: clickType, snapshotId: nil)
+        try await self.automation.click(
+            target: .coordinates(point), clickType: action.peekabooClickType, snapshotId: nil)
     }
 
     func typeText(
@@ -274,7 +270,7 @@ final class ComputerScreenActionExecutor {
         try checkExecutionAllowed()
         if modifiers.isEmpty {
             try await self.automation.scroll(ScrollRequest(
-                direction: Self.scrollDirection(direction),
+                direction: direction.peekabooDirection,
                 amount: amount,
                 foreground: true))
         } else {
@@ -384,7 +380,7 @@ final class ComputerScreenActionExecutor {
 
     func pressLeftButton(at point: CGPoint, flags: CGEventFlags, inputScopeId: UUID) throws {
         guard !self.leftButtonDown else { throw ComputerActionError.buttonAlreadyHeld }
-        try self.rawMouseButton(down: true, at: point, flags: flags)
+        try self.mouseButtonEventPoster(true, point, flags)
         self.setLeftButtonDown(true, flags: flags, inputScopeId: inputScopeId)
     }
 
@@ -442,7 +438,7 @@ final class ComputerScreenActionExecutor {
     {
         let releaseFlags = self.heldButtonFlags.union(additionalFlags)
         do {
-            try self.rawMouseButton(down: false, at: point, flags: releaseFlags)
+            try self.mouseButtonEventPoster(false, point, releaseFlags)
         } catch {
             // Ownership authorizes the only safe follow-up mouse-up. Keep it and
             // its modifiers until synthesis succeeds, with a live watchdog retry.
@@ -559,17 +555,6 @@ final class ComputerScreenActionExecutor {
         return keys
     }
 
-    private static func scrollDirection(
-        _ direction: OpenClawComputerScrollDirection) -> PeekabooFoundation.ScrollDirection
-    {
-        switch direction {
-        case .up: .up
-        case .down: .down
-        case .left: .left
-        case .right: .right
-        }
-    }
-
     // MARK: - Raw CoreGraphics primitives
 
     private func rawClick(at point: CGPoint, button: ComputerMouseButton, count: Int, flags: CGEventFlags) throws {
@@ -624,10 +609,6 @@ final class ComputerScreenActionExecutor {
         }
         try self.mouseEventPoster(up)
         needsRelease = false
-    }
-
-    private func rawMouseButton(down: Bool, at point: CGPoint, flags: CGEventFlags) throws {
-        try self.mouseButtonEventPoster(down, point, flags)
     }
 
     private static func postMouseButtonEvent(
@@ -741,6 +722,17 @@ final class ComputerScreenActionExecutor {
             event.flags = flags
         }
         event.post(tap: .cghidEventTap)
+    }
+}
+
+extension OpenClawComputerScrollDirection {
+    var peekabooDirection: PeekabooFoundation.ScrollDirection {
+        switch self {
+        case .up: .up
+        case .down: .down
+        case .left: .left
+        case .right: .right
+        }
     }
 }
 

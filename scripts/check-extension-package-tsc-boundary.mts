@@ -4,6 +4,7 @@
 import type { ChildProcess } from "node:child_process";
 import type { EventEmitter } from "node:events";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -12,7 +13,6 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import os from "node:os";
 import { dirname, join, resolve } from "node:path";
 import pMap from "p-map";
@@ -21,7 +21,7 @@ import {
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
 import { collectFilesSync } from "./check-file-utils.ts";
-import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
+import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
 import {
   portableRelativePath,
   readArtifactRecord,
@@ -35,6 +35,10 @@ import {
 import { toErrorObject } from "./lib/error-format.mts";
 import { BOUNDARY_CACHE_ROOT, BoundaryInputSnapshot } from "./lib/extension-boundary-inputs.mts";
 import { prepareExtensionBoundaryProjects } from "./lib/extension-boundary-projects.mts";
+import {
+  formatBoundarySelection,
+  resolveExtensionBoundarySelection,
+} from "./lib/extension-boundary-selection.mts";
 import { classifyBundledExtensionSourcePath } from "./lib/extension-source-classifier.mts";
 import {
   runManagedCommand,
@@ -81,16 +85,8 @@ type BoundaryStep = {
   onSuccess?: (result: StepResult) => void;
 };
 type BoundaryCheckParams = { rootDir?: string; processObject?: Pick<EventEmitter, "on" | "off"> };
-const require = createRequire(import.meta.url);
 const repoRoot = resolveRepoRoot(import.meta.url);
-const tscBin = require.resolve("typescript/bin/tsc");
-const nativePackageJsonPath = require.resolve("typescript-native/package.json");
-const nativePackageJson = JSON.parse(readFileSync(nativePackageJsonPath, "utf8"));
-const nativeBin = nativePackageJson.bin?.tsc;
-if (typeof nativeBin !== "string") {
-  throw new Error("typescript-native does not declare the tsc binary");
-}
-const tsgoBin = resolve(dirname(nativePackageJsonPath), nativeBin);
+const compilerWorker = resolve(repoRoot, "scripts/compile-extension-boundary.mts");
 const prepareBoundaryArtifactsArgs = distArtifactEntryArgs(
   resolve(repoRoot, "scripts/prepare-extension-package-boundary-artifacts.mts"),
 );
@@ -163,13 +159,6 @@ function createStepOutputCapture(): StepOutputCapture {
   return { text: "", truncatedChars: 0 };
 }
 
-function formatCapturedStepOutput(buffer: StepOutputCapture) {
-  if (buffer.truncatedChars === 0) {
-    return buffer.text;
-  }
-  return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
-}
-
 function isPositiveFinite(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
@@ -178,9 +167,6 @@ function isPositiveInteger(value: number | undefined): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
-/**
- * Formats the successful boundary compile summary.
- */
 export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams = {}) {
   const lines = ["extension package boundary check passed"];
   if (params.mode) {
@@ -210,9 +196,6 @@ export function formatBoundaryCheckSuccessSummary(params: BoundarySummaryParams 
   return `${lines.join("\n")}\n`;
 }
 
-/**
- * Formats skipped compile progress for fresh extension canaries.
- */
 export function formatSkippedCompileProgress(params: SkippedCompileParams = {}) {
   const skippedCount = params.skippedCount ?? 0;
   const totalCount = params.totalCount ?? 0;
@@ -227,9 +210,6 @@ export function formatSkippedCompileProgress(params: SkippedCompileParams = {}) 
   return `skipped ${skippedCount} fresh plugin compiles\n`;
 }
 
-/**
- * Formats slow extension compile diagnostics.
- */
 export function formatSlowCompileSummary(params: SlowCompileParams = {}) {
   const compileTimings = Array.isArray(params.compileTimings) ? params.compileTimings : [];
   if (compileTimings.length === 0) {
@@ -246,9 +226,6 @@ export function formatSlowCompileSummary(params: SlowCompileParams = {}) {
   return `${lines.join("\n")}\n`;
 }
 
-/**
- * Formats a failed boundary-check child process step.
- */
 export function formatStepFailure(label: string, params: StepFailureParams = {}) {
   const stdoutSection = summarizeOutputSection("stdout", params.stdout ?? "");
   const stderrSection = summarizeOutputSection("stderr", params.stderr ?? "");
@@ -367,8 +344,8 @@ export async function runNodeStepAsync(
       });
     }
     return {
-      stdout: formatCapturedStepOutput(stdout),
-      stderr: formatCapturedStepOutput(stderr),
+      stdout: formatBoundedTail(stdout),
+      stderr: formatBoundedTail(stderr),
       elapsedMs: Date.now() - startedAt,
     };
   } catch (error) {
@@ -387,8 +364,8 @@ export async function runNodeStepAsync(
                 ? "signal"
                 : "spawn-error";
     const detail = {
-      stdout: formatCapturedStepOutput(stdout),
-      stderr: formatCapturedStepOutput(stderr),
+      stdout: formatBoundedTail(stdout),
+      stderr: formatBoundedTail(stderr),
       kind,
       elapsedMs: Date.now() - startedAt,
       note:
@@ -407,9 +384,6 @@ export async function runNodeStepAsync(
   }
 }
 
-/**
- * Runs boundary check steps with bounded concurrency.
- */
 export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurrency: number) {
   const abortController = new AbortController();
   let firstFailure: unknown = null;
@@ -449,9 +423,6 @@ export async function runNodeStepsWithConcurrency(steps: BoundaryStep[], concurr
   }
 }
 
-/**
- * Resolves canary artifact paths for an extension boundary compile.
- */
 export function resolveCanaryArtifactPaths(extensionId: string, rootDir = repoRoot) {
   const extensionRoot = resolve(rootDir, "extensions", extensionId);
   return {
@@ -461,27 +432,19 @@ export function resolveCanaryArtifactPaths(extensionId: string, rootDir = repoRo
   };
 }
 
-/**
- * Removes canary artifacts for one extension.
- */
 function cleanupCanaryArtifacts(extensionId: string, rootDir = repoRoot) {
   const { canaryPath, tsconfigPath } = resolveCanaryArtifactPaths(extensionId, rootDir);
   rmSync(canaryPath, { force: true });
   rmSync(tsconfigPath, { force: true });
+  rmSync(resolveBoundaryInputReceiptPath(`${extensionId}-canary`, rootDir), { force: true });
 }
 
-/**
- * Removes canary artifacts for multiple extensions.
- */
-export function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
+function cleanupCanaryArtifactsForExtensions(extensionIds: string[], rootDir = repoRoot) {
   for (const extensionId of extensionIds) {
     cleanupCanaryArtifacts(extensionId, rootDir);
   }
 }
 
-/**
- * Installs signal/exit cleanup for extension canary artifacts.
- */
 export function installCanaryArtifactCleanup(
   extensionIds: string[],
   params: BoundaryCheckParams = {},
@@ -497,19 +460,50 @@ export function installCanaryArtifactCleanup(
   };
 }
 
-function resolveBoundaryTsBuildInfoPath(extensionId: string) {
-  return resolve(repoRoot, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.tsbuildinfo`);
+function resolveBoundaryInputReceiptPath(extensionId: string, rootDir = repoRoot) {
+  return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.inputs.json`);
 }
 function resolveBoundaryTsStampPath(extensionId: string, rootDir = repoRoot) {
   return resolve(rootDir, BOUNDARY_CACHE_ROOT, "compile", `${extensionId}.json`);
 }
-async function runCompileCheck(extensionIds: string[]) {
+async function runCompileCheck(extensionIds: string[], selectedPreparation: boolean) {
+  const sharedSdk = process.env.OPENCLAW_CI_SHARED_SDK === "1";
+  if (extensionIds.length === 0 && !sharedSdk) {
+    return {
+      prepElapsedMs: 0,
+      compileCount: 0,
+      skippedCompileCount: 0,
+      compileElapsedMs: 0,
+      compileTimings: [],
+    };
+  }
   const prepStartedAt = Date.now();
   process.stdout.write(
     `preparing plugin-sdk boundary artifacts for ${extensionIds.length} plugins\n`,
   );
-  await runNodeStepAsync("plugin-sdk boundary prep", prepareBoundaryArtifactsArgs, 420_000);
+  const preparation = await runNodeStepAsync(
+    "plugin-sdk boundary prep",
+    [
+      ...prepareBoundaryArtifactsArgs,
+      ...(extensionIds.length === 0
+        ? ["--mode=package-boundary"]
+        : selectedPreparation
+          ? [`--extensions=${JSON.stringify(extensionIds)}`]
+          : []),
+    ],
+    420_000,
+  );
+  process.stdout.write(preparation.stdout);
   const prepElapsedMs = Date.now() - prepStartedAt;
+  if (extensionIds.length === 0) {
+    return {
+      prepElapsedMs,
+      compileCount: 0,
+      skippedCompileCount: 0,
+      compileElapsedMs: 0,
+      compileTimings: [],
+    };
+  }
   const compileStartedAt = Date.now();
   const availableParallelism = os.availableParallelism();
   const concurrency = resolveCompileConcurrency(process.env, availableParallelism);
@@ -532,7 +526,7 @@ async function runCompileCheck(extensionIds: string[]) {
     config: string;
     args: string[];
     startedAt: number;
-    tsBuildInfoPath: string;
+    inputReceipt: string;
   }[] = [];
   // Source bytes are a cold-cache scheduling hint, never a coverage selector.
   // Include the package's implementation even when its config starts at public barrels.
@@ -547,25 +541,26 @@ async function runCompileCheck(extensionIds: string[]) {
     .toSorted((left, right) => right.sourceBytes - left.sourceBytes);
   const steps = orderedExtensions
     .map(({ extensionId, config }, index) => {
-      const tsBuildInfoPath = resolveBoundaryTsBuildInfoPath(extensionId);
+      const inputReceipt = resolveBoundaryInputReceiptPath(extensionId);
       const args = [
-        tsgoBin,
-        "-p",
-        resolve(repoRoot, config),
-        "--noEmit",
-        "--checkers",
-        String(compilerThreads),
-        "--incremental",
-        "--tsBuildInfoFile",
-        tsBuildInfoPath,
+        compilerWorker,
+        JSON.stringify({
+          configFile: config,
+          inputReceipt: portableRelativePath(repoRoot, inputReceipt),
+          emit: false,
+        }),
       ];
       before.signature(config, args, []);
       const recordPath = resolveBoundaryTsStampPath(extensionId);
-      mkdirSync(dirname(tsBuildInfoPath), { recursive: true });
+      mkdirSync(dirname(inputReceipt), { recursive: true });
       if (
-        before.matches(readArtifactRecord(recordPath), config, args, [
-          portableRelativePath(repoRoot, tsBuildInfoPath),
-        ])
+        before.matchesReceipt(
+          readArtifactRecord(recordPath),
+          config,
+          args,
+          [portableRelativePath(repoRoot, inputReceipt)],
+          inputReceipt,
+        )
       ) {
         skippedCompileCount += 1;
         if (verboseFreshLogs) {
@@ -576,7 +571,7 @@ async function runCompileCheck(extensionIds: string[]) {
         return null;
       }
       rmSync(recordPath, { force: true });
-      rmSync(tsBuildInfoPath, { force: true });
+      rmSync(inputReceipt, { force: true });
       let startedAt = 0;
       return {
         label: extensionId,
@@ -588,7 +583,7 @@ async function runCompileCheck(extensionIds: string[]) {
           process.stdout.write(
             `[${index + 1}/${extensionIds.length}] ${extensionId} (${result.elapsedMs}ms)\n`,
           );
-          completed.push({ recordPath, config, args, startedAt, tsBuildInfoPath });
+          completed.push({ recordPath, config, args, startedAt, inputReceipt });
           compileTimings.push({
             extensionId,
             elapsedMs: result.elapsedMs,
@@ -616,14 +611,15 @@ async function runCompileCheck(extensionIds: string[]) {
         record: after.record(
           unit.config,
           unit.args,
-          unit.tsBuildInfoPath,
-          [portableRelativePath(repoRoot, unit.tsBuildInfoPath)],
+          unit.inputReceipt,
+          [portableRelativePath(repoRoot, unit.inputReceipt)],
           before,
           unit.startedAt,
         ),
       }),
     );
     for (const unit of records) {
+      rmSync(unit.inputReceipt.replace(/\.inputs\.json$/u, ".tsbuildinfo"), { force: true });
       writeArtifactRecord(unit.recordPath, unit.record);
     }
   }
@@ -671,7 +667,14 @@ async function runCanaryCheck(extensionIds: string[]) {
 
         const result = await runNodeStepAsync(
           `${extensionId} canary`,
-          [tscBin, "-p", tsconfigPath, "--noEmit"],
+          [
+            compilerWorker,
+            JSON.stringify({
+              configFile: tsconfigPath,
+              inputReceipt: resolveBoundaryInputReceiptPath(`${extensionId}-canary`),
+              emit: false,
+            }),
+          ],
           120_000,
         );
         throw new Error(
@@ -707,9 +710,6 @@ async function runCanaryCheck(extensionIds: string[]) {
   };
 }
 
-/**
- * Runs the extension package TypeScript boundary check.
- */
 async function runBoundaryCheck(argv: string[]) {
   const startedAt = Date.now();
   const mode = parseMode(argv);
@@ -728,8 +728,17 @@ async function runBoundaryCheck(argv: string[]) {
   try {
     cleanupCanaryArtifactsForExtensions(cleanupExtensionIds);
     if (mode === "all" || mode === "compile") {
+      const selection = resolveExtensionBoundarySelection(repoRoot, optInExtensionIds);
+      const summary = formatBoundarySelection(selection);
+      process.stdout.write(summary);
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+      }
       ({ prepElapsedMs, compileCount, skippedCompileCount, compileElapsedMs, compileTimings } =
-        await runCompileCheck(optInExtensionIds));
+        await runCompileCheck(
+          selection.selected.map((row) => row.package),
+          selection.mode === "affected",
+        ));
     }
     if (shouldRunCanary) {
       ({ canaryElapsedMs } = await runCanaryCheck(canaryExtensionIds));

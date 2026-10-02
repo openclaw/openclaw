@@ -11,6 +11,7 @@ import {
   beginModelCatalogRead,
   publishModelCatalogResult,
   invalidateModelCatalogCache,
+  isModelCatalogRetired,
   modelCatalogCache,
 } from "./model-catalog-cache.ts";
 import {
@@ -94,6 +95,8 @@ describe("model catalog display cache", () => {
       .mockResolvedValueOnce({ models: [published] });
     const client = createTestGatewayClient(request);
     const scope = { agentId: "writer" };
+    clearModelCatalogCache(client);
+    expect(isModelCatalogRetired(client, scope)).toBe(false);
     expect(peekModelCatalog(client, scope)).toBeUndefined();
     expect((await loadModelCatalog(client, scope)).models).toEqual([prepared]);
     expect(peekModelCatalog(client, scope)?.models).toEqual([prepared]);
@@ -106,6 +109,16 @@ describe("model catalog display cache", () => {
     expect(peekModelCatalog(client, scope, { allowStale: true })?.models).toEqual([published]);
     clearModelCatalogCache(client);
     expect(peekModelCatalog(client, scope, { allowStale: true })).toBeUndefined();
+    expect(isModelCatalogRetired(client, scope)).toBe(true);
+    publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, { models: [published] });
+    expect(isModelCatalogRetired(client, { agentId: "reader" })).toBe(false);
+    clearModelCatalogCache(client, { requireSnapshot: true });
+    publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, {
+      models: [published],
+      modelSelectionPolicy: { restricted: true, defaultModel: "example/published" },
+    });
+    expect(isModelCatalogRetired(client, scope)).toBe(false);
+    expect(isModelCatalogRetired(client, { agentId: "reader" })).toBe(true);
   });
 
   it("keeps every projection and connection separate while normalizing equivalent requests", async () => {

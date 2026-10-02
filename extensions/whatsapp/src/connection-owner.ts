@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Whatsapp connection-owner lease serializes auth-backed Baileys sockets across processes.
 import {
   acquireFileLock,
@@ -6,6 +7,7 @@ import {
   FILE_LOCK_TIMEOUT_ERROR_CODE,
   type FileLockHandle,
 } from "openclaw/plugin-sdk/file-lock";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const WHATSAPP_CONNECTION_OWNER_BUSY_CODE = "whatsapp_connection_owner_busy";
@@ -45,23 +47,6 @@ function ownershipCancelledError(signal?: AbortSignal): Error {
       );
 }
 
-async function waitForAbortableDelay(delayMs: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw ownershipCancelledError(signal);
-  }
-  await new Promise<void>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(ownershipCancelledError(signal));
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 async function reserveProcessOwner(params: {
   authDir: string;
   ownerPath: string;
@@ -74,12 +59,10 @@ async function reserveProcessOwner(params: {
     }
     const current = processOwners.get(params.ownerPath);
     if (!current) {
-      let resolveReleased = () => {};
+      const released = createDeferred<void>();
       const owner: ProcessOwner = {
-        released: new Promise<void>((resolve) => {
-          resolveReleased = resolve;
-        }),
-        resolveReleased,
+        released: released.promise,
+        resolveReleased: released.resolve,
         token: Symbol(params.ownerPath),
       };
       processOwners.set(params.ownerPath, owner);
@@ -173,9 +156,9 @@ async function acquireOwnerLease(params: {
       }
       const delayMs = Math.min(100 * 1.5 ** attempt, 1_000);
       attempt += 1;
-      await waitForAbortableDelay(delayMs, params.signal).catch((delayError: unknown) => {
+      await sleepWithAbort(delayMs, params.signal).catch(() => {
         abandonProcessOwner(ownerPath, processOwner);
-        throw delayError;
+        throw ownershipCancelledError(params.signal);
       });
     }
   }

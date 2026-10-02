@@ -1,4 +1,3 @@
-// Narrow bundled-plugin facts used before the full metadata/runtime registry is available.
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -22,18 +21,6 @@ function hasDoctorContractArtifact(pluginRoot: string): boolean {
   );
 }
 
-/** Inspects one manifest-owned plugin root without loading its runtime or doctor contract. */
-export function inspectPluginStartupMetadata(params: {
-  pluginId: string;
-  rootDir: string;
-}): PluginStartupMetadata | undefined {
-  const manifest = tryReadJsonSync(path.join(params.rootDir, "openclaw.plugin.json"));
-  if (!isRecord(manifest) || manifest.id !== params.pluginId) {
-    return undefined;
-  }
-  return { hasDoctorContract: hasDoctorContractArtifact(params.rootDir) };
-}
-
 /** Resolves one exact bundled id without scanning or materializing the full plugin catalog. */
 export function inspectBundledPluginStartupMetadata(params: {
   pluginId: string;
@@ -43,8 +30,10 @@ export function inspectBundledPluginStartupMetadata(params: {
   if (!bundledPluginsDir) {
     return undefined;
   }
-  return inspectPluginStartupMetadata({
-    pluginId: params.pluginId,
-    rootDir: path.join(bundledPluginsDir, params.pluginId),
-  });
+  const rootDir = path.join(bundledPluginsDir, params.pluginId);
+  const manifest = tryReadJsonSync(path.join(rootDir, "openclaw.plugin.json"));
+  if (!isRecord(manifest) || manifest.id !== params.pluginId) {
+    return undefined;
+  }
+  return { hasDoctorContract: hasDoctorContractArtifact(rootDir) };
 }

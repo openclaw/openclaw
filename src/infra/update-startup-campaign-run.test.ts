@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -50,7 +51,7 @@ vi.mock("./restart.js", async (importOriginal) => ({
 }));
 
 function createApplyingCampaign() {
-  const campaign = new UpdateCampaignController();
+  const campaign = new UpdateCampaignController(createTestGatewayScheduler());
   campaign.announce({
     target: { kind: "package", version: "2.0.0-beta.1" },
     inspect: { getQueueSize: () => 1 },
@@ -209,6 +210,7 @@ describe("automatic campaign handoff failure", () => {
               const outcome = await runAutoUpdateCommand(params, log);
               if (diagnosticFailure) {
                 const reader = await import("./update-run-reader.js");
+                const readKernel = await import("./update-run-read.kernel.js");
                 const verificationOwner = await import("./update-run-verification.js");
                 const failed = () => {
                   throw Object.assign(new Error("summary diagnostics unavailable"), {
@@ -219,7 +221,7 @@ describe("automatic campaign handoff failure", () => {
                   diagnosticFailure === "stale"
                     ? vi.spyOn(reader, "getUpdateRun").mockReturnValueOnce(beforeCancellation)
                     : diagnosticFailure === "read"
-                      ? vi.spyOn(reader, "readUpdateRunRecord").mockImplementationOnce(failed)
+                      ? vi.spyOn(readKernel, "readUpdateRunRecord").mockImplementationOnce(failed)
                       : vi
                           .spyOn(verificationOwner, "recordUpdateRunVerificationRecord")
                           .mockImplementationOnce(failed);

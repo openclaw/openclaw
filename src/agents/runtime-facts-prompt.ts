@@ -82,7 +82,7 @@ export async function buildRuntimeFactsContext(
     );
   }
   const canSpawn = params.capabilityToolNames.has("sessions_spawn");
-  const subagentContext = buildActiveSubagentRuntimeContext({
+  const subagentContext = await buildActiveSubagentRuntimeContext({
     cfg: params.cfg,
     controllerSessionKey: params.sessionKey,
     controllerAgentId: params.agentId,

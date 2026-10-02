@@ -45,16 +45,24 @@ function response(instanceId: string, paused = false) {
         }),
   };
 }
-function mount(handle: Parameters<typeof createBrowserClient>[0], active = true) {
+function mount(
+  handle: Parameters<typeof createBrowserClient>[0],
+  active = true,
+  scopes: readonly string[] = ["operator.admin"],
+  methods: readonly string[] = ["browser.request", "browser.dashboard.request"],
+) {
   const requests: BrowserRequestEnvelope[] = [];
-  const { client, request } = createBrowserClient(async (envelope) => {
-    requests.push(envelope);
-    return await handle(envelope);
-  });
+  const { client, request } = createBrowserClient(
+    async (envelope) => {
+      requests.push(envelope);
+      return await handle(envelope);
+    },
+    { sessionScoped: !scopes.includes("operator.admin") },
+  );
   const { gateway, publishEvent } = createApplicationGateway({
     phase: "connected",
     client,
-    hello: gatewayHelloForMethods(["browser.request"]),
+    hello: gatewayHelloForMethods(methods, scopes),
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
     assistantAgentId: "main",
@@ -77,6 +85,82 @@ function mount(handle: Parameters<typeof createBrowserClient>[0], active = true)
 afterEach(() => document.body.replaceChildren());
 
 describe("Browser dashboard presentation", () => {
+  it.each(["operator.write", "operator.sessions.write"])(
+    "opens an isolated dashboard with %s while hiding global transfers",
+    async (scope) => {
+      const { element, request } = mount(
+        async (envelope) =>
+          envelope.path === "/dashboard" ? response("first") : { running: false, tabs: [] },
+        true,
+        [scope],
+      );
+      await vi.waitFor(() =>
+        expect(element.querySelector("openclaw-browser-panel")).not.toBeNull(),
+      );
+      const panel = element.querySelector("openclaw-browser-panel")!;
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledWith(
+        "browser.dashboard.request",
+        expect.objectContaining({
+          sessionKey,
+          dashboard: { name: "status", instanceId: "first" },
+          method: "POST",
+          path: "/dashboard",
+        }),
+        { timeoutMs: 150_000 },
+      );
+      expect(panel.dashboardTarget?.sessionScoped).toBe(true);
+      expect(panel.shadowRoot?.querySelector('[aria-label="Download file"]')).toBeNull();
+      expect(panel.shadowRoot?.querySelector('[aria-label="New tab"]')).toBeNull();
+      expect(element.textContent).toContain("isolated session browser");
+    },
+  );
+
+  it.each([
+    [["operator.read"], ["browser.dashboard.request"]],
+    [["operator.sessions.read"], ["browser.dashboard.request"]],
+    [["operator.write"], ["browser.request"]],
+    [[], ["browser.dashboard.request"]],
+  ])(
+    "does not dispatch without scoped write access and advertised capability (%j)",
+    async (scopes, methods) => {
+      const { element, request } = mount(async () => response("first"), true, scopes, methods);
+      await element.updateComplete;
+      expect(request).not.toHaveBeenCalled();
+      expect(element.textContent).toContain("Connect to a Gateway with browser access");
+    },
+  );
+
+  it("shows a session admission rejection without falling back to global browser access", async () => {
+    const { element, request } = mount(
+      async () => {
+        throw new Error("Session browser requires a supported sandbox backend");
+      },
+      true,
+      ["operator.write"],
+    );
+    await vi.waitFor(() => expect(element.textContent).toContain("supported sandbox backend"));
+    expect(element.querySelector("openclaw-browser-panel")).toBeNull();
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls[0]?.[0]).toBe("browser.dashboard.request");
+  });
+
+  it("keeps administrator dashboards on the global route with transfers", async () => {
+    const { element, request } = mount(async (envelope) =>
+      envelope.path === "/dashboard" ? response("first") : { running: false, tabs: [] },
+    );
+    await vi.waitFor(() => expect(element.querySelector("openclaw-browser-panel")).not.toBeNull());
+    const panel = element.querySelector("openclaw-browser-panel")!;
+    await panel.updateComplete;
+    expect(request).toHaveBeenCalledWith(
+      "browser.request",
+      expect.objectContaining({ target: "host", path: "/dashboard" }),
+      { timeoutMs: 150_000 },
+    );
+    expect(panel.dashboardTarget?.sessionScoped).toBeUndefined();
+    expect(panel.shadowRoot?.querySelector('[aria-label="Download file"]')).not.toBeNull();
+  });
+
   it.each(["user", "agent"] as const)(
     "keeps an unfinished %s Stop visible until closure is confirmed",
     async (initiator) => {

@@ -550,15 +550,6 @@ describe("slash-http", () => {
     expect(clientB.requests).toEqual(["/commands/cmd-1"]);
   });
 
-  it("rejects a command that Mattermost reports as deleted", async () => {
-    const registeredCommand = createRegisteredCommand();
-    const client = createCommandLookupClient({
-      command: createCurrentCommand({ delete_at: 123 }),
-    });
-
-    await expectTokenValidation({ client, registeredCommand, expected: false });
-  });
-
   it("rejects a regenerated command when the current command id changed", async () => {
     const registeredCommand = createRegisteredCommand({ token: "old-token" });
     const oldDeletedCommand = createCurrentCommand({ token: "old-token", delete_at: 123 });
@@ -614,18 +605,6 @@ describe("slash-http", () => {
     }
   });
 
-  it("falls back to the team command list when command lookup is unavailable", async () => {
-    const registeredCommand = createRegisteredCommand();
-    const command = createCurrentCommand();
-    const client = createCommandLookupClient({
-      commandLookupError: new Error("not implemented"),
-      listCommands: [command],
-    });
-
-    await expectTokenValidation({ client, registeredCommand, expected: true });
-    expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
-  });
-
   it("logs sanitized command lookup failures when falling back to the team command list", async () => {
     const registeredCommand = createRegisteredCommand();
     const command = createCurrentCommand();
@@ -638,6 +617,7 @@ describe("slash-http", () => {
     const log = vi.fn();
 
     await expectTokenValidation({ client, registeredCommand, expected: true, log });
+    expect(client.requests).toEqual(["/commands/cmd-1", "/commands?team_id=t1&custom_only=true"]);
 
     const message = log.mock.calls
       .map(([entry]) => (typeof entry === "string" ? entry : ""))

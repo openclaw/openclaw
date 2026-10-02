@@ -596,7 +596,7 @@ describe("Where chip", () => {
           .querySelector("#new-session-where-trigger")
           ?.textContent?.replace(/\s+/g, " ")
           .trim(),
-      ).toBe(expectedOs === "linux" ? "aws · Linux · Small" : "aws · Windows · Large");
+      ).toBe(expectedOs === "linux" ? "aws Linux · Small" : "aws Windows · Large");
       expect(
         container.querySelector(`[data-value="os:${expectedOs}"]`)?.getAttribute("aria-pressed"),
       ).toBe("true");
@@ -609,7 +609,7 @@ describe("Where chip", () => {
   );
 
   it("hides unavailable operating systems from cloud configuration", () => {
-    const reason = "Upgrade Crabbox to 0.53.1 or newer, then restart the Gateway.";
+    const reason = "Upgrade Crabbox to enable this operating system.";
     const container = renderPicker(true, undefined, {
       cloudProfileId: "aws",
       cloudProfiles: readDraftCloudProfiles([
@@ -677,7 +677,7 @@ describe("Where chip", () => {
       expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
       expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
       expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
-        `· ${os === "windows/wsl2" ? "Windows (WSL2)" : "Linux"} · ${machine}`,
+        `${os === "windows/wsl2" ? "Windows (WSL2)" : "Linux"} · ${machine}`,
       );
       expect(container.querySelector("openclaw-select-picker")).toBeNull();
     },
@@ -704,7 +704,7 @@ describe("Where chip", () => {
       });
       const trigger = container.querySelector("#new-session-where-trigger");
       expect(trigger?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-        `${id} · ${osLabel} · ${sizeLabel}`,
+        `${id} ${osLabel} · ${sizeLabel}`,
       );
       expect(trigger?.getAttribute("aria-label")).toContain(`${id}, ${osLabel} · ${sizeLabel}`);
     },
@@ -715,12 +715,12 @@ describe("Where chip", () => {
     {
       operatingSystems: [{ id: "linux", label: "Linux" }],
       machines: undefined,
-      summary: "· Linux",
+      summary: "Linux",
     },
     {
       operatingSystems: undefined,
       machines: [{ id: "small", label: "Small" }],
-      summary: "· Small",
+      summary: "Small",
     },
   ])("shows only reported cloud metadata: $summary", ({ operatingSystems, machines, summary }) => {
     const container = renderPicker(true, undefined, {
@@ -894,6 +894,15 @@ describe("Where chip", () => {
       disabled: true,
       reason: "No worker slots are available. Wait for a slot or pick another device.",
       label: "Slot utilization unavailable",
+    },
+    {
+      name: "admits worker execution by reclaiming the sole idle worker slot",
+      devicePlacement: { requiredNodeCommands: [], consumesWorkerSlot: true },
+      workerSlots: { total: 1, available: 0, reclaimableIdle: 1 },
+      invocableCommands: [],
+      commandState: undefined,
+      disabled: false,
+      label: "1 of 1 session slots in use",
     },
     {
       name: "disables a declared remote command that the Gateway has not enabled",

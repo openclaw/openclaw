@@ -25,22 +25,10 @@ class TerminalPage extends OpenClawLightDomElement {
   constructor() {
     super();
     new SubscriptionsController(this)
-      .watch(
-        () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.config,
-        (config, notify) => config.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      );
+      .watchStore(() => this.context?.gateway)
+      .watchStore(() => this.context?.config)
+      .watchStore(() => this.context?.theme)
+      .watchStore(() => this.context?.agentSelection);
   }
 
   override render() {

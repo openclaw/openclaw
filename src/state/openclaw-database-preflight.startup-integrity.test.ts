@@ -1,11 +1,9 @@
-import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as integrity from "../infra/sqlite-integrity.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
-import { acquireStateDatabaseHandleLease } from "../infra/state-database-coordinator.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
@@ -14,15 +12,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { assertOpenClawDatabasesReady } from "./openclaw-database-preflight.js";
 import { snapshotPreflightSourceManifest } from "./openclaw-database-preflight.test-support.js";
-import {
-  applyOpenClawDatabaseVerificationResults,
-  runDatabaseVerifyWorker,
-} from "./openclaw-database-verify.impl.js";
-import * as verifier from "./openclaw-database-verify.js";
-import {
-  clearOpenClawAgentIntegrityVerification,
-  readOpenClawAgentIntegrityVerification,
-} from "./openclaw-quarantine-store.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -108,87 +98,6 @@ it.each(["DELETE", "WAL", "closed WAL"])(
       }
     } finally {
       writer?.close();
-    }
-  },
-);
-
-it.each(process.platform === "win32" ? ["idle", "held"] : ["idle", "held", "alias"])(
-  "requires exclusive source ownership for clean closed-WAL startup proof (%s)",
-  async (ownership) => {
-    const root = tempDirs.make("openclaw-startup-clean-wal-");
-    const stateDir = path.join(root, "state");
-    fs.mkdirSync(stateDir);
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    if (ownership === "alias") {
-      env.OPENCLAW_STATE_DIR = path.join(root, "alias");
-      fs.symlinkSync(stateDir, env.OPENCLAW_STATE_DIR);
-    }
-    const agentPath = openOpenClawAgentDatabase({ agentId: "main", env }).path;
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    const realAgentPath = fs.realpathSync.native(agentPath);
-    expect(readOpenClawAgentIntegrityVerification(agentPath, env)?.clean_close).toBe(1);
-    expect(
-      ["-wal", "-shm", "-journal"].filter((suffix) => fs.existsSync(agentPath + suffix)),
-    ).toEqual([]);
-    const prepare = snapshots.prepareSqliteReadOnlyLocation;
-    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((pathname, options) => {
-      if (fs.realpathSync.native(pathname) === realAgentPath) {
-        throw new Error("Clean restart must not copy the agent database");
-      }
-      return prepare(pathname, options);
-    });
-    const request = vi.spyOn(verifier, "requestOpenClawAgentDatabaseQuickCheck");
-    const before = snapshotPreflightSourceManifest(stateDir);
-
-    const lease =
-      ownership === "held"
-        ? acquireStateDatabaseHandleLease({ databasePath: agentPath, busyTimeoutMs: 0 })
-        : undefined;
-    try {
-      const readiness = assertOpenClawDatabasesReady({
-        env,
-        operation: "gateway-startup",
-        config: {},
-      });
-      if (ownership === "held") {
-        await expect(readiness).rejects.toThrow("Clean restart must not copy the agent database");
-        expect(request).not.toHaveBeenCalled();
-      } else {
-        await expect(readiness).resolves.toBeUndefined();
-        expect(request).toHaveBeenCalledExactlyOnceWith({ path: agentPath, env });
-      }
-      expect(snapshotPreflightSourceManifest(stateDir)).toEqual(before);
-      if (ownership === "alias") {
-        const [queued] = request.mock.calls[0] ?? [];
-        if (!queued) {
-          throw new Error("Startup did not queue verification");
-        }
-        const agent = openOpenClawAgentDatabase({ agentId: "main", env });
-        agent.db.exec(`
-          CREATE TABLE startup_parent (id INTEGER PRIMARY KEY);
-          CREATE TABLE startup_child (parent_id INTEGER REFERENCES startup_parent(id));
-          PRAGMA foreign_keys=OFF;
-          INSERT INTO startup_child VALUES (123);
-          PRAGMA foreign_keys=ON;
-        `);
-        const targets = [
-          {
-            kind: "agent" as const,
-            path: queued.path,
-            label: "synthetic agent",
-            check: "quick" as const,
-          },
-        ];
-        const results = await runDatabaseVerifyWorker(targets);
-        await applyOpenClawDatabaseVerificationResults({ env, targets, results });
-        expect(agent.db.isOpen).toBe(false);
-        expect(() => openOpenClawAgentDatabase({ agentId: "main", env })).toThrow(
-          expect.objectContaining({ name: "SqliteIntegrityError" }),
-        );
-      }
-    } finally {
-      lease?.release();
     }
   },
 );

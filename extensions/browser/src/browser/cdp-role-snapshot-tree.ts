@@ -1,5 +1,6 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { axValue, type RawAXNode } from "./cdp-ax.js";
+import type { RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
@@ -10,13 +11,6 @@ export type CdpRoleRef = {
   nth?: number;
   backendDOMNodeId?: number;
   frameId?: string;
-};
-
-/** Options for CDP role snapshot extraction and compaction. */
-export type CdpRoleSnapshotOptions = {
-  interactive?: boolean;
-  compact?: boolean;
-  maxDepth?: number;
 };
 
 export type CursorInteractiveInfo = {
@@ -58,11 +52,14 @@ export function buildRoleTree(
     if (!nodeId) {
       continue;
     }
+    const role = axValue(raw.role) || "unknown";
+    const name = axValue(raw.name);
+    const normalizedRole = role.toLowerCase();
     byId.set(nodeId, tree.length);
     tree.push({
       raw,
-      role: axValue(raw.role) || "unknown",
-      name: axValue(raw.name),
+      role,
+      name,
       value: axValue(raw.value),
       backendDOMNodeId:
         typeof raw.backendDOMNodeId === "number" && raw.backendDOMNodeId > 0
@@ -74,32 +71,38 @@ export function buildRoleTree(
         ? {
             transparent:
               raw.ignored === true ||
-              ["none", "presentation", "fragment"].includes(axValue(raw.role).toLowerCase()) ||
-              (axValue(raw.role).toLowerCase() === "generic" && !axValue(raw.name)),
+              ["none", "presentation", "fragment"].includes(normalizedRole) ||
+              (normalizedRole === "generic" && !name),
           }
         : {}),
     });
   }
 
-  for (let index = 0; index < tree.length; index += 1) {
-    for (const childId of tree[index]?.raw.childIds ?? []) {
+  for (const [index, node] of tree.entries()) {
+    for (const childId of node.raw.childIds ?? []) {
       const childIndex = byId.get(childId);
       if (childIndex === undefined) {
         continue;
       }
-      tree[index]?.children.push(childIndex);
+      node.children.push(childIndex);
       expectDefined(tree[childIndex], "CDP child node index").parent = index;
     }
   }
 
-  const rootIndex = tree.findIndex((node) => node.backendDOMNodeId === rootBackendNodeId);
-  if (rootBackendNodeId !== undefined && rootIndex < 0) {
-    throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
+  const roots: number[] = [];
+  if (rootBackendNodeId !== undefined) {
+    const rootIndex = tree.findIndex((node) => node.backendDOMNodeId === rootBackendNodeId);
+    if (rootIndex < 0) {
+      throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
+    }
+    roots.push(rootIndex);
+  } else {
+    for (const [index, node] of tree.entries()) {
+      if (node.parent === undefined) {
+        roots.push(index);
+      }
+    }
   }
-  const roots =
-    rootBackendNodeId !== undefined
-      ? [rootIndex]
-      : tree.map((_node, index) => index).filter((index) => tree[index]?.parent === undefined);
   const stack = roots.map((index) => ({ index, depth: 0 }));
   while (stack.length) {
     const current = stack.pop();
@@ -116,7 +119,7 @@ export function buildRoleTree(
   return { tree, roots: roots.length ? roots : tree.length ? [0] : [] };
 }
 
-function shouldIncludeRoleNode(node: RoleTreeNode, options: CdpRoleSnapshotOptions): boolean {
+function shouldIncludeRoleNode(node: RoleTreeNode, options: RoleSnapshotOptions): boolean {
   if (node.transparent) {
     return false;
   }
@@ -168,9 +171,8 @@ export function renderRoleTree(
   tree: RoleTreeNode[],
   index: number,
   output: string[],
-  options: CdpRoleSnapshotOptions,
+  options: RoleSnapshotOptions,
   state: { truncated: boolean; recordIframePositions?: boolean; flattenInteractive?: boolean },
-  indentOffset = 0,
 ): void {
   const node = tree[index];
   if (!node) {
@@ -179,7 +181,7 @@ export function renderRoleTree(
   if (options.maxDepth !== undefined && node.depth > options.maxDepth) {
     return;
   }
-  const effectiveDepth = Math.max(0, node.depth + indentOffset);
+  const effectiveDepth = Math.max(0, node.depth);
   if (effectiveDepth > ROLE_SNAPSHOT_MAX_DEPTH) {
     state.truncated = true;
     return;
@@ -202,6 +204,6 @@ export function renderRoleTree(
     );
   }
   for (const child of node.children) {
-    renderRoleTree(tree, child, output, options, state, indentOffset);
+    renderRoleTree(tree, child, output, options, state);
   }
 }

@@ -617,7 +617,7 @@ describe("Models page catalog publication", () => {
       search!.dispatchEvent(new Event("input", { bubbles: true }));
       await utility.updateComplete;
       expect(
-        [...utility.querySelectorAll<HTMLElement>('[role="option"]')].map(
+        [...utility.querySelectorAll<HTMLElement>('[role="option"]:not([hidden])')].map(
           (option) => option.dataset.value,
         ),
       ).toEqual(["openai/discovered"]);

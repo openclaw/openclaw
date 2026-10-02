@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { removeFileIfExists } from "./disk-budget-files.js";
 import {
   enforceSessionDiskBudget,
   measureSessionPhysicalDiskUsage,
@@ -18,9 +19,6 @@ const ARCHIVE_STAMP = "2026-01-01T00-00-00.000Z";
 const PRESSURE = { maxDiskBytes: 64, highWaterBytes: 64 };
 const EMPTY_ARTIFACTS = [
   { kind: "transcript", name: "orphan.jsonl" },
-  { kind: "trajectory", name: "orphan.trajectory.jsonl" },
-  { kind: "trajectory pointer", name: "orphan.trajectory-path.json" },
-  { kind: "checkpoint", name: "orphan.checkpoint.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.jsonl" },
   { kind: "prompt blob", name: PROMPT_FILE },
   { kind: "prompt temp", name: `${PROMPT_FILE}${TEMP_SUFFIX}` },
   { kind: "store temp", name: `sessions.json${TEMP_SUFFIX}` },
@@ -148,7 +146,16 @@ it("counts empty retained archives under pressure and returns real disk usage", 
     const excludedName = `keep.jsonl.deleted.${ARCHIVE_STAMP}`;
     const excluded = await writeOldFile(dir, excludedName);
     await fs.writeFile(path.join(dir, "filler.bin"), Buffer.alloc(128));
-    const params = { storePath, highWaterBytes: 64, excludeNames: new Set([excludedName]) };
+    const params: Parameters<typeof pruneSessionTranscriptArchivesToHighWater>[0] = {
+      storePath,
+      highWaterBytes: 64,
+      removeFile: async (file) => {
+        if (file.name === excludedName) {
+          return "preserved";
+        }
+        return (await removeFileIfExists(file.path)).ok ? "removed" : "failed";
+      },
+    };
 
     const result = await pruneSessionTranscriptArchivesToHighWater(params);
 

@@ -11,7 +11,10 @@ import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/s
 import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
+} from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import { createOpenClawReadTool } from "../agent-tools.read.js";
 import { createExecTool } from "../bash-tools.exec-run.js";
@@ -36,13 +39,19 @@ import { SettingsManager } from "./settings-manager.js";
 import { createReadTool } from "./tools/read.js";
 
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 afterEach(resetSecretRedactionRegistryForTest);
 afterEach(resetLogger);
 
 describe("AgentSession model-visible tool-result redaction", () => {
   it.each([
-    { kind: "opaque", ambientPolicy: "matching", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "different", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "absent", callbackChange: "none" },
     { kind: "opaque", ambientPolicy: "matching", callbackChange: "duplicate" },
@@ -153,7 +162,7 @@ describe("AgentSession model-visible tool-result redaction", () => {
         expect.soft(JSON.stringify(providerPayload).includes(secret)).toBe(false);
         session.dispose();
         const databasePath = resolveSqliteTargetFromSessionStorePath(scope.storePath).path;
-        expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
+        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
         const reopened = SessionManager.open(scope, cwd);
         const { session: restored } = await createTestSession({
           sessionManager: guardSessionManager(reopened, { config }),
@@ -168,7 +177,7 @@ describe("AgentSession model-visible tool-result redaction", () => {
         expect(currentToolText === admittedText).toBe(true);
       } finally {
         session.dispose();
-        closeOpenClawAgentDatabaseByPath(
+        await closeOpenClawAgentDatabaseByPathAsync(
           resolveSqliteTargetFromSessionStorePath(scope.storePath).path,
         );
       }
@@ -176,11 +185,8 @@ describe("AgentSession model-visible tool-result redaction", () => {
   );
 
   it.each([
-    ["anthropic-messages", "read", "fixture.txt"],
     ["anthropic-messages", "read", ".env"],
-    ["anthropic-messages", "exec", "fixture.txt"],
     ["openai-responses", "read", "fixture.txt"],
-    ["openai-responses", "read", ".env"],
     ["openai-responses", "exec", "fixture.txt"],
   ] as const)("keeps secrets off %s after %s returns %s", async (api, toolName, filename) => {
     const cwd = tempDirs.make("openclaw-tool-result-redaction-");

@@ -25,14 +25,9 @@ type FeedbackEvent = {
   conversationId: string;
 };
 
-export function buildFeedbackEvent(params: {
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-}): FeedbackEvent {
+export function buildFeedbackEvent(
+  params: Omit<FeedbackEvent, "type" | "event" | "ts">,
+): FeedbackEvent {
   return {
     type: "custom",
     event: "feedback",

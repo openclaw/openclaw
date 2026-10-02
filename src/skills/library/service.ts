@@ -260,7 +260,12 @@ export async function saveSkillLibrary(
       "Skill security scan found critical issues. Review the instructions and support files before publishing.",
     );
   }
-  const staged = await stageSkillLibraryBundle(skillId, bundle, options.env);
+  const staged = await stageSkillLibraryBundle(
+    skillId,
+    bundle,
+    options.env,
+    authority.assertFileMutationAllowed,
+  );
   try {
     const policy = await evaluateSkillInstallPolicy({
       config: authority.getConfig(),

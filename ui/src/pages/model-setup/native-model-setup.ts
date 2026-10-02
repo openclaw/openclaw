@@ -5,6 +5,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
+import { chatModelUnavailableMessage } from "../../lib/chat/model-select-state.ts";
 import {
   loadModelCatalog,
   modelCatalogRefreshError,
@@ -198,7 +199,12 @@ export class NativeModelSetup {
           detail:
             model.available === true
               ? providerDisplayLabel(model.provider)
-              : t("modelSetup.nativeModels.signIn"),
+              : (chatModelUnavailableMessage(model.unavailableReason) ??
+                (this.nativeModelsStatus === "loading" && model.available === undefined
+                  ? t("modelSetup.nativeModels.loading")
+                  : model.available === false
+                    ? t("chat.modelControls.modelsUnavailable")
+                    : t("modelSetup.nativeModels.unconfirmed"))),
           disabled: model.available !== true,
         })),
         disabled: this.options.blocked() || this.saving,

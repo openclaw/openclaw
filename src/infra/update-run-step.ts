@@ -2,10 +2,26 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatUpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UPDATE_RUN_DIAGNOSTIC_LIMIT, UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-record.js";
-import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
-import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
+import type { UpdateRunResult } from "./update-run-result.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
+
+/** Preserve the failed outcome without attaching command or working-directory metadata. */
+export function createUpdateStepFailureError(step: ResultStep): Error {
+  return new Error(summarizeUpdateStepFailure(step), {
+    cause: {
+      exitCode: step.exitCode,
+      stderrTail: step.stderrTail,
+      failureFacts: step.failureFacts,
+      signal: step.signal,
+      killed: step.killed,
+      outputLimitExceeded: step.outputLimitExceeded,
+      termination: step.termination,
+      snapshotCapacity: step.snapshotCapacity,
+    },
+  });
+}
 
 /** Physical process success does not erase a failed inspection or incomplete termination. */
 export function isFailedUpdateStep(
@@ -25,12 +41,14 @@ export function isFailedUpdateStep(
 export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolean {
   const step = result.steps.findLast(
     (entry) =>
-      entry.name === "gateway verification" || entry.name === "rollback gateway verification",
+      entry.name === "gateway verification" ||
+      entry.name === "rollback gateway verification" ||
+      entry.name === "gateway recovery verification",
   );
   return step?.termination === "timeout" && step.advisory?.kind === "recoverable-maintenance";
 }
 
-/** Warning rows preserve producer-classified advisories in the existing diagnostic ledger. */
+/** Preserve producer-classified diagnostics without turning successful inventory into warnings. */
 export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] {
   const text = (value: string) => truncateUtf16Safe(value, UPDATE_RUN_TEXT_LIMIT);
   const failed = isFailedUpdateStep(step);
@@ -47,15 +65,15 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
     ? {
         ...capacity,
         candidates: capacity.candidates.slice(0, 3).map((candidate) => {
-          const copied: UpdateSnapshotCapacity["candidates"][number] = {
+          const projected: (typeof capacity.candidates)[number] = {
             kind: candidate.kind,
             availableBytes: candidate.availableBytes,
             directory: text(candidate.directory),
           };
           if (candidate.allocationError) {
-            copied.allocationError = text(candidate.allocationError);
+            projected.allocationError = text(candidate.allocationError);
           }
-          return copied;
+          return projected;
         }),
         selection: capacity.selection
           ? { ...capacity.selection, directory: text(capacity.selection.directory) }
@@ -72,14 +90,15 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
       step: text(step.name),
       status: failed ? "failed" : "completed",
       exitCode: step.exitCode,
-      ...(step.failureFacts?.length && !step.advisory
-        ? { failureFacts: step.failureFacts.slice(0, 5) }
-        : {}),
-      ...(configWriteRefusal ? { configWriteRefusal } : {}),
-      ...(snapshotCapacity ? { snapshotCapacity } : {}),
-      ...(failed || step.exitCode !== 0
-        ? { detail: text(step.advisory?.message ?? summarizeUpdateStepFailure(step)) }
-        : {}),
+      // A completed retry replaces diagnostics from the previous attempt with the same ID.
+      failureFacts:
+        step.failureFacts?.length && !step.advisory ? step.failureFacts.slice(0, 5) : undefined,
+      configWriteRefusal,
+      snapshotCapacity,
+      detail:
+        failed || step.exitCode !== 0
+          ? text(step.advisory?.message ?? summarizeUpdateStepFailure(step))
+          : undefined,
     },
     ...(step.doctorLintFindings
       ? [
@@ -90,11 +109,16 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
           },
         ]
       : []),
-    ...warnings.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
-      step: text(`warning:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
-      status: "completed" as const,
-      detail: text(detail),
-    })),
+    ...[
+      { kind: "warning", messages: warnings },
+      { kind: "diagnostic", messages: step.diagnostics ?? [] },
+    ].flatMap(({ kind, messages }) =>
+      messages.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
+        step: text(`${kind}:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
+        status: "completed" as const,
+        detail: text(detail),
+      })),
+    ),
     ...(step.configChanges ?? []).slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((change, index) => {
       const configChange =
         change.kind === "key"
@@ -110,12 +134,32 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
   ];
 }
 
-export function updateRunWarningMessages(steps: readonly UpdateRunStep[]): string[] {
-  return steps.flatMap((step) =>
-    step.status === "completed" && step.step.startsWith("warning:") && step.detail
+export function updateRunWarningMessages(
+  steps: readonly UpdateRunStep[],
+  maxMessages?: number,
+): string[] {
+  const messages = steps.flatMap((step) =>
+    (step.step === "reconcile:settle" ||
+      (step.status === "completed" && step.step.startsWith("warning:"))) &&
+    step.detail
       ? [step.detail]
       : [],
   );
+  if (maxMessages === undefined) {
+    return messages;
+  }
+  // The operator's restart command must survive later advisory Doctor warnings.
+  const serviceWarning = steps.findLast(
+    (step) => step.step === "warning:managed-service-reconciliation" && step.status === "completed",
+  )?.detail;
+  return (
+    serviceWarning
+      ? [
+          serviceWarning,
+          ...messages.filter((message) => message !== serviceWarning).slice(1 - maxMessages),
+        ]
+      : messages.slice(-maxMessages)
+  ).slice(0, maxMessages);
 }
 
 /** Shared bounded receipt for history and rollback-readable diagnostics. */

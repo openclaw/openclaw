@@ -42,11 +42,11 @@ describe("Browser panel downloads", () => {
         static override revokeObjectURL = revokeObjectURL;
       },
     );
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(
-      function (this: HTMLAnchorElement) {
-        downloads.push({ href: this.href, filename: this.download });
-      },
-    );
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      downloads.push({ href: this.href, filename: this.download });
+    });
   });
 
   it("saves the Browser-prepared bytes and filename through authenticated same-origin media", async () => {

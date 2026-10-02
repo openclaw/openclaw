@@ -1,6 +1,6 @@
 // Deepgram Flux voice-note transcription uses the provider's one-shot WebSocket protocol.
 import { open } from "node:fs/promises";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-runtime";
+import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,

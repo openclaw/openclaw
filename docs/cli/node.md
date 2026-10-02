@@ -122,8 +122,12 @@ persisted in service arguments.
 
 For a managed foreground process, `--pair-if-needed` reuses native device-token
 storage across restarts; it does not keep a separate enrollment marker. Preserve
-the node state directory. An expired setup code cannot enroll a new state
-directory or replace a revoked device token; provision a fresh code when needed.
+the node state directory. After the setup code expires, the node can still reconnect
+when its saved identity and node token exist and every selected Gateway endpoint
+matches the saved Gateway scope. The expired bootstrap token is never sent.
+An expired setup code cannot enroll a new state directory or replace a revoked
+device token; provision a fresh code when needed. Explicit `--pair` still rejects
+expired setup codes.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -232,8 +236,9 @@ an absent service remains a successful no-op.
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
-restart it with fresh config and credentials. Pairing-required pauses stay in
-the foreground flow so the pending request can be approved.
+restart it with fresh config and credentials. While device pairing is pending,
+the node keeps reconnecting with exponential backoff capped at 30 seconds and
+connects automatically after approval.
 
 ## Automatic updates
 
@@ -276,17 +281,20 @@ openclaw devices list
 openclaw devices approve <deviceRequestId>
 ```
 
-Device approval admits the connection, not its command surface. Restart an
-installed node with `openclaw node restart`, or stop and rerun the foreground
-`openclaw node run` command. A node paused on `PAIRING_REQUIRED` does not resume
-automatically after manual approval. This reconnect creates a separate
-command-surface request on the Gateway:
+Device approval admits the connection; the command surface needs separate
+approval. The node keeps reconnecting while device approval is pending, with
+exponential backoff capped at 30 seconds. After approval, its next reconnect
+creates a separate command-surface request on the Gateway:
 
 ```bash
 openclaw nodes pending
 openclaw nodes approve <nodeRequestId>
 openclaw nodes describe --node <idOrNameOrIp>
 ```
+
+If an older client already reports that reconnect is paused, restart the
+installed node with `openclaw node restart`, or stop and rerun its foreground
+`openclaw node run` command once.
 
 The device and node request IDs are distinct. An initial unapproved surface has
 no effective commands. SSH-verified and bootstrap enrollment can approve the
@@ -362,9 +370,9 @@ revoke and re-pair a node:
    attempt can request pairing.
 3. On the Gateway, run `openclaw devices list`, then
    `openclaw devices approve <deviceRequestId>`.
-4. Restart or rerun the node again. A client paused for pairing does not resume
-   automatically after approval; this reconnect creates the separate
-   command-surface request.
+4. Wait for the node's automatic reconnect, which creates the separate
+   command-surface request. If an older client already paused for pairing,
+   restart or rerun it once.
 5. On the Gateway, run `openclaw nodes pending`, then
    `openclaw nodes approve <nodeRequestId>`.
 
@@ -375,10 +383,14 @@ a separate check.
 Older OpenClaw releases stored node-host state in `node.json`, the signed
 identity in `identity/device.json`, and paired auth in
 `identity/device-auth.json`. Stop the node host and run
-`openclaw doctor --fix` once; Doctor claims each retired source, validates it,
-imports and verifies the canonical SQLite row, then removes the old file. Normal
-node commands fail closed with this repair instruction while either retired file
-or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+`openclaw doctor --fix` once; Doctor validates the retired inputs, imports and
+verifies their canonical SQLite rows, then removes the old files. Node startup,
+including the macOS app's worker, leaves these inputs for Doctor. Pending device
+auth or exec approvals stop startup before capabilities are prepared. A missing
+canonical identity plus retired identity data or an interrupted import claim
+also stops startup before a new key can be created. An existing valid canonical
+identity remains authoritative when an older release recreates `identity/device.json`;
+Doctor owns that stale file's cleanup. Keep `state/openclaw.sqlite` private;
 it contains the device keypair and auth tokens.
 
 ## Exec approvals
@@ -388,7 +400,9 @@ it contains the device keypair and auth tokens.
 - `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
   `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is unset
 - [Exec approvals](/tools/exec-approvals)
-- `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
+- From the Gateway, inspect with `openclaw approvals get --node <id|name|ip>` or
+  replace with `openclaw approvals set --node <id|name|ip> --file <path>`; see the
+  [Approvals CLI](/cli/approvals).
 
 For approved async node exec, OpenClaw prepares a canonical `systemRunPlan`
 before prompting. The later approved `system.run` forward reuses that stored

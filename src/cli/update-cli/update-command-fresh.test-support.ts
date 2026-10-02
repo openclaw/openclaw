@@ -81,7 +81,7 @@ export function installFreshUpdateFixture() {
       managedEnv: undefined,
     }));
     vi.spyOn(shared, "resolveGlobalManager").mockResolvedValue("npm");
-    vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue("2026.9.2");
+    vi.spyOn(shared, "resolveTargetVersion").mockResolvedValue({ version: "2026.9.2" });
     vi.spyOn(updateGlobal, "createGlobalInstallEnv").mockResolvedValue({ ...process.env });
     vi.spyOn(packageDestination, "inspectNpmGlobalDestination").mockResolvedValue({
       kind: "empty",

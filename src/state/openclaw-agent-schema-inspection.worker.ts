@@ -1,19 +1,16 @@
 import type { DatabaseSync } from "node:sqlite";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
+import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { serializeAgentSchemaInspectionError } from "./openclaw-agent-schema-inspection-response.js";
 import type { AgentSchemaInspectionSnapshot } from "./openclaw-agent-schema-inspection-worker.js";
 import {
   inspectAgentDatabaseSchema,
   type AgentSchemaInspectionInput,
 } from "./openclaw-agent-schema-inspection.js";
-import {
-  canReuseOpenClawAgentIntegrityVerification,
-  readOpenClawAgentIntegrityVerification,
-} from "./openclaw-quarantine-store.js";
+import { readOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 if (!process.send || !process.disconnect) {
@@ -49,8 +46,7 @@ process.on(
       const inspect = (database: DatabaseSync, verification = readVerification()) => {
         setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
         if (input.requireStartupMigrationReadiness) {
-          // sqlite-allow-raw -- Match the disposable integrity child's connection-local cache budget.
-          database.exec("PRAGMA cache_size = -65536;");
+          configureSqliteMaintenanceCache(database);
         }
         return inspectAgentDatabaseSchema(database, {
           ...input,
@@ -68,34 +64,6 @@ process.on(
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
       } else {
         inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
-        if (
-          !inspection &&
-          canReuseOpenClawAgentIntegrityVerification(input.pathname, readVerification(), false)
-        ) {
-          try {
-            inspection = withSqliteSourceReadDatabase(
-              input.pathname,
-              "source",
-              (database) => {
-                // sqlite-allow-raw -- Match the ordinary source reader's connection policy.
-                database.exec("PRAGMA trusted_schema = OFF;");
-                const verification = readVerification();
-                return canReuseOpenClawAgentIntegrityVerification(
-                  input.pathname,
-                  verification,
-                  false,
-                )
-                  ? inspect(database, verification)
-                  : undefined;
-              },
-              "immutable",
-            );
-          } catch (error) {
-            if (!(error instanceof StateDatabaseCoordinatorContentionError)) {
-              throw error;
-            }
-          }
-        }
       }
       send({
         requestId,

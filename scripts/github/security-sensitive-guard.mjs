@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
 import { appendFile } from "node:fs/promises";
-import { finishGuard, openGuard, withApprovalRequest } from "./guard-review.mjs";
+import {
+  ObsoleteReviewError,
+  finishGuard,
+  openGuard,
+  securityReviewContracts,
+  withApprovalRequest,
+} from "./guard-review.mjs";
 import { createIssueMutationHelpers, sanitizeGuardDisplayValue } from "./guard-shared.mjs";
 import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 
-const marker = "<!-- openclaw:security-sensitive-guard -->";
+const marker = securityReviewContracts.sensitive.commentMarker;
 const changedLabel = "security-sensitive-changed";
 const reviewLabel = "security-review-required";
 
@@ -95,24 +101,15 @@ function renderComment({ changes, pullRequest, approval }) {
 }
 
 export async function reviewSecuritySensitiveChanges(prepared) {
-  const guard = await openGuard(
-    {
-      context: "openclaw/security-sensitive-review",
-      commentMarker: marker,
-      approvalCommand: "/allow-security-sensitive-change",
-    },
-    prepared,
-  );
+  const guard = await openGuard(securityReviewContracts.sensitive, prepared);
   if (!guard) {
     return true;
   }
   const { api, owner, repo, issuePath, files, pullRequest } = guard;
   const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
   const changes = collectSecuritySensitiveChanges(files);
-  const [comments, labels] = await Promise.all([
-    api.paginate(`${issuePath}/comments`),
-    api.paginate(`${issuePath}/labels`),
-  ]);
+  const comments = await api.paginate(`${issuePath}/comments`);
+  const labels = await api.paginate(`${issuePath}/labels`);
   const existing = comments.find(
     (comment) => comment.user?.login === "github-actions[bot]" && comment.body?.startsWith(marker),
   );
@@ -123,13 +120,10 @@ export async function reviewSecuritySensitiveChanges(prepared) {
     issuePath,
     labelNames: new Set(labels.map((label) => label.name)),
   });
-  const allowed = await finishGuard(guard, {
-    requiresApproval: changes.length > 0,
-    description:
-      changes.length > 0
-        ? "Sensitive changes have maintainer authority"
-        : "No sensitive product changes",
-  });
+  const allowed = await finishGuard(
+    guard,
+    securityReviewContracts.sensitive.success[changes.length > 0 ? "approved" : "clear"],
+  );
   if (changes.length > 0) {
     await addLabelIfMissing(changedLabel);
   } else {
@@ -163,6 +157,10 @@ export async function reviewSecuritySensitiveChanges(prepared) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewSecuritySensitiveChanges().catch(
     /** @param {unknown} error */ (error) => {
+      if (error instanceof ObsoleteReviewError) {
+        console.log(error.message);
+        return;
+      }
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },

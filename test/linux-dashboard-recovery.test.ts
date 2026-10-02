@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { setImmediate as yieldToDashboard } from "node:timers/promises";
 import vm from "node:vm";
 import { test } from "vitest";
 import { createDeferred } from "./helpers/promise.js";
@@ -118,17 +119,39 @@ test("CLI recovery errors offer both retry and reinstall", async () => {
   assert.equal(element("#install-controls").classList.contains("hidden"), false);
 });
 
-test("failed release-page opening retains an explicit download-page retry", async () => {
+test.each([
+  {
+    event: "updater://available",
+    message: "Downloading in the background…",
+  },
+  {
+    event: "updater://available-manual",
+    message: "Install the latest system package from the release page.",
+  },
+])("$event keeps release markup out of the status banner", async ({ event, message }) => {
+  const { element, emit } = await mountDashboard("?mode=missingCli");
+  emit(event, {
+    version: "2026.9.10",
+    notes: "<!-- openclaw-release-publication:docs-v1 -->\n## Changes\n\n- A release fix.",
+  });
+
+  assert.equal(element("#update-message").textContent, message);
+});
+
+test("failed release-page opening retains a retry that clears the error on success", async () => {
   const opening = createDeferred();
+  const retry = createDeferred();
   let attempts = 0;
   const { element, emit, invoked } = await mountDashboard("?mode=missingCli", () =>
-    ++attempts === 1 ? opening.promise : Promise.resolve(),
+    ++attempts === 1 ? opening.promise : retry.promise,
   );
   emit("updater://available-manual", { version: "2026.9.10" });
   assert.equal(element("#update-action").textContent, "Open download page");
   element("#update-action").click();
   opening.reject(new Error("Browser unavailable"));
   await opening.promise.catch(() => {});
+  // Let the VM's cross-realm promise continuation finish rendering.
+  await yieldToDashboard();
 
   assert.equal(element("#update-title").textContent, "Could not open release page");
   assert.equal(element("#update-message").textContent, "Browser unavailable");
@@ -137,41 +160,66 @@ test("failed release-page opening retains an explicit download-page retry", asyn
   assert.equal(attempts, 1);
   element("#update-action").click();
   assert.equal(attempts, 2);
+  retry.resolve();
+  await retry.promise;
+  await yieldToDashboard();
+  assert.equal(element("#update-title").textContent, "Update available v2026.9.10");
+  assert.equal(
+    element("#update-message").textContent,
+    "Install the latest system package from the release page.",
+  );
+  assert.equal(element("#update-banner").classList.contains("hidden"), false);
   assert.equal(invoked.filter((command) => command === "open_release_page").length, 2);
 });
 
-test("late release-page failure preserves a newer update action", async () => {
-  const opening = createDeferred();
-  const { element, emit, invoked } = await mountDashboard(
-    "?mode=missingCli",
-    () => opening.promise,
-  );
-  emit("updater://available-manual", { version: "2026.9.10" });
-  element("#update-action").click();
-  emit("updater://ready", { version: "2026.9.11" });
-  opening.reject(new Error("Browser unavailable"));
-  await opening.promise.catch(() => {});
+test.each(["success", "failure"])(
+  "late release-page %s preserves a newer update action",
+  async (outcome) => {
+    const opening = createDeferred();
+    const { element, emit, invoked } = await mountDashboard(
+      "?mode=missingCli",
+      () => opening.promise,
+    );
+    emit("updater://available-manual", { version: "2026.9.10" });
+    element("#update-action").click();
+    emit("updater://ready", { version: "2026.9.11" });
+    if (outcome === "failure") {
+      opening.reject(new Error("Browser unavailable"));
+    } else {
+      opening.resolve();
+    }
+    await opening.promise.catch(() => {});
+    await yieldToDashboard();
 
-  assert.equal(element("#update-title").textContent, "Update ready");
-  assert.equal(element("#update-action").textContent, "Restart to update");
-  assert.equal(element("#update-action").classList.contains("hidden"), false);
-  element("#update-action").click();
-  assert.equal(invoked.at(-1), "relaunch");
-});
+    assert.equal(element("#update-title").textContent, "Update ready");
+    assert.equal(element("#update-action").textContent, "Restart to update");
+    assert.equal(element("#update-action").classList.contains("hidden"), false);
+    element("#update-action").click();
+    assert.equal(invoked.at(-1), "relaunch");
+  },
+);
 
-test("late release-page failure does not reopen a dismissed update banner", async () => {
-  const opening = createDeferred();
-  const { element, emit } = await mountDashboard("?mode=missingCli", () => opening.promise);
-  emit("updater://available-manual", { version: "2026.9.10" });
-  element("#update-action").click();
-  element("#update-dismiss").click();
-  assert.equal(element("#update-banner").classList.contains("hidden"), true);
-  opening.reject(new Error("Browser unavailable"));
-  await opening.promise.catch(() => {});
+test.each(["success", "failure"])(
+  "late release-page %s does not reopen a dismissed update banner",
+  async (outcome) => {
+    const opening = createDeferred();
+    const { element, emit } = await mountDashboard("?mode=missingCli", () => opening.promise);
+    emit("updater://available-manual", { version: "2026.9.10" });
+    element("#update-action").click();
+    element("#update-dismiss").click();
+    assert.equal(element("#update-banner").classList.contains("hidden"), true);
+    if (outcome === "failure") {
+      opening.reject(new Error("Browser unavailable"));
+    } else {
+      opening.resolve();
+    }
+    await opening.promise.catch(() => {});
+    await yieldToDashboard();
 
-  assert.equal(element("#update-banner").classList.contains("hidden"), true);
-  assert.equal(element("#update-title").textContent, "Update available v2026.9.10");
-});
+    assert.equal(element("#update-banner").classList.contains("hidden"), true);
+    assert.equal(element("#update-title").textContent, "Update available v2026.9.10");
+  },
+);
 
 test.each([
   { name: "local", remote: null, failure: false, entry: "settings", lateRetry: false },
@@ -259,14 +307,10 @@ test.each([
       }
       elements.get("#edit-connection")?.click();
       // Drain the actual click's promise continuations, without changing the handler.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await yieldToDashboard();
       if (lateRetry) {
         retry.resolve({ phase: "remoteError" });
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await yieldToDashboard();
       }
       assert.equal(elements.get("#title")?.textContent, "Connection Settings");
     }

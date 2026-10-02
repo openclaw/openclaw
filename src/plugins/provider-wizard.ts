@@ -48,24 +48,6 @@ export function setProviderWizardProvidersResolverForTest(
   };
 }
 
-function resolveWizardSetupChoiceId(
-  provider: ProviderPlugin,
-  wizard: ProviderPluginWizardSetup,
-): string {
-  const explicit = normalizeOptionalString(wizard.choiceId);
-  if (explicit) {
-    return explicit;
-  }
-  const explicitMethodId = normalizeOptionalString(wizard.methodId);
-  if (explicitMethodId) {
-    return buildProviderPluginMethodChoice(provider.id, explicitMethodId);
-  }
-  if (provider.auth.length === 1) {
-    return provider.id;
-  }
-  return buildProviderPluginMethodChoice(provider.id, provider.auth[0]?.id ?? "default");
-}
-
 function resolveMethodById(
   provider: ProviderPlugin,
   methodId?: string,
@@ -77,17 +59,6 @@ function resolveMethodById(
   return provider.auth.find(
     (method) => normalizeOptionalLowercaseString(method.id) === normalizedMethodId,
   );
-}
-
-function listMethodWizardSetups(provider: ProviderPlugin): Array<{
-  method: ProviderAuthMethod;
-  wizard: ProviderPluginWizardSetup;
-}> {
-  return provider.auth
-    .map((method) => (method.wizard ? { method, wizard: method.wizard } : null))
-    .filter((entry): entry is { method: ProviderAuthMethod; wizard: ProviderPluginWizardSetup } =>
-      Boolean(entry),
-    );
 }
 
 function resolveProviderWizardProviders(params: {
@@ -108,7 +79,7 @@ function resolveProviderWizardProviders(params: {
   });
 }
 
-function resolveModelPickerChoiceValue(
+function resolveProviderMethodChoiceValue(
   provider: ProviderPlugin,
   modelPicker: ProviderPluginWizardModelPicker,
 ): string {
@@ -139,7 +110,7 @@ export function resolveProviderModelPickerEntries(params: {
       continue;
     }
     entries.push({
-      value: resolveModelPickerChoiceValue(provider, modelPicker),
+      value: resolveProviderMethodChoiceValue(provider, modelPicker),
       label: normalizeOptionalString(modelPicker.label) || `${provider.label} (custom)`,
       hint: normalizeOptionalString(modelPicker.hint),
     });
@@ -239,7 +210,11 @@ export function resolveProviderPluginChoiceCore(params: {
   }
 
   for (const provider of params.providers) {
-    for (const { method, wizard } of listMethodWizardSetups(provider)) {
+    for (const method of provider.auth) {
+      const wizard = method.wizard;
+      if (!wizard) {
+        continue;
+      }
       const choiceId =
         normalizeOptionalString(wizard.choiceId) ||
         buildProviderPluginMethodChoice(provider.id, method.id);
@@ -249,7 +224,9 @@ export function resolveProviderPluginChoiceCore(params: {
     }
     const setup = provider.wizard?.setup;
     if (setup) {
-      const setupChoiceId = resolveWizardSetupChoiceId(provider, setup);
+      const setupChoiceId =
+        normalizeOptionalString(setup.choiceId) ??
+        resolveProviderMethodChoiceValue(provider, setup);
       if ((normalizeOptionalString(setupChoiceId) ?? "") === choice) {
         const method = resolveMethodById(provider, setup.methodId);
         if (method) {

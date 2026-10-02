@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -13,12 +14,12 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
+import { withinTest } from "../helpers/promise.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs";
 const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
 const SWEEP_SCRIPT = "scripts/e2e/lib/kitchen-sink-plugin/sweep.sh";
-// The shim waits for an explicit log-ready marker; this only bounds a broken fixture process.
-const FIXTURE_READY_WAIT_ATTEMPTS = process.env.CI ? 2_000 : 1_000;
 const REQUIRED_FULL_DIAGNOSTIC_CANARIES = [
   "agent tool result middleware must be a function",
   "trusted tool policy registration requires id, description, and evaluate()",
@@ -168,10 +169,12 @@ function runAssertClawhubInstalled({
   contextEngineIds = [],
   installPathRelative,
   recordOverrides = {},
+  wrongPeerTarget = false,
 }: {
   contextEngineIds?: string[];
   installPathRelative?: string;
   recordOverrides?: Record<string, unknown>;
+  wrongPeerTarget?: boolean;
 } = {}) {
   const label = `clawhub-context-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const pluginId = "openclaw-kitchen-sink-fixture";
@@ -205,8 +208,12 @@ function runAssertClawhubInstalled({
     mkdirSync(installPath, { recursive: true });
     if (record.artifactKind === "npm-pack") {
       mkdirSync(path.join(installPath, "node_modules"), { recursive: true });
+      const peerTarget = wrongPeerTarget ? path.join(home, "other-host") : process.cwd();
+      if (wrongPeerTarget) {
+        mkdirSync(peerTarget);
+      }
       symlinkSync(
-        process.cwd(),
+        peerTarget,
         path.join(installPath, "node_modules", "openclaw"),
         process.platform === "win32" ? "junction" : "dir",
       );
@@ -240,6 +247,7 @@ function runAssertClawhubInstalled({
         },
       }),
       record,
+      wrongPeerRealPath: wrongPeerTarget ? realpathSync(path.join(home, "other-host")) : undefined,
     };
   } finally {
     rmSync(home, { force: true, recursive: true });
@@ -278,6 +286,38 @@ function runSweepShell(script: string, env: NodeJS.ProcessEnv = {}) {
   });
 }
 
+async function runSweepShellUntilSettled(
+  script: string,
+  env: NodeJS.ProcessEnv,
+  signal: AbortSignal,
+) {
+  let stdout = "";
+  let stderr = "";
+  const command = runManagedCommand({
+    bin: BASH_BIN,
+    args: ["-c", toBashScript(script)],
+    cwd: process.cwd(),
+    env: { ...process.env, ...toBashEnv(env) },
+    stdio: ["ignore", "pipe", "pipe"],
+    requireProcessTreeExit: process.platform !== "win32",
+    signal,
+    onReady(child) {
+      child.stdout!.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+      child.stderr!.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+    },
+  });
+  try {
+    return { status: await withinTest(command, signal), stdout, stderr };
+  } finally {
+    // The managed owner joins the shell tree after cancellation before temp files are removed.
+    await command.catch(() => {});
+  }
+}
+
 function toBashScript(script: string) {
   if (process.platform === "win32") {
     return `export PATH="/usr/bin:/bin:$PATH"\n${script}`;
@@ -309,6 +349,21 @@ function toGitBashPath(value: string) {
     return value;
   }
   return `/${drive.toLowerCase()}/${suffix.replaceAll("\\", "/")}`;
+}
+
+function withScanFixture(
+  run: (fixture: { parent: string; home: string; scratchRoot: string }) => void,
+) {
+  const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
+  const home = path.join(parent, "home");
+  const scratchRoot = path.join(parent, "scratch");
+  try {
+    mkdirSync(home, { recursive: true });
+    mkdirSync(scratchRoot, { recursive: true });
+    run({ parent, home, scratchRoot });
+  } finally {
+    rmSync(parent, { force: true, recursive: true });
+  }
 }
 
 describe("kitchen-sink plugin assertions", () => {
@@ -658,6 +713,20 @@ describe("kitchen-sink plugin assertions", () => {
       errorPrefix: null,
     },
     {
+      name: "rejects an npm peer linked to a different host",
+      recordOverrides: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        clawpackSha256: "digest",
+        clawpackSize: 0,
+        npmIntegrity: "integrity",
+        npmShasum: "shasum",
+        npmTarballName: "package.tgz",
+      },
+      wrongPeerTarget: true,
+      errorPrefix: null,
+    },
+    {
       name: "rejects metadata before an empty install path",
       recordOverrides: { artifactFormat: "tgz", installPath: "" },
       errorPrefix: "missing kitchen-sink legacy ZIP artifact metadata",
@@ -667,20 +736,29 @@ describe("kitchen-sink plugin assertions", () => {
       recordOverrides: { artifactFormat: "tgz", installPath: 42 },
       errorPrefix: "missing kitchen-sink legacy ZIP artifact metadata",
     },
-  ])("ClawHub kitchen-sink metadata: $name", ({ recordOverrides, errorPrefix }) => {
-    const result = runAssertClawhubInstalled({
-      contextEngineIds: ["openclaw-kitchen-sink-fixture"],
-      recordOverrides,
-    });
-    if (errorPrefix === null) {
-      expect(result.status, result.stderr).toBe(0);
-    } else {
-      expect(result.status).toBe(1);
-      expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
-        `${errorPrefix}: ${JSON.stringify(result.record)}`,
-      );
-    }
-  });
+  ])(
+    "ClawHub kitchen-sink metadata: $name",
+    ({ recordOverrides, errorPrefix, wrongPeerTarget }) => {
+      const result = runAssertClawhubInstalled({
+        contextEngineIds: ["openclaw-kitchen-sink-fixture"],
+        recordOverrides,
+        wrongPeerTarget,
+      });
+      if (wrongPeerTarget) {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `expected kitchen-sink openclaw peer ${result.wrongPeerRealPath} to target ${realpathSync(process.cwd())}`,
+        );
+      } else if (errorPrefix === null) {
+        expect(result.status, result.stderr).toBe(0);
+      } else {
+        expect(result.status).toBe(1);
+        expect(result.stderr.match(/^(?:Error|error): (.*)$/m)?.[1]).toBe(
+          `${errorPrefix}: ${JSON.stringify(result.record)}`,
+        );
+      }
+    },
+  );
 
   it("rejects ClawHub kitchen-sink install paths that resolve outside managed extensions", () => {
     const result = runAssertClawhubInstalled({
@@ -705,13 +783,8 @@ describe("kitchen-sink plugin assertions", () => {
   });
 
   it("scans only the configured kitchen-sink scratch root", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    const siblingRoot = path.join(parent, "sibling");
-    try {
-      mkdirSync(home, { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
+    withScanFixture(({ parent, home, scratchRoot }) => {
+      const siblingRoot = path.join(parent, "sibling");
       mkdirSync(siblingRoot, { recursive: true });
       writeFileSync(path.join(scratchRoot, "large.log"), `${"x".repeat(70 * 1024)}\n0 errors\n`);
       writeFileSync(path.join(siblingRoot, "stale.log"), "[ERROR] stale sibling failure\n");
@@ -721,18 +794,12 @@ describe("kitchen-sink plugin assertions", () => {
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("log scan passed");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("stale sibling failure");
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("bounds irrelevant OpenClaw home traversal during log scans", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    try {
+    withScanFixture(({ home, scratchRoot }) => {
       mkdirSync(path.join(home, ".openclaw"), { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
       writeFileSync(path.join(scratchRoot, "scenario.log"), "0 errors\n");
       for (let index = 0; index < 20; index += 1) {
         const dir = path.join(home, ".openclaw", `cache-${index}`);
@@ -750,9 +817,7 @@ describe("kitchen-sink plugin assertions", () => {
       expect(`${result.stdout}\n${result.stderr}`).toContain(
         "kitchen-sink log scan exceeded 8 filesystem entries",
       );
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("streams kitchen-sink log directories instead of sorting full child lists", () => {
@@ -763,12 +828,7 @@ describe("kitchen-sink plugin assertions", () => {
   });
 
   it("does not allow dirty error lines just because they mention zero errors", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    try {
-      mkdirSync(home, { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
+    withScanFixture(({ home, scratchRoot }) => {
       writeFileSync(
         path.join(scratchRoot, "dirty.log"),
         "[ERROR] 0 errors reported but fatal state remained\n",
@@ -779,37 +839,22 @@ describe("kitchen-sink plugin assertions", () => {
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("unexpected error-like log lines");
       expect(`${result.stdout}\n${result.stderr}`).toContain("fatal state remained");
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("rejects kitchen-sink log scans that find no files", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    try {
-      mkdirSync(home, { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
-
+    withScanFixture(({ home, scratchRoot }) => {
       const result = runScanLogs({ home, scratchRoot });
 
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain(
         "kitchen-sink log scan found no files",
       );
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("bounds repeated kitchen-sink log scan findings", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    try {
-      mkdirSync(home, { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
+    withScanFixture(({ home, scratchRoot }) => {
       writeFileSync(
         path.join(scratchRoot, "errors.log"),
         Array.from({ length: 105 }, (_, index) => `[ERROR] failure ${index}`).join("\n"),
@@ -820,18 +865,11 @@ describe("kitchen-sink plugin assertions", () => {
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("additional findings omitted");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("[ERROR] failure 104");
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("bounds huge single-line kitchen-sink log findings", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    try {
-      mkdirSync(home, { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
+    withScanFixture(({ home, scratchRoot }) => {
       writeFileSync(
         path.join(scratchRoot, "single-line.jsonl"),
         `DO_NOT_DUMP_OLD_PREFIX${"x".repeat(256 * 1024)}recent marker [ERROR] bad state`,
@@ -843,18 +881,11 @@ describe("kitchen-sink plugin assertions", () => {
       expect(`${result.stdout}\n${result.stderr}`).toContain("recent marker");
       expect(`${result.stdout}\n${result.stderr}`).not.toContain("DO_NOT_DUMP_OLD_PREFIX");
       expect(`${result.stdout}\n${result.stderr}`.length).toBeLessThan(25 * 1024);
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("detects kitchen-sink log errors split across scan segment boundaries", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-scan-"));
-    const home = path.join(parent, "home");
-    const scratchRoot = path.join(parent, "scratch");
-    try {
-      mkdirSync(home, { recursive: true });
-      mkdirSync(scratchRoot, { recursive: true });
+    withScanFixture(({ home, scratchRoot }) => {
       writeFileSync(
         path.join(scratchRoot, "split-marker.jsonl"),
         `${"x".repeat(16 * 1024 - 3)}[ERROR] split boundary marker`,
@@ -864,9 +895,7 @@ describe("kitchen-sink plugin assertions", () => {
 
       expect(result.status).not.toBe(0);
       expect(`${result.stdout}\n${result.stderr}`).toContain("split boundary marker");
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
+    });
   });
 
   it("rejects kitchen-sink log scans without an isolated scratch root", () => {
@@ -923,38 +952,6 @@ test ! -e "$KITCHEN_SINK_TMP_DIR"
     }
   });
 
-  it("preserves successful kitchen-sink CLI command logs for the final scan", () => {
-    const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-log-"));
-    const scratchRoot = path.join(parent, "scratch");
-    const entry = path.join(parent, "entry.mjs");
-    try {
-      mkdirSync(scratchRoot, { recursive: true });
-      writeFileSync(entry, "console.log(`cli transcript: ${process.argv.slice(2).join(' ')}`);\n");
-
-      const result = runSweepShell(
-        `
-set -euo pipefail
-export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
-export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
-export OPENCLAW_ENTRY="$ENTRY"
-source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
-run_kitchen_sink_openclaw_logged "install/log" plugins install demo
-test -f "$SCRATCH_ROOT/install_log.log"
-grep -q "cli transcript: plugins install demo" "$SCRATCH_ROOT/install_log.log"
-`,
-        {
-          ENTRY: entry,
-          SCRATCH_ROOT: scratchRoot,
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("cli transcript: plugins install demo");
-    } finally {
-      rmSync(parent, { force: true, recursive: true });
-    }
-  });
-
   it("bounds printed kitchen-sink CLI command logs without truncating saved logs", () => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-log-print-"));
     const scratchRoot = path.join(parent, "scratch");
@@ -963,7 +960,7 @@ grep -q "cli transcript: plugins install demo" "$SCRATCH_ROOT/install_log.log"
       mkdirSync(scratchRoot, { recursive: true });
       writeFileSync(
         entry,
-        'process.stdout.write(`prefix\\n${"x".repeat(2048)}\\nTAIL_MARKER\\n`);\n',
+        'process.stdout.write(`prefix\\n${"x".repeat(2048)}\\nTAIL_MARKER ${process.argv.slice(2).join(" ")}\\n`);\n',
       );
 
       const result = runSweepShell(
@@ -985,7 +982,7 @@ grep -q "prefix" "$SCRATCH_ROOT/install_noisy.log"
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain("truncated: showing last 64");
-      expect(result.stdout).toContain("TAIL_MARKER");
+      expect(result.stdout).toContain("TAIL_MARKER plugins install demo");
       expect(result.stdout).not.toContain("prefix");
     } finally {
       rmSync(parent, { force: true, recursive: true });
@@ -1043,7 +1040,7 @@ export KITCHEN_SINK_SPEC=npm:@openclaw/kitchen-sink@0.0.0
 source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
 run_expect_failure "install/failure" bash -c 'printf "%s\\n" "npm ERR! No matching version @openclaw/kitchen-sink@0.0.0"; exit 1'
 test -f "$SCRATCH_ROOT/kitchen-sink-expected-failure-install_failure.log"
-scan_logs_for_unexpected_errors
+node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs scan-logs
 `,
         {
           HOME_DIR: home,
@@ -1056,6 +1053,41 @@ scan_logs_for_unexpected_errors
     } finally {
       rmSync(parent, { force: true, recursive: true });
     }
+  });
+
+  it("rejects live Kitchen Sink ClawHub scenarios after the listing is retired", () => {
+    const result = runSweepShell(
+      `
+set -euo pipefail
+export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
+source scripts/e2e/lib/kitchen-sink-plugin/sweep.sh
+KITCHEN_SINK_SCENARIOS='clawhub-latest|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic'
+run_kitchen_sink_sweep_main
+`,
+      {
+        OPENCLAW_ENTRY: "/bin/false",
+        OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: "1",
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("The OpenClaw Kitchen Sink package is delisted from ClawHub");
+    expect(result.stdout).not.toContain("Testing clawhub-latest install");
+  });
+
+  it("rejects live Kitchen Sink ClawHub E2E before launching Docker", () => {
+    const result = spawnSync(BASH_BIN, ["scripts/e2e/kitchen-sink-plugin-docker.sh"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB: "1",
+      },
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("The OpenClaw Kitchen Sink package is delisted from ClawHub");
+    expect(result.stdout).not.toContain("Running kitchen-sink plugin Docker E2E");
   });
 
   it("cleans a ClawHub fixture server that times out before readiness", () => {
@@ -1156,7 +1188,10 @@ exit "$status"
     }
   });
 
-  it("bounds ClawHub fixture server logs on startup timeout", () => {
+  it("bounds ClawHub fixture server logs on startup timeout", async ({
+    signal,
+    onTestFinished,
+  }) => {
     const parent = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-sink-clawhub-log-"));
     const fakeBin = path.join(parent, "bin");
     const scratchRoot = path.join(parent, "scratch");
@@ -1164,6 +1199,14 @@ exit "$status"
     const nodeShim = path.join(fakeBin, "node");
     const sleepShim = path.join(fakeBin, "sleep");
     const fixtureReadyPath = path.join(parent, "fixture-log-ready");
+    let command: ReturnType<typeof runSweepShellUntilSettled> | undefined;
+    let cleanup: Promise<void> | undefined;
+    const close = () =>
+      (cleanup ??= (async () => {
+        await command?.catch(() => {});
+        rmSync(parent, { force: true, recursive: true });
+      })());
+    onTestFinished(close);
     try {
       mkdirSync(fakeBin, { recursive: true });
       mkdirSync(fixtureDir, { recursive: true });
@@ -1174,8 +1217,8 @@ exit "$status"
           "printf 'DO_NOT_DUMP_CLAWHUB_PREFIX\\n'",
           "head -c 2048 /dev/zero | tr '\\0' x",
           "printf '\\nFIXTURE_TAIL_MARKER\\n'",
-          ': >"$FIXTURE_READY_PATH"',
-          "/bin/sleep 30",
+          'printf "ready\\n" >&3',
+          "exec /bin/sleep 30",
           "",
         ].join("\n"),
       );
@@ -1184,19 +1227,20 @@ exit "$status"
         sleepShim,
         [
           "#!/usr/bin/env bash",
-          'for _ in $(seq 1 "$FIXTURE_READY_WAIT_ATTEMPTS"); do',
-          '  [[ -f "$FIXTURE_READY_PATH" ]] && exit 0',
-          "  /bin/sleep 0.01",
-          "done",
-          "exit 1",
+          "read -r ready <&3",
+          '[[ "$ready" == ready ]] || exit 1',
+          "# Startup and cleanup share this shim, so keep readiness available for every call.",
+          'printf "%s\\n" "$ready" >&3',
           "",
         ].join("\n"),
       );
       chmodSync(sleepShim, 0o755);
 
-      const result = runSweepShell(
+      command = runSweepShellUntilSettled(
         `
 set -euo pipefail
+mkfifo "$FIXTURE_READY_PATH"
+exec 3<>"$FIXTURE_READY_PATH"
 export PATH="$FAKE_BIN:$PATH"
 export KITCHEN_SINK_SWEEP_SOURCE_ONLY=1
 export KITCHEN_SINK_TMP_DIR="$SCRATCH_ROOT"
@@ -1214,17 +1258,18 @@ exit "$status"
           FAKE_BIN: fakeBin,
           FIXTURE_DIR: fixtureDir,
           FIXTURE_READY_PATH: fixtureReadyPath,
-          FIXTURE_READY_WAIT_ATTEMPTS: String(FIXTURE_READY_WAIT_ATTEMPTS),
           SCRATCH_ROOT: scratchRoot,
         },
+        signal,
       );
+      const result = await command;
 
       expect(result.status).not.toBe(0);
       expect(result.stdout).toContain("truncated: showing last 64");
       expect(result.stdout).toContain("FIXTURE_TAIL_MARKER");
       expect(result.stdout).not.toContain("DO_NOT_DUMP_CLAWHUB_PREFIX");
     } finally {
-      rmSync(parent, { force: true, recursive: true });
+      await close();
     }
   });
 });

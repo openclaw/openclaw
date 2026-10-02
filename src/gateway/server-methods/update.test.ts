@@ -213,6 +213,7 @@ describe("update.run acknowledgement", () => {
           message: `⬆️ Updating OpenClaw 1.0.0 → ${managed ? "2.0.0" : "the latest release"}. The gateway stays available while the update is validated; you'll get a message here when it finishes.`,
           deliveryIntentId: expect.stringMatching(/^update-run-ack:/),
         }),
+        expect.any(Object),
       );
     },
   );
@@ -235,6 +236,7 @@ describe("update.run acknowledgement", () => {
     expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({ to: "C0456DEF" }),
+      expect.any(Object),
     );
     expect(sentinelState.capturedPayload).toBeUndefined();
   });
@@ -287,6 +289,7 @@ describe("update.run acknowledgement", () => {
       expect.objectContaining({
         message: "⏳ Restarting the gateway now (v1.0.0 → v2.0.0)…",
       }),
+      expect.any(Object),
     );
   });
 

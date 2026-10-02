@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
 import { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
@@ -10,9 +11,9 @@ import {
   FaceTimeHelperAmbiguousError,
   projectCompleteFaceTimeAbsence,
   projectFaceTimeNativeAction,
-  type FaceTimeHelperSocketServer,
   type HelperActionResult,
-} from "./helper-rpc.js";
+} from "./helper-results.js";
+import type { FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import { terminateExactCarrierProcesses } from "./runtime-carrier-process.js";
 import type { ActiveFaceTimeCall } from "./runtime-state.js";
 import { startFaceTimeTalkDriver } from "./talk-driver.js";
@@ -256,10 +257,7 @@ export function createFaceTimeCallControl(params: {
                 ),
             });
           const first = projectCompleteFaceTimeAbsence(await inspect());
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 100);
-            timer.unref?.();
-          });
+          await sleepWithAbort(100, undefined, { ref: false });
           const second = projectCompleteFaceTimeAbsence(await inspect());
           return (
             first.topologyGeneration === second.topologyGeneration &&
@@ -320,10 +318,7 @@ export function createFaceTimeCallControl(params: {
           ) {
             return true;
           }
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 1_000);
-            timer.unref?.();
-          });
+          await sleepWithAbort(1_000, undefined, { ref: false });
         }
         return true;
       })(),
@@ -379,18 +374,9 @@ export function createFaceTimeCallControl(params: {
           },
           async onFailure(error) {
             const failureReason = `talk-failed: ${formatErrorMessage(error)}`;
-            if (!call.talk) {
-              const carrierClosed = await waitForStartupCarrierHangup(call, failureReason);
-              if (carrierClosed) {
-                queueMicrotask(() => {
-                  void closeCall(call, failureReason);
-                });
-              }
-              return carrierClosed;
-            }
-            const carrierClosed = await attemptCarrierHangup(call, failureReason, {
-              closeLocal: false,
-            });
+            const carrierClosed = call.talk
+              ? await attemptCarrierHangup(call, failureReason, { closeLocal: false })
+              : await waitForStartupCarrierHangup(call, failureReason);
             if (carrierClosed) {
               queueMicrotask(() => {
                 void closeCall(call, failureReason);

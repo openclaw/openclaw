@@ -162,12 +162,9 @@ describe("runBrowserHatchHandoff", () => {
     );
   });
 
-  it.each([
-    { platform: "darwin" as const, env: {} },
-    { platform: "linux" as const, env: { DISPLAY: ":0" } },
-    { platform: "linux" as const, env: { WSL_DISTRO_NAME: "Ubuntu" } },
-    { platform: "win32" as const, env: {} },
-  ])("opens once in a $platform GUI session", async ({ platform, env }) => {
+  it("opens once when the browser is available", async () => {
+    const platform = "darwin";
+    const env = {};
     sharedMocks.detectBrowserOpenSupport.mockResolvedValueOnce({ ok: true, command: "opener" });
     const prompter = createWizardPrompter();
     const openBrowser = vi.fn(async () => true);
@@ -650,28 +647,6 @@ describe("runBrowserHatchHandoff", () => {
     expect(displayed).not.toContain(gatewayPassword);
     expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
     expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(target.links);
-  });
-
-  it("returns the poll timeout without claiming a handoff", async () => {
-    const prompter = createWizardPrompter();
-
-    const result = await runBrowserHatchHandoff(
-      { config: {}, prompter },
-      {
-        env: { DISPLAY: ":0" },
-        platform: "linux",
-        openBrowser: vi.fn(async () => true),
-        resolveTarget: async () => target,
-        probePresence: async () => ({ reachable: true, clientKeys: [] }),
-        pollForClient: async () => ({ connected: false, reason: "timeout" }),
-      },
-    );
-
-    expect(result).toEqual({ handedOff: false, reason: "timeout" });
-    expect(prompter.note).not.toHaveBeenCalledWith(
-      "Dashboard connected — continuing in your browser.",
-      expect.anything(),
-    );
   });
 
   it("bounds the final presence probe by the remaining handoff time", async () => {

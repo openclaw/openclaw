@@ -4,6 +4,7 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerWebPushSubscription } from "../../infra/push-web.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
 import { readUserProfileIdentity } from "../../state/user-profile-list.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import {
@@ -11,7 +12,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "../device-revocation.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
-import { createRequiredSharedGatewaySessionGenerationReader } from "../server-shared-auth-generation.js";
+import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -39,6 +40,10 @@ vi.mock("../../infra/push-web.js", () => ({
 }));
 vi.mock("../../state/user-profiles.js", () => ({ resolveUserProfileId: vi.fn() }));
 vi.mock("../../state/user-profile-list.js", () => ({ readUserProfileIdentity: vi.fn() }));
+vi.mock("../../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/user-channel-identity-operations.js")>()),
+  prepareUserProfileSelectionAuthority: vi.fn(),
+}));
 vi.mock("../../state/user-preferences.js", () => ({
   getUserPreferences: vi.fn(),
   setUserPreferences: vi.fn(),
@@ -67,6 +72,16 @@ describe("Web Push router authority at the worker grant", () => {
   ] as const)("keeps profile SQL outside the grant for %s", async (scenario) => {
     let inGrant = false;
     const forbiddenGrantReads = vi.fn();
+    vi.mocked(prepareUserProfileSelectionAuthority).mockImplementation(async (profileId) => {
+      if (inGrant) {
+        forbiddenGrantReads();
+        throw new Error("profile authority acquisition attempted during worker admission");
+      }
+      return {
+        profileId: profileId === "retired-profile" ? "profile-owner" : profileId,
+        isCurrent: () => true,
+      };
+    });
     vi.mocked(resolveUserProfileId).mockImplementation((profileId) => {
       if (inGrant) {
         forbiddenGrantReads();
@@ -147,12 +162,10 @@ describe("Web Push router authority at the worker grant", () => {
     const context = createDirectChatContext({ isConnectionActive, getClientConnIds });
     const harness = createDispatchTestHarness({
       connId: "original-connection",
-      getRequiredSharedGatewaySessionGeneration: createRequiredSharedGatewaySessionGenerationReader(
-        {
-          current: "generation-a",
-          required: null,
-        },
-      ),
+      getRequiredSharedGatewaySessionGeneration: new SharedGatewaySessionGenerationState({
+        current: "generation-a",
+        required: null,
+      }).reader,
       buildRequestContext: () => context,
       extraHandlers: pushHandlers,
     });
@@ -176,6 +189,9 @@ describe("Web Push router authority at the worker grant", () => {
           throw new Error("router returned before storage admission");
         }),
       ]);
+      expect(prepareUserProfileSelectionAuthority).toHaveBeenCalledWith(
+        client.authenticatedUserProfile?.profileId,
+      );
       expect(resolveUserProfileId).toHaveBeenCalled();
       expect(persisted).not.toHaveBeenCalled();
       if (scenario === "transport retirement") {

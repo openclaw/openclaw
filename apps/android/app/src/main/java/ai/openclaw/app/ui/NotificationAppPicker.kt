@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 
-/** App entry shown in the notification-forwarding package picker. */
 data class InstalledApp(
   val label: String,
   val packageName: String,
@@ -24,25 +23,13 @@ internal fun queryInstalledApps(
     packageManager
       .queryIntentActivities(launcherIntent, PackageManager.MATCH_ALL)
       .asSequence()
-      .mapNotNull {
-        it.activityInfo
-          ?.packageName
-          ?.trim()
-          ?.takeIf(String::isNotEmpty)
-      }.toMutableSet()
-
-  val recentNotificationPackages =
-    DeviceNotificationListenerService
-      .recentPackages(context)
-      .asSequence()
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      .toList()
+      .mapNotNull { it.activityInfo?.packageName }
+      .toSet()
 
   val candidatePackages =
     resolveNotificationCandidatePackages(
       launcherPackages = launcherPackages,
-      recentPackages = recentNotificationPackages,
+      recentPackages = DeviceNotificationListenerService.recentPackages(context),
       configuredPackages = configuredPackages,
       appPackageName = context.packageName,
     )

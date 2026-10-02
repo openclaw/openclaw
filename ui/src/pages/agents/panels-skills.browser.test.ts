@@ -3,7 +3,7 @@ import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
-import { renderAgentSkills } from "./panels-tools-skills.ts";
+import { renderAgentSkills } from "./panels-skills.ts";
 
 installBrowserHistoryIsolation();
 

@@ -3,13 +3,15 @@ import path from "node:path";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
-import { createMcpOAuthClientProvider, withMcpOAuthLeaseSignal } from "./mcp-oauth-provider.js";
+import { withMcpOAuthLeaseSignal } from "./mcp-oauth-provider.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import { clearMcpOAuthCredentials, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
+import { withMcpOAuthProviderForTest } from "./mcp-oauth.test-support.js";
 
 const authMock = vi.hoisted(() => vi.fn());
 const FRESH_ACCESS = "test-token-placeholder";
@@ -27,10 +29,12 @@ async function withTempHome<T>(
   return withBaseTempHome(async (home) => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     try {
       return await run(home);
     } finally {
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
@@ -42,12 +46,16 @@ async function withTempHome<T>(
 }
 
 describe("MCP OAuth provider", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     authMock.mockReset();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
-  afterEach(() => closeOpenClawStateDatabaseForTest());
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 
   it("aborts OAuth fetches when their owning lease signal is lost", async () => {
     const lease = new AbortController();
@@ -77,15 +85,19 @@ describe("MCP OAuth provider", () => {
   it("returns a fresh stored access token without refreshing it", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveTokens({
-          access_token: "test-token-placeholder",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveTokens({
+              access_token: "test-token-placeholder",
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: 3600,
+            });
+          },
+        );
 
         await expect(
           resolveMcpOAuthAccessToken({
@@ -108,12 +120,13 @@ describe("MCP OAuth provider", () => {
   it("aborts an in-flight refresh, preserves tokens, and releases its lease", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({ identity: IDENTITY });
-        await provider.saveTokens({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: -1,
+        await withMcpOAuthProviderForTest({ identity: IDENTITY }, async (provider) => {
+          await provider.saveTokens({
+            access_token: "decoy-token",
+            refresh_token: "test-auth-token",
+            token_type: "Bearer",
+            expires_in: -1,
+          });
         });
         let signalStarted: (() => void) | undefined;
         const started = new Promise<void>((resolve) => {
@@ -152,7 +165,12 @@ describe("MCP OAuth provider", () => {
 
         await expect(refresh).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
         expect(refreshSignal).toMatchObject({ aborted: true });
-        expect(provider.tokens()).toMatchObject({
+        expect(
+          await withMcpOAuthProviderForTest(
+            { identity: IDENTITY },
+            async (provider) => await provider.tokens(),
+          ),
+        ).toMatchObject({
           access_token: "decoy-token",
           refresh_token: "test-auth-token",
         });
@@ -172,15 +190,19 @@ describe("MCP OAuth provider", () => {
   it("refreshes an expired stored access token before projecting it", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveTokens({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: -1,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveTokens({
+              access_token: "decoy-token",
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: -1,
+            });
+          },
+        );
         authMock.mockImplementationOnce(async (refreshProvider) => {
           await refreshProvider.saveTokens({
             access_token: "gateway-token",
@@ -217,15 +239,19 @@ describe("MCP OAuth provider", () => {
   it("serializes concurrent refreshes for the same OAuth credential store", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveTokens({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: -1,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveTokens({
+              access_token: "decoy-token",
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: -1,
+            });
+          },
+        );
 
         let signalRefreshStarted: (() => void) | undefined;
         const refreshStarted = new Promise<void>((resolve) => {
@@ -276,15 +302,19 @@ describe("MCP OAuth provider", () => {
   it("does not restore a stale challenge after a concurrent refresh rotates the token", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveTokens({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveTokens({
+              access_token: "decoy-token",
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: 3600,
+            });
+          },
+        );
 
         let signalRefreshStarted: (() => void) | undefined;
         const refreshStarted = new Promise<void>((resolve) => {
@@ -326,7 +356,9 @@ describe("MCP OAuth provider", () => {
           ROTATED_ACCESS,
         ]);
         expect(authMock).toHaveBeenCalledOnce();
-        expect(readMcpOAuthStore(IDENTITY.storeKey).pendingAuthorizationChallenge).toBeUndefined();
+        expect(
+          (await readMcpOAuthStore(IDENTITY.storeKey)).pendingAuthorizationChallenge,
+        ).toBeUndefined();
       },
       {
         prefix: "openclaw-mcp-oauth-concurrent-challenge-",
@@ -339,15 +371,19 @@ describe("MCP OAuth provider", () => {
   it("does not let a completed refresh resurrect a concurrent logout", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveTokens({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: -1,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveTokens({
+              access_token: "decoy-token",
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: -1,
+            });
+          },
+        );
         let signalStarted: (() => void) | undefined;
         const started = new Promise<void>((resolve) => {
           signalStarted = resolve;
@@ -377,7 +413,14 @@ describe("MCP OAuth provider", () => {
 
         await expect(refresh).resolves.toBe(ROTATED_ACCESS);
         await logout;
-        expect(provider.tokens()).toBeUndefined();
+        expect(
+          await withMcpOAuthProviderForTest(
+            {
+              identity: IDENTITY,
+            },
+            async (provider) => await provider.tokens(),
+          ),
+        ).toBeUndefined();
       },
       {
         prefix: "openclaw-mcp-oauth-refresh-logout-",
@@ -390,15 +433,19 @@ describe("MCP OAuth provider", () => {
   it("refreshes a resource-rejected token even while its expiry is fresh", async () => {
     await withTempHome(
       async () => {
-        const provider = createMcpOAuthClientProvider({
-          identity: IDENTITY,
-        });
-        await provider.saveTokens({
-          access_token: "decoy-token",
-          refresh_token: "test-auth-token",
-          token_type: "Bearer",
-          expires_in: 3600,
-        });
+        await withMcpOAuthProviderForTest(
+          {
+            identity: IDENTITY,
+          },
+          async (provider) => {
+            await provider.saveTokens({
+              access_token: "decoy-token",
+              refresh_token: "test-auth-token",
+              token_type: "Bearer",
+              expires_in: 3600,
+            });
+          },
+        );
         authMock.mockImplementationOnce(async (refreshProvider) => {
           await refreshProvider.saveTokens({
             access_token: "gateway-token",
@@ -421,7 +468,9 @@ describe("MCP OAuth provider", () => {
           }),
         ).resolves.toBe(ROTATED_ACCESS);
         expect(authMock).toHaveBeenCalledOnce();
-        expect(readMcpOAuthStore(IDENTITY.storeKey).pendingAuthorizationChallenge).toBeUndefined();
+        expect(
+          (await readMcpOAuthStore(IDENTITY.storeKey)).pendingAuthorizationChallenge,
+        ).toBeUndefined();
       },
       {
         prefix: "openclaw-mcp-oauth-rejected-token-",

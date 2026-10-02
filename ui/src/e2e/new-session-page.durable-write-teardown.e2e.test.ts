@@ -100,7 +100,11 @@ suite.define(() => {
           return originalTransaction.apply(this, args);
         } as IDBDatabase["transaction"];
       });
-      await installMockGateway(page, { attachmentMaxBytes: DURABLE_ATTACHMENT_CAP_BYTES });
+      // One send's frame bounds the staged batch too; give it room for the near-cap draft file.
+      await installMockGateway(page, {
+        attachmentMaxBytes: DURABLE_ATTACHMENT_CAP_BYTES,
+        maxPayload: 40 * 1024 * 1024,
+      });
       await page.goto(`${suite.server.baseUrl}new`);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "near-durable-cap.txt",

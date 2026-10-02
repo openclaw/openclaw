@@ -1,7 +1,6 @@
-// Shared session-store writer queue state and test-only drains.
+// Shared session-store writer queue state.
 import {
   clearStoreWriterQueuesForTest,
-  drainStoreWriterQueuesForTest,
   type StoreWriterQueue,
 } from "../../shared/store-writer-queue.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission.js";
@@ -18,14 +17,4 @@ export function clearSessionStoreCacheForTest(): void {
     SQLITE_SESSION_WRITER_QUEUES,
     "SQLite session store queue cleared for test",
   );
-}
-
-export async function drainSessionStoreWriterQueuesForTest(): Promise<void> {
-  await Promise.all([
-    drainStoreWriterQueuesForTest(WRITER_QUEUES, "session store queue cleared for test"),
-    drainStoreWriterQueuesForTest(
-      SQLITE_SESSION_WRITER_QUEUES,
-      "SQLite session store queue cleared for test",
-    ),
-  ]);
 }

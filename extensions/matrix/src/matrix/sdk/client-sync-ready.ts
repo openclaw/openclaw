@@ -42,35 +42,30 @@ export async function waitForMatrixInitialSyncReady(params: {
       }
     };
 
-    const settleResolve = () => {
+    const settle = (error?: Error) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      resolve();
-    };
-
-    const settleReject = (error: Error) => {
-      if (settled) {
-        return;
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
       }
-      settled = true;
-      cleanup();
-      reject(error);
     };
 
     const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
       if (isMatrixReadySyncState(state)) {
-        settleResolve();
+        settle();
         return;
       }
       if (isMatrixAccessTokenInvalidatedError(error)) {
-        settleReject(error instanceof Error ? error : new Error("Matrix access token invalidated"));
+        settle(error instanceof Error ? error : new Error("Matrix access token invalidated"));
         return;
       }
       if (isMatrixTerminalSyncState(state)) {
-        settleReject(
+        settle(
           new Error(
             error instanceof Error && error.message
               ? error.message
@@ -80,12 +75,10 @@ export async function waitForMatrixInitialSyncReady(params: {
       }
     };
 
-    const onUnexpectedError = (error: Error) => {
-      settleReject(error);
-    };
+    const onUnexpectedError = settle;
 
     const onAbort = () => {
-      settleReject(createMatrixStartupAbortError());
+      settle(createMatrixStartupAbortError());
     };
 
     params.emitter.on("sync.state", onSyncState);
@@ -96,9 +89,7 @@ export async function waitForMatrixInitialSyncReady(params: {
     }
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     timeoutId = setTimeout(() => {
-      settleReject(
-        new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`),
-      );
+      settle(new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`));
     }, timeoutMs);
     timeoutId.unref?.();
   });

@@ -92,6 +92,8 @@ export type WorkerSshIdentity =
 
 /** Durable context supplied when a worker provider resolves the identity it minted. */
 export type WorkerSshIdentityRequest = {
+  /** Optional live invocation guard; core supplies it for identity resolution. */
+  assertCurrent?: () => void;
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;
@@ -102,9 +104,11 @@ export type WorkerDesktopApp =
   | {
       id: "browser";
       executablePath: string;
+      /** Fixed provider-owned arguments, passed directly without a shell. */
+      args?: string[];
       cdpPort: number;
     }
-  | { id: "terminal"; executablePath: string };
+  | { id: "terminal"; executablePath: string; args?: string[] };
 
 /** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
 export type WorkerDesktopEndpoint = {
@@ -134,6 +138,8 @@ export type WorkerNodeRuntimeIdentity = {
 };
 
 type WorkerNodeBootstrapAccess = {
+  /** Core-owned command window for downloading and installing this grant's artifacts. */
+  bootstrapTimeoutMs?: number;
   /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
     url: string;
@@ -338,6 +344,8 @@ export type WorkerProvider = {
       machineClass?: string;
       os?: string;
       nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
+      /** Upper bound per runtime preparation/enrollment phase, including the node connection wait. */
+      nodeBootstrapTimeoutMs?: number;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
       project?: {
@@ -393,7 +401,10 @@ export type WorkerProvider = {
     ...args: Parameters<WorkerProvider["provision"]>
   ) => Promise<() => Promise<WorkerLease>>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
-  resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
+  resolveProvisionTimeoutMs?: (
+    profile: WorkerProfile,
+    options?: { nodeBootstrapTimeoutMs?: number },
+  ) => number;
   /**
    * Throws on transient/indeterminate observation failures. `unknown` means the provider no
    * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`

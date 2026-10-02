@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { classifyReleaseGhTransportError } from "./full-release-validation-policy.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import { sleep as defaultSleep } from "./lib/sleep.mjs";
 import { validateForwardAncestry } from "./pr-lib/crabbox-gate-contract.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -9,6 +11,7 @@ const BROKER_WORKFLOW = ".github/workflows/frv-proof-broker.yml";
 const FIXTURE_WORKFLOW = ".github/workflows/frv-proof-fixture.yml";
 const FIXTURE_WORKFLOW_ID = "frv-proof-fixture.yml";
 const FIXTURE_NAME = "FRV Proof Fixture";
+const FIXTURE_JOB_NAME = "Fail once, then pass";
 const FIXTURE_OPERATION = "noop";
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
 const POLL_INTERVAL_MS = 5_000;
@@ -138,14 +141,6 @@ function validatePullRequest(value, context) {
   }
 }
 
-function validateLandedAncestry(value, context) {
-  validateForwardAncestry(
-    value,
-    { baseSha: context.landedSha, headSha: context.workflowSha },
-    "landed controller ancestry",
-  );
-}
-
 function validateFixtureWorkflow(value) {
   const workflow = record(value, "fixture workflow");
   if (
@@ -264,7 +259,29 @@ async function waitForRerun(api, context, fixtureRunId, sleep) {
       runId: fixtureRunId,
     });
   }
-  throw new Error("timed out waiting for the failed-job rerun");
+  throw new Error("timed out waiting for the targeted job rerun");
+}
+
+async function readFailedFixtureJob(api, context, fixtureRunId) {
+  const response = record(
+    await api.request("GET", `/actions/runs/${fixtureRunId}/attempts/1/jobs?per_page=100`),
+    "fixture jobs",
+  );
+  if (response.total_count !== 1 || !Array.isArray(response.jobs) || response.jobs.length !== 1) {
+    throw new Error("fixture jobs must contain exactly the fixed failed job");
+  }
+  const job = record(response.jobs[0], "fixture job");
+  if (
+    job.name !== FIXTURE_JOB_NAME ||
+    job.run_id !== fixtureRunId ||
+    job.head_sha !== context.workflowSha ||
+    (job.run_attempt !== undefined && job.run_attempt !== 1) ||
+    job.status !== "completed" ||
+    job.conclusion !== "failure"
+  ) {
+    throw new Error("fixture job does not match the failed first attempt");
+  }
+  return requiredPositiveInteger(job.id, "fixture job id");
 }
 
 async function validateMutationAuthority(api, context) {
@@ -273,25 +290,18 @@ async function validateMutationAuthority(api, context) {
     context.actor,
   );
   validatePullRequest(await api.request("GET", `/pulls/${context.prNumber}`), context);
-  validateLandedAncestry(
+  validateForwardAncestry(
     await api.request("GET", `/compare/${context.landedSha}...${context.workflowSha}`),
-    context,
+    { baseSha: context.landedSha, headSha: context.workflowSha },
+    "landed controller ancestry",
   );
 }
 
-async function validateFixturePrerequisite(api) {
-  validateFixtureWorkflow(await api.request("GET", `/actions/workflows/${FIXTURE_WORKFLOW_ID}`));
-}
-
-async function validateTrustedMain(api, context) {
-  validateMainRef(await api.request("GET", "/git/ref/heads/main"), context.workflowSha);
-}
-
-export async function runProofBroker({ api, env, event, sleep = setTimeoutPromise }) {
+export async function runProofBroker({ api, env, event, sleep = defaultSleep }) {
   const context = validateBrokerRequest(event, env);
-  await validateFixturePrerequisite(api);
+  validateFixtureWorkflow(await api.request("GET", `/actions/workflows/${FIXTURE_WORKFLOW_ID}`));
   await validateMutationAuthority(api, context);
-  await validateTrustedMain(api, context);
+  validateMainRef(await api.request("GET", "/git/ref/heads/main"), context.workflowSha);
 
   await api.request("POST", `/actions/workflows/${FIXTURE_WORKFLOW_ID}/dispatches`, {
     inputs: {
@@ -302,12 +312,41 @@ export async function runProofBroker({ api, env, event, sleep = setTimeoutPromis
   });
   const initialRun = await waitForInitialRun(api, context, sleep);
   const fixtureRunId = requiredPositiveInteger(initialRun.id, "fixture run id");
+  const fixtureJobId = await readFailedFixtureJob(api, context, fixtureRunId);
+  validateFixtureRun(await api.request("GET", `/actions/runs/${fixtureRunId}`), {
+    attempt: 1,
+    branch: "main",
+    conclusion: "failure",
+    correlation: context.correlation,
+    headSha: context.workflowSha,
+    repository: context.repository,
+    runId: fixtureRunId,
+  });
   await validateMutationAuthority(api, context);
-  await api.request("POST", `/actions/runs/${fixtureRunId}/rerun-failed-jobs`);
-  await waitForRerun(api, context, fixtureRunId, sleep);
+  let mutationError;
+  try {
+    await api.request("POST", `/actions/jobs/${fixtureJobId}/rerun`);
+  } catch (error) {
+    if (classifyReleaseGhTransportError(error) === "hard") {
+      throw error;
+    }
+    mutationError = error;
+  }
+  try {
+    await waitForRerun(api, context, fixtureRunId, sleep);
+  } catch (error) {
+    if (!mutationError) {
+      throw error;
+    }
+    throw new Error(
+      `uncertain targeted job rerun was not reconciled (run ${fixtureRunId}, job ${fixtureJobId}): ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   return {
     actor: context.actor,
     correlation: context.correlation,
+    fixtureJobId,
     fixtureRunAttempt: 2,
     fixtureRunId,
     landedSha: context.landedSha,
@@ -317,12 +356,6 @@ export async function runProofBroker({ api, env, event, sleep = setTimeoutPromis
     sourceRef: "refs/heads/main",
     workflowSha: context.workflowSha,
   };
-}
-
-function setTimeoutPromise(milliseconds) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
 }
 
 export function createGitHubApi({ repository, token, fetchImpl = fetch }) {
@@ -345,12 +378,13 @@ export function createGitHubApi({ repository, token, fetchImpl = fetch }) {
       });
       if (!response.ok) {
         const detail = (await response.text()).slice(0, 500);
-        throw new Error(`GitHub API ${method} ${path} failed (${response.status}): ${detail}`);
+        throw new Error(`GitHub API ${method} ${path} failed (HTTP ${response.status}): ${detail}`);
       }
       if (response.status === 204) {
         return null;
       }
-      return response.json();
+      const text = await response.text();
+      return text ? JSON.parse(text) : null;
     },
   };
 }
@@ -370,12 +404,13 @@ async function main() {
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
       [
-        "## FRV failed-job rerun proof",
+        "## FRV targeted job rerun proof",
         "",
         `- Pull request: #${receipt.prNumber}`,
         `- Landed controller: \`${receipt.landedSha}\``,
         `- Trusted broker SHA: \`${receipt.workflowSha}\``,
         `- Fixture run: \`${receipt.fixtureRunId}\`, attempt \`2\``,
+        `- Rerun job: \`${receipt.fixtureJobId}\`, source attempt \`1\``,
         "- Fixed operation: `noop`",
         "- Fixture source: trusted `main` at the broker workflow SHA",
         "",

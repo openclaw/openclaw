@@ -42,6 +42,45 @@ it("does not repaint a cancelled placement dialog when its catalog finishes load
   expect(host.childElementCount).toBe(0);
 });
 
+it("orders Move profiles by backend while keeping local selection and blockers", async () => {
+  const result = showSessionPlacementTargetDialog({
+    mode: "move",
+    sessionLabel: "Example session",
+    activeRun: false,
+    profileDisabledReason: (profile) => (profile.id === "production" ? "Unavailable" : undefined),
+    loadCatalog: async () => ({
+      devices: [],
+      profiles: [
+        { id: "AWS", providerId: "crabbox", providerDisplayId: "local-container" },
+        { id: "Azure", providerId: "crabbox", providerDisplayId: "incus" },
+        { id: "custom", providerId: "custom-worker" },
+        { id: "production", providerId: "crabbox", providerDisplayId: "aws" },
+        { id: "local", providerId: "crabbox", providerDisplayId: "machine0" },
+      ],
+    }),
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+  try {
+    expect(
+      [...modal.querySelectorAll('[data-value^="cloud:"]')].map((row) =>
+        row.getAttribute("data-value"),
+      ),
+    ).toEqual(["cloud:local", "cloud:production", "cloud:AWS", "cloud:Azure", "cloud:custom"]);
+    expect(
+      modal.querySelector<HTMLButtonElement>('[data-value="cloud:production"]')!.disabled,
+    ).toBe(true);
+    modal.querySelector<HTMLButtonElement>('[data-value="cloud:AWS"]')!.click();
+    expect(modal.querySelector('[data-value="cloud:AWS"]')?.getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    modal.querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
+    await expect(result).resolves.toEqual({ kind: "profile", profileId: "AWS" });
+  } finally {
+    modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
+    await result;
+  }
+});
+
 it("moves with the selected OS and limits machine choices to that OS", async () => {
   const result = showSessionPlacementTargetDialog({
     mode: "move",

@@ -157,18 +157,21 @@ function containsDiscoverableSkill(
   opts: {
     maxCandidateDirs: number;
     skipTopLevelDirName?: string;
+    includeRoot?: boolean;
+    symlinkCandidates?: boolean;
   },
 ): boolean {
   const discoveryBudget = createSkillDiscoveryBudget(opts.maxCandidateDirs);
   const queue: Array<{ dir: string; depth: number }> = [{ dir, depth: 0 }];
   for (const candidate of queue) {
-    if (candidate.depth > 0 && hasSkillFileCandidate(candidate.dir)) {
+    if ((opts.includeRoot || candidate.depth > 0) && hasSkillFileCandidate(candidate.dir)) {
       return true;
     }
     if (candidate.depth >= MAX_GROUPED_SKILL_SCAN_DEPTH) {
       continue;
     }
     if (
+      opts.symlinkCandidates &&
       hasCandidateSymlinkChild(
         candidate.dir,
         candidate.depth === 0 ? opts.skipTopLevelDirName : undefined,
@@ -237,24 +240,18 @@ function buildEscapedSkillPathReason(params: { source: string; candidatePath: st
   consoleHint: string;
 } {
   const candidateIsSymlink = isSymlinkPath(params.candidatePath);
-  if (params.source === "openclaw-bundled" && candidateIsSymlink) {
-    return {
-      reason: "bundled-symlink-escape",
-      consoleHint:
-        "reason=bundled-symlink-escape hint=likely-stray-local-symlink-or-checkout-mutation",
-    };
-  }
-  if (candidateIsSymlink) {
-    return { reason: "symlink-escape", consoleHint: "reason=symlink-escape" };
-  }
-  if (params.source === "openclaw-bundled") {
-    return {
-      reason: "bundled-root-escape",
-      consoleHint:
-        "reason=bundled-root-escape hint=likely-stray-local-symlink-or-checkout-mutation",
-    };
-  }
-  return { reason: "path-escape", consoleHint: "reason=path-escape" };
+  const bundled = params.source === "openclaw-bundled";
+  const reason = bundled
+    ? candidateIsSymlink
+      ? "bundled-symlink-escape"
+      : "bundled-root-escape"
+    : candidateIsSymlink
+      ? "symlink-escape"
+      : "path-escape";
+  return {
+    reason,
+    consoleHint: `reason=${reason}${bundled ? " hint=likely-stray-local-symlink-or-checkout-mutation" : ""}`,
+  };
 }
 
 function warnEscapedSkillPath(params: {
@@ -348,30 +345,15 @@ function resolveNestedSkillsRoot(dir: string, maxEntriesToScan: number): string 
     containsDiscoverableSkill(dir, {
       maxCandidateDirs: scanLimit,
       skipTopLevelDirName: "skills",
+      symlinkCandidates: true,
     })
   ) {
     return dir;
   }
 
-  const discoveryBudget = createSkillDiscoveryBudget(scanLimit);
-  const queue: Array<{ dir: string; depth: number }> = [{ dir: nested, depth: 0 }];
-  for (const candidate of queue) {
-    if (hasSkillFileCandidate(candidate.dir)) {
-      return nested;
-    }
-    if (candidate.depth >= MAX_GROUPED_SKILL_SCAN_DEPTH) {
-      continue;
-    }
-    const childDirs = listChildDirectories(candidate.dir, {
-      budget: discoveryBudget,
-      followSymlinks: false,
-      maxCandidateDirs: scanLimit,
-    }).dirs;
-    for (const childDir of childDirs.toSorted().slice(0, scanLimit)) {
-      queue.push({ dir: path.join(candidate.dir, childDir), depth: candidate.depth + 1 });
-    }
-  }
-  return dir;
+  return containsDiscoverableSkill(nested, { maxCandidateDirs: scanLimit, includeRoot: true })
+    ? nested
+    : dir;
 }
 
 function shouldEnforceConfiguredSkillRootContainment(source: string): boolean {
@@ -398,14 +380,10 @@ function resolveSkillRootCandidatePath(params: {
     return tryRealpath(params.candidatePath);
   }
   return resolveContainedSkillPath({
-    source: params.source,
-    rootDir: params.rootDir,
-    rootRealPath: params.rootRealPath,
-    candidatePath: params.candidatePath,
+    ...params,
     allowedSymlinkTargetRealPaths: shouldUseConfiguredSymlinkTargets(params.source)
       ? params.allowedSymlinkTargetRealPaths
       : [],
-    onDiagnostic: params.onDiagnostic,
   });
 }
 
@@ -498,13 +476,37 @@ export function discoverSkillCandidates(params: {
   const baseDirIsNestedSkillsRoot = path.resolve(baseDir) === path.resolve(rootDir, "skills");
   const baseDirLooksLikeSkillsRoot = path.basename(baseDir) === "skills";
   const discoveryBudget = createSkillDiscoveryBudget(maxCandidatesPerRoot);
+  const reportTruncatedScan = (scan: ChildDirectoryScan, nestedDir?: string) => {
+    const candidateLimitReached = scan.dirs.length > maxCandidatesPerRoot;
+    discoveryBudget.truncated ||= candidateLimitReached;
+    if (!scan.truncated && !candidateLimitReached) {
+      return;
+    }
+    const subject = nestedDir ? "Nested skills directory" : "Skills root";
+    const reason = scan.truncated ? "looks suspiciously large" : "has many entries";
+    skillsLogger.warn(`${subject} ${reason}, truncating discovery.`, {
+      dir: params.dir,
+      baseDir,
+      ...(nestedDir
+        ? { nestedDir, nestedChildDirCount: scan.dirs.length }
+        : { childDirCount: scan.dirs.length }),
+      ...(scan.truncated
+        ? {
+            scannedEntryCount: scan.scannedEntryCount,
+            maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
+          }
+        : {}),
+      maxCandidatesPerRoot: params.limits.maxCandidatesPerRoot,
+      maxSkillsLoadedPerSource: params.limits.maxSkillsLoadedPerSource,
+      ...(nestedDir ? { maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH } : {}),
+    });
+  };
   const childDirScan = listChildDirectories(baseDir, {
     budget: discoveryBudget,
     maxCandidateDirs: maxCandidatesPerRoot,
     onDiagnostic: params.onDiagnostic,
   });
   const childDirs = childDirScan.dirs.toSorted();
-  discoveryBudget.truncated ||= childDirs.length > maxCandidatesPerRoot;
   const limitedChildren =
     maxSkillsLoadedPerSource === 0 ? [] : childDirs.slice(0, maxCandidatesPerRoot);
   if (
@@ -515,25 +517,7 @@ export function discoverSkillCandidates(params: {
     limitedChildren.push("skills");
   }
 
-  if (childDirScan.truncated) {
-    skillsLogger.warn("Skills root looks suspiciously large, truncating discovery.", {
-      dir: params.dir,
-      baseDir,
-      childDirCount: childDirs.length,
-      scannedEntryCount: childDirScan.scannedEntryCount,
-      maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
-      maxCandidatesPerRoot: params.limits.maxCandidatesPerRoot,
-      maxSkillsLoadedPerSource: params.limits.maxSkillsLoadedPerSource,
-    });
-  } else if (childDirs.length > maxCandidatesPerRoot) {
-    skillsLogger.warn("Skills root has many entries, truncating discovery.", {
-      dir: params.dir,
-      baseDir,
-      childDirCount: childDirs.length,
-      maxCandidatesPerRoot: params.limits.maxCandidatesPerRoot,
-      maxSkillsLoadedPerSource: params.limits.maxSkillsLoadedPerSource,
-    });
-  }
+  reportTruncatedScan(childDirScan);
 
   let configuredRootCandidate: CandidateSkillDir | undefined;
   if (!rootIsContainer && path.resolve(baseDir) !== rootDir && hasSkillFileCandidate(rootDir)) {
@@ -612,30 +596,7 @@ export function discoverSkillCandidates(params: {
       onDiagnostic: params.onDiagnostic,
     });
     const nestedChildren = nestedChildScan.dirs;
-    discoveryBudget.truncated ||= nestedChildren.length > maxCandidatesPerRoot;
-    if (nestedChildScan.truncated) {
-      skillsLogger.warn("Nested skills directory looks suspiciously large, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        nestedDir: candidate.skillDir,
-        nestedChildDirCount: nestedChildren.length,
-        scannedEntryCount: nestedChildScan.scannedEntryCount,
-        maxEntriesToScan: resolveRawEntryScanLimit(maxCandidatesPerRoot),
-        maxCandidatesPerRoot: params.limits.maxCandidatesPerRoot,
-        maxSkillsLoadedPerSource: params.limits.maxSkillsLoadedPerSource,
-        maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
-      });
-    } else if (nestedChildren.length > maxCandidatesPerRoot) {
-      skillsLogger.warn("Nested skills directory has many entries, truncating discovery.", {
-        dir: params.dir,
-        baseDir,
-        nestedDir: candidate.skillDir,
-        nestedChildDirCount: nestedChildren.length,
-        maxCandidatesPerRoot: params.limits.maxCandidatesPerRoot,
-        maxSkillsLoadedPerSource: params.limits.maxSkillsLoadedPerSource,
-        maxGroupedSkillScanDepth: MAX_GROUPED_SKILL_SCAN_DEPTH,
-      });
-    }
+    reportTruncatedScan(nestedChildScan, candidate.skillDir);
 
     for (const nestedName of nestedChildren.toSorted().slice(0, maxCandidatesPerRoot)) {
       scanQueue.push({

@@ -28,27 +28,15 @@ export function manualProviderActivation(
     : null;
 }
 
+export function revealManualProvider(root: ParentNode): void {
+  const input = root.querySelector<HTMLInputElement>('.model-setup__manual input[type="password"]');
+  root.querySelector("openclaw-modal-dialog")?.setReturnFocusTarget(input);
+  input?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
+}
+
 type WebAwesomeSelectEvent = CustomEvent<{
   item: HTMLElement & { checked?: boolean; value?: string };
 }>;
-
-function focusSelectedManualProvider(event: Event): void {
-  const dropdown = event.currentTarget as HTMLElement;
-  const options = Array.from(
-    dropdown.querySelectorAll<HTMLElement & { active: boolean }>(
-      "wa-dropdown-item[data-manual-provider]:not([disabled])",
-    ),
-  );
-  const selected = options.find((option) => option.hasAttribute("data-selected")) ?? options[0];
-  if (!selected) {
-    return;
-  }
-  for (const option of options) {
-    option.active = option === selected;
-  }
-  selected.focus({ preventScroll: true });
-  selected.scrollIntoView?.({ block: "nearest" });
-}
 
 function handleManualProviderKeydown(event: KeyboardEvent): void {
   const dropdown = event.currentTarget as HTMLElement & { open: boolean };
@@ -139,7 +127,6 @@ export function renderManualProviderPicker(
       aria-label=${t("modelSetup.manual.provider")}
       @wa-select=${(event: WebAwesomeSelectEvent) =>
         handleManualProviderSelect(event, props.manualProviderId, props.onManualProviderChange)}
-      @wa-after-show=${focusSelectedManualProvider}
       @keydown=${handleManualProviderKeydown}
     >
       <button
@@ -190,6 +177,7 @@ export function renderManualProviderPicker(
               type="checkbox"
               .checked=${selected}
               ?disabled=${props.actionsDisabled}
+              ?autofocus=${selected && !props.actionsDisabled}
               ${ref((element) => syncDropdownItemRadio(element, selected))}
             >
               <span slot="icon">

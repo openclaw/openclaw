@@ -1,13 +1,13 @@
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawPluginService, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../plugin-sdk/test-helpers/import-fresh.js";
+import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import { createPluginStateKeyedStore } from "../../plugin-state/plugin-state-store.js";
 import { resolvePluginModuleExport } from "../../plugins/module-export.js";
 import * as support from "./service.test-support.js";
 
@@ -35,7 +35,7 @@ function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
 }
 
 describe("Crabbox runtime preflight cleanup", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+  support.setupWorkerEnvironmentServiceSuite({ reuseReadWorkers: true });
   const pluginServices: OpenClawPluginService[] = [];
   async function registerProvider(): Promise<WorkerProvider> {
     let registered: WorkerProvider | undefined;
@@ -50,7 +50,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         id: "crabbox",
         runtime: createPluginRuntimeMock({
           state: {
-            openKeyedStore: (options) => createPluginStateKeyedStoreForTests("crabbox", options),
+            openKeyedStore: (options) => createPluginStateKeyedStore("crabbox", options),
           },
         }),
         rootDir: fileURLToPath(new URL("../../../extensions/crabbox/", import.meta.url)),
@@ -93,7 +93,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "0.56.0" });
+            return commandResult({ stdout: "999.0.0" });
           }
           if (argv[1] === "providers") {
             expect(argv.slice(1)).toEqual(["providers", "--json"]);
@@ -137,14 +137,14 @@ describe("Crabbox runtime preflight cleanup", () => {
   it.each(["restart reconciliation", "direct destroy"])(
     "retains unresolved legacy allocation responsibility after %s and cleanup restart",
     async (entrance) => {
-      const intent = support.testState.store.createIntent({
+      const intent = await support.testState.store.createIntent({
         environmentId: "worker-legacy-provision",
         providerId: "crabbox",
         profileId: "development",
         profileSnapshot: { settings: PROFILE },
         provisionOperationId: `provision:${"0".repeat(64)}`,
       });
-      const original = support.testState.store.transition({
+      const original = await support.testState.store.transition({
         environmentId: intent.environmentId,
         from: intent.state,
         to: "provisioning",
@@ -223,18 +223,11 @@ describe("Crabbox runtime preflight cleanup", () => {
     },
     { kind: "modes", name: "changed advertised modes" },
     { kind: "timeout", name: "invalid timeout metadata" },
-    ...[
-      "unknown flag: --lease-id",
-      "flag provided but not defined: -lease-id",
-      "provider=machine0 does not support fixed idempotent lease IDs",
-      'unknown provider "machine0"',
-      "provider=machine0 does not support warmup",
-      "provider=machine0 does not support status",
-      "provider=machine0 does not expose persistent status",
-      "provider=machine0 is one-shot; use crabbox run",
-      "provider=machine0 requires module source; use crabbox run --script",
-      "--class is not supported for provider=machine0",
-    ].map((stderr) => ({ kind: "cli", name: stderr, result: commandResult({ code: 2, stderr }) })),
+    {
+      kind: "cli",
+      name: "unknown flag: --lease-id",
+      result: commandResult({ code: 2, stderr: "unknown flag: --lease-id" }),
+    },
   ])("retains the original allocation after $name across restart", async (scenario) => {
     const profile = {
       ...PROFILE,
@@ -243,6 +236,8 @@ describe("Crabbox runtime preflight cleanup", () => {
     };
     support.getDevelopmentProfile().provider = "crabbox";
     support.getDevelopmentProfile().settings = profile;
+    // This replay fixture owns lifecycle commands; periodic heartbeats have separate coverage.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     let changed = false;
     let live = false;
     let leaseId = "";
@@ -252,7 +247,7 @@ describe("Crabbox runtime preflight cleanup", () => {
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(async (argv) => {
       if (argv[1] === "--version") {
         expect(argv.slice(1)).toEqual(["--version"]);
-        return commandResult({ stdout: "0.56.0" });
+        return commandResult({ stdout: "999.0.0" });
       }
       calls.push(argv);
       if (argv[1] === "providers") {
@@ -393,7 +388,7 @@ describe("Crabbox runtime preflight cleanup", () => {
         .mockImplementation(async (argv) => {
           if (argv[1] === "--version") {
             expect(argv.slice(1)).toEqual(["--version"]);
-            return commandResult({ stdout: "0.56.0" });
+            return commandResult({ stdout: "999.0.0" });
           }
           expect(argv.slice(1)).toEqual(["providers", "--json"]);
           return commandResult({ stdout: "[]" });

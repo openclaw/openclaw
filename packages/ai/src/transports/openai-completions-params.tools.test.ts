@@ -1,362 +1,259 @@
 import { describe, expect, it } from "vitest";
+import type { Context, Tool } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { makeCompletionsModel } from "./openai-completions.test-support.js";
 
-describe("openai completions params", () => {
-  it("omits strict tool shaping for Z.ai default-route completions providers", () => {
+const native = makeCompletionsModel({ id: "gpt-5" });
+const proxy = makeCompletionsModel({
+  provider: "vllm",
+  baseUrl: "http://localhost:8000/v1",
+  reasoning: false,
+  contextWindow: 10_000,
+  maxTokens: 10_000,
+});
+function emptyContext(systemPrompt = "system"): Context {
+  return { systemPrompt, messages: [], tools: [] };
+}
+
+function tool(parameters: Record<string, unknown> = { type: "object", properties: {} }): Tool {
+  return { name: "lookup_weather", description: "Get forecast", parameters };
+}
+
+function toolContext(parameters?: Record<string, unknown>): Context {
+  return { ...emptyContext(), tools: [tool(parameters)] };
+}
+
+function historyContext(): Context {
+  return {
+    messages: [
+      {
+        role: "assistant",
+        api: native.api,
+        provider: native.provider,
+        model: native.id,
+        content: [{ type: "toolCall", id: "call_1", name: "lookup_weather", arguments: {} }],
+        usage: createZeroUsage(),
+        stopReason: "toolUse",
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "lookup_weather",
+        content: [{ type: "text", text: "sunny" }],
+        isError: false,
+        timestamp: 2,
+      },
+    ],
+  };
+}
+
+const brokenTool: Tool = {
+  name: "broken",
+  description: "Unreadable schema",
+  get parameters(): never {
+    throw new Error("parameters exploded");
+  },
+};
+
+describe("OpenAI completions compatibility and tools", () => {
+  it("keeps implicit tool choice limited to proxy endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({ provider: "custom-cpa", baseUrl: "https://proxy.example.com/v1" }),
+      toolContext(),
+      { reasoningEffort: "high" },
+    );
+    expect(params.messages[0]).toEqual({ role: "system", content: "system" });
+    expect(params).not.toHaveProperty("reasoning_effort");
+    expect(params).not.toHaveProperty("stream_options");
+    expect(params).not.toHaveProperty("store");
+    expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
+    expect(params.tool_choice).toBe("auto");
+
+    const nativeParams = buildOpenAICompletionsParams(native, toolContext(), undefined);
+    expect(nativeParams.tools).toHaveLength(1);
+    expect(nativeParams).not.toHaveProperty("tool_choice");
+  });
+
+  it("honors streaming usage opt-out on the Moonshot default route", () => {
     const params = buildOpenAICompletionsParams(
       makeCompletionsModel({
-        id: "glm-5",
-        name: "GLM 5",
-        provider: "zai",
+        id: "kimi-k2.5",
+        provider: "moonshot",
         baseUrl: "",
+        compat: { supportsUsageInStreaming: false },
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      emptyContext(),
       undefined,
-    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
+    );
+    expect(params.messages[0]).toEqual({ role: "system", content: "system" });
+    expect(params).not.toHaveProperty("stream_options");
+  });
 
+  it("uses Mistral defaults for custom providers on native Mistral hosts", () => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({
+        id: "mistral-small-latest",
+        provider: "custom-mistral-host",
+        baseUrl: "https://api.mistral.ai/v1",
+      }),
+      emptyContext(),
+      { maxTokens: 2048, reasoningEffort: "high" },
+    );
+    expect(params.max_tokens).toBe(2048);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+    expect(params).not.toHaveProperty("store");
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("flattens text blocks for string-only backends", () => {
+    const model = { ...proxy, compat: { requiresStringContent: true } };
+    const params = buildOpenAICompletionsParams(
+      model,
+      {
+        ...emptyContext(),
+        messages: [
+          { role: "user", content: [{ type: "text", text: "What is 2 + 2?" }], timestamp: 1 },
+        ],
+      },
+      undefined,
+    );
+    expect(params.messages).toEqual([
+      { role: "system", content: "system" },
+      { role: "user", content: "What is 2 + 2?" },
+    ]);
+  });
+
+  it("strips tool-call metadata for strict-key backends", () => {
+    const model = { ...proxy, compat: { strictMessageKeys: true } };
+    const params = buildOpenAICompletionsParams(
+      model,
+      { ...historyContext(), tools: [] },
+      undefined,
+    );
+    expect(params.messages).toEqual([
+      { role: "assistant", content: null },
+      { role: "tool", content: "sunny" },
+    ]);
+  });
+
+  it("omits strict tool shaping on the Z.ai default route", () => {
+    const params = buildOpenAICompletionsParams(
+      makeCompletionsModel({ id: "glm-5", provider: "zai", baseUrl: "" }),
+      toolContext(),
+      undefined,
+    );
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
 
-  it("defaults completions tool schemas to strict on native OpenAI routes", () => {
+  it("keeps strict projected tools usable by required choice after quarantining bad schemas", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5",
-        name: "GPT-5",
-      }),
+      native,
       {
-        systemPrompt: "system",
-        messages: [],
+        ...emptyContext(),
         tools: [
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: { type: "object", properties: {}, additionalProperties: false },
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
-
-    expect(params.tools?.[0]?.function?.strict).toBe(true);
-  });
-
-  it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5",
-        name: "GPT-5",
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "broken",
-            description: "Broken",
-            parameters: {
-              type: "object",
-              get properties(): never {
-                throw new Error("properties exploded");
-              },
+          tool({
+            type: "object",
+            get properties(): never {
+              throw new Error("properties exploded");
             },
-          },
-          {
-            name: "lookup_weather",
-            description: "Get forecast",
-            parameters: {},
-          },
+          }),
+          tool({}),
         ],
-      } as never,
-      undefined,
-    ) as {
-      tools?: Array<{
-        function?: {
-          name?: string;
-          strict?: boolean;
-          parameters?: Record<string, unknown>;
-        };
-      }>;
-    };
-
-    expect(params.tools?.map((tool) => tool.function)).toEqual([
+      },
+      { toolChoice: "required" },
+    );
+    expect(params.tools?.map((entry) => entry.function)).toEqual([
       {
         name: "lookup_weather",
         description: "Get forecast",
         strict: true,
-        parameters: {
-          type: "object",
-          properties: {},
-          required: [],
-          additionalProperties: false,
-        },
+        parameters: { type: "object", properties: {}, required: [], additionalProperties: false },
       },
     ]);
+    expect(params.tool_choice).toBe("required");
   });
 
-  it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {
+  it("downgrades a non-strict-compatible native schema to strict:false", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5",
-        name: "GPT-5",
+      native,
+      toolContext({
+        type: "object",
+        additionalProperties: false,
+        properties: { path: { type: "string" } },
+        required: [],
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "read",
-            description: "Read file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: { path: { type: "string" } },
-              required: [],
-            },
-          },
-        ],
-      } as never,
       undefined,
-    ) as { tools?: Array<{ function?: { strict?: boolean } }> };
-
-    expect(params.tools?.[0]?.function?.strict).toBe(false);
+    );
+    expect(params.tools?.[0]?.function.strict).toBe(false);
   });
 
-  it("applies model compat unsupported schema keywords to completions tools", () => {
+  it("removes configured unsupported schema keywords", () => {
+    const model = { ...proxy, compat: { unsupportedToolSchemaKeywords: ["not"] } };
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
-        name: "Kimi K2.5 Turbo",
-        provider: "fireworks",
-        baseUrl: "https://api.fireworks.ai/inference/v1",
-        reasoning: false,
-        contextWindow: 256000,
-        maxTokens: 256000,
-        compat: {
-          unsupportedToolSchemaKeywords: ["not"],
-        } as never,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "lookup",
-            description: "Lookup",
-            parameters: {
-              type: "object",
-              properties: {
-                forbidden: { not: {} },
-              },
-            },
-          },
-        ],
-      } as never,
+      model,
+      toolContext({ type: "object", properties: { forbidden: { not: {} } } }),
       undefined,
-    ) as {
-      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
-    };
-
-    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
+    );
+    expect(params.tools?.[0]?.function.parameters).toHaveProperty("properties.forbidden", {});
   });
 
-  it("applies model compat empty array items omission after completions normalization", () => {
+  it("omits empty array items without losing typed items", () => {
+    const model = { ...proxy, compat: { omitEmptyArrayItems: true } };
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "mimo-v2.5",
-        name: "MiMo V2.5",
-        provider: "xiaomi",
-        baseUrl: "https://api.xiaomimimo.com/v1",
-        contextWindow: 256000,
-        maxTokens: 256000,
-        compat: {
-          omitEmptyArrayItems: true,
-        } as never,
+      model,
+      toolContext({
+        type: "object",
+        properties: {
+          hints: { type: "array" },
+          typedHints: { type: "array", items: { type: "string" } },
+        },
       }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "collect",
-            description: "Collect hints",
-            parameters: {
-              type: "object",
-              properties: {
-                hints: { type: "array" },
-                typedHints: { type: "array", items: { type: "string" } },
-              },
-            },
-          },
-        ],
-      } as never,
       undefined,
-    ) as {
-      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
-    };
-
-    expect(params.tools?.[0]?.function?.parameters?.properties?.hints).toStrictEqual({
+    );
+    expect(params.tools?.[0]?.function.parameters).toHaveProperty("properties.hints", {
       type: "array",
     });
-    expect(params.tools?.[0]?.function?.parameters?.properties?.typedHints).toStrictEqual({
+    expect(params.tools?.[0]?.function.parameters).toHaveProperty("properties.typedHints", {
       type: "array",
       items: { type: "string" },
     });
   });
 
-  it("omits tools from completions payload when model compat sets supportsTools to false", () => {
+  it("omits both active tools and the history marker when tools are unsupported", () => {
+    const model = { ...proxy, compat: { ...proxy.compat, supportsTools: false } };
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "chat-only-model",
-        name: "Chat Only Model",
-        provider: "venice",
-        baseUrl: "https://api.venice.ai/api/v1",
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-        compat: {
-          supportsTools: false,
-        } as Record<string, unknown>,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [],
-        tools: [
-          {
-            name: "noop",
-            description: "noop tool",
-            parameters: { type: "object", properties: {} },
-          },
-        ],
-      } as never,
+      model,
+      { ...historyContext(), tools: [tool()] },
       undefined,
-    ) as { tools?: unknown; tool_choice?: unknown };
-
+    );
     expect(params).not.toHaveProperty("tools");
     expect(params).not.toHaveProperty("tool_choice");
   });
 
-  it("omits tool-history tools:[] fallback when model compat sets supportsTools to false", () => {
-    const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "chat-only-model",
-        name: "Chat Only Model",
-        provider: "venice",
-        baseUrl: "https://api.venice.ai/api/v1",
-        reasoning: false,
-        contextWindow: 128000,
-        maxTokens: 4096,
-        compat: {
-          supportsTools: false,
-        } as Record<string, unknown>,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "noop",
-                arguments: {},
-              },
-            ],
-            timestamp: Date.now(),
-          },
-          {
-            role: "toolResult",
-            toolCallId: "call_abc",
-            toolName: "noop",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now(),
-          },
-        ],
-      } as never,
-      undefined,
-    ) as { tools?: unknown };
-
-    expect(params).not.toHaveProperty("tools");
-  });
-
-  it("fails locally when required Chat Completions has no usable tools", () => {
+  it("fails required choice when every schema is quarantined", () => {
     expect(() =>
       buildOpenAICompletionsParams(
-        makeCompletionsModel({
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          reasoning: false,
-        }),
-        {
-          systemPrompt: "system",
-          messages: [],
-          tools: [
-            {
-              name: "broken",
-              get parameters(): never {
-                throw new Error("parameters exploded");
-              },
-            },
-          ],
-        } as never,
+        native,
+        { ...emptyContext(), tools: [brokenTool] },
         { toolChoice: "required" },
       ),
     ).toThrow("no tools survived schema conversion");
   });
 
-  it("preserves the native empty tools marker for tool history after quarantining every schema", () => {
+  it("preserves the native history marker after quarantining every schema", () => {
     const params = buildOpenAICompletionsParams(
-      makeCompletionsModel({
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        reasoning: false,
-      }),
-      {
-        systemPrompt: "system",
-        messages: [
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "toolCall",
-                id: "call_abc",
-                name: "lookup",
-                arguments: {},
-              },
-            ],
-          },
-          {
-            role: "toolResult",
-            content: [{ type: "text", text: "done" }],
-            toolCallId: "call_abc",
-          },
-          { role: "user", content: "continue", timestamp: 1 },
-        ],
-        tools: [
-          {
-            name: "broken",
-            description: "Broken tool.",
-            get parameters(): never {
-              throw new Error("parameters exploded");
-            },
-          },
-        ],
-      } as never,
+      native,
+      { ...historyContext(), tools: [brokenTool] },
       undefined,
-    ) as { tools?: unknown[] };
-
+    );
     expect(params.tools).toEqual([]);
+  });
+
+  it("omits empty tools and tool choice for proxy requests with only tool history", () => {
+    const params = buildOpenAICompletionsParams(proxy, historyContext(), undefined);
+    expect(params).not.toHaveProperty("tools");
+    expect(params).not.toHaveProperty("tool_choice");
   });
 });

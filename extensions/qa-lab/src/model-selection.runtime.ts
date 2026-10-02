@@ -1,3 +1,4 @@
+import { normalizeOptionalString as normalizeModel } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -7,15 +8,7 @@ import {
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { resolveQaLiveFrontierAlternateModel } from "./providers/live-frontier/model-selection.runtime.js";
 
-export function defaultQaRuntimeModelForMode(
-  mode: QaProviderModeInput,
-  options?: {
-    alternate?: boolean;
-    preferredLiveModel?: string;
-  },
-) {
-  return defaultQaModelForMode(mode, options);
-}
+export { defaultQaModelForMode as defaultQaRuntimeModelForMode };
 
 export function resolveQaRuntimeModelPair(params: {
   providerMode: QaProviderModeInput;
@@ -24,11 +17,10 @@ export function resolveQaRuntimeModelPair(params: {
   resolveDefaultModel?: (mode: QaProviderMode, alternate?: boolean) => string;
 }) {
   const providerMode = normalizeQaProviderMode(params.providerMode);
-  const normalizeModel = (model: string | undefined) => model?.trim() || undefined;
   const resolveDefaultModel =
     params.resolveDefaultModel ??
     ((mode: QaProviderModeInput, alternate = false) =>
-      defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined));
+      defaultQaModelForMode(mode, alternate ? { alternate: true } : undefined));
   const primaryModel = normalizeModel(params.primaryModel) ?? resolveDefaultModel(providerMode);
   const alternateModel =
     normalizeModel(params.alternateModel) ??

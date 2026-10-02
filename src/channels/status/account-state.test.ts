@@ -32,40 +32,60 @@ describe("resolveChannelAccountState", () => {
       "disabled wins over later states",
       { enabled: false, configured: false, linked: false, runtime: { running: true } },
       {
-        kind: "disabled",
         configured: false,
         linked: false,
-        reason: "disabled reason",
-        failure: null,
+        running: false,
+        stateReason: "disabled reason",
+        lastError: null,
       },
     ],
     [
       "unconfigured wins over linkage and runtime",
       { configured: false, linked: false, runtime: { running: true } },
-      { kind: "unconfigured", reason: "unconfigured reason", failure: null },
+      { configured: false, running: false, stateReason: "unconfigured reason", lastError: null },
     ],
     [
       "explicitly unlinked wins over runtime",
       { linked: false, runtime: { running: true } },
-      { kind: "unlinked", reason: "unlinked reason", failure: null },
+      {
+        configured: true,
+        linked: false,
+        running: false,
+        stateReason: "unlinked reason",
+        lastError: null,
+      },
     ],
     [
       "running owns linkage, connectivity, and failure",
       { runtime: { running: true, connected: true, lastError: "not linked" } },
-      { kind: "running", linked: true, connected: true, failure: "not linked" },
+      { configured: true, linked: true, running: true, connected: true, lastError: "not linked" },
     ],
     [
+      "running preserves explicit disconnected status",
+      { runtime: { running: true, connected: false } },
+      { configured: true, linked: true, running: true, connected: false, lastError: null },
+    ],
+    [
+      // Manufacturing connected:false restarts socketless channels every cooldown window.
       "running keeps connectivity absent when the transport publishes none",
       { runtime: { running: true } },
-      { kind: "running", linked: true, connected: undefined, failure: null },
+      { configured: true, linked: true, running: true, lastError: null },
     ],
     [
       "stopped owns linkage, connectivity, and failure",
-      {},
-      { kind: "stopped", linked: true, connected: undefined, failure: null },
+      { runtime: { connected: true, lastError: "transport failed" } },
+      {
+        configured: true,
+        linked: true,
+        running: false,
+        connected: true,
+        lastError: "transport failed",
+      },
     ],
   ] as const)("%s", (_name, input, expected) => {
-    expect(resolveChannelAccountState({ ...baseInput, ...input })).toEqual(expected);
+    expect(
+      projectChannelAccountState(resolveChannelAccountState({ ...baseInput, ...input })),
+    ).toEqual(expected);
   });
 
   it.each([false, true])("keeps unknown linkage configured (running=%s)", (running) => {
@@ -90,56 +110,6 @@ describe("resolveChannelAccountState", () => {
 });
 
 describe("projectChannelAccountState", () => {
-  it.each([
-    [
-      {
-        kind: "disabled",
-        configured: false,
-        linked: false,
-        reason: "disabled",
-        failure: null,
-      },
-      {
-        configured: false,
-        linked: false,
-        running: false,
-        stateReason: "disabled",
-        lastError: null,
-      },
-    ],
-    [
-      { kind: "unconfigured", reason: "not configured", failure: null },
-      { configured: false, running: false, stateReason: "not configured", lastError: null },
-    ],
-    [
-      { kind: "unlinked", reason: "not linked", failure: null },
-      {
-        configured: true,
-        linked: false,
-        running: false,
-        stateReason: "not linked",
-        lastError: null,
-      },
-    ],
-    [
-      { kind: "running", linked: true, connected: false, failure: null },
-      { configured: true, linked: true, running: true, connected: false, lastError: null },
-    ],
-    [
-      // Socketless channels never publish connectivity; a manufactured
-      // `connected: false` here reads as a transport disconnect and makes the
-      // gateway health monitor restart them every cooldown window.
-      { kind: "running", linked: true, failure: null },
-      { configured: true, linked: true, running: true, lastError: null },
-    ],
-    [
-      { kind: "stopped", connected: true, failure: "transport failed" },
-      { configured: true, running: false, connected: true, lastError: "transport failed" },
-    ],
-  ] as const)("projects %s without stale fields", (state, expected) => {
-    expect(projectChannelAccountState(state)).toEqual(expected);
-  });
-
   it("replaces owner fields while preserving unrelated snapshot data", () => {
     const state = resolveChannelAccountState({ ...baseInput, linked: undefined });
     const snapshot = {

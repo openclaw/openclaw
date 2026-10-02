@@ -35,6 +35,7 @@ import {
   modelCatalogPricingFingerprint,
   resolveModelPricing,
   resolveModelPricingContext,
+  type PricingContext,
 } from "../model-catalog/pricing.js";
 export { formatTokenCount } from "./token-format.js";
 export type { ModelCostConfig } from "@openclaw/llm-core";
@@ -264,9 +265,16 @@ export function resolveModelCostConfigFingerprint(
   config?: OpenClawConfig,
   agentDir?: string,
 ): string {
+  return fingerprintModelCostPricing(config, agentDir, resolveModelPricingContext(config));
+}
+
+function fingerprintModelCostPricing(
+  config: OpenClawConfig | undefined,
+  agentDir: string | undefined,
+  pricingContext: PricingContext,
+): string {
   const resolvedAgentDir = resolveCostAgentDir(config, agentDir);
   const sourceConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
-  const pricingContext = resolveModelPricingContext(config);
   const serialized = stableCostFingerprintValue({
     configuredRaw: serializeCostIndex(getProviderCostIndex(sourceConfig?.models?.providers)),
     configuredNormalized: serializeCostIndex(
@@ -288,6 +296,24 @@ export function resolveModelCostConfigFingerprint(
   return createHash("sha256").update(serialized).digest("hex");
 }
 
+export type CapturedModelCostPricing = {
+  fingerprint: () => string;
+  resolve: (provider?: string, model?: string) => ModelCostConfig | undefined;
+};
+
+/** Captures hosted rows, normalization policy, and prices for one usage operation. */
+export function captureModelCostPricing(
+  config?: OpenClawConfig,
+  agentDir?: string,
+): CapturedModelCostPricing {
+  const pricingContext = resolveModelPricingContext(config);
+  return {
+    fingerprint: () => fingerprintModelCostPricing(config, agentDir, pricingContext),
+    resolve: (provider, model) =>
+      resolveModelCostConfigWithPricing({ provider, model, config, agentDir }, pricingContext),
+  };
+}
+
 /**
  * Resolves local models.json first, then authored overrides over effective catalog prices.
  * Complete direct prices need no plugin normalization or provider discovery.
@@ -299,6 +325,13 @@ export function resolveModelCostConfig(params: {
   agentDir?: string;
   allowPluginNormalization?: boolean;
 }): ModelCostConfig | undefined {
+  return resolveModelCostConfigWithPricing(params);
+}
+
+function resolveModelCostConfigWithPricing(
+  params: Parameters<typeof resolveModelCostConfig>[0],
+  capturedPricing?: PricingContext,
+): ModelCostConfig | undefined {
   const provider = normalizeProviderId(normalizeOptionalString(params.provider) ?? "");
   const model = normalizeOptionalString(params.model);
   if (!provider || !model) {
@@ -321,9 +354,9 @@ export function resolveModelCostConfig(params: {
   let configuredCost = getProviderCostIndex(sourceConfig?.models?.providers, undefined, rawKey).get(
     rawKey,
   );
-  let pricingContext: ReturnType<typeof resolveModelPricingContext> | undefined;
+  let pricingContext = capturedPricing;
   if (params.allowPluginNormalization !== false && !configuredCost) {
-    pricingContext = resolveModelPricingContext(params.config);
+    pricingContext ??= resolveModelPricingContext(params.config);
     const key = pricingContext.normalizeKey(provider, model);
     const modelsJsonCost = loadModelsJsonCostIndex({
       agentDir,

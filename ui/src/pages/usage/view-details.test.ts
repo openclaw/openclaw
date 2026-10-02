@@ -80,6 +80,7 @@ function mount(
     contextWeight?: UsageSessionEntry["contextWeight"];
     contextExpanded?: boolean;
     onToggleContextExpanded?: () => void;
+    onCursorRangeChange?: (start: number | null, end: number | null) => void;
   } = {},
 ) {
   const status = (error?: string, hasLoaded = errors.stale ?? false): PanelRefreshStatus => ({
@@ -92,38 +93,45 @@ function mount(
   render(
     renderSessionDetailPanel(
       { ...(errors.session ?? session()), contextWeight: errors.contextWeight },
-      { points },
-      false,
-      status(errors.timeSeries),
-      "per-turn",
-      vi.fn(),
-      breakdownMode,
-      vi.fn(),
-      start,
-      end,
-      vi.fn(),
-      filters.startDate ?? "",
-      filters.endDate ?? "",
-      filters.selectedDays ?? [],
-      filters.timeZone ?? "local",
-      errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
-      errors.sessionLogsLoading ?? false,
-      status(errors.sessionLogs, errors.sessionLogsHasLoaded),
-      false,
-      vi.fn(),
-      errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
-      vi.fn(),
       {
-        weight: errors.contextWeight,
-        loading: false,
-        status: status(),
+        timeSeries: { points },
+        timeSeriesLoading: false,
+        timeSeriesStatus: status(errors.timeSeries),
+        timeSeriesMode: "per-turn",
+        timeSeriesBreakdownMode: breakdownMode,
+        timeSeriesCursorStart: start,
+        timeSeriesCursorEnd: end,
+        sessionLogs: errors.sessionLogsData === undefined ? [] : errors.sessionLogsData,
+        sessionLogsLoading: errors.sessionLogsLoading ?? false,
+        sessionLogsStatus: status(errors.sessionLogs, errors.sessionLogsHasLoaded),
+        sessionLogsExpanded: false,
+        logFilters: errors.logFilters ?? { roles: [], tools: [], hasTools: false, query: "" },
+        context: {
+          weight: errors.contextWeight,
+          loading: false,
+          status: status(),
+        },
+      },
+      {
+        onTimeSeriesModeChange: vi.fn(),
+        onTimeSeriesBreakdownChange: vi.fn(),
+        onTimeSeriesCursorRangeChange: errors.onCursorRangeChange ?? vi.fn(),
+        onToggleSessionLogsExpanded: vi.fn(),
+        onLogFilterRolesChange: vi.fn(),
+        onLogFilterToolsChange: vi.fn(),
+        onLogFilterHasToolsChange: vi.fn(),
+        onLogFilterQueryChange: vi.fn(),
+        onLogFilterClear: vi.fn(),
+        onToggleContextExpanded: errors.onToggleContextExpanded ?? vi.fn(),
+        onSelectSession: vi.fn(),
+      },
+      {
+        startDate: filters.startDate ?? "",
+        endDate: filters.endDate ?? "",
+        selectedDays: filters.selectedDays ?? [],
+        timeZone: filters.timeZone ?? "local",
       },
       errors.contextExpanded ?? false,
-      errors.onToggleContextExpanded ?? vi.fn(),
       vi.fn(),
     ),
     container,
@@ -132,6 +140,47 @@ function mount(
 }
 
 describe("renderSessionDetailPanel filtered usage", () => {
+  it.each<{
+    side: "left" | "right";
+    key: string;
+    start: number | null;
+    end: number | null;
+    expected: [number, number];
+  }>([
+    { side: "left", key: "ArrowRight", start: null, end: null, expected: [2000, 4000] },
+    { side: "right", key: "ArrowLeft", start: null, end: null, expected: [1000, 3000] },
+    { side: "left", key: "ArrowUp", start: 2000, end: 3000, expected: [3000, 3000] },
+    { side: "right", key: "ArrowDown", start: 2000, end: 3000, expected: [2000, 2000] },
+    { side: "left", key: "Home", start: 2000, end: 3000, expected: [1000, 3000] },
+    { side: "left", key: "End", start: 2000, end: 3000, expected: [3000, 3000] },
+    { side: "right", key: "Home", start: 2000, end: 3000, expected: [2000, 2000] },
+    { side: "right", key: "End", start: 2000, end: 3000, expected: [2000, 4000] },
+    { side: "left", key: "ArrowRight", start: 3000, end: 3000, expected: [3000, 3000] },
+    { side: "right", key: "ArrowLeft", start: 2000, end: 2000, expected: [2000, 2000] },
+    { side: "left", key: "ArrowRight", start: 3000, end: 2000, expected: [3000, 3000] },
+  ])(
+    "adjusts the $side range handle with $key from $start–$end",
+    ({ side, key, start, end, expected }) => {
+      const onCursorRangeChange = vi.fn();
+      const container = mount(
+        [1000, 2000, 3000, 4000].map((timestamp) => point({ timestamp })),
+        start,
+        end,
+        "total",
+        {},
+        { onCursorRangeChange },
+      );
+      const handle = container.querySelector<HTMLElement>(`.chart-handle-${side}`)!;
+      expect(handle.getAttribute("role")).toBe("slider");
+      expect(handle.tabIndex).toBe(0);
+      expect(handle.getAttribute("aria-label")).toBe(side === "left" ? "Range start" : "Range end");
+      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      handle.dispatchEvent(event);
+      expect(event.defaultPrevented).toBe(true);
+      expect(onCursorRangeChange).toHaveBeenCalledExactlyOnceWith(...expected);
+    },
+  );
+
   it("formats timeline labels in the selected UTC time zone", () => {
     const timestamps = [
       Date.parse("2026-05-13T18:00:00.000Z"),
@@ -175,16 +224,16 @@ describe("renderSessionDetailPanel filtered usage", () => {
 
   it("filters detail points by the selected UTC day and keeps the final millisecond", () => {
     const localOffsetMs = 8 * 60 * 60 * 1000;
-    const localYear = vi
-      .spyOn(Date.prototype, "getFullYear")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
-      });
-    const localMonth = vi
-      .spyOn(Date.prototype, "getMonth")
-      .mockImplementation(function (this: Date) {
-        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
-      });
+    const localYear = vi.spyOn(Date.prototype, "getFullYear").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+    });
+    const localMonth = vi.spyOn(Date.prototype, "getMonth").mockImplementation(function (
+      this: Date,
+    ) {
+      return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+    });
     const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
       return new Date(this.getTime() + localOffsetMs).getUTCDate();
     });

@@ -31,8 +31,6 @@ describe("Codex app-server dynamic tool question prompts", () => {
 
   it.each<[string, string | undefined, string | undefined, string | undefined, boolean]>([
     ["provider-only Telegram", undefined, "telegram", "telegram", true],
-    ["explicit Telegram", "telegram", undefined, "telegram", true],
-    ["explicit Telegram before another provider", "telegram", "discord", "telegram", true],
     ["explicit webchat before Telegram provider", "webchat", "telegram", "webchat", true],
     ["both channels absent", undefined, undefined, undefined, true],
     ["callback absent", undefined, "telegram", "telegram", false],

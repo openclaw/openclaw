@@ -116,7 +116,12 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
-it.each([false, true])("native subprocess refuses a revoked owner: revoked=%s", async (revoked) => {
+it.each([
+  { revoked: false, nested: false },
+  { revoked: true, nested: false },
+  { revoked: false, nested: true },
+  { revoked: true, nested: true },
+])("native subprocess retains its owner: %j", async ({ revoked, nested }) => {
   const root = dirs.make("native-authority-");
   const effect = path.join(root, "effect");
   let current = true;
@@ -127,13 +132,16 @@ it.each([false, true])("native subprocess refuses a revoked owner: revoked=%s", 
       }
     },
     async () => {
-      await Promise.resolve();
-      current = !revoked;
-      const result = await execFileUtf8(process.execPath, [
-        "-e",
-        `require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`,
-      ]);
-      expect(result.code, result.stderr).toBe(0);
+      const invoke = async () => {
+        await Promise.resolve();
+        current = !revoked;
+        const result = await execFileUtf8(process.execPath, [
+          "-e",
+          `require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`,
+        ]);
+        expect(result.code, result.stderr).toBe(0);
+      };
+      await (nested ? withGatewayServiceUpdateAuthority(() => {}, invoke) : invoke());
     },
   );
   if (revoked) {

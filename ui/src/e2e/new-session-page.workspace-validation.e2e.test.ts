@@ -5,6 +5,7 @@ import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { holdModuleResponse, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   NEW_SESSION_MODEL_CATALOG,
@@ -12,6 +13,7 @@ import {
   TARGET_REPO,
   WORKSPACE,
   captureUiProof,
+  checkoutBaseRefInput,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
@@ -71,12 +73,7 @@ async function withNewSessionPage(
   options: BrowserContextOptions,
   run: (page: Page) => Promise<void>,
 ): Promise<void> {
-  await suite.withPage(
-    options,
-    ({ page }) => run(page),
-    // Callers release held modules in finally; join their fetch/fulfill work before closing.
-    ({ page }) => page.unrouteAll({ behavior: "wait" }),
-  );
+  await suite.withPage(options, ({ page }) => run(page));
 }
 
 type MockGateway = Awaited<ReturnType<typeof installMockGateway>>;
@@ -141,7 +138,7 @@ suite.define(() => {
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
         .click();
 
-      const baseRef = checkout.getByLabel("From", { exact: true });
+      const baseRef = checkoutBaseRefInput(checkout);
       await baseRef.focus();
       await checkout.locator('[data-worktree-suggestion="release/next"]').click();
       await expect.poll(() => baseRef.inputValue()).toBe("release/next");
@@ -234,7 +231,7 @@ suite.define(() => {
           .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
           .click();
         await expect.poll(() => checkout.getAttribute("data-worktree")).toBe("true");
-        const baseRef = page.getByLabel("From", { exact: true });
+        const baseRef = checkoutBaseRefInput(page);
         await baseRef.fill("origin/release-outside-suggestions");
         expect(
           await page
@@ -486,7 +483,7 @@ suite.define(() => {
       await checkoutTrigger.click();
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       expect(await checkout.locator('[data-value="checkout"]').isDisabled()).toBe(true);
-      await checkout.getByLabel("From", { exact: true }).waitFor();
+      await checkoutBaseRefInput(checkout).waitFor();
       await checkout.getByLabel("Name", { exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await page.keyboard.press("Escape");
@@ -614,8 +611,9 @@ suite.define(() => {
       await page.locator("#new-session-checkout-trigger").click();
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect
-        .poll(() => checkout.getByLabel("From", { exact: true }).inputValue())
+        .poll(() => checkoutBaseRefInput(checkout).getAttribute("placeholder"))
         .toBe("beta");
+      expect(await checkoutBaseRefInput(checkout).inputValue()).toBe("");
       await page.keyboard.press("Escape");
 
       await gateway.resolveDeferred("fs.listDir", {
@@ -648,7 +646,10 @@ suite.define(() => {
             return digest(algorithm, data);
           };
         });
-        const chatModule = await holdModuleResponse(page, /\/assets\/route-entry-[^/]+\.js/);
+        const chatModule = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
+        );
         try {
           const sessionKey = "agent:main:late-recovery-scope";
           const gateway = await installMockGateway(page, {

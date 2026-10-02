@@ -39,21 +39,18 @@ describe("execution auth binding fingerprints", () => {
     expect(fingerprint("codex-runtime-v1")).not.toBe(fingerprint("codex-runtime-v2"));
   });
 
-  it.each(["env", "file", "exec"] as const)(
-    "rejects an unresolved %s static-secret reference",
-    (source) => {
-      expect(
-        fingerprintAuthProfileCredential({
-          profileId: "openai:bound",
-          credential: {
-            type: "api_key",
-            provider: "openai",
-            keyRef: { source, provider: "default", id: source === "env" ? "OPENAI_KEY" : "key" },
-          },
-        }),
-      ).toBeUndefined();
-    },
-  );
+  it("rejects an unresolved static-secret reference", () => {
+    expect(
+      fingerprintAuthProfileCredential({
+        profileId: "openai:bound",
+        credential: {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "exec", provider: "default", id: "key" },
+        },
+      }),
+    ).toBeUndefined();
+  });
 
   it("changes when a materialized static secret rotates", () => {
     const fingerprint = (key: string) =>

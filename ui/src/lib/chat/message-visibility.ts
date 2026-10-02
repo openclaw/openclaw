@@ -71,12 +71,8 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
-function isHeartbeatAckStream(text: string): boolean {
-  return stripHeartbeatTokenForDisplay(text).shouldSkip;
-}
-
 export function isHiddenAssistantStreamText(text: string): boolean {
-  return isSilentReplyStream(text) || isHeartbeatAckStream(text);
+  return isSilentReplyStream(text) || stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
 
 export function shouldHideAssistantChatMessage(message: unknown): boolean {

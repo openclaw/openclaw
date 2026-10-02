@@ -5,12 +5,6 @@ export type SkillConfigMutationOwner = Pick<RuntimeConfigCapability, "runExterna
 
 type SkillConfigPatch = { skillKey: string; enabled?: boolean; apiKey?: string };
 
-export function normalizeSkillApiKeyReplacement(value: string | undefined): string | undefined {
-  const apiKey = value?.trim();
-  // Blank skills.update API keys explicitly clear stored credentials; this UI only replaces them.
-  return apiKey || undefined;
-}
-
 export async function runSkillConfigMutation(
   owner: SkillConfigMutationOwner,
   expectedClient: GatewayBrowserClient,
@@ -41,14 +35,4 @@ export async function runSkillConfigMutation(
     throw requestError ?? new Error(mutation.error);
   }
   return mutation.refresh.ok ? null : mutation.refresh.error;
-}
-
-export function skillConfigMutationSuccess(
-  message: string,
-  refreshError: string | null,
-): { kind: "success"; message: string } {
-  return {
-    kind: "success",
-    message: refreshError ? `${message}\n${refreshError}` : message,
-  };
 }

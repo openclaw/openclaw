@@ -85,7 +85,7 @@ const extensionMocks = vi.hoisted(() => ({
 vi.mock("./browser-cli-manage.js", () => manageMocks);
 vi.mock("./browser-cli-cookie-sync.js", () => cookieSyncMocks);
 vi.mock("./browser-cli-inspect.js", () => inspectMocks);
-vi.mock("./browser-cli-actions-input.js", () => actionInputMocks);
+vi.mock("./browser-cli-actions-input/register.js", () => actionInputMocks);
 vi.mock("./browser-cli-actions-observe.js", () => actionObserveMocks);
 vi.mock("./browser-cli-debug.js", () => debugMocks);
 vi.mock("./browser-cli-state.js", () => stateMocks);

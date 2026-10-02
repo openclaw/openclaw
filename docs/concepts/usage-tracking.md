@@ -43,6 +43,10 @@ lineage includes retained earlier instances of a session; the date range still
 controls which activity appears in the chart. Totals and daily charts come from
 the same session report, including sessions beyond the visible list limit.
 
+A recorded zero-dollar cost is valid cost data. The average-cost hint warns
+about missing prices only when the selected report contains unpriced usage;
+filtering to sessions with known zero cost clears that warning.
+
 **Started by** groups usage by the recorded session creator. Select an identity
 to filter the full report, including its history and totals. Human profiles,
 agents, and system-created sessions remain distinct; historical sessions without

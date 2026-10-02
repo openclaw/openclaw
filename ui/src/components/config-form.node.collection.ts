@@ -1,4 +1,4 @@
-// Control UI renderers for structured config form nodes.
+import { asNonArrayRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type TemplateResult } from "lit";
 import { Directive, directive } from "lit/directive.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -28,9 +28,9 @@ import {
 } from "./config-form.constraints.ts";
 import { renderMapField } from "./config-form.node.collection-map.ts";
 import {
+  configChildRenderOptions,
   renderCollectionDefaultDescription,
   renderFieldRow,
-  schemaWithDefault,
   type ConfigNodeRenderer,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -46,22 +46,7 @@ const UNSET_ARRAY_SOURCE_IDENTITY = Symbol("unset-array-source");
 const UNSET_MAP_SOURCE_IDENTITY = Symbol("unset-map-source");
 
 export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    onRemove,
-    rawAvailable,
-    maskSensitive,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-    searchCriteria,
-  } = params;
+  const { schema, value, path, hints, onPatch, onRemove, searchCriteria } = params;
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -70,10 +55,7 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   const inherited = value === undefined && schema.default !== undefined;
   const fallback = inherited ? schema.default : value;
   const objectSourceIdentity = fallback === undefined ? UNSET_MAP_SOURCE_IDENTITY : fallback;
-  const objectValue =
-    fallback && typeof fallback === "object" && !Array.isArray(fallback)
-      ? (fallback as Record<string, unknown>)
-      : {};
+  const objectValue = asNonArrayRecord(fallback);
   const entries = objectPropertyKeys(schema)
     .map((key) => [key, objectPropertySchema(schema, key)] as const)
     .filter((entry): entry is readonly [string, ConfigNodeRenderParams["schema"]] =>
@@ -81,7 +63,6 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     );
   const requiredKeys = requiredPropertyKeys(schema);
 
-  // Sort by hint order
   const sorted = entries.toSorted((left, right) => {
     const leftOrder = hintForPath([...path, left[0]], hints)?.order ?? 0;
     const rightOrder = hintForPath([...path, right[0]], hints)?.order ?? 0;
@@ -104,10 +85,10 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
     let candidate: Record<string, unknown>;
     const relativePath = childPath.slice(path.length);
     if (relativePath.length === 0) {
-      if (!childValue || typeof childValue !== "object" || Array.isArray(childValue)) {
+      if (!isRecord(childValue)) {
         return false;
       }
-      candidate = childValue as Record<string, unknown>;
+      candidate = childValue;
     } else {
       try {
         candidate = structuredClone(objectValue);
@@ -134,26 +115,16 @@ export function resolveConfigObjectFields(params: ConfigNodeRenderParams) {
   return {
     fields: sorted.map(([propertyKey, node]) => {
       const hasInheritedChild = inherited && Object.hasOwn(objectValue, propertyKey);
-      return {
-        schema: hasInheritedChild ? schemaWithDefault(node, objectValue[propertyKey]) : node,
+      return Object.assign(configChildRenderOptions(params), {
+        schema: hasInheritedChild ? { ...node, default: objectValue[propertyKey] } : node,
         value: inherited ? undefined : objectValue[propertyKey],
         path: [...path, propertyKey],
-        hints,
-        rawAvailable,
-        maskSensitive,
-        unsupported,
-        disabled,
-        compact: params.compact,
-        commitOnBlur: params.commitOnBlur,
         isRequired: requiredKeys.has(propertyKey),
         sourceIdentity: inherited ? undefined : objectValue[propertyKey],
         controlIdentity: params.controlIdentity ?? objectValue,
         searchCriteria: childSearchCriteria,
-        revealSensitive,
-        isSensitivePathRevealed,
-        onToggleSensitivePath,
         onPatch: patchObjectChild,
-      } satisfies ConfigNodeRenderParams;
+      }) satisfies ConfigNodeRenderParams;
     }),
     additional: allowExtra
       ? {
@@ -188,7 +159,6 @@ export function renderObject(
     return fields;
   }
 
-  // Nested objects get collapsible treatment as an indented sub-block.
   return html`
     <details class="cfg-object cfg-block" ?open=${path.length <= 2}>
       <summary class="settings-row cfg-object__summary">
@@ -232,21 +202,7 @@ function renderArrayContent(
   renderNode: ConfigNodeRenderer,
   rows: ConfigFormArrayIdentity,
 ): TemplateResult {
-  const {
-    schema,
-    value,
-    path,
-    hints,
-    unsupported,
-    disabled,
-    onPatch,
-    searchCriteria,
-    rawAvailable,
-    maskSensitive,
-    revealSensitive,
-    isSensitivePathRevealed,
-    onToggleSensitivePath,
-  } = params;
+  const { schema, value, path, hints, disabled, onPatch, searchCriteria } = params;
   const showLabel = params.showLabel ?? true;
   const showHeaderMeta = params.showHeaderMeta ?? showLabel;
   const { label, help } = resolveFieldMeta(path, schema, hints);
@@ -268,16 +224,13 @@ function renderArrayContent(
   }
 
   const inherited = value === undefined && Array.isArray(schema.default);
-  const arrayValue = Array.isArray(value)
+  const arraySource = Array.isArray(value)
     ? value
     : Array.isArray(schema.default)
       ? schema.default
-      : [];
-  const arraySourceIdentity = Array.isArray(value)
-    ? value
-    : Array.isArray(schema.default)
-      ? schema.default
-      : UNSET_ARRAY_SOURCE_IDENTITY;
+      : undefined;
+  const arrayValue = arraySource ?? [];
+  const arraySourceIdentity = arraySource ?? UNSET_ARRAY_SOURCE_IDENTITY;
   const defaultDescription = renderCollectionDefaultDescription(params, arrayValue);
   const rowIdentities = rows.read(arrayValue);
   const patch = (nextValue: unknown[], identities: readonly symbol[]) =>
@@ -381,7 +334,8 @@ function renderArrayContent(
           }
           <button
             type="button"
-            class="btn btn--sm"
+            class=${params.compact ? "btn btn--sm btn--icon" : "btn btn--sm"}
+            aria-label=${t("configForm.add")}
             aria-controls=${draftId}
             ?disabled=${disabled || (!canAppend && atomicCandidate === undefined)}
             @click=${(event: Event) => {
@@ -402,7 +356,7 @@ function renderArrayContent(
               }
             }}
           >
-            ${t("configForm.add")}
+            ${params.compact ? icons.plus : t("configForm.add")}
           </button>
         </div>
       </div>
@@ -480,24 +434,15 @@ function renderArrayContent(
                       </button>
                     </openclaw-tooltip>`;
                     const valueControl = renderNode({
-                      schema: inherited ? schemaWithDefault(itemSchema, item) : itemSchema,
+                      ...configChildRenderOptions(params),
+                      schema: inherited ? { ...itemSchema, default: item } : itemSchema,
                       value: inherited ? undefined : item,
                       path: [...path, index],
-                      hints,
-                      rawAvailable,
-                      maskSensitive,
-                      unsupported,
-                      disabled,
-                      compact: params.compact,
-                      commitOnBlur: params.commitOnBlur,
                       isRequired: true,
                       sourceIdentity: inherited ? undefined : item,
                       controlIdentity: arrayValue,
                       searchCriteria: childSearchCriteria,
                       showLabel: false,
-                      revealSensitive,
-                      isSensitivePathRevealed,
-                      onToggleSensitivePath,
                       // Keep inherited source identity until an edit materializes the
                       // complete effective array through its parent owner.
                       onPatch: patchArrayItem,

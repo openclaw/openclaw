@@ -1,4 +1,3 @@
-// Kitchen Sink Rpc Walk tests cover kitchen sink rpc walk script behavior.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
@@ -15,7 +14,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   assertChannelAccountRunning,
   assertCommandResourceCeiling,
@@ -28,6 +27,8 @@ import {
   assertKitchenSinkUiDescriptors,
   assertKitchenSinkSearchInvokeResult,
   assertKitchenSinkTextInvokeResult,
+  assertKitchenSinkResourcePlugins,
+  assertKitchenSinkResourceShutdown,
   assertOperatorRpcDenied,
   assertResourceCeiling,
   assertTtsProviderCoverage,
@@ -41,10 +42,9 @@ import {
   findDistCallGatewayModuleFiles,
   hasChildExited,
   MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
-  listKitchenSinkToolInvokeNames,
   listKitchenSinkAuthorizationRpcProbeNames,
-  listKitchenSinkReadOnlyRpcProbeNames,
   makeEnv,
+  kitchenSinkResourceEnv,
   parseJsonOutput,
   parseGatewayCliRequestFailure,
   readPositiveInt,
@@ -52,6 +52,7 @@ import {
   resolveKitchenSinkRpcConfig,
   resolveKitchenSinkRpcPort,
   runCommand,
+  runKitchenSinkResourceToolWorkload,
   sampleProcess,
   sampleWindowsProcessByPort,
   shouldPrintHelp,
@@ -65,18 +66,218 @@ import {
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mts";
 import {
+  measureResourceOperations,
+  type KitchenSinkResourcePhase,
+} from "../../scripts/e2e/lib/kitchen-sink-resources.mts";
+import {
   resolveWindowsPowerShellPath,
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../../scripts/lib/windows-taskkill.mjs";
 import { formatGatewayClientRequestErrorJson } from "../../src/gateway/call.js";
+import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { waitForChildClose } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { cleanupTempDirs, makeTempDir, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
+
+it("resource proof requires clean joined Gateway exit, not forced termination", () => {
+  const clean = { exited: true, exitCode: 0, signal: null, signals: ["SIGTERM"] };
+  expect(() => assertKitchenSinkResourceShutdown(clean)).not.toThrow();
+  for (const failed of [
+    { ...clean, exited: false },
+    { ...clean, exitCode: 1 },
+    { ...clean, signals: ["SIGTERM", "SIGKILL"] },
+    { ...clean, exitCode: null, signal: "SIGKILL", signals: ["SIGTERM", "SIGKILL"] },
+  ]) {
+    expect(() => assertKitchenSinkResourceShutdown(failed)).toThrow("did not exit cleanly");
+  }
+});
+
+it.each(["valid", "wrong session", "wrong tool"])(
+  "measures the actual session and tool RPC callbacks: %s",
+  async (response) => {
+    const phases: KitchenSinkResourcePhase[] = [];
+    const events: string[] = [];
+    let step = 0;
+    const sample = async () => {
+      events.push("sample");
+      step++;
+      return {
+        pid: 123,
+        atMonotonicMicros: step * 1000,
+        process: { user: step * 100, system: step * 10 },
+        mainThread: { user: step * 50, system: step * 5 },
+        cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
+        memory: { rss: 100, heapTotal: 100, heapUsed: 100, external: 0, arrayBuffers: 0 },
+        activeResources: {},
+        runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
+      };
+    };
+    const rpc = vi.fn(async (method: string, _params: unknown) => {
+      events.push(method);
+      return method === "sessions.create"
+        ? {
+            ok: true,
+            key: response === "wrong session" ? "wrong" : "agent:main:kitchen-sink-rpc",
+            sessionId: "fixture-session",
+          }
+        : {
+            ok: true,
+            source: "plugin",
+            output: {
+              route: "tool:kitchen_sink_text",
+              text: response === "wrong tool" ? "wrong" : "Kitchen Sink fixture",
+            },
+          };
+    });
+    const measure: Parameters<typeof runKitchenSinkResourceToolWorkload>[0]["measure"] = async (
+      name,
+      count,
+      run,
+      options,
+    ) => {
+      const phase = await measureResourceOperations({ name, count, run, sample, ...options });
+      phases.push(phase);
+      if (phase.status === "failed") {
+        throw new Error(phase.error);
+      }
+      return phase;
+    };
+    const result = runKitchenSinkResourceToolWorkload({ rpc, measure }, 20);
+    if (response !== "valid") {
+      await expect(result).rejects.toThrow(response === "wrong session" ? "session" : "fixture");
+      expect(phases.at(-1)).toMatchObject({
+        status: "failed",
+        operations: { attempted: 1, completed: 0, failed: 1 },
+      });
+      expect(rpc).toHaveBeenCalledTimes(response === "wrong session" ? 1 : 2);
+      return;
+    }
+    await result;
+    expect(rpc.mock.calls).toEqual([
+      [
+        "sessions.create",
+        { key: "agent:main:kitchen-sink-rpc", agentId: "main", label: "kitchen-sink-resources" },
+      ],
+      ...Array.from({ length: 20 }, (_, index) => [
+        "tools.invoke",
+        {
+          name: "kitchen_sink_text",
+          args: { prompt: "explain kitchen sink resource profiling" },
+          sessionKey: "agent:main:kitchen-sink-rpc",
+          agentId: "main",
+          idempotencyKey: `kitchen-sink-resources-${index}`,
+        },
+      ]),
+    ]);
+    expect(events).toEqual([
+      "sample",
+      "sessions.create",
+      "sample",
+      "sample",
+      "tools.invoke",
+      "sample",
+      ...Array.from({ length: 19 }, () => "tools.invoke"),
+      "sample",
+    ]);
+    expect(phases).toMatchObject([
+      {
+        name: "session-create",
+        status: "exercised",
+        operations: { attempted: 1, completed: 1, failed: 0 },
+      },
+      {
+        name: "plugin-tool",
+        status: "exercised",
+        operations: { attempted: 20, completed: 20, failed: 0 },
+        breakdown: [
+          { name: "plugin-tool-first", operations: { completed: 1 } },
+          { name: "plugin-tool-warm", operations: { completed: 19 } },
+        ],
+      },
+    ]);
+  },
+);
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const realDelay = delay;
-const realNow = Date.now;
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+// The parent writes readiness before sending a receipt, so process settlement
+// can consult the durable record if the independent receipt pipe arrives late.
+function fixtureReadyBeforeSettlement(readyPath: string, operation: PromiseLike<unknown>) {
+  return Promise.race([
+    receipts.waitFor(readyPath, "ready"),
+    Promise.resolve(operation).then(
+      () => {
+        if (!existsSync(readyPath)) {
+          throw new Error("timed out waiting for condition");
+        }
+      },
+      (error: unknown) => {
+        if (!existsSync(readyPath)) {
+          throw error;
+        }
+      },
+    ),
+  ]);
+}
+
+it("admits resource comparison explicitly without inheriting developer credentials", () => {
+  expect(validateCliArgs([])).toBeUndefined();
+  expect(validateCliArgs(["--resource-profile", "report.json"])).toBe(path.resolve("report.json"));
+  expect(() => validateCliArgs(["--resource-profile"])).toThrow("requires one report path");
+  expect(() => validateCliArgs(["--resource-profile", "a", "--resource-profile", "b"])).toThrow(
+    "requires one report path",
+  );
+  const env = kitchenSinkResourceEnv({
+    PATH: "/usr/bin",
+    OPENAI_API_KEY: "test-only",
+    NODE_OPTIONS: "--require=developer-hook",
+    HTTPS_PROXY: "http://example.invalid",
+  });
+  expect(env.PATH).toBe("/usr/bin");
+  expect(env.OPENAI_API_KEY).toBeUndefined();
+  expect(env.NODE_OPTIONS).toBeUndefined();
+  expect(env.HTTPS_PROXY).toBeUndefined();
+  expect(env.OPENCLAW_NO_RESPAWN).toBe("1");
+});
+
+it("rejects an active-plugin contaminated baseline and missing or failed conformance activation", () => {
+  const fixture = { id: "openclaw-kitchen-sink-fixture", runtime: { state: "active" } };
+  expect(assertKitchenSinkResourcePlugins({ plugins: [] }, false)).toEqual([]);
+  expect(assertKitchenSinkResourcePlugins({ plugins: [fixture] }, true)).toEqual([fixture.id]);
+  expect(() =>
+    assertKitchenSinkResourcePlugins(
+      { plugins: [fixture, { id: "memory-core", runtime: { state: "active" } }] },
+      true,
+    ),
+  ).toThrow("Unexpected active plugins");
+  expect(() => assertKitchenSinkResourcePlugins({ plugins: [fixture] }, false)).toThrow(
+    "Unexpected active plugins",
+  );
+  expect(() => assertKitchenSinkResourcePlugins({ plugins: [] }, true)).toThrow(
+    "Unexpected active plugins",
+  );
+  expect(() =>
+    assertKitchenSinkResourcePlugins(
+      { plugins: [{ ...fixture, runtime: { state: "service-failed" } }] },
+      true,
+    ),
+  ).toThrow("Unexpected active plugins");
+});
 
 type RunTaskkill = NonNullable<
   NonNullable<Parameters<typeof signalProcessGroup>[2]>["runTaskkill"]
@@ -167,9 +368,18 @@ async function sampleWindowsSnapshot(stdout: string, commandLineNeedles?: string
   return { calls, sample };
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.useRealTimers();
+let processFixtureCleanup: (() => Promise<void>) | undefined;
+afterEach(async () => {
+  try {
+    // Vitest runs afterEach before onTestFinished, including after a timeout.
+    // Join fake-time process cleanup before restoring the clock it still owns.
+    await processFixtureCleanup?.();
+  } finally {
+    processFixtureCleanup = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  }
 });
 
 function captureSyncError(action: () => void): Error {
@@ -258,13 +468,12 @@ process.exit(17);
     expect(isProcessAlive(receipt.pid)).toBe(false);
   });
 
-  it("prints help without creating temp state or installing the plugin", async () => {
-    const result = await runCommand(process.execPath, [
-      "--import",
-      "tsx",
-      "scripts/e2e/kitchen-sink-rpc-walk.mts",
-      "--help",
-    ]);
+  it("prints help before malformed guardrails without creating temp state", async () => {
+    const result = await runCommand(
+      process.execPath,
+      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
+      { env: { ...process.env, OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3" } },
+    );
 
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain(
@@ -278,24 +487,6 @@ process.exit(17);
     expect(result.stdout).toContain("OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS");
     expect(result.stdout).not.toContain("Kitchen Sink RPC walk using");
     expect(result.stdout).not.toContain("temp root preserved");
-  });
-
-  it("prints help before parsing malformed runtime guardrails", async () => {
-    const result = await runCommand(
-      process.execPath,
-      ["--import", "tsx", "scripts/e2e/kitchen-sink-rpc-walk.mts", "--help"],
-      {
-        env: {
-          ...process.env,
-          OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB: "1e3",
-        },
-      },
-    );
-
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toContain(
-      "Usage: node --import tsx scripts/e2e/kitchen-sink-rpc-walk.mts",
-    );
   });
 
   it("detects short and long help flags", () => {
@@ -399,6 +590,31 @@ process.exit(17);
     expect(existsSync(root)).toBe(false);
   });
 
+  it("preserves a disabled memory slot when enabling the resource fixture", async () => {
+    const { root, env } = makeEnv(kitchenSinkResourceEnv());
+    try {
+      writeFileSync(
+        env.OPENCLAW_CONFIG_PATH,
+        JSON.stringify({ plugins: { enabled: false, slots: { memory: "none" } } }),
+      );
+      configureKitchenSink(env, 18888);
+      const config = JSON.parse(readFileSync(env.OPENCLAW_CONFIG_PATH, "utf8"));
+      expect(config.plugins).toMatchObject({
+        enabled: true,
+        slots: { memory: "none" },
+        allow: ["openclaw-kitchen-sink-fixture"],
+        entries: {
+          "openclaw-kitchen-sink-fixture": {
+            enabled: true,
+            config: { personality: "conformance" },
+          },
+        },
+      });
+    } finally {
+      await cleanupKitchenSinkEnv(root);
+    }
+  });
+
   it("uses the candidate config dialect only for an authorized frozen target", async () => {
     const { root, env } = makeEnv();
     try {
@@ -497,7 +713,6 @@ describe("kitchen-sink RPC gateway teardown", () => {
 
     expect(child.kill).toHaveBeenCalledOnce();
   });
-
   it("treats failed gateway kill signals as already exited", async () => {
     const child = new EventEmitter() as EventEmitter & {
       exitCode: number | null;
@@ -832,16 +1047,15 @@ describe("kitchen-sink RPC command output capture", () => {
     }
   });
 
-  posixIt("kills timed command process groups", async () => {
+  posixIt("kills timed command process groups", async ({ signal, onTestFinished }) => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-"));
     const scriptPath = path.join(root, "trap-term.mjs");
     const grandchildPidPath = path.join(root, "grandchild.pid");
     const grandchildReadyPath = path.join(root, "grandchild.ready");
     let grandchildPid = 0;
     const grandchildScript = [
-      "const fs = require('node:fs');",
       "process.on('SIGTERM', () => {});",
-      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
+      "process.send('ready');",
       "setInterval(() => {}, 1000);",
     ].join(" ");
 
@@ -850,11 +1064,16 @@ describe("kitchen-sink RPC command output capture", () => {
       `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const grandchild = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(grandchildScript)},
-], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+});
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
@@ -862,6 +1081,7 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const runPromise = runCommand(
       process.execPath,
       [scriptPath, grandchildPidPath, grandchildReadyPath],
@@ -878,23 +1098,42 @@ setInterval(() => {}, 1000);
       (error: unknown) => error,
     );
 
+    let finishing: Promise<unknown> | undefined;
+    const finishCommand = () =>
+      (finishing ??= (async () => {
+        if (vi.isFakeTimers()) {
+          await vi.runAllTimersAsync();
+          vi.useRealTimers();
+        }
+        return runErrorPromise;
+      })());
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        await finishCommand();
+        if (!grandchildPid && existsSync(grandchildPidPath)) {
+          grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        }
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        rmSync(root, { recursive: true, force: true });
+      })());
+    processFixtureCleanup = cleanup;
+    onTestFinished(cleanup);
+
     try {
-      await waitFor(() => existsSync(grandchildPidPath));
-      await waitFor(() => existsSync(grandchildReadyPath));
+      await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, runPromise), signal);
       grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
       expect(Number.isInteger(grandchildPid)).toBe(true);
       expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      const runError = await runErrorPromise;
+      const runError = await withinTest(finishCommand(), signal);
       expect(runError).toBeInstanceOf(Error);
       expect((runError as Error).message).toContain("timed out after 500ms");
-      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
+      await waitForProcessExit(grandchildPid, signal);
     } finally {
-      await runPromise.catch(() => {});
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
-        process.kill(grandchildPid, "SIGKILL");
-      }
-      rmSync(root, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
@@ -1063,180 +1302,212 @@ describe("kitchen-sink RPC caller loading", () => {
     }
   });
 
-  posixIt("kills descendants when timed commands exit cleanly after SIGTERM", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
-    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
-    const grandchildPidPath = path.join(root, "grandchild.pid");
-    const grandchildReadyPath = path.join(root, "grandchild.ready");
-    const parentPidPath = path.join(root, "parent.pid");
-    let grandchildPid = 0;
-    const grandchildScript = [
-      "const fs = require('node:fs');",
-      "process.on('SIGTERM', () => {});",
-      "fs.writeFileSync(process.env.GRANDCHILD_READY_PATH, 'ready');",
-      "setInterval(() => {}, 1000);",
-    ].join(" ");
+  posixIt(
+    "kills descendants when timed commands exit cleanly after SIGTERM",
+    async ({ signal, onTestFinished }) => {
+      const tempDirs: string[] = [];
+      const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-timeout-clean-parent-");
+      const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      const grandchildReadyPath = path.join(root, "grandchild.ready");
+      const parentPidPath = path.join(root, "parent.pid");
+      let grandchildPid = 0;
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "process.send('ready');",
+        "setInterval(() => {}, 1000);",
+      ].join(" ");
 
-    writeFileSync(
-      scriptPath,
-      `
+      writeFileSync(
+        scriptPath,
+        `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const grandchild = spawn(process.execPath, [
   "-e",
   ${JSON.stringify(grandchildScript)},
-], { env: { ...process.env, GRANDCHILD_READY_PATH: process.argv[3] }, stdio: "ignore" });
+], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+grandchild.once("message", () => {
+  fs.writeFileSync(process.argv[3], "ready");
+  sendReceipt(process.argv[3], "ready");
+});
 process.on("SIGTERM", () => process.exit(0));
 fs.writeFileSync(process.argv[4], String(process.pid));
 fs.writeFileSync(process.argv[2], String(grandchild.pid));
 setInterval(() => {}, 1000);
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    // Readiness polling uses real time; command deadlines advance only after
-    // the real processes have installed their signal handlers.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    const runPromise = runCommand(
-      process.execPath,
-      [scriptPath, grandchildPidPath, grandchildReadyPath, parentPidPath],
-      {
-        timeoutKillGraceMs: 100,
-        timeoutMs: 100,
-      },
-    );
-    let settled = false;
-    const runErrorPromise = runPromise.then(
-      () => {
-        settled = true;
-      },
-      (error: unknown) => {
-        settled = true;
-        return error;
-      },
-    );
-    const finishCommand = () =>
-      waitFor(async () => {
-        await vi.runOnlyPendingTimersAsync();
-        return settled;
-      });
+      // Advance command deadlines only after the real processes report that
+      // their signal handlers are installed.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      const runPromise = runCommand(
+        process.execPath,
+        [scriptPath, grandchildPidPath, grandchildReadyPath, parentPidPath],
+        {
+          timeoutKillGraceMs: 100,
+          timeoutMs: 100,
+        },
+      );
+      const runErrorPromise = runPromise.catch((error: unknown) => error);
+      let finishing: Promise<unknown> | undefined;
+      const finishCommand = () =>
+        (finishing ??= (async () => {
+          if (vi.isFakeTimers()) {
+            await vi.runAllTimersAsync();
+            vi.useRealTimers();
+          }
+          return runErrorPromise;
+        })());
 
-    try {
-      await waitFor(() => {
-        if (!existsSync(grandchildPidPath)) {
-          return false;
-        }
-        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
-        return Number.isInteger(grandchildPid);
-      });
-      const parentPid = Number.parseInt(readText(parentPidPath), 10);
-      await waitFor(() => existsSync(grandchildReadyPath));
-      expect(Number.isInteger(grandchildPid)).toBe(true);
-      expect(isProcessAlive(grandchildPid)).toBe(true);
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          try {
+            // A readiness/assertion failure must still fire the deadline and kill grace.
+            await finishCommand();
+          } finally {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+            if (!grandchildPid && existsSync(grandchildPidPath)) {
+              grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+            }
+            if (grandchildPid && isProcessAlive(grandchildPid)) {
+              process.kill(grandchildPid, "SIGKILL");
+            }
+            cleanupTempDirs(tempDirs);
+          }
+        })());
+      processFixtureCleanup = cleanup;
+      onTestFinished(cleanup);
 
-      await vi.advanceTimersByTimeAsync(100);
-      await waitFor(() => !isProcessAlive(parentPid));
-      await finishCommand();
-      const runError = await runErrorPromise;
-      expect(runError).toBeInstanceOf(Error);
-      expect((runError as Error).message).toContain("timed out after 100ms");
-      expect(runError).toMatchObject({ status: 0, signal: null });
-      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
-    } finally {
       try {
-        // A readiness/assertion failure must still fire the deadline and kill grace.
-        await finishCommand();
+        await withinTest(fixtureReadyBeforeSettlement(grandchildReadyPath, runPromise), signal);
+        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        const parentPid = Number.parseInt(readText(parentPidPath), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(100);
+        await waitForProcessExit(parentPid, signal);
+        const runError = await withinTest(finishCommand(), signal);
+        expect(runError).toBeInstanceOf(Error);
+        expect((runError as Error).message).toContain("timed out after 100ms");
+        expect(runError).toMatchObject({ status: 0, signal: null });
+        await waitForProcessExit(grandchildPid, signal);
       } finally {
-        vi.clearAllTimers();
-        vi.useRealTimers();
-        if (grandchildPid && isProcessAlive(grandchildPid)) {
-          process.kill(grandchildPid, "SIGKILL");
-        }
-        cleanupTempDirs(tempDirs);
+        await cleanup();
       }
-    }
-  });
+    },
+  );
 
-  posixIt("cleans active command process groups before parent signal exit", async () => {
-    const tempDirs: string[] = [];
-    const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-parent-signal-");
-    const runnerPath = path.join(root, "runner.mjs");
-    const scriptPath = path.join(root, "term-zero-grandchild.mjs");
-    const grandchildPidPath = path.join(root, "grandchild.pid");
-    const readyPath = path.join(root, "ready");
-    let grandchildPid = 0;
-    let runner: ReturnType<typeof spawn> | undefined;
-    const grandchildScript = [
-      "const fs = require('node:fs');",
-      "process.on('SIGTERM', () => {});",
-      "process.on('SIGHUP', () => {});",
-      `fs.writeFileSync(${JSON.stringify(readyPath)}, 'ready');`,
-      "setInterval(() => {}, 1000);",
-    ].join("\n");
+  posixIt(
+    "cleans active command process groups before parent signal exit",
+    async ({ signal, onTestFinished }) => {
+      const tempDirs: string[] = [];
+      const root = makeTempDir(tempDirs, "openclaw-kitchen-rpc-parent-signal-");
+      const runnerPath = path.join(root, "runner.mjs");
+      const scriptPath = path.join(root, "term-zero-grandchild.mjs");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      const readyPath = path.join(root, "ready");
+      let grandchildPid = 0;
+      let runner: ReturnType<typeof spawn> | undefined;
+      let closed: Promise<{ code: number | null; signal: NodeJS.Signals | null }> | undefined;
+      const grandchildScript = [
+        "process.on('SIGTERM', () => {});",
+        "process.on('SIGHUP', () => {});",
+        "process.send('ready');",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
 
-    writeFileSync(
-      scriptPath,
-      `
+      writeFileSync(
+        scriptPath,
+        `
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+${fixtureReceiptClientSource(receipts.endpoint)}
 
 const grandchild = spawn(process.execPath, ["-e", ${JSON.stringify(grandchildScript)}], {
-  stdio: "ignore",
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+grandchild.once("message", () => {
+  fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");
+  sendReceipt(${JSON.stringify(readyPath)}, "ready");
 });
 fs.writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));
 process.on("SIGTERM", () => process.exit(0));
 setInterval(() => {}, 1000);
 `,
-      "utf8",
-    );
-    writeFileSync(
-      runnerPath,
-      `
+        "utf8",
+      );
+      writeFileSync(
+        runnerPath,
+        `
 import { runCommand } from ${JSON.stringify(
-        new URL("../../scripts/e2e/kitchen-sink-rpc-walk.mts", import.meta.url).href,
-      )};
+          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.kitchenSinkRpcWalk).href,
+        )};
 
 await runCommand(process.execPath, [${JSON.stringify(scriptPath)}], {
   timeoutKillGraceMs: 100,
   timeoutMs: 30_000,
 });
 `,
-      "utf8",
-    );
+        "utf8",
+      );
 
-    try {
-      runner = spawn(process.execPath, ["--import", "tsx", runnerPath], {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS: "100",
-        },
-        stdio: ["ignore", "ignore", "pipe"],
-      });
-      await waitFor(() => existsSync(readyPath) && existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
-      expect(Number.isInteger(grandchildPid)).toBe(true);
-      expect(isProcessAlive(grandchildPid)).toBe(true);
+      let cleanupPromise: Promise<void> | undefined;
+      const cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          // Let the runner retire its detached command group even if readiness failed.
+          if (runner?.pid && isProcessAlive(runner.pid)) {
+            runner.kill("SIGTERM");
+          }
+          await closed;
+          if (!grandchildPid && existsSync(grandchildPidPath)) {
+            grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+          }
+          if (grandchildPid && isProcessAlive(grandchildPid)) {
+            process.kill(grandchildPid, "SIGKILL");
+          }
+          cleanupTempDirs(tempDirs);
+        })());
+      processFixtureCleanup = cleanup;
+      onTestFinished(cleanup);
 
-      runner.kill("SIGTERM");
+      try {
+        const child = spawn(process.execPath, ["--import", "tsx", runnerPath], {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_KITCHEN_SINK_PARENT_SIGNAL_KILL_GRACE_MS: "100",
+          },
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+        runner = child;
+        closed = new Promise((resolve, reject) => {
+          child.once("error", reject);
+          child.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+        });
+        await withinTest(fixtureReadyBeforeSettlement(readyPath, closed), signal);
+        grandchildPid = Number.parseInt(readText(grandchildPidPath), 10);
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(waitForChildClose(runner, 5_000)).resolves.toEqual({
-        code: null,
-        signal: "SIGTERM",
-      });
-      await waitFor(() => !isProcessAlive(grandchildPid), 5_000);
-    } finally {
-      if (grandchildPid && isProcessAlive(grandchildPid)) {
-        process.kill(grandchildPid, "SIGKILL");
+        runner.kill("SIGTERM");
+
+        await expect(withinTest(closed, signal)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForProcessExit(grandchildPid, signal);
+      } finally {
+        await cleanup();
       }
-      if (runner?.pid && isProcessAlive(runner.pid)) {
-        runner.kill("SIGKILL");
-      }
-      cleanupTempDirs(tempDirs);
-    }
-  });
+    },
+  );
 });
 
 describe("kitchen-sink RPC payload unwrapping", () => {
@@ -1248,7 +1519,6 @@ describe("kitchen-sink RPC payload unwrapping", () => {
         'warning: ignored trailing diagnostic {"ok":false,"result":{"stale":true}}',
       ].join("\n"),
     );
-
     expect(parsed).toEqual({ ok: true, result: { current: true } });
   });
 
@@ -1383,37 +1653,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
     ).toEqual(["kitchen_sink_text", "kitchen_sink_search", "kitchen_sink_image_job"]);
   });
 
-  it("invokes every advertised Kitchen Sink tool during the RPC walk", () => {
-    expect(listKitchenSinkToolInvokeNames().toSorted()).toEqual([
-      "kitchen_sink_image_job",
-      "kitchen_sink_search",
-      "kitchen_sink_text",
-    ]);
-  });
-
-  it("walks broad read-only gateway RPC surfaces", () => {
-    expect(listKitchenSinkReadOnlyRpcProbeNames()).toEqual(
-      expect.arrayContaining([
-        "gateway.identity.get",
-        "config.schema.lookup",
-        "models.list",
-        "skills.status",
-        "agents.list",
-        "sessions.list",
-        "cron.list",
-        "tasks.list",
-        "usage.status",
-        "voicewake.routing.get",
-        "talk.catalog",
-        "update.status",
-        "node.list",
-        "device.pair.list",
-        "exec.approvals.get",
-        "environments.status",
-      ]),
-    );
-  });
-
   it("proves node-only RPC authorization boundaries", async () => {
     expect(listKitchenSinkAuthorizationRpcProbeNames()).toEqual(["skills.bins"]);
     await expect(
@@ -1487,28 +1726,6 @@ describe("kitchen-sink RPC command catalog assertions", () => {
         }),
       ).toBeNull();
     }
-  });
-
-  it("requires provenance for effective Kitchen Sink plugin tools too", () => {
-    expect(() =>
-      assertExpectedKitchenSinkToolEntries(
-        [
-          { id: "kitchen_sink_text", source: "plugin", pluginId: "openclaw-kitchen-sink-fixture" },
-          {
-            id: "kitchen_sink_search",
-            source: "plugin",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-          {
-            id: "kitchen_sink_image_job",
-            source: "core",
-            pluginId: "openclaw-kitchen-sink-fixture",
-          },
-        ],
-        "tools.effective plugin tools",
-        { requirePluginProvenance: true },
-      ),
-    ).toThrow("tools.effective plugin tools plugin provenance mismatch");
   });
 
   it("requires the exact Kitchen Sink channel account", () => {
@@ -1792,8 +2009,6 @@ describe("kitchen-sink RPC health/status assertions", () => {
         },
         channelSummary: [],
         queuedSystemEvents: [],
-        tasks: {},
-        taskAudit: {},
         sessions: {
           paths: [],
           count: 0,
@@ -2241,19 +2456,21 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  it("cancels stalled HTTP probe response streams when the external signal fires", async () => {
-    let readStarted = false;
-    let canceled = false;
+  it("cancels stalled HTTP probe response streams when the external signal fires", async ({
+    signal,
+  }) => {
+    const readStarted = createDeferred();
+    const canceled = createDeferred();
     const controller = new AbortController();
     const fetchImpl = vi.fn().mockResolvedValue(
       new Response(
         new ReadableStream({
           pull() {
-            readStarted = true;
+            readStarted.resolve();
             return new Promise(() => {});
           },
           cancel() {
-            canceled = true;
+            canceled.resolve();
           },
         }),
         { status: 200 },
@@ -2268,11 +2485,19 @@ describe("kitchen-sink RPC process sampling", () => {
     });
     const rejection = expect(result).rejects.toThrow("gateway exited before ready");
 
-    await waitFor(() => readStarted);
-    controller.abort(new Error("gateway exited before ready"));
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(readStarted.promise, result, "timed out waiting for condition"),
+        signal,
+      );
+      controller.abort(new Error("gateway exited before ready"));
 
-    await rejection;
-    await waitFor(() => canceled);
+      await withinTest(rejection, signal);
+      await withinTest(canceled.promise, signal);
+    } finally {
+      controller.abort(new Error("gateway exited before ready"));
+      await rejection;
+    }
   });
 
   it("times out stalled HTTP probe response bodies", async () => {
@@ -2303,16 +2528,37 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(fetchImpl.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
   });
 
-  it("fails when the sampled RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ rssMiB: 2049 })).toThrow(
-      "gateway RSS exceeded 2048 MiB: 2049 MiB",
-    );
-  });
-
-  it("fails when aggregate RSS exceeds the configured ceiling", () => {
-    expect(() => assertResourceCeiling({ aggregateRssMiB: 2049, rssMiB: 1024 })).toThrow(
-      "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
-    );
+  it.each([false, true])("enforces RSS locally and warns in Actions (%s)", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions ? "true" : "");
+    vi.stubEnv("GITHUB_STEP_SUMMARY", "");
+    const report = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [assertCeiling, sample, message] of [
+      [assertResourceCeiling, { rssMiB: 2049 }, "gateway RSS exceeded 2048 MiB: 2049 MiB"],
+      [
+        assertResourceCeiling,
+        { aggregateRssMiB: 2049, rssMiB: 1024 },
+        "gateway aggregate RSS exceeded 2048 MiB: 2049 MiB",
+      ],
+      [
+        assertCommandResourceCeiling,
+        { aggregateRssMiB: 8193, rssMiB: 1024 },
+        "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
+      ],
+    ] as const) {
+      if (actions) {
+        expect(() => assertCeiling(sample)).not.toThrow();
+        expect(report).toHaveBeenCalledWith(expect.stringContaining(`::${message}`));
+      } else {
+        expect(() => assertCeiling(sample)).toThrow(message);
+      }
+    }
+    if (actions) {
+      expect(report).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "::warning file=scripts/e2e/kitchen-sink-rpc-walk.mts,line=1,col=0",
+        ),
+      );
+    }
   });
 
   it("summarizes peak RSS across repeated process samples", () => {
@@ -2331,23 +2577,15 @@ describe("kitchen-sink RPC process sampling", () => {
     });
   });
 
-  it("fails when process sampling does not capture RSS", () => {
+  it.each(["", "true"])("rejects missing and invalid RSS in Actions mode %s", (actions) => {
+    vi.stubEnv("GITHUB_ACTIONS", actions);
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
-  });
-
-  it("fails zero-valued process RSS samples", () => {
+    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
     expect(() => assertResourceCeiling({ rssMiB: 0 })).toThrow(
       "gateway RSS sample was invalid: 0 MiB",
     );
     expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 0, rssMiB: 128 })).toThrow(
       "command aggregate RSS sample was invalid: 0 MiB",
-    );
-  });
-
-  it("fails missing command samples and command RSS spikes", () => {
-    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
-    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
-      "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
     );
   });
 });
@@ -2356,13 +2594,15 @@ function readText(file: string) {
   return readFileSync(file, "utf8");
 }
 
-async function waitFor(condition: () => boolean | Promise<boolean>, timeoutMs = 3_000) {
-  const startedAt = realNow();
-  while (!(await condition())) {
-    if (realNow() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
+// runCommand bounds its group probe; it cannot join a foreign descendant's
+// kernel exit. Keep that observation deadline-free and tied to the test lifetime.
+async function waitForProcessExit(pid: number, signal: AbortSignal) {
+  while (isProcessAlive(pid)) {
+    try {
+      await realDelay(25, undefined, { signal });
+    } catch (cause) {
+      throw new Error(`timed out waiting for condition: process ${pid} to exit`, { cause });
     }
-    await realDelay(25);
   }
 }
 

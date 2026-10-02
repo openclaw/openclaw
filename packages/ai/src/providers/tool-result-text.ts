@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAiTransportHost } from "../host.js";
+import { hasMediaPayload } from "../media-payload.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
 const STRUCTURED_TOOL_RESULT_MAX_CHARS = 8000;
@@ -107,18 +108,6 @@ function truncateStructuredToolText(text: string): string {
     return text;
   }
   return `${truncateUtf16Safe(text, STRUCTURED_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
-}
-
-/** Media metadata alone is not an attachment; provider emitters need inline bytes. */
-export function hasMediaPayload(
-  block: unknown,
-): block is Record<string, unknown> & { data: string } {
-  return isRecord(block) && typeof block.data === "string" && block.data.trim().length > 0;
-}
-
-/** Image metadata alone is not an attachment; provider emitters need inline bytes. */
-export function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
-  return isRecord(block) && block.type === "image" && hasMediaPayload(block);
 }
 
 function classifyToolResultMedia(blocks: readonly unknown[]): {

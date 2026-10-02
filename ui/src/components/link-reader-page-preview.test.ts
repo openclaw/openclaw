@@ -15,7 +15,8 @@ function linkHovercardUrl(anchor: HTMLAnchorElement) {
   const target = resolveHoverPreviewTarget(anchor, owner);
   return target && !target.reader ? new URL(target.href) : null;
 }
-import { prefetchLinkReader } from "./link-reader-hovercard-registration.ts";
+import { prefetchLinkReader } from "./link-reader-prefetch-request.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import { renderWizardStepControls } from "./wizard-step-controls.ts";
 
@@ -90,6 +91,75 @@ afterEach(() => {
 });
 
 describe("generic link hovercards", () => {
+  it("keeps a rendered GitHub sign-in link ordinary while genuine issue and PR links preview", async () => {
+    const view = fixture();
+    const login = "https://github.com/login?return_to=%2Facme%2Fproject%2Fpull%2F42";
+    view.pane.innerHTML = toSanitizedMarkdownHtml(
+      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43)`,
+    );
+    const [signIn, pull, issue] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
+    await hover(signIn!);
+    signIn!.focus();
+    signIn!.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    await prefetchLinkReader(signIn!, new AbortController().signal);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(document.querySelector(".link-hovercard, .link-reader-hovercard")).toBeNull();
+    expect(signIn!.href).toBe(login);
+    expect(signIn!.target).toBe("_blank");
+    expect(signIn!.textContent).toBe("Sign in");
+    for (const anchor of [pull!, issue!]) {
+      view.request.mockResolvedValue({
+        url: anchor.href,
+        title: "Real resource",
+        subtitle: "acme/project",
+        badge: { label: "Open", tone: "positive" },
+      });
+      await hover(anchor);
+      expect(document.querySelector(".link-reader-hovercard")?.textContent).toContain(
+        "Real resource",
+      );
+      expect(view.request).toHaveBeenLastCalledWith(
+        "forge.preview",
+        { url: anchor.href },
+        { signal: expect.any(AbortSignal) },
+      );
+    }
+  });
+
+  it.each([
+    "https://github.com/",
+    "https://github.com/acme",
+    "https://github.com/login/device",
+    "https://github.com/%6cogin/device",
+    "https://github.com/settings/profile",
+    "https://github.com/orgs/openclaw",
+    "https://github.com/apps/example",
+    "https://github.com/issues/assigned",
+    "https://github.com/%69ssues/mentioned",
+    "https://github.com/pulls/review-requested",
+    "https://github.com/discussions/created",
+    "https://github.com/enterprises/example",
+    "https://github.com/copilot/spaces",
+    "https://github.com/marketplace/manage",
+    "https://github.com/acme/project/settings",
+    "https://github.com/acme/project/commit/abcdef1",
+    "https://github.com/acme/project.git",
+    "https://github.com/acme%2fother/project",
+    "https://github.com:8443/acme/project",
+    "https://www.github.com/acme/project",
+    "https://github.com/login/oauth/authorize?client_id=example-client",
+    "https://github.com/session",
+    "https://www.github.com/login",
+  ])("never substitutes a public-page card for unsupported GitHub URL %s", async (href) => {
+    const view = fixture();
+    view.anchor.href = href;
+    await hover(view.anchor);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(card()).toBeNull();
+    expect(view.anchor.href).toBe(href);
+  });
+
   it("leaves the real wizard sign-in action external without fetching its authorization URL", async () => {
     const view = fixture();
     const authorizationUrl = "https://provider.example/authorize?state=synthetic-state";
@@ -318,10 +388,66 @@ describe("generic link hovercards", () => {
       expect(linkHovercardUrl(anchor)).toBeNull();
     },
   );
-  it("allows ordinary GitHub repository links but not explicit rich tooltip owners", () => {
+  it.each([
+    "https://github.com/openclaw/openclaw",
+    "https://github.com/openclaw/clawsweeper/?tab=readme-ov-file#readme",
+    "https://github.com/%6fpenclaw/project.name",
+    "https://github.com/education/students",
+    "https://github.com/resources/articles?type=article",
+    "https://github.com/advisories/GHSA-2345-6789-cfgh",
+    "https://github.com/git-guides/git-init",
+    "https://github.com/open-source/github-fund",
+    "https://github.com/trust-center/privacy",
+    "https://github.com/partners/technology-partners",
+    "https://github.com/customer-terms/general-terms",
+    "https://github.com/newsroom/press-releases",
+  ])("shows a public GitHub social card on intent without prefetching %s", async (href) => {
+    const { anchor, request } = fixture();
+    anchor.href = href;
+    const imageDataUrl = "data:image/png;base64,AAAA";
+    request.mockResolvedValue({
+      title: "OpenClaw repository",
+      description: "Your own personal assistant.",
+      imageDataUrl,
+    });
+    await prefetchLinkReader(anchor, new AbortController().signal);
+    expect(request).not.toHaveBeenCalled();
+    await hover(anchor);
+    expect(card()?.textContent).toContain("OpenClaw repository");
+    expect(card()?.textContent).toContain("Your own personal assistant.");
+    expect(card()?.querySelector(".link-hovercard__image")?.getAttribute("src")).toBe(imageDataUrl);
+    expect(card()?.querySelector("a")?.href).toBe(href);
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "controlUi.linkPreview",
+      { url: href.split("#", 1)[0] },
+      { signal: expect.any(AbortSignal) },
+    );
+  });
+
+  it("keeps a plugin's repository claim authoritative over public metadata", async () => {
+    const view = fixture();
+    view.anchor.href = "https://github.com/openclaw/openclaw";
+    view.provider.claimedReaders = [
+      {
+        pluginId: "forge",
+        id: "repository",
+        label: "Repository",
+        linkReader: {
+          hosts: ["github.com"],
+          pathPattern: "^/openclaw/openclaw$",
+          detailMethod: "forge.repository",
+        },
+      },
+    ];
+    await hover(view.anchor);
+    expect(view.request).not.toHaveBeenCalled();
+    expect(card()).toBeNull();
+  });
+
+  it("keeps explicit rich tooltip owners out of page previews", () => {
     const { anchor, pane } = fixture();
-    anchor.href = "https://github.com/openclaw/openclaw";
-    expect(linkHovercardUrl(anchor)?.hostname).toBe("github.com");
+    anchor.href = url;
+    expect(linkHovercardUrl(anchor)?.hostname).toBe("example.com");
     const tooltip = pane.appendChild(document.createElement("openclaw-tooltip"));
     tooltip.append(anchor);
     expect(linkHovercardUrl(anchor)).toBeNull();

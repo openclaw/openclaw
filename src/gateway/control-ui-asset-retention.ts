@@ -3,11 +3,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as openRoot, type Root } from "@openclaw/fs-safe";
+import { isWithinDir } from "@openclaw/fs-safe/path";
 import { resolveStateDir } from "../config/paths.js";
 import { sha256File } from "../infra/directory-durability.js";
 import { isErrno } from "../infra/errors.js";
 import { copyFileHandle } from "../infra/file-descriptor.js";
-import { isWithinDir } from "../infra/path-safety.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseControlUiAssetManifest } from "./control-ui-asset-manifest-parse.js";
 import {
@@ -45,10 +46,6 @@ export type ControlUiAssetRetention = {
   resolveAsset: (assetPath: string) => ResolvedRetainedControlUiAsset | null;
 };
 
-function resolveControlUiAssetCacheDir(): string {
-  return path.join(resolveStateDir(), "cache", "control-ui-assets");
-}
-
 async function readCachedGeneration(
   directory: string,
   signal?: AbortSignal,
@@ -56,10 +53,11 @@ async function readCachedGeneration(
   try {
     signal?.throwIfAborted();
     const stats = await fs.lstat(directory);
-    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+    if (!stats.isDirectory()) {
       return null;
     }
-    const realPath = await fs.realpath(directory);
+    const assetRoot = await openRoot(directory);
+    const realPath = assetRoot.rootReal;
     if (!isWithinDir(path.dirname(directory), realPath)) {
       return null;
     }
@@ -71,8 +69,7 @@ async function readCachedGeneration(
       await verifyAsset({
         entry: asset,
         signal,
-        root: realPath,
-        rootRealPath: realPath,
+        root: assetRoot,
       });
     }
     const currentStats = await fs.lstat(directory);
@@ -95,12 +92,7 @@ async function readCachedGeneration(
 }
 
 function sameDirectory(left: Stats, right: Stats): boolean {
-  return (
-    right.isDirectory() &&
-    !right.isSymbolicLink() &&
-    left.dev === right.dev &&
-    left.ino === right.ino
-  );
+  return right.isDirectory() && left.dev === right.dev && left.ino === right.ino;
 }
 
 function compareGenerations(left: RetainedGeneration, right: RetainedGeneration): number {
@@ -129,12 +121,12 @@ async function readCacheInventory(
   const known = new Map(verified.map((generation) => [generation.generation, generation]));
   for (const entry of entries) {
     signal?.throwIfAborted();
-    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+    if (!entry.isDirectory()) {
       continue;
     }
     const directory = path.join(cacheRealPath, entry.name);
     const stats = await fs.lstat(directory).catch(() => null);
-    if (!stats || !stats.isDirectory() || stats.isSymbolicLink()) {
+    if (!stats?.isDirectory()) {
       continue;
     }
     directories.set(directory, stats);
@@ -164,7 +156,7 @@ async function readAssetManifest(
   signal?.throwIfAborted();
   const stats = await fs.lstat(manifestPath);
   signal?.throwIfAborted();
-  if (stats.isSymbolicLink() || !stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
+  if (!stats.isFile() || stats.size > CONTROL_UI_MANIFEST_MAX_BYTES) {
     throw new Error(`Invalid Control UI asset manifest: ${manifestPath}`);
   }
   const manifest = parseControlUiAssetManifest(
@@ -181,25 +173,17 @@ async function verifyAsset(params: {
   destination?: string;
   entry: ControlUiAssetManifestEntry;
   signal?: AbortSignal;
-  root: string;
-  rootRealPath: string;
+  root: Root;
 }): Promise<void> {
   params.signal?.throwIfAborted();
-  const sourcePath = path.resolve(params.root, params.entry.path);
-  if (!isWithinDir(params.root, sourcePath)) {
-    throw new Error(`Unsafe Control UI asset path: ${params.entry.path}`);
-  }
-  const expectedRealPath = await fs.realpath(sourcePath);
-  if (!isWithinDir(params.rootRealPath, expectedRealPath)) {
-    throw new Error(`Unsafe Control UI asset path: ${params.entry.path}`);
-  }
-  const initialStats = await fs.lstat(sourcePath);
-  if (initialStats.isSymbolicLink() || !initialStats.isFile()) {
-    throw new Error(`Unsafe Control UI asset: ${params.entry.path}`);
-  }
-  const source = await fs.open(sourcePath, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  const opened = await params.root.open(params.entry.path, {
+    hardlinks: "allow",
+    symlinks: "follow-parents-within-root",
+  });
+  const source = opened.handle;
   let destination: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
+    params.signal?.throwIfAborted();
     if (params.destination) {
       destination = await fs.open(
         params.destination,
@@ -225,17 +209,16 @@ async function verifyAsset(params: {
     } else {
       ({ bytes, digest } = await sha256File(source, options));
     }
-    const openedStats = await source.stat();
-    const currentStats = await fs.lstat(sourcePath);
-    const currentRealPath = await fs.realpath(sourcePath);
+    // A verified copy can outlive its source path; cached paths must still name the verified file.
+    const sourcePath = path.join(params.root.rootDir, params.entry.path);
+    const current = params.destination ? undefined : await fs.lstat(sourcePath);
     if (
-      !openedStats.isFile() ||
-      openedStats.size !== params.entry.size ||
-      currentStats.isSymbolicLink() ||
-      !currentStats.isFile() ||
-      currentRealPath !== expectedRealPath ||
-      currentStats.dev !== openedStats.dev ||
-      currentStats.ino !== openedStats.ino ||
+      (current &&
+        (!current.isFile() ||
+          current.size !== params.entry.size ||
+          current.dev !== opened.stat.dev ||
+          current.ino !== opened.stat.ino ||
+          (await fs.realpath(sourcePath)) !== opened.realPath)) ||
       bytes !== params.entry.size ||
       digest !== params.entry.sha256
     ) {
@@ -277,7 +260,7 @@ async function publishGeneration(params: {
   params.signal?.throwIfAborted();
   await fs.mkdir(staging, { recursive: false, mode: 0o700 });
   try {
-    const rootRealPath = await fs.realpath(params.root);
+    const sourceRoot = await openRoot(params.root);
     let preparedDirectory: string | undefined;
     for (const entry of params.manifest.assets) {
       params.signal?.throwIfAborted();
@@ -292,8 +275,7 @@ async function publishGeneration(params: {
         destination,
         entry,
         signal: params.signal,
-        root: params.root,
-        rootRealPath,
+        root: sourceRoot,
       });
     }
     params.signal?.throwIfAborted();
@@ -430,7 +412,7 @@ async function pruneRetainedGenerations(params: {
 }
 
 export function createControlUiAssetRetention(root: string): ControlUiAssetRetention {
-  const cacheDir = resolveControlUiAssetCacheDir();
+  const cacheDir = path.join(resolveStateDir(), "cache", "control-ui-assets");
   let generations: RetainedGeneration[] = [];
   let preparing: Promise<void> | undefined;
 

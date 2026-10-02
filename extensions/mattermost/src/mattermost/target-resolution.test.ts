@@ -1,11 +1,21 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Mattermost tests cover target resolution plugin behavior.
 import type { MattermostClient } from "./client.js";
+import { parseMattermostTarget, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
-const resolveMattermostAccount = vi.fn();
-const createMattermostClient = vi.fn();
-const fetchMattermostUser = vi.fn();
-const fetchMattermostChannel = vi.fn();
+const {
+  resolveMattermostAccount,
+  createMattermostClient,
+  fetchMattermostUser,
+  fetchMattermostChannel,
+  normalizeMattermostBaseUrl,
+} = vi.hoisted(() => ({
+  resolveMattermostAccount: vi.fn(),
+  createMattermostClient: vi.fn(),
+  fetchMattermostUser: vi.fn(),
+  fetchMattermostChannel: vi.fn(),
+  normalizeMattermostBaseUrl: vi.fn((value: string | undefined) => value?.trim()),
+}));
 const fixtureClient = (token = "token", baseUrl = "https://mm.example.com"): MattermostClient => ({
   token,
   baseUrl,
@@ -13,7 +23,6 @@ const fixtureClient = (token = "token", baseUrl = "https://mm.example.com"): Mat
   request: vi.fn(),
   fetchImpl: vi.fn(),
 });
-const normalizeMattermostBaseUrl = vi.fn((value: string | undefined) => value?.trim());
 
 vi.mock("./accounts.js", () => ({
   resolveMattermostAccount,
@@ -29,14 +38,6 @@ vi.mock("./client.js", async () => ({
 }));
 
 describe("mattermost target resolution", () => {
-  let parseMattermostTarget: typeof import("./target-resolution.js").parseMattermostTarget;
-  let resolveMattermostOpaqueTarget: typeof import("./target-resolution.js").resolveMattermostOpaqueTarget;
-
-  beforeAll(async () => {
-    ({ parseMattermostTarget, resolveMattermostOpaqueTarget } =
-      await import("./target-resolution.js"));
-  });
-
   beforeEach(() => {
     resolveMattermostAccount.mockReset();
     createMattermostClient.mockReset();

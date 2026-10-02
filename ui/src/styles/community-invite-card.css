@@ -42,7 +42,7 @@
 
   .invite__header {
     position: relative;
-    height: 100px;
+    aspect-ratio: 12 / 5;
     flex: none;
     overflow: hidden;
   }
@@ -110,7 +110,7 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: center 87%;
+    object-position: center;
   }
 
   .invite__close {
@@ -159,7 +159,7 @@
     display: flex;
     flex-direction: column;
     gap: 5px;
-    padding: 11px 18px 20px;
+    padding: 11px 12px 20px;
   }
 
   .invite__title {
@@ -183,10 +183,10 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
-    min-height: 38px;
-    margin-top: var(--space-3, 12px);
-    padding: 6px var(--space-2, 8px);
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 44px;
+    padding: 6px 2px;
     border-radius: var(--radius-md, 10px);
     background: var(--text-strong);
     color: var(--bg);
@@ -213,9 +213,18 @@
   }
 
   .invite__cta svg {
-    width: 17px;
-    height: 17px;
+    width: 16px;
+    height: 16px;
     flex: none;
+    fill: currentcolor;
+    stroke: none;
+  }
+
+  .invite__links {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: var(--space-3, 12px);
   }
 
   @supports (corner-shape: superellipse(1.5)) {

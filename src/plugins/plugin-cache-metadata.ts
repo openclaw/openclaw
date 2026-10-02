@@ -12,6 +12,11 @@ import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { BundledProviderPolicySurface } from "./provider-policy-surface.types.js";
 
+export type PluginMcpAuthDeclarations = ReadonlyMap<
+  string,
+  readonly { serverName: string; url: string }[]
+>;
+
 export type ProviderPolicyOwnerIndex = {
   bundled: Map<string, PluginManifestRecord>;
   trusted: Map<string, PluginManifestRecord[]>;
@@ -21,6 +26,7 @@ type CurrentPluginMetadataCacheState = {
   snapshot: PluginMetadataSnapshot | undefined;
   owner: "gateway" | "operation";
   configFingerprint: string | undefined;
+  agentWorkspaceFingerprint: string | undefined;
   envFingerprint: string | undefined;
   defaultDiscoveryCompatible: boolean;
   compatiblePolicyHashes: readonly string[] | undefined;
@@ -76,6 +82,10 @@ export type PluginCacheMetadata = {
         unconfigured?: ManifestModelSuppressionResolver;
         byConfig: WeakMap<OpenClawConfig, ManifestModelSuppressionResolver>;
       }
+    >;
+    mcpAuthDeclarations: WeakMap<
+      PluginMetadataSnapshot,
+      WeakMap<OpenClawConfig, PluginMcpAuthDeclarations>
     >;
   };
 };

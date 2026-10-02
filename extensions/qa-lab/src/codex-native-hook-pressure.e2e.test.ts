@@ -1,15 +1,16 @@
-import { execFile } from "node:child_process";
+import { execFile, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { attachQaMockResponsesWebSocketServer } from "./providers/mock-openai/mock-openai-responses-websocket.js";
 import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.js";
@@ -149,9 +150,63 @@ function toolsIn(body: Record<string, unknown>): Array<{ tool: Tool; namespace?:
 describe.skipIf(process.platform !== "linux")(
   "Codex native-hook pressure real Gateway proof",
   () => {
-    it.each(["matched", "unmatched", "none"] as const)(
+    let sandboxSkipReason: string | undefined;
+    beforeAll(async () => {
+      try {
+        const cwd = tempDirs.make("openclaw-codex-sandbox-probe-");
+        const codexHome = path.join(cwd, "codex-home");
+        await fs.mkdir(codexHome);
+        const require = createRequire(path.join(REPO_ROOT, "extensions/codex/package.json"));
+        const launcher = require.resolve("@openai/codex/bin/codex.js");
+        // Exercise Codex's workspace-write sandbox, including Bubblewrap's loopback setup.
+        const result = spawnSync(
+          process.execPath,
+          [
+            launcher,
+            "sandbox",
+            "-c",
+            'sandbox_mode="workspace-write"',
+            "-c",
+            "sandbox_workspace_write.network_access=false",
+            "--",
+            "true",
+          ],
+          {
+            cwd,
+            env: { ...process.env, CODEX_HOME: codexHome },
+            stdio: ["ignore", "pipe", "pipe"],
+            encoding: "utf8",
+            timeout: 20_000,
+            killSignal: "SIGKILL",
+          },
+        );
+        if (result.error || result.status === null || result.status === 0) {
+          return;
+        }
+        // Mirror Codex's own USER_NAMESPACE_FAILURES (codex-rs/sandboxing/src/bwrap.rs);
+        // other namespace errors such as ENOSPC exhaustion must still fail the suite.
+        const denial = `${result.stdout}\n${result.stderr}`
+          .split(/\r?\n/)
+          .find((line) =>
+            /^bwrap: (?:loopback: Failed RTM_NEW(?:ADDR|LINK)|setting up uid map: Permission denied|No permissions to create a new namespace)\b/.test(
+              line,
+            ),
+          );
+        if (denial) {
+          sandboxSkipReason = `Codex Bubblewrap sandbox cannot configure an unprivileged network namespace on this host (${denial})`;
+        }
+      } catch {
+        // Unknown probe failures must leave the real Gateway test enabled.
+      }
+    });
+
+    it.for(["matched", "unmatched", "none"] as const)(
       "records %s policy work through the real Gateway",
-      async (selection) => {
+      { timeout: 480_000 },
+      async (selection, context) => {
+        if (sandboxSkipReason) {
+          context.skip(sandboxSkipReason);
+        }
         expect(process.platform).toBe("linux");
         const root = tempDirs.make("openclaw-native-hook-pressure-");
         const pluginDir = path.join(root, "plugin");
@@ -555,7 +610,7 @@ export default {
               ).stdout.trim();
               const current = await readProcess(row.pid);
               expect(current?.startTimeTicks).toBe(row.startTimeTicks);
-              expect(version).toBe("codex-cli 0.154.0");
+              expect(version).toBe("codex-cli 0.159.1");
               binaryIdentities.push({
                 pid: row.pid,
                 startTimeTicks: row.startTimeTicks,
@@ -622,7 +677,6 @@ export default {
           expect(stopped.errors).toEqual([]);
         }
       },
-      480_000,
     );
   },
 );

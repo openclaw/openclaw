@@ -81,7 +81,11 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
+    opts?: {
+      scope?: OperatorScope;
+      profileAccess?: GatewayMethodProfileAccess;
+      sessionAccess?: import("../gateway/methods/descriptor.js").GatewayMethodSessionAccess;
+    },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
@@ -110,6 +114,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         handler: wrappedHandler,
         scope: normalizedScope.scope,
         ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
+        ...(opts?.sessionAccess ? { sessionAccess: opts.sessionAccess } : {}),
       }),
     );
   };

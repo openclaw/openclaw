@@ -8,7 +8,7 @@ import {
   type PanelHostedTab,
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
-import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
+import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
 import "./chat-sidebar-region.runtime.ts";
 
@@ -44,6 +44,7 @@ async function mount(
     closeHostedTab: vi.fn().mockResolvedValue(undefined),
   }) satisfies PanelHostedTabsElement;
   const region = document.createElement("openclaw-chat-sidebar-region");
+  region.panelIdPrefix = `sidebar-region-fixture-${shells.length}`;
   region.layout = activatePanel(
     openSlot(openSlot(openSlot({ columns: [] }, "detail"), slot), "workspace"),
     slot,
@@ -135,7 +136,7 @@ describe("chat sidebar hosted tabs", () => {
     expect(shell.querySelector("wa-tab[active]")?.getAttribute("panel")).toBe(
       "hosted:browser:remote:page:1",
     );
-    const hostedTab = shell.querySelector('[id="side-panel-tab-browser-remote:page:1"]')!;
+    const hostedTab = shell.querySelector('wa-tab[panel="hosted:browser:remote:page:1"]')!;
     expect(hostedTab.hasAttribute("title")).toBe(false);
     expect(hostedTab.querySelector("openclaw-tooltip")?.content).toBe("First page");
     expect(hostedTab.hasAttribute("draggable")).toBe(false);

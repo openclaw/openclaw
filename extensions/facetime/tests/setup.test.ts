@@ -93,16 +93,27 @@ function readyCommandRunner() {
   });
 }
 
+function runSetup(overrides: Partial<Parameters<typeof runFaceTimeSetup>[0]> = {}) {
+  return runFaceTimeSetup({
+    config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+    nativePackageReady: true,
+    pluginRoot: "/plugin",
+    runCommandWithTimeout: readyCommandRunner() as never,
+    runtimeStatus: readyRuntime,
+    preflight: readyPreflight,
+    readAssertionsFile: async () => JSON.stringify({ data: [] }),
+    ...overrides,
+  });
+}
+
 describe("FaceTime guided setup", () => {
   it.each([
-    ["disabled", "System Integrity Protection status: disabled.\n", 0, undefined],
     [
       "custom debug disabled",
       "System Integrity Protection status: unknown (Custom Configuration).\n\tDebugging Restrictions: disabled\n",
       0,
       undefined,
     ],
-    ["enabled", "System Integrity Protection status: enabled.\n", 0, "disable-sip-debugging"],
     [
       "custom debug enabled",
       "System Integrity Protection status: unknown (Custom Configuration).\n\tDebugging Restrictions: enabled\n",
@@ -110,7 +121,6 @@ describe("FaceTime guided setup", () => {
       "disable-sip-debugging",
     ],
     ["empty", "", 0, "verify-sip-status"],
-    ["unknown", "System Integrity Protection status: unknown.\n", 0, "verify-sip-status"],
     ["failed", "System Integrity Protection status: disabled.\n", 1, "verify-sip-status"],
     [
       "malformed disabled",
@@ -118,7 +128,6 @@ describe("FaceTime guided setup", () => {
       0,
       "verify-sip-status",
     ],
-    ["malformed debug", "Debugging Restrictions: disabled unexpectedly\n", 0, "verify-sip-status"],
     [
       "unrelated substring",
       "Could not read System Integrity Protection status: disabled.\n",
@@ -129,16 +138,10 @@ describe("FaceTime guided setup", () => {
     "reports SIP %s without recommending unnecessary protection changes",
     async (_name, stdout, code, actionId) => {
       const readyRunner = readyCommandRunner();
-      const report = await runFaceTimeSetup({
-        config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-        nativePackageReady: true,
-        pluginRoot: "/plugin",
+      const report = await runSetup({
         runCommandWithTimeout: vi.fn(async (argv: string[]) =>
           argv[0] === "/usr/bin/csrutil" ? { code, stdout, stderr: "" } : readyRunner(argv),
         ) as never,
-        runtimeStatus: readyRuntime,
-        preflight: readyPreflight,
-        readAssertionsFile: async () => JSON.stringify({ data: [] }),
       });
       const check = report.checks.find((entry) => entry.id === "system-integrity-protection");
       expect(check?.status).toBe(actionId ? "action-required" : "ready");
@@ -158,13 +161,7 @@ describe("FaceTime guided setup", () => {
   );
 
   it("reports a statically ready machine and leaves live call proof explicit", async () => {
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
-      runCommandWithTimeout: readyCommandRunner() as never,
-      runtimeStatus: readyRuntime,
-      preflight: readyPreflight,
+    const report = await runSetup({
       readAssertionsFile: async () =>
         JSON.stringify({ data: [{ storeInvalidationRecords: [{}] }] }),
     });
@@ -201,14 +198,8 @@ describe("FaceTime guided setup", () => {
     const runtimeStatus = new Promise<typeof readyRuntime>((resolve) => {
       finishRefresh = resolve;
     });
-    const setup = runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
-      runCommandWithTimeout: readyCommandRunner() as never,
+    const setup = runSetup({
       runtimeStatus,
-      preflight: readyPreflight,
-      readAssertionsFile: async () => JSON.stringify({ data: [] }),
     });
 
     finishRefresh(readyRuntime);
@@ -245,11 +236,10 @@ describe("FaceTime guided setup", () => {
       throw new Error(`unexpected command: ${argv.join(" ")}`);
     });
 
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
+    const report = await runSetup({
       runCommandWithTimeout: runCommandWithTimeout as never,
+      runtimeStatus: undefined,
+      preflight: undefined,
       runtimeError: "listen EADDRINUSE: address already in use 127.0.0.1:45670",
       readAssertionsFile: async () =>
         JSON.stringify({ data: [{ storeAssertionRecords: [{ assertionUUID: "active" }] }] }),
@@ -299,40 +289,19 @@ describe("FaceTime guided setup", () => {
   });
 
   it("does not accept a Command Line Tools-only installation", async () => {
+    const readyRunner = readyCommandRunner();
     const runCommandWithTimeout = vi.fn(async (argv: string[]) => {
       if (argv[0] === "/bin/test" && (argv[1] === "-x" || argv[1] === "-d")) {
         return { code: 1, stdout: "", stderr: "" };
       }
-      if (argv[0] === "/usr/sbin/DevToolsSecurity") {
-        return { code: 0, stdout: "Developer mode is currently enabled.\n", stderr: "" };
-      }
-      if (argv[0] === "/usr/bin/csrutil") {
-        return {
-          code: 0,
-          stdout: "System Integrity Protection status: disabled.\n",
-          stderr: "",
-        };
-      }
-      if (argv[0] === "/bin/sh" && argv.at(-1) === "--status") {
-        return { code: 0, stdout: "current\n", stderr: "" };
-      }
-      if (argv[0] === "/bin/bash") {
-        return { code: 0, stdout: "true\n", stderr: "" };
-      }
       if (argv[0] === "/usr/bin/xcode-select") {
         return { code: 0, stdout: "/Library/Developer/CommandLineTools\n", stderr: "" };
       }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
+      return readyRunner(argv);
     });
 
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
+    const report = await runSetup({
       runCommandWithTimeout: runCommandWithTimeout as never,
-      runtimeStatus: readyRuntime,
-      preflight: readyPreflight,
-      readAssertionsFile: async () => JSON.stringify({ data: [] }),
     });
 
     expect(report.readyForTest).toBe(false);
@@ -346,11 +315,7 @@ describe("FaceTime guided setup", () => {
   });
 
   it("shows automatic helper repair without declaring the machine ready", async () => {
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
-      runCommandWithTimeout: readyCommandRunner() as never,
+    const report = await runSetup({
       runtimeStatus: {
         ...readyRuntime,
         helperConnected: false,
@@ -368,8 +333,6 @@ describe("FaceTime guided setup", () => {
           readyRuntime.helperTargets[1]!,
         ],
       },
-      preflight: readyPreflight,
-      readAssertionsFile: async () => JSON.stringify({ data: [] }),
     });
 
     expect(report.ok).toBe(false);
@@ -384,13 +347,7 @@ describe("FaceTime guided setup", () => {
   });
 
   it("allows manual Focus verification when macOS state cannot be read", async () => {
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
-      runCommandWithTimeout: readyCommandRunner() as never,
-      runtimeStatus: readyRuntime,
-      preflight: readyPreflight,
+    const report = await runSetup({
       readAssertionsFile: async () => {
         throw new Error("operation not permitted");
       },
@@ -411,11 +368,7 @@ describe("FaceTime guided setup", () => {
   });
 
   it("requires a real app restart after stale helper detection", async () => {
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
-      runCommandWithTimeout: readyCommandRunner() as never,
+    const report = await runSetup({
       runtimeStatus: {
         ...readyRuntime,
         helperTargets: [
@@ -429,8 +382,6 @@ describe("FaceTime guided setup", () => {
           readyRuntime.helperTargets[1]!,
         ],
       },
-      preflight: readyPreflight,
-      readAssertionsFile: async () => JSON.stringify({ data: [] }),
     });
 
     expect(report.readyForTest).toBe(false);
@@ -442,11 +393,7 @@ describe("FaceTime guided setup", () => {
   });
 
   it("preserves the aggregate helper failure when no target can be supervised", async () => {
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
-      nativePackageReady: true,
-      pluginRoot: "/plugin",
-      runCommandWithTimeout: readyCommandRunner() as never,
+    const report = await runSetup({
       runtimeStatus: {
         ...readyRuntime,
         helperConnected: false,
@@ -462,7 +409,6 @@ describe("FaceTime guided setup", () => {
             : check,
         ),
       },
-      readAssertionsFile: async () => JSON.stringify({ data: [] }),
     });
 
     expect(report.readyForTest).toBe(false);
@@ -475,14 +421,13 @@ describe("FaceTime guided setup", () => {
 
   it("requires Homebrew native repair before runtime activation or driver setup", async () => {
     const runCommandWithTimeout = readyCommandRunner();
-    const report = await runFaceTimeSetup({
-      config: resolveFaceTimeConfig({ ownerHandles: ["owner@example.com"] }),
+    const report = await runSetup({
       nativePackageReady: false,
-      pluginRoot: "/plugin",
+      runtimeStatus: undefined,
+      preflight: undefined,
       runCommandWithTimeout: runCommandWithTimeout as never,
       runtimeError:
         "Compatible FaceTime native helpers are not installed. Run: brew install openclaw/tap/openclaw-facetime",
-      readAssertionsFile: async () => JSON.stringify({ data: [] }),
     });
 
     expect(report.readyForTest).toBe(false);

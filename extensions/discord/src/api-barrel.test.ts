@@ -2,17 +2,16 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import * as ts from "typescript/unstable/ast";
+import { afterAll, describe, expect, it } from "vitest";
+import { createNativeTypeScriptParser } from "../../../scripts/lib/native-typescript.mts";
+
+const parser = createNativeTypeScriptParser();
+afterAll(() => parser.close());
 
 const API_SOURCE_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../api.ts");
 function collectExportedNames(): Set<string> {
-  const source = ts.createSourceFile(
-    API_SOURCE_PATH,
-    readFileSync(API_SOURCE_PATH, "utf8"),
-    ts.ScriptTarget.Latest,
-    true,
-  );
+  const source = parser.parseSourceFile(API_SOURCE_PATH, readFileSync(API_SOURCE_PATH, "utf8"));
   const names = new Set<string>();
   for (const statement of source.statements) {
     if (

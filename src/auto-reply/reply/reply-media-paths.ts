@@ -1,5 +1,5 @@
-// Resolves media paths from reply payloads into runtime attachment metadata.
 import path from "node:path";
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
@@ -21,13 +21,13 @@ import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
-import { sanitizeUntrustedFileName } from "../../infra/fs-safe-advanced.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
 import { collectReplyMediaEntries } from "../../infra/outbound/reply-media-entries.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { HostReadMediaTypeError, LocalMediaAccessError } from "../../media/local-media-access.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import {
@@ -63,11 +63,6 @@ function resolveReplyMediaFailureLabel(media: string, index: number): string {
   );
 }
 
-function resolveReplyMediaFailureKind(media: string): ReplyMediaFailure["kind"] {
-  const kind = mediaKindFromMime(mimeTypeFromFilePath(media));
-  return kind === "image" || kind === "audio" || kind === "video" ? kind : "document";
-}
-
 function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"] {
   let current: unknown = error;
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
@@ -91,9 +86,10 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
 
 function createReplyMediaFailure(media: string, index: number, error: unknown): ReplyMediaFailure {
   const mimeType = mimeTypeFromFilePath(media);
+  const kind = mediaKindFromMime(mimeType);
   return {
     code: resolveReplyMediaFailureCode(error),
-    kind: resolveReplyMediaFailureKind(media),
+    kind: kind === "image" || kind === "audio" || kind === "video" ? kind : "document",
     label: resolveReplyMediaFailureLabel(media, index),
     ...(mimeType ? { mimeType } : {}),
   };
@@ -111,10 +107,6 @@ function isLikelyLocalMediaSource(media: string): boolean {
     (!SCHEME_RE.test(media) &&
       (media.includes("/") || media.includes("\\") || HAS_FILE_EXT_RE.test(media)))
   );
-}
-
-function getPayloadMediaList(payload: ReplyPayload): string[] {
-  return resolveSendableOutboundReplyParts(payload).mediaUrls;
 }
 
 type PreparedReplyMediaSource = {
@@ -269,6 +261,20 @@ export function createReplyMediaSourcePreparer(params: {
     return await persistPromise;
   };
 
+  const prepareLocalReplyMedia = async (
+    media: string,
+    sessionWorkspaceDir?: string,
+    workspaceDir?: string,
+  ): Promise<PreparedReplyMediaSource> => {
+    const persisted = await persistLocalReplyMedia(media, sessionWorkspaceDir, workspaceDir);
+    return {
+      mediaUrl: persisted.path,
+      trustedLocalMedia: true,
+      fileName: path.basename(media),
+      ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
+    };
+  };
+
   const resolveWorkspaceRelativeMedia = (media: string): string => {
     const relativeWorkspacePath = toRelativeWorkspacePath(params.workspaceDir, media, {
       cwd: params.workspaceDir,
@@ -287,15 +293,12 @@ export function createReplyMediaSourcePreparer(params: {
     }
   };
 
-  const normalizeMediaSource = async (
-    raw: string,
-  ): Promise<{
-    mediaUrl: string;
-    trustedLocalMedia: boolean;
-    fileName?: string;
-    mimeType?: string;
-  }> => {
-    const source = raw.trim();
+  const normalizeMediaSource = async (raw: string): Promise<PreparedReplyMediaSource> => {
+    const trimmed = raw.trim();
+    // Canonical references from history must pass the same policy as their stored file.
+    const source = /^media:\/\//i.test(trimmed)
+      ? ((await resolveInboundMediaReference(trimmed))?.physicalPath ?? trimmed)
+      : trimmed;
     const mapping = params.workspaceMediaRoot
       ? resolveSandboxPathMapping(
           [{ hostRoot: params.workspaceDir, containerRoot: params.workspaceMediaRoot }],
@@ -319,13 +322,7 @@ export function createReplyMediaSourcePreparer(params: {
       ? resolveAbsoluteWorkspaceMedia(media)
       : undefined;
     if (absoluteWorkspaceMedia) {
-      const persisted = await persistLocalReplyMedia(absoluteWorkspaceMedia);
-      return {
-        mediaUrl: persisted.path,
-        trustedLocalMedia: true,
-        fileName: path.basename(absoluteWorkspaceMedia),
-        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-      };
+      return prepareLocalReplyMedia(absoluteWorkspaceMedia);
     }
     const isRelativeLocalMedia =
       isLikelyLocalMediaSource(media) &&
@@ -357,29 +354,16 @@ export function createReplyMediaSourcePreparer(params: {
         }
         throw err;
       }
-      const persisted = await persistLocalReplyMedia(
+      return prepareLocalReplyMedia(
         sandboxResolvedMedia,
         sandboxWorkspace.root,
         // Without a mounted workspace, the session's media workspace is its sandbox,
         // never the host agent workspace.
         workspaceMounted ? undefined : sandboxWorkspace.root,
       );
-      return {
-        mediaUrl: persisted.path,
-        trustedLocalMedia: true,
-        fileName: path.basename(sandboxResolvedMedia),
-        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-      };
     }
     if (isRelativeLocalMedia) {
-      const workspaceMedia = resolveWorkspaceRelativeMedia(media);
-      const persisted = await persistLocalReplyMedia(workspaceMedia);
-      return {
-        mediaUrl: persisted.path,
-        trustedLocalMedia: true,
-        fileName: path.basename(workspaceMedia),
-        ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-      };
+      return prepareLocalReplyMedia(resolveWorkspaceRelativeMedia(media));
     }
     if (!isLikelyLocalMediaSource(media)) {
       return { mediaUrl: media, trustedLocalMedia: false };
@@ -389,13 +373,7 @@ export function createReplyMediaSourcePreparer(params: {
         "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
       );
     }
-    const persisted = await persistLocalReplyMedia(media);
-    return {
-      mediaUrl: persisted.path,
-      trustedLocalMedia: true,
-      fileName: path.basename(media),
-      ...(persisted.contentType ? { mimeType: persisted.contentType } : {}),
-    };
+    return prepareLocalReplyMedia(media);
   };
 
   return async (sources) => {
@@ -420,7 +398,7 @@ export function applyPreparedReplyMedia(
   payload: ReplyPayload,
   prepared: PreparedReplyMedia,
 ): ReplyPayload {
-  const mediaList = getPayloadMediaList(payload);
+  const mediaList = resolveSendableOutboundReplyParts(payload).mediaUrls;
   if (!mediaList.length || !prepared.length) {
     return payload;
   }
@@ -451,8 +429,8 @@ export function applyPreparedReplyMedia(
     for (const source of previousSourceUrls?.get(sourceKey) ?? []) {
       sourceUrls.add(source);
     }
-    if (normalized.mediaUrl !== media.trim()) {
-      sourceUrls.add(media.trim());
+    if (normalized.mediaUrl !== media) {
+      sourceUrls.add(media);
     }
     if (sourceUrls.size > 0) {
       sourcesByReference.set(normalizedKey, sourceUrls);
@@ -492,29 +470,15 @@ export function applyPreparedReplyMedia(
   const previousMediaFailures = getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? [];
   const assistantMediaFailures = [...previousMediaFailures, ...mediaFailures];
 
-  if (normalizedMedia.length === 0) {
-    const normalized = copyReplyPayloadMetadata(payload, {
-      ...payload,
-      text,
-      mediaUrl: undefined,
-      mediaUrls: undefined,
-      attachments: undefined,
-    });
-    return setReplyPayloadMetadata(normalized, {
-      replyMediaSourceUrls: undefined,
-      ...(mediaFailures.length > 0 ? { assistantMediaFailures } : {}),
-    });
-  }
-
   const normalized = copyReplyPayloadMetadata(payload, {
     ...payload,
     text,
     mediaUrl: normalizedMedia[0],
-    mediaUrls: normalizedMedia,
+    mediaUrls: normalizedMedia.length > 0 ? normalizedMedia : undefined,
     attachments: normalizedAttachments.some((attachment) => Object.keys(attachment).length > 0)
       ? normalizedAttachments
       : undefined,
-    ...(hasTrustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    ...(normalizedMedia.length > 0 && hasTrustedLocalMedia ? { trustedLocalMedia: true } : {}),
   });
   return setReplyPayloadMetadata(normalized, {
     replyMediaSourceUrls,
@@ -527,7 +491,10 @@ export function createReplyMediaPathNormalizer(
 ): (payload: ReplyPayload) => Promise<ReplyPayload> {
   const prepare = createReplyMediaSourcePreparer(params);
   return async (payload) =>
-    applyPreparedReplyMedia(payload, await prepare(getPayloadMediaList(payload)));
+    applyPreparedReplyMedia(
+      payload,
+      await prepare(resolveSendableOutboundReplyParts(payload).mediaUrls),
+    );
 }
 
 export type ReplyMediaContext = {

@@ -1,24 +1,41 @@
 // Sms tests cover status plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import { formatSmsProbeLines, probeSmsAccount } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
+  return createSmsTestAccount({ accountId: "default", ...overrides });
+}
+
+function createWebhookResponse(overrides: Record<string, string> = {}) {
+  return {
+    incoming_phone_numbers: [
+      {
+        phone_number: "+15557654321",
+        sms_url: "https://gateway.example.com/webhooks/sms",
+        sms_method: "POST",
+        ...overrides,
+      },
+    ],
+  };
+}
+
+function createDeliveryRecord(
+  messageSid: string,
+  status: string,
+  extra: Partial<SmsDeliveryRecord> = {},
+): SmsDeliveryRecord {
   return {
     accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
+    accountSidHash: "account-sid-hash",
+    messageSid,
+    status,
+    firstObservedAt: 1,
+    lastObservedAt: 2,
+    observations: [],
+    ...extra,
   };
 }
 
@@ -43,16 +60,7 @@ afterEach(() => {
 describe("SMS status probe", () => {
   it("reports a healthy Twilio SMS webhook", async () => {
     const fetchImpl = createFetch([
-      {
-        incoming_phone_numbers: [
-          {
-            phone_number: "+15557654321",
-            sms_url: "https://gateway.example.com/webhooks/sms",
-            sms_method: "POST",
-            voice_url: "https://gateway.example.com/voice/webhook",
-          },
-        ],
-      },
+      createWebhookResponse({ voice_url: "https://gateway.example.com/voice/webhook" }),
       {
         messages: [
           {
@@ -66,13 +74,12 @@ describe("SMS status probe", () => {
       },
     ]);
 
-    await expect(
-      probeSmsAccount({
-        account: createAccount(),
-        timeoutMs: 1000,
-        options: { fetchImpl },
-      }),
-    ).resolves.toMatchObject({
+    const result = await probeSmsAccount({
+      account: createAccount(),
+      timeoutMs: 1000,
+      options: { fetchImpl },
+    });
+    expect(result).toMatchObject({
       ok: true,
       webhook: {
         status: "matches",
@@ -84,49 +91,13 @@ describe("SMS status probe", () => {
         status: "received",
       },
     });
-    const result = await probeSmsAccount({
-      account: createAccount(),
-      timeoutMs: 1000,
-      options: {
-        fetchImpl: createFetch([
-          {
-            incoming_phone_numbers: [
-              {
-                phone_number: "+15557654321",
-                sms_url: "https://gateway.example.com/webhooks/sms",
-                sms_method: "POST",
-              },
-            ],
-          },
-          {
-            messages: [
-              {
-                sid: "SM456",
-                direction: "inbound",
-                status: "received",
-                to: "+15557654321",
-                from: "+15551234567",
-              },
-            ],
-          },
-        ]),
-      },
-    });
     expect(result.recentInbound).not.toHaveProperty("from");
     expect(result.recentInbound).not.toHaveProperty("to");
   });
 
   it("detects a Twilio SMS webhook URL mismatch", async () => {
     const fetchImpl = createFetch([
-      {
-        incoming_phone_numbers: [
-          {
-            phone_number: "+15557654321",
-            sms_url: "https://old.example.com/webhooks/sms",
-            sms_method: "POST",
-          },
-        ],
-      },
+      createWebhookResponse({ sms_url: "https://old.example.com/webhooks/sms" }),
       { messages: [] },
     ]);
 
@@ -148,15 +119,7 @@ describe("SMS status probe", () => {
 
   it("surfaces Twilio 11200 recent inbound failures and Funnel hints", async () => {
     const fetchImpl = createFetch([
-      {
-        incoming_phone_numbers: [
-          {
-            phone_number: "+15557654321",
-            sms_url: "https://mac-studio.example.ts.net/webhooks/sms",
-            sms_method: "POST",
-          },
-        ],
-      },
+      createWebhookResponse({ sms_url: "https://mac-studio.example.ts.net/webhooks/sms" }),
       {
         messages: [
           {
@@ -302,29 +265,8 @@ describe("SMS status probe", () => {
       account: createAccount(),
       timeoutMs: 1000,
       options: {
-        fetchImpl: createFetch([
-          {
-            incoming_phone_numbers: [
-              {
-                phone_number: "+15557654321",
-                sms_url: "https://gateway.example.com/webhooks/sms",
-                sms_method: "POST",
-              },
-            ],
-          },
-          { messages: [] },
-        ]),
-        deliveryRecords: [
-          {
-            accountId: "default",
-            accountSidHash: "account-sid-hash",
-            messageSid: "SM-delivered",
-            status: "delivered",
-            firstObservedAt: 1,
-            lastObservedAt: 2,
-            observations: [],
-          },
-        ],
+        fetchImpl: createFetch([createWebhookResponse(), { messages: [] }]),
+        deliveryRecords: [createDeliveryRecord("SM-delivered", "delivered")],
       },
     });
 
@@ -347,18 +289,7 @@ describe("SMS status probe", () => {
       timeoutMs: 1000,
       options: {
         fetchImpl,
-        deliveryRecords: [
-          {
-            accountId: "default",
-            accountSidHash: "account-sid-hash",
-            messageSid: "SM-failed",
-            status: "failed",
-            errorCode: "30005",
-            firstObservedAt: 1,
-            lastObservedAt: 2,
-            observations: [],
-          },
-        ],
+        deliveryRecords: [createDeliveryRecord("SM-failed", "failed", { errorCode: "30005" })],
       },
     });
 
@@ -403,17 +334,7 @@ describe("SMS status probe", () => {
       timeoutMs: 1000,
       options: {
         fetchImpl,
-        deliveryRecords: [
-          {
-            accountId: "default",
-            accountSidHash: "account-sid-hash",
-            messageSid: "SM-delivered",
-            status: "delivered",
-            firstObservedAt: 1,
-            lastObservedAt: 2,
-            observations: [],
-          },
-        ],
+        deliveryRecords: [createDeliveryRecord("SM-delivered", "delivered")],
       },
     });
 
@@ -431,18 +352,7 @@ describe("SMS status probe", () => {
       if (fetchInputUrl(input).includes("/Messages.json")) {
         throw new Error("message history unavailable");
       }
-      return new Response(
-        JSON.stringify({
-          incoming_phone_numbers: [
-            {
-              phone_number: "+15557654321",
-              sms_url: "https://gateway.example.com/webhooks/sms",
-              sms_method: "POST",
-            },
-          ],
-        }),
-        { status: 200 },
-      );
+      return new Response(JSON.stringify(createWebhookResponse()), { status: 200 });
     });
 
     const result = await probeSmsAccount({
@@ -450,17 +360,7 @@ describe("SMS status probe", () => {
       timeoutMs: 1000,
       options: {
         fetchImpl,
-        deliveryRecords: [
-          {
-            accountId: "default",
-            accountSidHash: "account-sid-hash",
-            messageSid: "SM-undelivered",
-            status: "undelivered",
-            firstObservedAt: 1,
-            lastObservedAt: 2,
-            observations: [],
-          },
-        ],
+        deliveryRecords: [createDeliveryRecord("SM-undelivered", "undelivered")],
       },
     });
 
@@ -480,17 +380,7 @@ describe("SMS status probe", () => {
       timeoutMs: 1000,
       options: {
         fetchImpl,
-        deliveryRecords: [
-          {
-            accountId: "default",
-            accountSidHash: "account-sid-hash",
-            messageSid: "SM-timeout",
-            status: "delivered",
-            firstObservedAt: 1,
-            lastObservedAt: 2,
-            observations: [],
-          },
-        ],
+        deliveryRecords: [createDeliveryRecord("SM-timeout", "delivered")],
       },
     });
 

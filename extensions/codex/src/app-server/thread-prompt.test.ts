@@ -153,6 +153,15 @@ describe("buildDeveloperInstructions credential routing", () => {
 });
 
 describe("buildDeveloperInstructions delegation guidance", () => {
+  it("omits discovery and delegation guidance for an explicitly empty tool allowlist", () => {
+    const params = createParams({ toolsAllow: [] });
+    const instructions = buildDeveloperInstructions(params);
+
+    expect(instructions).not.toContain("ALL_TOOLS");
+    expect(instructions).not.toContain("spawn_agent");
+    expect(buildDeveloperInstructions({ ...params, toolsAllow: undefined })).toContain("ALL_TOOLS");
+  });
+
   it("shares the visible-session delegation policy with a canonical main session", () => {
     const instructions = buildInstructions();
 
@@ -248,8 +257,11 @@ describe("buildDeveloperInstructions UI presentation guidance", () => {
       expect(instructions).toContain(
         `\`${prefix}message(action="send", clawhub={query:"capability"})\``,
       );
-      expect(instructions).toContain("including when it is already installed");
-      expect(instructions).toContain("desktop app does not establish");
+      expect(instructions).toContain("Tools/skills first");
+      expect(instructions).toContain(
+        "For explicit plugin/skill search/install or missing capability, use ClawHub",
+      );
+      expect(instructions).toContain("Skip routine tasks, tool errors, permissions");
     },
   );
 

@@ -1,4 +1,3 @@
-// Commander wiring for `openclaw update`, its status/finalize subcommands, and help text.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -8,6 +7,7 @@ import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
+import { setCommandJsonMode } from "./program/json-mode.js";
 import { getProgramContext } from "./program/program-context.js";
 import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
@@ -42,6 +42,7 @@ function inheritedUpdateTimeout(
 
 type CommanderUpdateOptions = Record<string, unknown> & {
   acceptCapabilities?: boolean;
+  admission?: string;
   channel?: string;
   dryRun?: boolean;
   json?: boolean;
@@ -128,14 +129,12 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           acceptCapabilities:
             Boolean(opts.acceptCapabilities) ||
             Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
-          restart: false,
           deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
         });
       }),
     );
 }
 
-/** Attach the update command group to the root CLI. */
 export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
@@ -164,9 +163,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
-      const fmtExamples = examples
-        .map(([cmd, desc]) => `  ${theme.command(cmd)} ${theme.muted(`# ${desc}`)}`)
-        .join("\n");
+      const fmtExamples = formatHelpExamples(examples, true);
       return `
 ${theme.heading("What this does:")}
   - Git checkouts: fetches, rebases, installs deps, builds, and runs doctor
@@ -197,6 +194,13 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     })
     .action(async (opts: CommanderUpdateOptions) => {
       try {
+        if (
+          opts.admission !== undefined &&
+          opts.admission !== "auto" &&
+          opts.admission !== "installed"
+        ) {
+          throw new Error('--admission must be "auto" or "installed".');
+        }
         const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
           runtimeRecoveryEnv: getProgramContext(program)?.runtimeRecoveryEnv,
@@ -209,10 +213,19 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           timeout: opts.timeout,
           yes: Boolean(opts.yes),
           acceptCapabilities: Boolean(opts.acceptCapabilities),
+          admission: opts.admission,
         });
       } catch (err) {
         handleUpdateCommandError(err);
       }
+    });
+
+  setCommandJsonMode(update.command("admit", { hidden: true }), "output", () => true)
+    .description("Internal read-only candidate admission protocol")
+    .requiredOption("--context <path>", "Absolute path to the private admission context")
+    .action(async (opts: { context: string }) => {
+      const { updateAdmitCommand } = await import("./update-cli/update-command-admit.js");
+      await updateAdmitCommand(opts.context);
     });
 
   update
@@ -276,7 +289,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     .command("wizard")
     .description("Interactive update wizard")
     .option("--accept-capabilities", "Accept widened plugin capabilities", false)
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
+    .option("--timeout <seconds>", "Set a per-step deadline in seconds")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,

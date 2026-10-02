@@ -16,9 +16,6 @@ const WIKI_RENDER_MODES = ["native", "obsidian"] as const;
 export const WIKI_SEARCH_BACKENDS = ["shared", "local"] as const;
 export const WIKI_SEARCH_CORPORA = ["wiki", "memory", "all"] as const;
 
-type WikiVaultMode = (typeof WIKI_VAULT_MODES)[number];
-type WikiVaultScope = (typeof WIKI_VAULT_SCOPES)[number];
-type WikiRenderMode = (typeof WIKI_RENDER_MODES)[number];
 export type WikiSearchBackend = (typeof WIKI_SEARCH_BACKENDS)[number];
 export type WikiSearchCorpus = (typeof WIKI_SEARCH_CORPORA)[number];
 
@@ -32,12 +29,6 @@ export type MemoryWikiConfigResolver = (
   agentId?: string,
   appConfig?: OpenClawConfig,
 ) => ResolvedMemoryWikiConfig;
-
-const DEFAULT_WIKI_VAULT_MODE: WikiVaultMode = "isolated";
-const DEFAULT_WIKI_VAULT_SCOPE: WikiVaultScope = "global";
-const DEFAULT_WIKI_RENDER_MODE: WikiRenderMode = "native";
-const DEFAULT_WIKI_SEARCH_BACKEND: WikiSearchBackend = "shared";
-const DEFAULT_WIKI_SEARCH_CORPUS: WikiSearchCorpus = "wiki";
 
 export const MemoryWikiConfigSource = z
   .strictObject({
@@ -133,7 +124,7 @@ export function resolveMemoryWikiConfig(
   const homedir = options?.homedir ?? os.homedir();
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});
-  const vaultScope = safeConfig.vault?.scope ?? DEFAULT_WIKI_VAULT_SCOPE;
+  const vaultScope = safeConfig.vault?.scope ?? "global";
   const vaultPath =
     safeConfig.vault?.path ??
     path.join(
@@ -143,11 +134,11 @@ export function resolveMemoryWikiConfig(
     );
 
   return {
-    vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
+    vaultMode: safeConfig.vaultMode ?? "isolated",
     vault: {
       scope: vaultScope,
       path: expandHomePath(vaultPath, homedir),
-      renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,
+      renderMode: safeConfig.vault?.renderMode ?? "native",
     },
     obsidian: {
       enabled: safeConfig.obsidian?.enabled ?? false,
@@ -173,8 +164,8 @@ export function resolveMemoryWikiConfig(
       allowUrlIngest: safeConfig.ingest?.allowUrlIngest ?? true,
     },
     search: {
-      backend: safeConfig.search?.backend ?? DEFAULT_WIKI_SEARCH_BACKEND,
-      corpus: safeConfig.search?.corpus ?? DEFAULT_WIKI_SEARCH_CORPUS,
+      backend: safeConfig.search?.backend ?? "shared",
+      corpus: safeConfig.search?.corpus ?? "wiki",
     },
     context: {
       includeCompiledDigestPrompt: safeConfig.context?.includeCompiledDigestPrompt ?? false,

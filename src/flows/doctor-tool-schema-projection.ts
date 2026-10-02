@@ -51,21 +51,6 @@ function toolSchemaDiagnosticToFinding(params: {
   };
 }
 
-function collectToolSchemaFindings(params: {
-  agentId: string;
-  tools: readonly AnyAgentTool[];
-  rawToolsByName?: ReadonlyMap<string, AnyAgentTool>;
-}): HealthFinding[] {
-  return inspectRuntimeToolInputSchemas(params.tools).map((diagnostic) =>
-    toolSchemaDiagnosticToFinding({
-      agentId: params.agentId,
-      tools: params.tools,
-      rawToolsByName: params.rawToolsByName,
-      diagnostic,
-    }),
-  );
-}
-
 export function collectNormalizedToolSchemaFindings(params: {
   agentId: string;
   tools: AnyAgentTool[];
@@ -107,41 +92,32 @@ export function collectNormalizedToolSchemaFindings(params: {
 
   return [
     ...preNormalizationFindings,
-    ...collectToolSchemaFindings({
-      agentId: params.agentId,
-      tools: normalizedTools,
-      rawToolsByName,
-    }),
+    ...inspectRuntimeToolInputSchemas(normalizedTools).map((diagnostic) =>
+      toolSchemaDiagnosticToFinding({
+        agentId: params.agentId,
+        tools: normalizedTools,
+        rawToolsByName,
+        diagnostic,
+      }),
+    ),
   ];
 }
 
-function agentRuntimeToolLoadFailureFinding(params: {
+function agentRuntimeToolFailureFinding(params: {
   agentId: string;
   error: unknown;
+  phase: "load" | "normalize";
 }): HealthFinding {
   return {
     checkId: "core/doctor/runtime-tool-schemas",
     severity: "error",
-    message: `Agent ${params.agentId} runtime tool schema validation could not load the runtime tool set.`,
+    message: `Agent ${params.agentId} runtime tool schema validation could not ${params.phase} the runtime tool set.`,
     path: `agents.${params.agentId}.tools`,
     requirement: formatErrorMessage(params.error),
     fixHint:
-      "Fix provider/plugin tool loading errors, then rerun doctor before relying on assistant tool startup.",
-  };
-}
-
-function agentRuntimeToolNormalizationFailureFinding(params: {
-  agentId: string;
-  error: unknown;
-}): HealthFinding {
-  return {
-    checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
-    message: `Agent ${params.agentId} runtime tool schema validation could not normalize the runtime tool set.`,
-    path: `agents.${params.agentId}.tools`,
-    requirement: formatErrorMessage(params.error),
-    fixHint:
-      "Fix provider/plugin schema normalization errors, then rerun doctor before relying on assistant tool startup.",
+      params.phase === "load"
+        ? "Fix provider/plugin tool loading errors, then rerun doctor before relying on assistant tool startup."
+        : "Fix provider/plugin schema normalization errors, then rerun doctor before relying on assistant tool startup.",
   };
 }
 
@@ -168,7 +144,7 @@ export async function collectAgentRuntimeToolSchemaFindings(
       emitBeforeToolCallDiagnostics: false,
     });
   } catch (error) {
-    return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
+    return [agentRuntimeToolFailureFinding({ agentId: params.agentId, error, phase: "load" })];
   }
 
   return collectNormalizedToolSchemaFindings({
@@ -179,9 +155,10 @@ export async function collectAgentRuntimeToolSchemaFindings(
     modelRef: params.modelRef,
     model: params.model,
     normalizationFailureFinding: (error) =>
-      agentRuntimeToolNormalizationFailureFinding({
+      agentRuntimeToolFailureFinding({
         agentId: params.agentId,
         error,
+        phase: "normalize",
       }),
   });
 }

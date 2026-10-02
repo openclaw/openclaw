@@ -111,13 +111,16 @@ export function createCodexUserInputBridge(params: {
         return undefined;
       }
       if (requestParams.questions.length === 0) {
-        return emptyUserInputResponse();
+        return emptyAgentHarnessUserInputAnswers();
       }
       const timeoutMs = requestParams.isBlocking
         ? (params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS)
         : NONBLOCKING_USER_INPUT_TIMEOUT_MS;
-      const input = compileUserInputQuestions(requestParams.questions);
-      const cancelValue = emptyUserInputResponse();
+      const input = structuredInput.compileQuestions({
+        questions: requestParams.questions,
+        intro: "Codex needs input:",
+      });
+      const cancelValue = emptyAgentHarnessUserInputAnswers();
       return await enqueue(
         {
           cancelValue,
@@ -194,12 +197,6 @@ export function createCodexUserInputBridge(params: {
       await completion;
     },
   };
-}
-
-function compileUserInputQuestions(
-  questions: readonly AgentHarnessUserInputQuestion[],
-): StructuredInputCompileResult {
-  return structuredInput.compileQuestions({ questions, intro: "Codex needs input:" });
 }
 
 function readUserInputParams(value: JsonValue | undefined):
@@ -327,10 +324,6 @@ function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonO
       Object.entries(answers).map(([questionId, values]) => [questionId, { answers: values }]),
     ),
   };
-}
-
-function emptyUserInputResponse(): JsonObject {
-  return { ...emptyAgentHarnessUserInputAnswers() };
 }
 
 function declineElicitation(message?: string) {

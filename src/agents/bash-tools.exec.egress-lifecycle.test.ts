@@ -24,7 +24,7 @@ import {
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
-import { deleteSession } from "./bash-process-registry.js";
+import { deleteSession, getFinishedSession } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 import * as sessionSlug from "./session-slug.js";
@@ -282,9 +282,16 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     await later.process({ action: "kill", sessionId: killed.sessionId });
     await expect(requestWithGrant(killed.grant)).resolves.toBe(407);
     await survivor.request(later, "sibling-after-kill");
-    await vi.waitFor(() => expect(hasExitEvent(killed.sessionId)).toBe(true), {
-      timeout: 10_000,
-    });
+    await vi.waitFor(
+      () =>
+        expect(getFinishedSession(killed.sessionId)).toMatchObject({
+          exitReason: "manual-cancel",
+          terminalStatus: "failed",
+        }),
+      { timeout: 10_000 },
+    );
+    // Observe settlement before polling can acknowledge an unwanted notification.
+    expect(hasExitEvent(killed.sessionId)).toBe(false);
     const running = await later.process({ action: "poll", sessionId: survivor.sessionId });
     expect(running.details).toMatchObject({ status: "running" });
     expect(hasExitEvent(survivor.sessionId)).toBe(false);

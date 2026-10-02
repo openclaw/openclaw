@@ -1,12 +1,13 @@
 // Twitch plugin module implements access control behavior.
 import {
-  createChannelIngressResolver,
   defineStableChannelIngressIdentity,
   type ChannelIngressContextBinding,
   type ChannelIngressIdentitySubjectInput,
   type IngressReasonCode,
+  type ResolvedChannelMessageIngress,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 type TwitchAccessControlResult =
@@ -18,9 +19,7 @@ type TwitchAccessControlResult =
     }
   | {
       allowed: true;
-      channelIngress: Awaited<
-        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
-      >;
+      channelIngress: ResolvedChannelMessageIngress;
       reason?: string;
       matchKey?: string;
       matchSource?: string;
@@ -55,39 +54,41 @@ export async function checkTwitchAccessControl(params: {
 }): Promise<TwitchAccessControlResult> {
   const { message, account, botUsername } = params;
   const policyKind = resolveTwitchPolicyKind(account);
-  const resolved = await createChannelIngressResolver({
-    channelId: "twitch",
-    accountId: params.accountId,
-    identity: policyKind === "role" ? twitchRoleIdentity : twitchUserIdentity,
-  }).message({
-    subject: twitchSubject(message),
-    conversation: {
-      kind: "group",
-      id: message.channel,
-    },
-    contextBinding: params.contextBinding,
-    event: { mayPair: false },
-    mentionFacts: {
-      canDetectMention: true,
-      wasMentioned: mentionsBot(message.message, botUsername),
-    },
-    dmPolicy: "open",
-    groupPolicy: policyKind === "open" ? "open" : "allowlist",
-    policy: {
-      activation: {
-        requireMention: account.requireMention ?? true,
-        allowTextCommands: false,
-        order: "before-sender",
+  const resolved = await getTwitchRuntime()
+    .channel.inbound.ingress.createResolver({
+      channelId: "twitch",
+      accountId: params.accountId,
+      identity: policyKind === "role" ? twitchRoleIdentity : twitchUserIdentity,
+    })
+    .message({
+      subject: twitchSubject(message),
+      conversation: {
+        kind: "group",
+        id: message.channel,
       },
-    },
-    // Canonical wildcard input keeps admission and participant evidence aligned.
-    groupAllowFrom:
-      policyKind === "allowFrom"
-        ? account.allowFrom
-        : policyKind === "role"
-          ? account.allowedRoles?.map((role) => (role === "all" ? "*" : role))
-          : undefined,
-  });
+      contextBinding: params.contextBinding,
+      event: { mayPair: false },
+      mentionFacts: {
+        canDetectMention: true,
+        wasMentioned: mentionsBot(message.message, botUsername),
+      },
+      dmPolicy: "open",
+      groupPolicy: policyKind === "open" ? "open" : "allowlist",
+      policy: {
+        activation: {
+          requireMention: account.requireMention ?? true,
+          allowTextCommands: false,
+          order: "before-sender",
+        },
+      },
+      // Canonical wildcard input keeps admission and participant evidence aligned.
+      groupAllowFrom:
+        policyKind === "allowFrom"
+          ? account.allowFrom
+          : policyKind === "role"
+            ? account.allowedRoles?.map((role) => (role === "all" ? "*" : role))
+            : undefined,
+    });
   const decision = resolved.ingress;
 
   if (decision.decisiveGateId === "activation" && decision.admission !== "dispatch") {

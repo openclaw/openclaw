@@ -3,6 +3,10 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  resetGatewayWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 
 const fixture = vi.hoisted(() => ({ root: "", buildId: "build-before" as string | null }));
@@ -26,7 +30,22 @@ async function writeIdentity(version: string, buildId: string): Promise<void> {
   );
 }
 
+async function registerRunHandoff(
+  accept: () => void,
+  waitForUpdates: () => Promise<void> | undefined = () => undefined,
+) {
+  const { registerGatewayRunInstallationReplacement } =
+    await import("../cli/gateway-cli/run-loop-request.js");
+  dispose = registerGatewayRunInstallationReplacement({
+    waitForUpdates,
+    accept,
+    logger: { warn: vi.fn(), error: vi.fn() },
+    supervised: true,
+  });
+}
+
 beforeEach(async () => {
+  resetGatewayWorkAdmission();
   fixture.root = directories.make("openclaw-replaced-install-");
   fixture.buildId = "build-before";
   await fs.mkdir(path.join(fixture.root, "dist"));
@@ -37,34 +56,33 @@ beforeEach(async () => {
 afterEach(() => {
   dispose?.();
   dispose = undefined;
+  resetGatewayWorkAdmission();
   vi.restoreAllMocks();
 });
 
 describe("running installation replacement", () => {
-  it.each(["2026.9.4", "2026.9.5"])(
-    "records a changed artifact once, including a same-version rebuild (%s)",
-    async (version) => {
-      const handoff = vi.fn();
-      dispose = owner.registerGatewayInstallationReplacementHandler(handoff);
-      await writeIdentity("2026.9.4", "build-before");
-      await owner.checkGatewayInstallationReplacement();
-      expect(handoff).not.toHaveBeenCalled();
-      await writeIdentity(version, "build-after");
-      await Promise.all([
-        owner.checkGatewayInstallationReplacement(),
-        owner.checkGatewayInstallationReplacement(),
-      ]);
-      expect(handoff).toHaveBeenCalledOnce();
-      expect(owner.getGatewayInstallationReplacement()).toMatchObject({
-        running: { version: "2026.9.4", buildId: "build-before" },
-        onDisk: { version, buildId: "build-after" },
-        reason: expect.stringContaining("gateway.installation_replaced"),
-        message: expect.stringContaining(`${version} build build-after`),
-      });
-      await owner.checkGatewayInstallationReplacement();
-      expect(handoff).toHaveBeenCalledOnce();
-    },
-  );
+  it("records a same-version rebuild once", async () => {
+    const version = "2026.9.4";
+    const handoff = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(handoff);
+    await writeIdentity("2026.9.4", "build-before");
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).not.toHaveBeenCalled();
+    await writeIdentity(version, "build-after");
+    await Promise.all([
+      owner.checkGatewayInstallationReplacement(),
+      owner.checkGatewayInstallationReplacement(),
+    ]);
+    expect(handoff).toHaveBeenCalledOnce();
+    expect(owner.getGatewayInstallationReplacement()).toMatchObject({
+      running: { version: "2026.9.4", buildId: "build-before" },
+      onDisk: { version, buildId: "build-after" },
+      reason: expect.stringContaining("gateway.installation_replaced"),
+      message: expect.stringContaining(`${version} build build-after`),
+    });
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
+  });
 
   it("waits through missing and malformed package-swap metadata without inventing a replacement", async () => {
     const handoff = vi.fn();
@@ -93,14 +111,16 @@ describe("running installation replacement", () => {
   it("follows a replaced stable pnpm link after the running version directory is removed", async () => {
     const globalRoot = fixture.root;
     const stableRoot = path.join(globalRoot, "node_modules", "openclaw");
-    fixture.root = path.join(
-      globalRoot,
-      "node_modules",
-      ".pnpm",
-      "openclaw@2026.9.4",
-      "node_modules",
-      "openclaw",
-    );
+    const packageRoot = (version: string) =>
+      path.join(
+        globalRoot,
+        "node_modules",
+        ".pnpm",
+        `openclaw@${version}`,
+        "node_modules",
+        "openclaw",
+      );
+    fixture.root = packageRoot("2026.9.4");
     await fs.mkdir(path.join(fixture.root, "dist"), { recursive: true });
     await fs.symlink(fixture.root, stableRoot, "junction");
     await writeIdentity("2026.9.4", "build-before");
@@ -111,14 +131,7 @@ describe("running installation replacement", () => {
     await owner.checkGatewayInstallationReplacement();
     expect(handoff).not.toHaveBeenCalled();
     const oldRoot = fixture.root;
-    fixture.root = path.join(
-      globalRoot,
-      "node_modules",
-      ".pnpm",
-      "openclaw@2026.9.5",
-      "node_modules",
-      "openclaw",
-    );
+    fixture.root = packageRoot("2026.9.5");
     await fs.mkdir(path.join(fixture.root, "dist"), { recursive: true });
     await writeIdentity("2026.9.5", "build-after");
     await fs.unlink(stableRoot);
@@ -139,6 +152,98 @@ describe("running installation replacement", () => {
     await copiedModule.checkGatewayInstallationReplacement();
     expect(handoff).toHaveBeenCalledOnce();
     expect(copiedModule.getGatewayInstallationReplacement()?.onDisk?.buildId).toBe("build-after");
+  });
+
+  it("leaves installation handoff with the suspension owner from preparation until rollback", async () => {
+    const restart = vi.fn();
+    await registerRunHandoff(restart);
+    const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+    expect(suspension).not.toBeNull();
+    await writeIdentity("2026.9.5", "build-after");
+    await owner.checkGatewayInstallationReplacement();
+    expect(restart).not.toHaveBeenCalled();
+    expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+    expect(suspension?.rollback()).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks suspension after the update helper settles and resumes after release", async () => {
+    const helper = createDeferredCore();
+    const accepted = createDeferredCore();
+    const restart = vi.fn(() => accepted.resolve());
+    await registerRunHandoff(restart, vi.fn().mockReturnValueOnce(helper.promise));
+    await writeIdentity("2026.9.5", "build-after");
+    await owner.checkGatewayInstallationReplacement();
+    const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+    expect(suspension?.drain()).toBe(true);
+    helper.resolve();
+    await helper.promise;
+    expect(restart).not.toHaveBeenCalled();
+    expect(suspension?.release()).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    await accepted.promise;
+    expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it("rechecks a latched replacement after a suspended helper rollback", async () => {
+    const helper = createDeferredCore();
+    const restart = vi.fn();
+    await registerRunHandoff(restart, vi.fn().mockReturnValueOnce(helper.promise));
+    await writeIdentity("2026.9.5", "build-after");
+    await owner.checkGatewayInstallationReplacement();
+    const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+    expect(suspension?.drain()).toBe(true);
+    await writeIdentity("2026.9.4", "build-before");
+    helper.resolve();
+    await helper.promise;
+    expect(suspension?.release()).toBe(true);
+    await owner.checkGatewayInstallationReplacement();
+    expect(restart).not.toHaveBeenCalled();
+    expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+  });
+
+  it("discards an installation read across suspension and rollback before it settles", async () => {
+    const json = await import("../infra/json-files.js");
+    const pending = createDeferredCore<unknown>();
+    vi.spyOn(json, "tryReadJson").mockImplementationOnce(() => pending.promise);
+    const restart = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(restart);
+    const checking = owner.checkGatewayInstallationReplacement();
+    try {
+      const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+      expect(suspension?.drain()).toBe(true);
+      await writeIdentity("2026.9.4", "build-before");
+      expect(suspension?.release()).toBe(true);
+      pending.resolve({ version: "2026.9.5", buildId: "build-after" });
+      await checking;
+      expect(restart).not.toHaveBeenCalled();
+      expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+      await owner.checkGatewayInstallationReplacement();
+      expect(restart).not.toHaveBeenCalled();
+    } finally {
+      pending.resolve(undefined);
+      await checking;
+    }
+  });
+
+  it("reports missing runtime chunks without taking over a held suspension", () => {
+    const restart = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(restart);
+    const suspension = tryBeginGatewaySuspendAdmission(vi.fn());
+    expect(suspension?.drain()).toBe(true);
+    const missing = Object.assign(new Error("runtime chunk unavailable"), {
+      code: "ENOENT",
+      path: path.join(fixture.root, "dist", "runtime.js"),
+    });
+    expect(owner.classifyGatewayStaleInstall(missing)?.error.details).toMatchObject({
+      code: "STALE_INSTALL",
+    });
+    expect(restart).not.toHaveBeenCalled();
+    expect(owner.getGatewayInstallationReplacement()).toBeUndefined();
+    expect(suspension?.release()).toBe(true);
+    expect(owner.classifyGatewayStaleInstall(missing)).not.toBeNull();
+    expect(restart).toHaveBeenCalledOnce();
   });
 
   it("coalesces disk reads and rejects an observation after its lifecycle registration retires", async () => {

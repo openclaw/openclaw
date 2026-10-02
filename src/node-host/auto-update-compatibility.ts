@@ -10,7 +10,7 @@ import {
   runSqliteReadOnlyWorker,
 } from "../infra/sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
-import { checkGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
+import { prepareGitCandidateNodeRuntime } from "../infra/update-runner-git-node-preflight.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { readAgentDatabasePreflightTargets } from "../state/openclaw-agent-db-registry.read.js";
@@ -88,8 +88,13 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
   signal?: AbortSignal;
 }): Promise<void> {
   params.signal?.throwIfAborted();
-  const { version, schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
-  const nodeRuntimeFailure = await checkGitCandidateNodeRuntime(params.packageRoot, version);
+  const { schemaVersions } = await readNodeRuntimeUpdateManifest(params.packageRoot);
+  // A Bun host runs the candidate with the same Bun, so Node engines describe a
+  // runtime that is not involved; the candidate's runtime guard and the
+  // launcher's readiness fallback own that compatibility check.
+  const nodeRuntimeFailure = process.versions.bun
+    ? null
+    : (await prepareGitCandidateNodeRuntime(params.packageRoot, undefined, "current-runtime")).step;
   if (nodeRuntimeFailure) {
     throw new Error(
       nodeRuntimeFailure.stderrTail ?? "Node runtime is incompatible with the update.",

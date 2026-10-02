@@ -408,11 +408,7 @@ class WearChatEventFlowTest {
           flow.send()
           flow.emit("delta", eventRunId = null, text = "Anonymous reply")
           val activeRun = if (run == "pending") flow.runId else run
-          flow.historyRun =
-            buildJsonObject {
-              activeRun?.let { put("runId", it) }
-              put("text", text)
-            }
+          flow.historyRun = inFlightHistory(activeRun, text)
           flow.emit("error")
           assertEquals(activeRun, flow.state.activeRunId)
           assertEquals(text, flow.state.streamText)
@@ -745,11 +741,7 @@ class WearChatEventFlowTest {
           flow.send()
           flow.observeReplyCompletion()
           flow.historyMessages = """[{"id":"owned-event","role":"assistant","content":"Original event reply"}]"""
-          flow.historyRun =
-            buildJsonObject {
-              put("runId", "foreign-live")
-              put("text", "Foreign live text")
-            }
+          flow.historyRun = inFlightHistory("foreign-live", "Foreign live text")
           flow.emit(
             terminalState,
             message =
@@ -923,11 +915,7 @@ class WearChatEventFlowTest {
             flow.observeReplyCompletion()
             flow.historyMessages = """[{"id":"owned-fallback","role":"assistant","content":"Owned fallback","idempotencyKey":"${flow.runId}:$suffix"}]"""
             val activeRun = if (run == "pending") flow.runId else run
-            flow.historyRun =
-              buildJsonObject {
-                activeRun?.let { put("runId", it) }
-                put("text", text)
-              }
+            flow.historyRun = inFlightHistory(activeRun, text)
             flow.vm.refresh()
             flow.idle()
             assertEquals(activeRun, flow.state.activeRunId)
@@ -964,6 +952,15 @@ class WearChatEventFlowTest {
       }
     }
   }
+
+  private fun inFlightHistory(
+    runId: String?,
+    text: String,
+  ): JsonObject =
+    buildJsonObject {
+      runId?.let { put("runId", it) }
+      put("text", text)
+    }
 
   private fun withFlow(block: (Flow) -> Unit) {
     val flow = Flow()
@@ -1011,11 +1008,7 @@ class WearChatEventFlowTest {
         flow.send()
         flow.observeReplyCompletion()
         flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-        flow.historyRun =
-          buildJsonObject {
-            put("runId", "foreign-run")
-            put("text", "Foreign live text")
-          }
+        flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
         flow.vm.refresh()
         flow.idle()
         assertEquals("Canonical foreign live state does not own the Watch send", flow.runId, flow.state.pendingReply?.runId)
@@ -1041,11 +1034,7 @@ class WearChatEventFlowTest {
         flow.send()
         flow.observeReplyCompletion()
         flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-        flow.historyRun =
-          buildJsonObject {
-            put("runId", "foreign-run")
-            put("text", "Foreign live text")
-          }
+        flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
         flow.emit(terminal)
         assertEquals(flow.runId, flow.state.pendingReply?.runId)
         assertEquals("foreign-run", flow.state.activeRunId)
@@ -1069,11 +1058,7 @@ class WearChatEventFlowTest {
           flow.send()
           flow.observeReplyCompletion()
           flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-          flow.historyRun =
-            buildJsonObject {
-              put("runId", "foreign-run")
-              put("text", "Foreign live text")
-            }
+          flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
           flow.historyMessages = """[{"id":"own-message","role":"assistant","content":"Own reply","idempotencyKey":"${flow.runId}"}]"""
           flow.emit(ownTerminal)
           assertTrue(flow.completedReplies.isEmpty())
@@ -1210,11 +1195,7 @@ class WearChatEventFlowTest {
       flow.vm.abort()
       flow.idle()
       assertEquals(controlRun, flow.state.pendingAbortRunId)
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
       flow.sendGate?.complete(Unit)
       flow.idle()
@@ -1520,11 +1501,7 @@ class WearChatEventFlowTest {
           val firstRun = flow.runId
           flow.observeReplyCompletion()
           flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-          flow.historyRun =
-            buildJsonObject {
-              put("runId", "foreign-run")
-              put("text", "Foreign live text")
-            }
+          flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
           flow.emit(ownTerminal, eventRunId = firstRun)
           flow.emit("delta", eventRunId = "foreign-run", text = "Foreign continued")
           assertEquals("foreign-run", flow.state.activeRunId)
@@ -1772,11 +1749,7 @@ class WearChatEventFlowTest {
       val ownRun = flow.runId
       flow.observeReplyCompletion()
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.vm.refresh()
       flow.idle()
       assertTrue(flow.completedReplies.isEmpty())
@@ -1839,11 +1812,7 @@ class WearChatEventFlowTest {
       flow.send()
       val ownRun = flow.runId
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.vm.refresh()
       flow.idle()
       flow.observeApp()
@@ -1866,11 +1835,7 @@ class WearChatEventFlowTest {
       val ownRun = flow.runId
       flow.observeReplyCompletion()
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.vm.refresh()
       flow.idle()
       flow.historyMessages = "[]"
@@ -1895,19 +1860,12 @@ class WearChatEventFlowTest {
               flow.observeReplyCompletion()
               val liveRun = "foreign-run".takeUnless { anonymous }
               flow.emit("delta", eventRunId = liveRun, text = "Other live reply")
-              flow.historyRun =
-                buildJsonObject {
-                  liveRun?.let { put("runId", it) }
-                  put("text", "Other live reply")
-                }
+              flow.historyRun = inFlightHistory(liveRun, "Other live reply")
               flow.emit(terminal, eventRunId = ownRun)
               assertTrue(flow.completedReplies.isEmpty())
               flow.historyRun =
                 if (stillActive) {
-                  buildJsonObject {
-                    put("runId", "newer-run")
-                    put("text", "Newer live reply")
-                  }
+                  inFlightHistory("newer-run", "Newer live reply")
                 } else {
                   null
                 }
@@ -1942,7 +1900,7 @@ class WearChatEventFlowTest {
         val ownRun = flow.runId
         flow.observeReplyCompletion()
         flow.emit("delta", eventRunId = null, text = "Anonymous live reply")
-        flow.historyRun = buildJsonObject { put("text", "Anonymous live reply") }
+        flow.historyRun = inFlightHistory(null, "Anonymous live reply")
         flow.emit("error", eventRunId = ownRun)
         flow.emit("delta", eventRunId = if (laterRun == "own") ownRun else laterRun, text = "New live projection")
         assertTrue(flow.completedReplies.isEmpty())
@@ -1964,11 +1922,7 @@ class WearChatEventFlowTest {
       flow.send()
       val ownRun = flow.runId
       flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.emit("error", eventRunId = ownRun)
       assertEquals(ownRun, flow.state.replyCompletion?.runId)
       flow.historyRun = null
@@ -2408,11 +2362,7 @@ class WearChatEventFlowTest {
         val ownRun = flow.runId
         flow.emit("delta", eventRunId = null, text = "Anonymous live")
         flow.historyMessages = """[{"id":"other-aborted","role":"assistant","content":"Other canceled reply","idempotencyKey":"other-run:assistant"}]"""
-        flow.historyRun =
-          buildJsonObject {
-            put("runId", "foreign-live")
-            put("text", "Foreign still live")
-          }
+        flow.historyRun = inFlightHistory("foreign-live", "Foreign still live")
         flow.clickAppAction("Abort run")
         flow.idle()
         assertEquals(listOf<String?>(null), flow.abortRuns)
@@ -2493,7 +2443,7 @@ class WearChatEventFlowTest {
       flow.submitFromApp("Hello")
       val ownRun = flow.runId
       flow.emit("delta", eventRunId = null, text = "Anonymous other run")
-      flow.historyRun = buildJsonObject { put("text", "Anonymous other run") }
+      flow.historyRun = inFlightHistory(null, "Anonymous other run")
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Already completed own reply","idempotencyKey":"$ownRun:assistant"}]"""
       flow.emit("aborted", eventRunId = ownRun)
       assertEquals(WearReplyOutcome.Aborted, flow.state.replyCompletion?.outcome)

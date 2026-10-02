@@ -5,7 +5,13 @@ import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-u
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import { formatUsageCost, formatUsageTokens, formatDayLabel, formatFullDate } from "./metrics.ts";
+import {
+  formatUsageCost,
+  formatAnalysisCost,
+  formatUsageTokens,
+  formatDayLabel,
+  formatFullDate,
+} from "./metrics.ts";
 import type { CostDailyEntry, UsageProps, UsageTotals } from "./types.ts";
 
 function tokenCategory<Key extends "output" | "input" | "cacheWrite" | "cacheRead">(
@@ -31,12 +37,6 @@ export const USAGE_TOKEN_CATEGORIES = [
 
 function pct(part: number, total: number): number {
   return total === 0 ? 0 : (part / total) * 100;
-}
-
-function formatAnalysisCost(value: number): string {
-  const magnitude = Math.abs(value);
-  const decimals = magnitude === 0 || magnitude >= 0.01 ? 2 : magnitude >= 0.0001 ? 4 : 6;
-  return formatUsageCost(value, decimals);
 }
 
 function handleDailyBarKeydown(
@@ -113,7 +113,6 @@ export function renderDailyChartCompact(
     return Math.max(minBarPx, ratio * chartAreaPx);
   });
 
-  // Calculate bar width based on number of days
   const barMaxWidth = daily.length > 30 ? 12 : daily.length > 20 ? 18 : daily.length > 14 ? 24 : 32;
   const showTotals = daily.length <= 14;
   const selectedDaySet = new Set(selectedDays);
@@ -173,13 +172,10 @@ export function renderDailyChartCompact(
             ${daily.map((d, idx) => {
               const heightPx = expectDefined(barHeights[idx], "daily usage bar height");
               const isSelected = selectedDaySet.has(d.date);
-              const label = formatDayLabel(d.date);
-              // Shorter label for many days (just day number)
               const showDateLabel =
                 daily.length <= 14 ||
                 idx % Math.ceil(daily.length / 6) === 0 ||
                 idx === daily.length - 1;
-              const shortLabel = label;
               const labelClass = showDateLabel
                 ? "daily-bar-label"
                 : "daily-bar-label daily-bar-label--hidden";
@@ -250,7 +246,7 @@ export function renderDailyChartCompact(
                             aria-hidden="true"
                           ></div>`
                     }
-                    <div class="${labelClass}">${shortLabel}</div>
+                    <div class="${labelClass}">${formatDayLabel(d.date)}</div>
                   </div>
                 </openclaw-tooltip>
               `;

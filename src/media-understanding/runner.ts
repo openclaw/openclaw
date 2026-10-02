@@ -38,7 +38,10 @@ import { logWarn } from "../logger.js";
 import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
-import { matchesMediaEntryCapability } from "./entry-capabilities.js";
+import {
+  matchesMediaEntryCapability,
+  resolveConfiguredMediaEntryCapabilities,
+} from "./entry-capabilities.js";
 import { inspectLocalAudioSelection } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import {
@@ -77,8 +80,19 @@ export {
   normalizeMediaAttachments,
   resolveMediaAttachmentLocalRoots,
 } from "./runner.attachments.js";
+export { buildMediaUnderstandingRegistry as buildProviderRegistry } from "./provider-registry.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+/**
+ * A provider registry, or a memoized factory that builds one on first use.
+ * `runCapability` receives the factory form so a turn that never needs the
+ * registry (the native-vision fast path) never pays to build it.
+ */
+type LazyProviderRegistry = ProviderRegistry | (() => ProviderRegistry);
+
+function resolveProviderRegistry(registry: LazyProviderRegistry): ProviderRegistry {
+  return typeof registry === "function" ? registry() : registry;
+}
 type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
   typeof import("../agents/prepared-model-catalog.js");
 type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["readPreparedModelCatalog"]>>;
@@ -147,33 +161,11 @@ function resolveConfiguredKeyProviderOrder(params: {
   return uniqueStrings([...supportedProviders, ...params.fallbackProviders]);
 }
 
-function resolveConfiguredImageModelId(params: {
-  cfg: OpenClawConfig;
-  providerId: string;
-}): string | undefined {
-  if (isMinimaxVlmProvider(params.providerId)) {
-    return undefined;
-  }
-  const configured = resolveConfiguredImageModel(params);
-  const id = configured?.id?.trim();
-  return id || undefined;
-}
-
 function resolveConfiguredImageModel(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): { id?: string; input?: string[] } | undefined {
-  const providerCfg = findNormalizedProviderValue(
-    params.cfg.models?.providers,
-    params.providerId,
-  ) as
-    | {
-        models?: Array<{
-          id?: string;
-          input?: string[];
-        }>;
-      }
-    | undefined;
+  const providerCfg = findNormalizedProviderValue(params.cfg.models?.providers, params.providerId);
   return providerCfg?.models?.find((entry) => {
     const id = entry?.id?.trim();
     return Boolean(id) && entry?.input?.includes("image");
@@ -258,7 +250,7 @@ async function resolveAutoImageModelId(params: {
   if (isMinimaxVlmProvider(params.providerId)) {
     return "MiniMax-VL-01";
   }
-  const configuredModel = resolveConfiguredImageModelId(params);
+  const configuredModel = resolveConfiguredImageModel(params)?.id?.trim();
   if (configuredModel) {
     return configuredModel;
   }
@@ -292,13 +284,6 @@ async function resolveAutoImageModelId(params: {
     catalog,
     modelSupportsVision,
   });
-}
-
-export function buildProviderRegistry(
-  overrides?: Record<string, MediaUnderstandingProvider>,
-  cfg?: OpenClawConfig,
-): ProviderRegistry {
-  return buildMediaUnderstandingRegistry(overrides, cfg);
 }
 
 async function resolveKeyEntry(params: {
@@ -397,15 +382,19 @@ function resolveImageModelFromAgentDefaults(params: {
 
 function hasExplicitImageUnderstandingConfig(params: {
   cfg: OpenClawConfig;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: LazyProviderRegistry;
 }): boolean {
-  return (params.cfg.tools?.media?.models ?? []).some((entry) =>
-    matchesMediaEntryCapability({
+  return (params.cfg.tools?.media?.models ?? []).some((entry) => {
+    const configured = resolveConfiguredMediaEntryCapabilities(entry);
+    if (configured) {
+      return configured.includes("image");
+    }
+    return matchesMediaEntryCapability({
       entry,
       capability: "image",
-      providerRegistry: params.providerRegistry,
-    }),
-  );
+      providerRegistry: resolveProviderRegistry(params.providerRegistry),
+    });
+  });
 }
 
 function isMinimaxNativeVisionModel(params: { provider: string; model?: string }): boolean {
@@ -450,7 +439,7 @@ async function activeModelSupportsNativeVision(params: {
 }
 
 async function* resolveAutoAudioEntries(
-  params: Parameters<typeof resolveAutoEntries>[0],
+  params: Parameters<typeof resolveAutoEntries>[0] & { providerRegistry: ProviderRegistry },
 ): AsyncGenerator<ResolvedMediaModelEntry> {
   const activeProvider = normalizeMediaExecutionProviderId(
     params.activeModel?.provider?.trim() ?? "",
@@ -481,26 +470,28 @@ async function resolveAutoEntries(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry?: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
   nativeVisionActive: boolean;
   config?: MediaUnderstandingConfig;
 }): Promise<ResolvedMediaModelEntry[]> {
   if (params.capability === "image" && !params.nativeVisionActive) {
-    const imageModelEntries = resolveImageModelFromAgentDefaults({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    });
+    const imageModelEntries = resolveImageModelFromAgentDefaults(params);
     if (imageModelEntries.length > 0) {
       return imageModelEntries.map((entry) => ({ entry }));
     }
   }
-  const activeEntry = await resolveActiveModelEntry(params);
+  const prepared = {
+    ...params,
+    providerRegistry:
+      params.providerRegistry ?? buildMediaUnderstandingRegistry(undefined, params.cfg),
+  };
+  const activeEntry = await resolveActiveModelEntry(prepared);
   if (activeEntry) {
     return [{ entry: activeEntry }];
   }
-  const keys = await resolveKeyEntry(params);
+  const keys = await resolveKeyEntry(prepared);
   if (keys) {
     return [{ entry: keys }];
   }
@@ -514,10 +505,8 @@ export async function resolveAutoImageModel(params: {
   workspaceDir?: string;
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
-  const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const entries = await resolveAutoEntries({
     ...params,
-    providerRegistry,
     capability: "image",
     nativeVisionActive: false,
   });
@@ -749,7 +738,7 @@ export async function runCapability(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: LazyProviderRegistry;
   config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
   request?: MediaRequestOverrides;
@@ -909,11 +898,15 @@ export async function runCapability(params: {
     };
   }
 
+  // Every path past the native-vision skip branch reads the registry: resolve
+  // it once here (apply.ts's memoized factory builds it at most once per turn)
+  // and reuse the concrete value for every remaining call below.
+  const providerRegistry = resolveProviderRegistry(params.providerRegistry);
   const entries = resolveModelEntries({
     cfg,
     capability,
     config,
-    providerRegistry: params.providerRegistry,
+    providerRegistry,
   });
   const automaticAudio = capability === "audio" && entries.length === 0;
   let resolvedEntries: ResolvedMediaModelEntry[] = entries;
@@ -923,7 +916,7 @@ export async function runCapability(params: {
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
+      providerRegistry,
       capability,
       activeModel: params.activeModel,
       config,
@@ -956,7 +949,7 @@ export async function runCapability(params: {
       agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
+      providerRegistry,
       cache: params.attachments,
       entries: automaticAudio
         ? resolveAutoAudioEntries({
@@ -964,7 +957,7 @@ export async function runCapability(params: {
             agentId: params.agentId,
             agentDir: params.agentDir,
             workspaceDir: params.workspaceDir,
-            providerRegistry: params.providerRegistry,
+            providerRegistry,
             capability,
             activeModel: params.activeModel,
             nativeVisionActive: false,

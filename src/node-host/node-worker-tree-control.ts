@@ -67,11 +67,11 @@ export async function signalOwnedNodeWorkerTree(
 }
 
 /** A recognized cleanup observer owns delivery to its child and must not receive group escalation. */
-export function signalOwnedNodeWorkerAnchor(
+export async function signalOwnedNodeWorkerAnchor(
   worker: NodeWorkerProcessIdentity,
-  isOwnerCurrent: () => boolean,
-): void {
-  if (!isOwnerCurrent() || inspectNodeWorkerProcessIdentity(worker) !== "live") {
+  isOwnerCurrent: () => boolean | Promise<boolean>,
+): Promise<void> {
+  if (!(await isOwnerCurrent()) || inspectNodeWorkerProcessIdentity(worker) !== "live") {
     return;
   }
   try {
@@ -86,12 +86,12 @@ export function signalOwnedNodeWorkerAnchor(
 export async function waitForOwnedNodeWorkerTreeDeath(
   worker: NodeWorkerProcessIdentity,
   timeoutMs?: number,
-  isOwnerCurrent?: () => boolean,
+  isOwnerCurrent?: () => boolean | Promise<boolean>,
 ): Promise<NodeWorkerTreeState> {
   const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
   let state = inspectOwnedNodeWorkerTree(worker);
   while (state === "live" && Date.now() < deadline) {
-    if (isOwnerCurrent?.() === false) {
+    if ((await isOwnerCurrent?.()) === false) {
       break;
     }
     await delay(RECOVERY_POLL_MS);

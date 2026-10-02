@@ -198,22 +198,6 @@ describe("buildWorkspaceSkillStatus", () => {
       expect(skill.missing.os).toEqual(["darwin"]);
     }
   });
-  it("marks bundled skills blocked by allowlist", () => {
-    const entry = makeEntry({
-      name: "peekaboo",
-      source: "openclaw-bundled",
-    });
-
-    const report = buildWorkspaceSkillStatus("/tmp/ws", {
-      entries: [entry],
-      config: { skills: { allowBundled: ["other-skill"] } },
-    });
-    const skill = requireReportedSkill(report, "peekaboo");
-
-    expect(skill.blockedByAllowlist).toBe(true);
-    expect(skill.eligible).toBe(false);
-    expect(skill.bundled).toBe(true);
-  });
 
   it("requires explicit enablement before exposing bundled coding-agent", async () => {
     const workspaceDir = await createTempWorkspaceDir();

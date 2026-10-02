@@ -15,42 +15,24 @@ export async function finalizeDoctorConfigFlow(params: {
 }): Promise<{
   cfg: OpenClawConfig;
   shouldWriteConfig: boolean;
-  confirmedConfigSource?: { path: string; hash: string };
+  confirmedConfigSource: { path: string; hash: string };
 }> {
+  const confirmedConfigSource = {
+    path: params.snapshot.path,
+    hash: params.snapshot.hash ?? hashConfigRaw(params.snapshot.raw),
+  };
+  let cfg = params.cfg;
+  let shouldWriteConfig = params.shouldRepair && params.pendingChanges;
   if (!params.shouldRepair && params.pendingChanges) {
-    const confirmedConfigSource = {
-      path: params.snapshot.path,
-      hash: params.snapshot.hash ?? hashConfigRaw(params.snapshot.raw),
-    };
-    const shouldApply = await params.confirm({
+    shouldWriteConfig = await params.confirm({
       message: "Apply recommended config repairs now?",
       initialValue: true,
     });
-    if (shouldApply) {
-      return {
-        cfg: params.candidate,
-        shouldWriteConfig: true,
-        confirmedConfigSource,
-      };
-    }
-    if (params.fixHints.length > 0) {
+    if (shouldWriteConfig) {
+      cfg = params.candidate;
+    } else if (params.fixHints.length > 0) {
       params.note(params.fixHints.join("\n"), "Doctor");
     }
-    return {
-      cfg: params.cfg,
-      shouldWriteConfig: false,
-    };
   }
-
-  if (params.shouldRepair && params.pendingChanges) {
-    return {
-      cfg: params.cfg,
-      shouldWriteConfig: true,
-    };
-  }
-
-  return {
-    cfg: params.cfg,
-    shouldWriteConfig: false,
-  };
+  return { cfg, shouldWriteConfig, confirmedConfigSource };
 }

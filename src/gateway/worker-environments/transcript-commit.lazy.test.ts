@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -77,6 +78,7 @@ async function createFixture() {
   const store = ledger.createWorkerTranscriptCommitStore({ database });
   return {
     store,
+    target,
     committer: owner.createWorkerTranscriptCommitter({ getConfig: () => cfg, store }),
     readEntries: () => sessions.SessionManager.open(target).getEntries(),
     async cleanup() {
@@ -132,6 +134,7 @@ describe("worker transcript runtime loading", () => {
       });
       const commit = fixture.committer.commit({
         identity: IDENTITY,
+        sessionTarget: fixture.target,
         request: createRequest(),
         assertCurrent,
       });
@@ -183,6 +186,7 @@ describe("worker transcript runtime loading", () => {
       await expect(
         fixture.committer.commit({
           identity: reason === "session-not-attached" ? { ...IDENTITY, sessionId: null } : IDENTITY,
+          sessionTarget: fixture.target,
           request: {
             ...createRequest(),
             runEpoch: reason === "epoch-mismatch" ? RUN_EPOCH + 1 : RUN_EPOCH,
@@ -192,7 +196,12 @@ describe("worker transcript runtime loading", () => {
       ).resolves.toEqual({ ok: false, reason });
       expect(loadRuntime).not.toHaveBeenCalled();
       await expect(
-        fixture.committer.commit({ identity: IDENTITY, request: createRequest(), assertCurrent }),
+        fixture.committer.commit({
+          identity: IDENTITY,
+          sessionTarget: fixture.target,
+          request: createRequest(),
+          assertCurrent,
+        }),
       ).rejects.toMatchObject({ cause: failure });
       expect(loadRuntime).toHaveBeenCalledOnce();
       expect(assertCurrent).not.toHaveBeenCalled();

@@ -49,6 +49,8 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
   disableToolSearch?: true;
   forceCodeModeControls?: boolean;
   modelToolsEnabled: boolean;
+  /** False when the harness cannot dispatch an unregistered catalog name directly. */
+  supportsDeferredToolCalls?: boolean;
   prompt?: string;
   runId?: string;
   runtimeToolAllowlist?: readonly string[];
@@ -75,6 +77,16 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     toolsAllow: params.toolsAllow,
     forceCodeModeControls: params.forceCodeModeControls,
   });
+  if (params.supportsDeferredToolCalls === false && plan.toolSearchConfig.mode === "directory") {
+    plan.toolSearchConfig = { ...plan.toolSearchConfig, mode: "tools" };
+    plan.toolSearchRuntimeConfig = {
+      ...plan.toolSearchRuntimeConfig,
+      tools: {
+        ...plan.toolSearchRuntimeConfig?.tools,
+        toolSearch: plan.toolSearchConfig,
+      },
+    };
+  }
   const {
     codeModeControlsEnabled,
     toolSearchControlsEnabled,
@@ -133,6 +145,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
     let effectiveTools = prepared
       ? projectedUncompactedTools
       : filterRuntimeCompatibleTools(projectedUncompactedTools).tools;
+    const codeModeSkills = prepared?.codeModeSkills;
     const codeModeTools = codeModeControlsEnabled
       ? createCodeModeTools({
           config: params.config,
@@ -147,7 +160,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
           executeTool: prepared?.executeTool ?? params.executeTool,
           forceRestartSafeTools: prepared?.forceRestartSafeTools,
           toolExecutionAllow: prepared?.toolExecutionAllow,
-          codeModeSkills: prepared?.codeModeSkills,
+          codeModeSkills,
         })
       : [];
     const compacted = applyAgentToolSurfaceCatalog({
@@ -164,7 +177,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
       catalogRef: toolSearchCatalogRef,
       toolHookContext: options.hookContext,
       toolExecutionAllow: prepared?.toolExecutionAllow,
-      codeModeSkills: prepared?.codeModeSkills,
+      codeModeSkills,
     });
     const projectedCompactedTools =
       !prepared && options.localModelLeanApplied
@@ -192,6 +205,12 @@ export function createAgentHarnessToolSurfaceRuntimeCore(params: {
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,
+        toolSearchPrompt: toolSearchControlsEnabled
+          ? {
+              config: toolSearchRuntimeConfig,
+              contextTokenBudget: params.contextTokenBudget ?? params.model?.contextWindow,
+            }
+          : undefined,
       }),
     };
   };

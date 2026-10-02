@@ -142,9 +142,11 @@ export function createTestCronReconciliation(complete: () => Promise<void> = asy
 }
 
 export function createPostReadyMaintenanceScheduleParams(
-  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> = {},
+  overrides: Partial<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0]> &
+    Pick<Parameters<typeof scheduleGatewayPostReadyMaintenance>[0], "scheduler">,
 ): Parameters<typeof scheduleGatewayPostReadyMaintenance>[0] {
   return {
+    signal: new AbortController().signal,
     delayMs: 1,
     isClosing: () => false,
     startMaintenance: vi.fn(async () => null),
@@ -163,14 +165,9 @@ export function createPostReadyMaintenanceScheduleParams(
 
 export function createMaintenanceHandles() {
   return {
-    tickInterval: setInterval(() => undefined, 60_000),
-    healthInterval: setInterval(() => undefined, 60_000),
-    dedupeCleanup: setInterval(() => undefined, 60_000),
+    stopPeriodicTasks: vi.fn(async () => {}),
     startMediaCleanup: vi.fn(async () => undefined),
     stopMediaCleanup: vi.fn(async () => "drained" as const),
-    stopSessionColdStorageMaintenance: vi.fn(async () => {}),
-    stopTelemetryChecks: vi.fn(async () => {}),
-    worktreeCleanup: setInterval(() => undefined, 60_000),
     skillUsageCleanup: vi.fn(async () => {}),
   };
 }

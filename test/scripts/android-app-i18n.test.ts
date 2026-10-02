@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildAndroidAppI18nCatalog,
   checkAndroidAppI18n,
@@ -9,22 +11,103 @@ import {
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue,
   selectDeterministicTranslation,
-  selectGeneratedTranslation,
+  verifyAndroidAppI18n,
 } from "../../scripts/android-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
+const { generatedOverrides } = vi.hoisted(() => ({
+  generatedOverrides: new Map<string, string>(),
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    readFile: (...args: Parameters<typeof actual.readFile>) => {
+      const override =
+        typeof args[0] === "string" ? generatedOverrides.get(path.resolve(args[0])) : undefined;
+      return override === undefined ? actual.readFile(...args) : Promise.resolve(override);
+    },
+  };
+});
+
 describe("Android app i18n resources", () => {
+  it("counts manual resources reached only through the generated native lookup", async () => {
+    const shellPath = path.resolve(
+      "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
+    );
+    const shell = await readFile(shellPath, "utf8");
+    try {
+      generatedOverrides.set(shellPath, shell.replaceAll("R.string.cancel", "R.string.app_name"));
+      await expect(verifyAndroidAppI18n()).resolves.toBeUndefined();
+    } finally {
+      generatedOverrides.clear();
+    }
+  });
+
   it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
-    // Managed native_* rows are reconciled by the post-merge locale refresh
-    // workflow (#111557); source PRs are validated with those rows pending.
     await expect(checkAndroidAppI18n({ tolerateManagedPending: true })).resolves.toBeUndefined();
-    const base = await readFile("apps/android/app/src/main/res/values/strings.xml", "utf8");
-    const wearBase = await readFile("apps/android/wear/src/main/res/values/strings.xml", "utf8");
-    expect(base).toContain('xmlns:tools="http://schemas.android.com/tools"');
+    const catalog = await buildAndroidAppI18nCatalog();
+    const base = catalog.resources.get(
+      path.resolve("apps/android/app/build/generated/native-i18n/res/values/native_strings.xml"),
+    );
     expect(base).toMatch(
       /<string name="native_[a-f0-9]+"[^>]*tools:ignore="Typos,TypographyDashes,TypographyEllipsis">/u,
     );
-    expect(wearBase).toContain('<string name="current_session">Current session</string>');
+  });
+
+  it("projects inventory translations without depending on previous generated files", async () => {
+    const source = "Read";
+    const id = `native.android.${createHash("sha256").update(`android ${source}`).digest("hex").slice(0, 16)}`;
+    const key = `native_${createHash("sha256").update(source).digest("hex").slice(0, 16)}`;
+    const artifactPath = path.resolve("apps/.i18n/native/de.json");
+    const artifact = JSON.parse(await readFile(artifactPath, "utf8"));
+    const inventory = JSON.parse(await readFile("apps/.i18n/native-source.json", "utf8"));
+    expect(inventory.entries).toContainEqual(
+      expect.objectContaining({
+        id,
+        source,
+        surface: "android",
+        sites: expect.arrayContaining([expect.objectContaining({ kind: "tool-display" })]),
+      }),
+    );
+    artifact.translations[id] = 'Lesen & "prüfen"';
+    try {
+      generatedOverrides.set(artifactPath, JSON.stringify(artifact));
+      const catalog = await buildAndroidAppI18nCatalog();
+      expect(catalog.kotlin).toContain(`"Read" to R.string.${key},`);
+      const german = catalog.resources.get(
+        path.resolve(
+          "apps/android/app/build/generated/native-i18n/res/values-de/native_strings.xml",
+        ),
+      );
+      expect(german).toContain(
+        `<string name="${key}" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Lesen &amp; \\"prüfen\\""</string>`,
+      );
+
+      inventory.entries.reverse();
+      generatedOverrides.set(
+        path.resolve("apps/.i18n/native-source.json"),
+        JSON.stringify(inventory),
+      );
+      const reordered = await buildAndroidAppI18nCatalog();
+      expect(reordered.kotlin).toBe(catalog.kotlin);
+      expect(reordered.resources).toEqual(catalog.resources);
+
+      delete artifact.translations[id];
+      generatedOverrides.set(artifactPath, JSON.stringify(artifact));
+      const fallback = await buildAndroidAppI18nCatalog();
+      expect(
+        fallback.resources.get(
+          path.resolve(
+            "apps/android/app/build/generated/native-i18n/res/values-de/native_strings.xml",
+          ),
+        ),
+      ).toContain(
+        `<string name="${key}" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Read"</string>`,
+      );
+    } finally {
+      generatedOverrides.clear();
+    }
   });
 
   it("routes compact token suffixes through generated resources", async () => {
@@ -193,17 +276,9 @@ describe("Android app i18n resources", () => {
     expect(selectDeterministicTranslation("Source", ["Source", "Source"])).toBe("Source");
   });
 
-  it("preserves a localized resource when translation memory retires its UI source", () => {
+  it("decodes quoted Android resources for canonical translation inputs", () => {
     expect(decodeAndroidResourceValue('"Sitzungen"')).toBe("Sitzungen");
     expect(decodeAndroidResourceValue('"Sag \\"Hallo\\""')).toBe('Sag "Hallo"');
-    const existing = { source: "Sessions", translation: "Sitzungen" };
-    expect(selectGeneratedTranslation("Sessions", [], existing)).toBe("Sitzungen");
-    expect(selectGeneratedTranslation("Sessions", ["Sesiones"], existing)).toBe("Sesiones");
-  });
-
-  it("does not reuse a localized resource after its English source changes", () => {
-    const existing = { source: "Sessions", translation: "Sitzungen" };
-    expect(selectGeneratedTranslation("Threads", [], existing)).toBe("");
   });
 
   it("preserves source argument indexes when a translation reorders interpolations", () => {

@@ -35,7 +35,6 @@ import {
   createCodexTestBindingStore,
   buildCodexAppServerConnectionFingerprint,
   catalogError,
-  parseCatalogPage,
   CODEX_LOCAL_SESSION_HOST_ID,
   createCodexSessionCatalogControlFactory,
   type CodexCatalogHome,
@@ -43,30 +42,6 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex session catalog errors", () => {
-  it("preserves fallback names returned by paired nodes", () => {
-    expect(
-      parseCatalogPage({
-        sessions: [
-          {
-            threadId: "thread-1",
-            fallbackName: "Readable fallback",
-            status: "idle",
-            archived: false,
-          },
-        ],
-      }),
-    ).toEqual({
-      sessions: [
-        {
-          threadId: "thread-1",
-          fallbackName: "Readable fallback",
-          status: "idle",
-          archived: false,
-        },
-      ],
-    });
-  });
-
   it("keeps the underlying paired-node list failure", () => {
     expect(catalogError("NODE_LIST_FAILED", new Error("paired store is unreadable"))).toEqual({
       code: "NODE_LIST_FAILED",

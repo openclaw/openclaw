@@ -2,10 +2,6 @@ const GATEWAY_SEND_LIMIT = 120;
 const GATEWAY_SEND_WINDOW_MS = 60_000;
 const GATEWAY_SEND_QUEUE_LIMIT = GATEWAY_SEND_LIMIT;
 
-type QueuedGatewaySend = {
-  payload: string;
-};
-
 type GatewaySendQueueOverflow = {
   droppedEvents: number;
   maxQueuedEvents: number;
@@ -15,7 +11,7 @@ type GatewaySendQueueOverflow = {
 
 export class GatewaySendLimiter {
   private outboundSendTimestamps: number[] = [];
-  private outboundQueue: QueuedGatewaySend[] = [];
+  private outboundQueue: string[] = [];
   private outboundFlushTimer?: NodeJS.Timeout;
   private droppedEvents = 0;
   private overflowWarningEmitted = false;
@@ -42,7 +38,7 @@ export class GatewaySendLimiter {
         shouldEmitOverflowWarning = true;
       }
     }
-    this.outboundQueue.push({ payload: serialized });
+    this.outboundQueue.push(serialized);
     if (shouldEmitOverflowWarning) {
       this.emitOverflowWarning({
         droppedEvents: this.droppedEvents,
@@ -121,11 +117,11 @@ export class GatewaySendLimiter {
   private flush(): void {
     while (this.outboundQueue.length > 0 && this.canSend(Date.now())) {
       const queued = this.outboundQueue.shift();
-      if (!queued) {
+      if (queued === undefined) {
         continue;
       }
       try {
-        this.sendSerialized(queued.payload);
+        this.sendSerialized(queued);
       } catch (error) {
         this.emitError(error instanceof Error ? error : new Error(String(error), { cause: error }));
         this.clear();

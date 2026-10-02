@@ -595,7 +595,6 @@ describe("config view", () => {
       },
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
-      originalValue: { gateway: { mode: "local" } },
     });
 
     expect(container.querySelector(".config-actions")).toBeNull();
@@ -684,7 +683,6 @@ describe("config view", () => {
       },
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: { gateway: { mode: "remote" } },
-      originalValue: { gateway: { mode: "local" } },
     });
     expect(container.querySelector(".config-content input")?.hasAttribute("disabled")).toBe(true);
   });
@@ -718,7 +716,6 @@ describe("config view", () => {
         },
       },
       formValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
-      originalValue: { lastTouchedAt: "2026-07-13T00:00:00.000Z" },
     };
 
     render(renderConfig({ ...props, formMode: "form" }), container);
@@ -751,7 +748,6 @@ describe("config view", () => {
         },
       },
       formValue: { gateway: { mode: "local" } },
-      originalValue: { gateway: { mode: "local" } },
     });
 
     const formButton = findButtonByText(container, "Form");
@@ -884,7 +880,6 @@ describe("config view", () => {
         },
       },
       formValue: { gateway: { mode: "local" } },
-      originalValue: { gateway: { mode: "local" } },
     } as const;
     const formMode = renderConfigView({ ...base, formMode: "form" });
     expect(findButtonByText(formMode.container, "Form").getAttribute("aria-pressed")).toBe("true");
@@ -912,7 +907,6 @@ describe("config view", () => {
         properties: {},
       },
       formValue: {},
-      originalValue: {},
       webPush: {
         supported: true,
         permission: "default",
@@ -1099,10 +1093,6 @@ describe("config view", () => {
         channels: { telegram: "on" },
         messages: { inbox: "smart" },
       },
-      originalValue: {
-        channels: { telegram: "on" },
-        messages: { inbox: "smart" },
-      },
     });
     document.body.append(container);
 
@@ -1227,10 +1217,6 @@ describe("config view", () => {
         channels: { telegram: "enabled" },
         models: {},
       },
-      originalValue: {
-        channels: { telegram: "enabled" },
-        models: {},
-      },
     });
 
     expect(
@@ -1258,11 +1244,6 @@ describe("config view", () => {
       },
       uiHints: { "auth.order": { advanced: false } },
       formValue: {
-        auth: {
-          order: {},
-        },
-      },
-      originalValue: {
         auth: {
           order: {},
         },
@@ -1295,10 +1276,6 @@ describe("config view", () => {
         },
       },
       formValue: {
-        auth: {},
-        gateway: {},
-      },
-      originalValue: {
         auth: {},
         gateway: {},
       },
@@ -1364,11 +1341,6 @@ describe("config view", () => {
           mode: "remote",
         },
       },
-      originalValue: {
-        gateway: {
-          mode: "local",
-        },
-      },
       onRawChange,
     };
     const rerender = () =>
@@ -1405,7 +1377,8 @@ describe("config view", () => {
   it("does not render a pending-changes panel for form drafts (they auto-save)", () => {
     const { container } = renderConfigView({
       formValue: { boundary: "after" },
-      originalValue: { boundary: "before" },
+      raw: '{ boundary: "after" }',
+      originalRaw: '{ boundary: "before" }',
     });
 
     expect(container.querySelector(".config-diff")).toBeNull();
@@ -1426,15 +1399,6 @@ describe("config view", () => {
           discord: {
             token: {
               id: "TOKEN_AFTER",
-            },
-          },
-        },
-      },
-      originalValue: {
-        channels: {
-          discord: {
-            token: {
-              id: "TOKEN_BEFORE",
             },
           },
         },
@@ -1486,9 +1450,6 @@ describe("config view", () => {
       formValue: {
         token: "TOKEN_A_AFTER",
       },
-      originalValue: {
-        token: "TOKEN_A_BEFORE",
-      },
     };
     const rerender = () =>
       render(
@@ -1519,9 +1480,6 @@ describe("config view", () => {
     props.originalRaw = '{\n  token: "TOKEN_B_BEFORE"\n}\n';
     props.formValue = {
       token: "TOKEN_B_AFTER",
-    };
-    props.originalValue = {
-      token: "TOKEN_B_BEFORE",
     };
     rerender();
 
@@ -1568,13 +1526,6 @@ describe("config view", () => {
           },
         },
       },
-      originalValue: {
-        integrations: {
-          "foo.bar": {
-            credential: "TOKEN_BEFORE",
-          },
-        },
-      },
     };
     const rerender = () =>
       render(
@@ -1614,11 +1565,6 @@ describe("config view", () => {
           mode: "remote",
         },
       },
-      originalValue: {
-        gateway: {
-          mode: "local",
-        },
-      },
     };
     const rerender = () =>
       render(
@@ -1640,7 +1586,7 @@ describe("config view", () => {
     ).toBe("gateway.mode");
 
     props.raw = props.originalRaw;
-    props.formValue = props.originalValue;
+    props.formValue = { gateway: { mode: "local" } };
     rerender();
 
     expect(container.querySelector(".config-diff")).toBeNull();
@@ -1671,13 +1617,6 @@ describe("config view", () => {
         },
       },
     };
-    const secretRefOriginalValue = {
-      channels: {
-        discord: {
-          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-        },
-      },
-    };
     const { container } = renderConfigView({
       schema: secretRefSchema,
       uiHints: {
@@ -1685,7 +1624,6 @@ describe("config view", () => {
       },
       formMode: "form",
       formValue: secretRefValue,
-      originalValue: secretRefOriginalValue,
       onFormPatch,
     });
 
@@ -1708,7 +1646,6 @@ describe("config view", () => {
           "channels.discord.token": { sensitive: true, advanced: false },
         },
         formValue: secretRefValue,
-        originalValue: secretRefOriginalValue,
       }),
       container,
     );
@@ -1737,11 +1674,6 @@ describe("config view", () => {
       },
       uiHints: { "gateway.mode": { advanced: false } },
       formValue: {
-        gateway: {
-          mode: { malformed: true },
-        },
-      },
-      originalValue: {
         gateway: {
           mode: { malformed: true },
         },
@@ -1891,8 +1823,8 @@ describe("config view", () => {
       .find((button) => button.textContent?.includes("100%"))
       ?.click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
-    expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
+    expect(setThemeMode).toHaveBeenCalledWith("system");
     expect(setAccent).toHaveBeenCalledWith(undefined);
     expect(setTextScale).toHaveBeenCalledWith(100);
   });
@@ -1927,8 +1859,8 @@ describe("config view", () => {
     findButtonByText(themeSection, "Claw").click();
     themeSection.querySelector<HTMLElement>('wa-radio[value="system"]')?.click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
-    expect(setThemeMode).toHaveBeenCalledWith("system", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
+    expect(setThemeMode).toHaveBeenCalledWith("system");
   });
 
   it("renders rejected theme and locale edits as browser-only fallbacks", () => {
@@ -1973,7 +1905,7 @@ describe("config view", () => {
 
     findButtonByText(themeSection, "Claw").click();
 
-    expect(setTheme).toHaveBeenCalledWith("claw", expect.any(Object));
+    expect(setTheme).toHaveBeenCalledWith("claw");
   });
 
   it("shows pending synced preferences without claiming they already synced", () => {
@@ -2030,7 +1962,7 @@ describe("config view", () => {
     for (const title of [
       "Message width",
       "Show task progress cards",
-      "Collapse task progress by default",
+      "Collapse task progress by default on desktop",
       "Open external sessions in",
       "Hold microphone button to start dictation",
     ]) {
@@ -2050,7 +1982,7 @@ describe("config view", () => {
     const row = Array.from(container.querySelectorAll<HTMLElement>(".settings-row")).find(
       (candidate) =>
         candidate.querySelector(".settings-row__title")?.textContent?.trim() ===
-        "Collapse task progress by default",
+        "Collapse task progress by default on desktop",
     );
     const toggle = row?.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
 
@@ -2106,7 +2038,7 @@ describe("config view", () => {
     const customButton = findButtonByText(container, "Light Green");
     expect(customButton.disabled).toBe(false);
     customButton.click();
-    expect(setTheme).toHaveBeenCalledWith("custom", { element: customButton });
+    expect(setTheme).toHaveBeenCalledWith("custom");
 
     const replaceButton = findButtonContainingText(container, "Replace Light Green");
     const clearButton = findButtonContainingText(container, "Clear Light Green");

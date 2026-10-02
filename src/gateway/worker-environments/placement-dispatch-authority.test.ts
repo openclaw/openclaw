@@ -10,7 +10,7 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.j
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {

@@ -8,6 +8,9 @@ export function resolveRuntimeConfig(
 ): RuntimeConfig {
   const configured = snapshot.plugins?.entries?.typesafe?.config;
   const validated = runtimeConfig(configured);
+  if (validated.baseUrl) {
+    return validated;
+  }
   const prepared = getPreparedPluginSecretInput("typesafe", "apiKey");
   return { ...validated, apiKey: prepared.value };
 }

@@ -16,17 +16,23 @@ import {
 } from "./artifacts.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionEntry: vi.fn(),
+  realSessionFacts: false,
   resolveManagedArtifactDownload: vi.fn(),
   resolveManagedUrlDownload: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-sharing-preparation.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-sharing-preparation.js")>();
+  const { artifactFixtureSessionFacts } = await import("./artifacts.test-support.js");
   return {
     ...actual,
-    loadGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
+    prepareSessionMutationFacts: async (
+      params: Parameters<typeof actual.prepareSessionMutationFacts>[0],
+    ) =>
+      hoisted.realSessionFacts
+        ? actual.prepareSessionMutationFacts(params)
+        : artifactFixtureSessionFacts(params),
   };
 });
 
@@ -34,7 +40,8 @@ vi.mock("../session-transcript-readers.js", async () => {
   const actual = await vi.importActual<typeof import("../session-transcript-readers.js")>(
     "../session-transcript-readers.js",
   );
-  return { ...actual, visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync };
+  const { withArtifactFixtureReader } = await import("./artifacts.test-support.js");
+  return withArtifactFixtureReader(actual, hoisted.visitSessionMessagesAsync);
 });
 
 vi.mock("../managed-image-attachments.js", async () => {
@@ -83,10 +90,7 @@ function mockedMessages(messages: unknown[]) {
 describe("managed artifact lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    hoisted.loadSessionEntry.mockReturnValue({
-      storePath: "/tmp/sessions.sqlite",
-      entry: { sessionId: "sess-main" },
-    });
+    hoisted.realSessionFacts = false;
     hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
     hoisted.resolveManagedUrlDownload.mockResolvedValue(null);
     hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
@@ -117,6 +121,7 @@ describe("managed artifact lifecycle", () => {
     "rechecks $name after a shared session becomes draft",
     async ({ method, managed }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        hoisted.realSessionFacts = true;
         hoisted.visitSessionMessagesAsync.mockImplementation(async (_scope, visit) => {
           visit(resultImageMessage(), 2);
           return 1;
@@ -336,7 +341,6 @@ describe("managed artifact lifecycle", () => {
 
   it.each([
     { runId: "run-output" },
-    { taskId: "task-output" },
     { messageRole: "assistant" },
     { runId: "run-output", messageRole: "assistant" },
   ])("keeps scoped managed downloads bound to their exact artifact id: %j", async (filter) => {
@@ -349,7 +353,7 @@ describe("managed artifact lifecycle", () => {
         {
           role: "assistant",
           content: [{ type: "file", artifactId, title: "stale-name.txt", ...payload }],
-          __openclaw: { seq: 3, runId: "run-output", taskId: "task-output" },
+          __openclaw: { seq: 3, runId: "run-output" },
         },
       ]);
       hoisted.resolveManagedArtifactDownload.mockResolvedValue(null);
@@ -380,7 +384,6 @@ describe("managed artifact lifecycle", () => {
           mimeType: "text/csv",
           sizeBytes: 8,
           runId: "run-output",
-          taskId: "task-output",
           messageSeq: 3,
           source: "session-transcript",
           download: { mode: "url" },

@@ -5,12 +5,14 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { classifyFailoverSignal } from "./failover/classify.js";
 
 const KEY_SPLIT_RE = /[\s,;]+/g;
-const GOOGLE_LIVE_SINGLE_KEY = "OPENCLAW_LIVE_GEMINI_KEY";
 
 const PROVIDER_PREFIX_OVERRIDES: Record<string, string> = {
   google: "GEMINI",
@@ -18,43 +20,16 @@ const PROVIDER_PREFIX_OVERRIDES: Record<string, string> = {
 };
 
 type ProviderApiKeyConfig = {
-  liveSingle?: string;
-  listVar?: string;
-  primaryVar?: string;
-  prefixedVar?: string;
+  liveSingle: string;
+  listVar: string;
+  primaryVar: string;
+  prefixedVar: string;
   fallbackVars: string[];
 };
 
 type CollectProviderApiKeysOptions = {
   env?: NodeJS.ProcessEnv;
   providerEnvVars?: readonly string[];
-};
-
-const PROVIDER_API_KEY_CONFIG: Record<string, Omit<ProviderApiKeyConfig, "fallbackVars">> = {
-  anthropic: {
-    liveSingle: "OPENCLAW_LIVE_ANTHROPIC_KEY",
-    listVar: "OPENCLAW_LIVE_ANTHROPIC_KEYS",
-    primaryVar: "ANTHROPIC_API_KEY",
-    prefixedVar: "ANTHROPIC_API_KEY_",
-  },
-  google: {
-    liveSingle: GOOGLE_LIVE_SINGLE_KEY,
-    listVar: "GEMINI_API_KEYS",
-    primaryVar: "GEMINI_API_KEY",
-    prefixedVar: "GEMINI_API_KEY_",
-  },
-  "google-vertex": {
-    liveSingle: GOOGLE_LIVE_SINGLE_KEY,
-    listVar: "GEMINI_API_KEYS",
-    primaryVar: "GEMINI_API_KEY",
-    prefixedVar: "GEMINI_API_KEY_",
-  },
-  openai: {
-    liveSingle: "OPENCLAW_LIVE_OPENAI_KEY",
-    listVar: "OPENAI_API_KEYS",
-    primaryVar: "OPENAI_API_KEY",
-    prefixedVar: "OPENAI_API_KEY_",
-  },
 };
 
 function parseKeyList(raw?: string | null): string[] {
@@ -81,30 +56,14 @@ function collectEnvPrefixedKeys(prefix: string, env: NodeJS.ProcessEnv): string[
 
 function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
   const normalized = normalizeProviderId(provider);
-  const custom = PROVIDER_API_KEY_CONFIG[normalized];
   const base = PROVIDER_PREFIX_OVERRIDES[normalized] ?? normalized.toUpperCase().replace(/-/g, "_");
-
-  const liveSingle = custom?.liveSingle ?? `OPENCLAW_LIVE_${base}_KEY`;
-  const listVar = custom?.listVar ?? `${base}_API_KEYS`;
-  const primaryVar = custom?.primaryVar ?? `${base}_API_KEY`;
-  const prefixedVar = custom?.prefixedVar ?? `${base}_API_KEY_`;
-
-  if (normalized === "google" || normalized === "google-vertex") {
-    return {
-      liveSingle,
-      listVar,
-      primaryVar,
-      prefixedVar,
-      fallbackVars: ["GOOGLE_API_KEY"],
-    };
-  }
-
   return {
-    liveSingle,
-    listVar,
-    primaryVar,
-    prefixedVar,
-    fallbackVars: [],
+    liveSingle: `OPENCLAW_LIVE_${base}_KEY`,
+    listVar: normalized === "anthropic" ? "OPENCLAW_LIVE_ANTHROPIC_KEYS" : `${base}_API_KEYS`,
+    primaryVar: `${base}_API_KEY`,
+    prefixedVar: `${base}_API_KEY_`,
+    fallbackVars:
+      normalized === "google" || normalized === "google-vertex" ? ["GOOGLE_API_KEY"] : [],
   };
 }
 
@@ -117,53 +76,24 @@ export function collectProviderApiKeys(
   const normalizedProvider = normalizeProviderId(provider);
   const config = resolveProviderApiKeyConfig(normalizedProvider);
 
-  const forcedSingle = config.liveSingle
-    ? normalizeOptionalString(env[config.liveSingle])
-    : undefined;
+  const forcedSingle = normalizeOptionalString(env[config.liveSingle]);
   if (forcedSingle) {
     // OPENCLAW_LIVE_*_KEY pins a single key so retries do not rotate fixtures.
     return [forcedSingle];
   }
 
-  const fromList = parseKeyList(config.listVar ? env[config.listVar] : undefined);
-  const primary = config.primaryVar ? normalizeOptionalString(env[config.primaryVar]) : undefined;
-  const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar, env) : [];
-
-  const fallback = config.fallbackVars
-    .map((envVar) => normalizeOptionalString(env[envVar]))
-    .filter(Boolean) as string[];
+  const fromList = parseKeyList(env[config.listVar]);
+  const primary = env[config.primaryVar];
+  const fromPrefixed = collectEnvPrefixedKeys(config.prefixedVar, env);
+  const fallback = config.fallbackVars.map((envVar) => env[envVar]);
   const manifestEnvVars = options.providerEnvVars ?? getProviderEnvVarsCore(normalizedProvider);
-  const manifestFallback = manifestEnvVars
-    .map((envVar) => normalizeOptionalString(env[envVar]))
-    .filter(Boolean) as string[];
-
-  const seen = new Set<string>();
-
-  const add = (value?: string) => {
-    if (!value) {
-      return;
-    }
-    if (seen.has(value)) {
-      return;
-    }
-    seen.add(value);
-  };
-
-  for (const value of fromList) {
-    add(value);
-  }
-  add(primary);
-  for (const value of fromPrefixed) {
-    add(value);
-  }
-  for (const value of fallback) {
-    add(value);
-  }
-  for (const value of manifestFallback) {
-    add(value);
-  }
-
-  return Array.from(seen);
+  return normalizeUniqueTrimmedStringList([
+    ...fromList,
+    primary,
+    ...fromPrefixed,
+    ...fallback,
+    ...manifestEnvVars.map((envVar) => env[envVar]),
+  ]);
 }
 
 /** Return whether a provider error message indicates API-key rate limiting. */

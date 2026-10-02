@@ -1,4 +1,3 @@
-// Zalo plugin owns raw webhook durable admission and replay draining.
 import {
   bindIngressLifecycleToReplyOptions,
   createChannelIngressError,

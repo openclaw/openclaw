@@ -16,6 +16,7 @@ import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
+  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
 import { testState } from "./test-helpers.runtime-state.js";
@@ -59,7 +60,7 @@ async function closeListener(server: Server): Promise<void> {
 }
 
 describe("Gateway test environment lifecycle", () => {
-  it("owns an implicit E2E listener across startup and a rejected close", async () => {
+  it("owns an explicit E2E listener across startup and a rejected close", async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     assert(configPath);
     const serverModule = await import("./server.js");
@@ -79,6 +80,7 @@ describe("Gateway test environment lifecycle", () => {
       });
     const token = "retained-listener-token";
     const acquisition = startGatewayWithClient({
+      port: await getGatewayE2ePortBlock(),
       cfg: { gateway: { auth: { mode: "token", token } } },
       configPath,
       token,
@@ -247,15 +249,15 @@ describe("Gateway test environment lifecycle", () => {
         let stopAcquiredClient: (() => Promise<void>) | undefined;
         let stopping: Promise<void> | undefined;
         let stopSettled = false;
-        const startSpy = vi
-          .spyOn(GatewayClient.prototype, "start")
-          .mockImplementation(function (this: GatewayClient) {
-            stopAcquiredClient = () => stopAndWait.call(this, { timeoutMs: 1_000 });
-            start.call(this);
-            if (failureMode === "start error") {
-              throw startError;
-            }
-          });
+        const startSpy = vi.spyOn(GatewayClient.prototype, "start").mockImplementation(function (
+          this: GatewayClient,
+        ) {
+          stopAcquiredClient = () => stopAndWait.call(this, { timeoutMs: 1_000 });
+          start.call(this);
+          if (failureMode === "start error") {
+            throw startError;
+          }
+        });
         const stopSpy = vi
           .spyOn(GatewayClient.prototype, "stopAndWait")
           .mockImplementation(function (this: GatewayClient, options) {

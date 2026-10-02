@@ -1,7 +1,5 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#endif
+import OpenClawKit
 
 private let appOnboardingVersion = 7
 
@@ -365,59 +363,15 @@ private func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
     if lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
         return true
     }
-    if isPrivateIPv6Literal(lower) {
+    if LoopbackHost.isPrivateIPv6Literal(lower) {
         return true
     }
-    guard let parts = ipv4Parts(lower) else { return false }
-    switch (parts[0], parts[1]) {
-    case (10, _), (192, 168), (169, 254):
-        return true
-    case (172, 16...31), (100, 64...127):
-        return true
-    default:
-        return false
-    }
-}
-
-private func ipv4Parts(_ value: String) -> [Int]? {
-    let labels = value.split(separator: ".", omittingEmptySubsequences: false)
-    guard labels.count == 4 else { return nil }
-    var parts: [Int] = []
-    parts.reserveCapacity(4)
-    for label in labels {
-        guard !label.isEmpty,
-              label.allSatisfy(\.isNumber),
-              let part = Int(label),
-              part >= 0,
-              part <= 255
-        else {
-            return nil
-        }
-        parts.append(part)
-    }
-    return parts
-}
-
-private func isPrivateIPv6Literal(_ value: String) -> Bool {
-    #if canImport(Darwin)
-    var addr = in6_addr()
-    guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
-        return false
-    }
-    return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
-    #else
-    return false
-    #endif
+    return LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
 }
 
 private func setDefaultStringIfProvided(_ defaults: UserDefaults, key: String, value: String?) {
     guard let value else { return }
-    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-    if trimmed.isEmpty {
-        defaults.removeObject(forKey: key)
-    } else {
-        defaults.set(trimmed, forKey: key)
-    }
+    setDefaultString(defaults, key: key, value: value)
 }
 
 private func setDefaultString(_ defaults: UserDefaults, key: String, value: String) {
@@ -498,13 +452,7 @@ private func isValidSSHTarget(_ raw: String) -> Bool {
 
 private func printConfigureRemoteOutput(_ output: ConfigureRemoteOutput, json: Bool) {
     if json {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        if let data = try? encoder.encode(output),
-           let text = String(data: data, encoding: .utf8)
-        {
-            print(text)
-        }
+        printCLIJSON(output)
         return
     }
     print("OpenClaw macOS Remote Config")

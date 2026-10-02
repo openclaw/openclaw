@@ -1,6 +1,6 @@
 // Channels page renders Nostr status.
 import { html, nothing } from "lit";
-import type { ChannelAccountSnapshot, NostrStatus } from "../../api/types.ts";
+import type { ChannelAccountSnapshot, NostrProfile, NostrStatus } from "../../api/types.ts";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
@@ -19,9 +19,6 @@ import {
 } from "./view.shared.ts";
 import type { ChannelsProps } from "./view.types.ts";
 
-/**
- * Truncate a pubkey for display (shows first and last 8 chars)
- */
 function truncatePubkey(pubkey: string | null | undefined): string {
   if (!pubkey) {
     return t("common.na");
@@ -37,11 +34,8 @@ export function renderNostrCard(params: {
   nostr?: NostrStatus | null;
   nostrAccounts: ChannelAccountSnapshot[];
   accountCount?: number;
-  /** Profile form state (optional - if provided, shows form) */
   profileFormState?: NostrProfileFormState | null;
-  /** Profile form callbacks */
   profileFormCallbacks?: NostrProfileFormCallbacks | null;
-  /** Called when Edit Profile is clicked */
   onEditProfile?: () => void;
 }) {
   const {
@@ -65,7 +59,7 @@ export function renderNostrCard(params: {
 
   const renderAccountRow = (account: ChannelAccountSnapshot) => {
     const publicKey = (account as { publicKey?: string }).publicKey;
-    const profile = (account as { profile?: { name?: string; displayName?: string } }).profile;
+    const profile = (account as { profile?: NostrProfile }).profile;
     const displayName = profile?.displayName ?? profile?.name ?? account.name ?? account.accountId;
 
     return renderChannelAccountRow({
@@ -85,7 +79,6 @@ export function renderNostrCard(params: {
   };
 
   const renderProfileSection = () => {
-    // If showing form, render the form instead of the read-only view
     if (showingForm && profileFormCallbacks) {
       return renderNostrProfileForm({
         state: profileFormState,
@@ -95,19 +88,7 @@ export function renderNostrCard(params: {
     }
 
     const profile =
-      (
-        primaryAccount as
-          | {
-              profile?: {
-                name?: string;
-                displayName?: string;
-                about?: string;
-                picture?: string;
-                nip05?: string;
-              };
-            }
-          | undefined
-      )?.profile ?? nostr?.profile;
+      (primaryAccount as { profile?: NostrProfile } | undefined)?.profile ?? nostr?.profile;
     const { name, displayName, about, picture, nip05 } = profile ?? {};
     const hasAnyProfileData = name || displayName || about || picture || nip05;
 
@@ -156,30 +137,17 @@ export function renderNostrCard(params: {
                       `
                     : nothing
                 }
-                ${
-                  name
-                    ? html`<dt>${t("channels.nostr.name")}</dt>
-                        <dd>${name}</dd>`
-                    : nothing
-                }
-                ${
-                  displayName
-                    ? html`<dt>${t("channels.nostr.displayName")}</dt>
-                        <dd>${displayName}</dd>`
-                    : nothing
-                }
-                ${
-                  about
-                    ? html`<dt>${t("channels.nostr.about")}</dt>
-                        <dd>${about}</dd>`
-                    : nothing
-                }
-                ${
-                  nip05
-                    ? html`<dt>NIP-05</dt>
-                        <dd>${nip05}</dd>`
-                    : nothing
-                }
+                ${[
+                  [t("channels.nostr.name"), name],
+                  [t("channels.nostr.displayName"), displayName],
+                  [t("channels.nostr.about"), about],
+                  ["NIP-05", nip05],
+                ].map(([label, value]) =>
+                  value
+                    ? html`<dt>${label}</dt>
+                        <dd>${value}</dd>`
+                    : nothing,
+                )}
               </dl>
             `
           : nothing

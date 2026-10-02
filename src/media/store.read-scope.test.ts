@@ -3,13 +3,16 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { saveRemoteMedia } from "./fetch.js";
 import { readLocalMediaFile } from "./local-media-access.js";
+import { mediaNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { saveMediaBuffer, saveMediaSource, saveMediaStream } from "./store.js";
 import { unlinkIfExists } from "./temp-files.js";
 
@@ -27,6 +30,69 @@ async function* mediaBytes() {
 }
 
 describe("read-owned media publication", () => {
+  it.each(["buffer", "stream"] as const)(
+    "composes a client commit guard with read authority after %s bytes are written",
+    async (kind) => {
+      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+        const mediaDir = state.statePath("media", "inbound");
+        await fs.mkdir(mediaDir, { recursive: true });
+        const realMediaDir = await fs.realpath(mediaDir);
+        let allowed = true;
+        let wrote = false;
+        const closed = new Error("client upload policy changed");
+        const assertCommitAllowed = () => {
+          if (!allowed) {
+            throw closed;
+          }
+        };
+        const open = fs.open.bind(fs);
+        vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+          const handle = await open(...args);
+          if (
+            typeof args[0] === "string" &&
+            path.dirname(args[0]) === realMediaDir &&
+            args[1] === "wx"
+          ) {
+            const write = handle.writeFile.bind(handle);
+            vi.spyOn(handle, "writeFile").mockImplementation(async (...writeArgs) => {
+              await write(...writeArgs);
+              wrote = true;
+              allowed = false;
+            });
+          }
+          return handle;
+        });
+        await expect(
+          withChannelReadAuthority(
+            () => {},
+            () =>
+              kind === "buffer"
+                ? saveMediaBuffer(
+                    bytes,
+                    "application/pdf",
+                    "inbound",
+                    undefined,
+                    undefined,
+                    undefined,
+                    { assertCommitAllowed },
+                  )
+                : saveMediaStream(
+                    mediaBytes(),
+                    "application/pdf",
+                    "inbound",
+                    undefined,
+                    undefined,
+                    undefined,
+                    { assertCommitAllowed },
+                  ),
+          ),
+        ).rejects.toBe(closed);
+        expect(wrote).toBe(true);
+        expect(await fs.readdir(mediaDir)).toEqual([]);
+      });
+    },
+  );
+
   it.each(["buffer", "source"] as const)(
     "rejects scoped %s publication when durable file sync fails",
     async (kind) => {
@@ -300,11 +366,15 @@ describe("read-owned media publication", () => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const mediaDir = state.statePath("media", "inbound");
         const displaced = state.statePath("user-owned.pdf");
+        const storeUrl = resolveRuntimeWorkerUrl(mediaNativeProcessEntrypoints.store);
+        const authorityUrl = resolveRuntimeWorkerUrl(
+          mediaNativeProcessEntrypoints.channelReadAuthority,
+        );
         const script = `
           import fs from 'node:fs';
           import path from 'node:path';
-          import { withChannelReadAuthority } from './src/shared/channel-read-authority.ts';
-          import { saveMediaStream } from './src/media/store.ts';
+          import { withChannelReadAuthority } from ${JSON.stringify(authorityUrl.href)};
+          import { saveMediaStream } from ${JSON.stringify(storeUrl.href)};
           const mediaDir = ${JSON.stringify(mediaDir)};
           const stream = (async function* () {
             yield Buffer.from(${JSON.stringify(bytes.toString())});
@@ -323,7 +393,7 @@ describe("read-owned media publication", () => {
         `;
         const { stdout } = await execFileAsync(
           process.execPath,
-          ["--import", "./scripts/tsx.mjs", "--input-type=module", "-e", script],
+          [...resolveRuntimeWorkerArgv(storeUrl).slice(0, -1), "--input-type=module", "-e", script],
           { cwd: process.cwd(), env: { ...process.env, ...state.envVars }, timeout: 20_000 },
         );
         const { stage } = JSON.parse(stdout) as { stage: string };
@@ -428,7 +498,9 @@ describe("read-owned media publication", () => {
         () => {},
         () => saveMediaStream(stream, "application/pdf"),
       ),
-    ).rejects.toThrow(/directory|path|alias/i);
+    ).rejects.toSatisfy(
+      (error: unknown) => error instanceof FsSafeError && error.code === "path-mismatch",
+    );
     await expect(fs.readdir(originalMedia)).resolves.toEqual([]);
     await expect(fs.readFile(preserved, "utf8")).resolves.toBe("existing user attachment");
     await expect(fs.readdir(replacementMedia)).resolves.toEqual(["existing.txt"]);

@@ -7,24 +7,20 @@ import {
   filterSupplementalContextItems,
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/security-runtime";
+import {
+  readSessionUpdatedAt,
+  resolveChannelResetConfig,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackUserAllowed } from "../allow-list.js";
-import { readSessionUpdatedAt, resolveChannelResetConfig } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
 import { formatSlackUnavailableMedia } from "./prepare-content.js";
-import {
-  applySlackThreadHistoryFilterPolicy,
-  ensureSlackThreadHistoryHasBotRoot,
-  formatSlackBotStarterThreadLabel,
-  formatSlackThreadLabelSnippet,
-  isSlackThreadAuthorCurrentBot,
-  resolveSlackThreadHistoryFilterPolicy,
-  shouldIncludeBotThreadStarterContext,
-} from "./prepare-thread-context-root.js";
+import { isSlackThreadAuthorCurrentBot } from "./prepare-thread-context-root.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
 const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
@@ -38,6 +34,10 @@ type SlackThreadContextData = {
 };
 
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
+
+function formatSlackThreadLabelSnippet(text: string): string {
+  return truncateUtf16Safe(text.replace(/\s+/g, " "), 80);
+}
 
 type SlackSessionResetFreshness =
   | {
@@ -92,32 +92,19 @@ async function resolveSlackThreadUserMap(params: {
   messages: SlackThreadStarter[];
   eventScope?: SlackEventScope;
 }): Promise<Map<string, { name?: string }>> {
-  const uniqueUserIds: string[] = [];
-  const seen = new Set<string>();
-  for (const item of params.messages) {
-    if (!item.userId || seen.has(item.userId)) {
-      continue;
-    }
-    seen.add(item.userId);
-    uniqueUserIds.push(item.userId);
-  }
-  const userMap = new Map<string, { name?: string }>();
-  if (uniqueUserIds.length === 0) {
-    return userMap;
-  }
+  const uniqueUserIds = [
+    ...new Set(
+      params.messages.map((item) => item.userId).filter((id): id is string => Boolean(id)),
+    ),
+  ];
   const { results } = await runTasksWithConcurrency({
     tasks: uniqueUserIds.map((id) => async () => {
       const user = await params.ctx.resolveUserName(id, params.eventScope);
-      return user ? { id, user } : null;
+      return user ? ([id, user] as const) : null;
     }),
     limit: SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY,
   });
-  for (const result of results) {
-    if (result) {
-      userMap.set(result.id, result.user);
-    }
-  }
-  return userMap;
+  return new Map(results.flatMap((result) => (result ? [result] : [])));
 }
 
 export async function resolveSlackThreadContextData(params: {
@@ -209,13 +196,7 @@ export async function resolveSlackThreadContextData(params: {
       ? (await params.ctx.resolveUserName(starter.userId, params.eventScope))?.name
       : undefined;
   params.assertHistoryCurrent?.();
-  const starterIsCurrentBot = Boolean(
-    starter &&
-    isCurrentBotAuthor({
-      userId: starter.userId,
-      botId: starter.botId,
-    }),
-  );
+  const starterIsCurrentBot = Boolean(starter && isCurrentBotAuthor(starter));
   const starterAllowed =
     !starter ||
     (!starterIsCurrentBot &&
@@ -277,11 +258,9 @@ export async function resolveSlackThreadContextData(params: {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
 
-  const includeBotStarterAsRootContext = shouldIncludeBotThreadStarterContext({
-    starterIsCurrentBot,
-    isNewThreadSession: shouldSeedInitialThreadContext,
-    hasStarterText: Boolean(starter?.text),
-  });
+  const includeBotStarterAsRootContext = Boolean(
+    starter?.text && starterIsCurrentBot && shouldSeedInitialThreadContext,
+  );
 
   if (starter?.text && starterIsCurrentBot && !includeBotStarterAsRootContext) {
     logVerbose("slack: omitted current-bot thread starter from context");
@@ -290,10 +269,8 @@ export async function resolveSlackThreadContextData(params: {
       `slack: omitted thread starter from context (mode=${params.contextVisibilityMode}, sender_allowed=${starterAllowed ? "yes" : "no"})`,
     );
   } else if (includeBotStarterAsRootContext) {
-    threadLabel = formatSlackBotStarterThreadLabel({
-      roomLabel: params.roomLabel,
-      starterText: starter?.text,
-    });
+    const snippet = formatSlackThreadLabelSnippet(starter?.text ?? "").trim();
+    threadLabel = `Slack thread ${params.roomLabel}${snippet ? ` (assistant root): ${snippet}` : ""}`;
     logVerbose("slack: retained current-bot thread starter as assistant root context");
   }
 
@@ -350,30 +327,26 @@ export async function resolveSlackThreadContextData(params: {
               : threadHistory),
           ]
         : threadHistory;
-    const threadHistoryWithBotRoot = ensureSlackThreadHistoryHasBotRoot({
-      history: threadHistoryWithEnrichedRoot,
-      includeBotStarterAsRootContext,
-      threadStarter: starter ? { ...starter, ts: currentBotRootTs } : null,
-    });
+    const threadHistoryWithBotRoot =
+      includeBotStarterAsRootContext &&
+      starter &&
+      !threadHistoryWithEnrichedRoot.some((entry) => entry.ts === currentBotRootTs)
+        ? [{ ...starter, ts: currentBotRootTs }, ...threadHistoryWithEnrichedRoot]
+        : threadHistoryWithEnrichedRoot;
 
     if (threadHistoryWithBotRoot.length > 0) {
-      const historyFilterPolicy = resolveSlackThreadHistoryFilterPolicy({
-        includeBotStarterAsRootContext,
-        starterTs: currentBotRootTs,
-        // MPIM roots intentionally stay on the flat group session. Outbound
-        // delivery may create the reply-thread session before its first inbound
-        // turn, so recover those assistant replies when hydrating that session.
-        retainCurrentBotHistory:
-          params.isGroupDm && (isMissingThreadSession || isOutboundOnlyThreadSession),
-      });
-      const {
-        kept: threadHistoryWithoutCurrentBot,
-        omittedCurrentBot: omittedCurrentBotHistoryCount,
-      } = applySlackThreadHistoryFilterPolicy({
-        history: threadHistoryWithBotRoot,
-        policy: historyFilterPolicy,
-        identity: botIdentity,
-      });
+      // MPIM roots stay on the flat group session. Outbound delivery may create
+      // the reply-thread session before its first inbound turn, so recover its replies.
+      const retainCurrentBotHistory =
+        params.isGroupDm && (isMissingThreadSession || isOutboundOnlyThreadSession);
+      const threadHistoryWithoutCurrentBot = threadHistoryWithBotRoot.filter(
+        (entry) =>
+          !isCurrentBotAuthor(entry) ||
+          retainCurrentBotHistory ||
+          (includeBotStarterAsRootContext && entry.ts === currentBotRootTs),
+      );
+      const omittedCurrentBotHistoryCount =
+        threadHistoryWithBotRoot.length - threadHistoryWithoutCurrentBot.length;
 
       const userMapForFilter =
         params.contextVisibilityMode !== "all" &&
@@ -394,12 +367,7 @@ export async function resolveSlackThreadContextData(params: {
               mode: params.contextVisibilityMode,
               kind: "thread",
               isSenderAllowed: (historyMsg) => {
-                if (
-                  isCurrentBotAuthor({
-                    userId: historyMsg.userId,
-                    botId: historyMsg.botId,
-                  })
-                ) {
+                if (isCurrentBotAuthor(historyMsg)) {
                   return true;
                 }
                 const msgUser = historyMsg.userId ? userMapForFilter.get(historyMsg.userId) : null;
@@ -427,10 +395,7 @@ export async function resolveSlackThreadContextData(params: {
       const historyParts: string[] = [];
       for (const historyMsg of filteredThreadHistory) {
         const msgUser = historyMsg.userId ? userMap.get(historyMsg.userId) : null;
-        const isCurrentBot = isCurrentBotAuthor({
-          userId: historyMsg.userId,
-          botId: historyMsg.botId,
-        });
+        const isCurrentBot = isCurrentBotAuthor(historyMsg);
         const role = isCurrentBot || historyMsg.botId ? "assistant" : "user";
         const msgSenderName = isCurrentBot
           ? "Bot (this assistant)"

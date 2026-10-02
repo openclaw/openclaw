@@ -41,7 +41,6 @@ import {
   prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveGatewaySessionStoreTargetsReadOnly,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
@@ -176,6 +175,12 @@ describe("global session lookup ownership", () => {
 
   it("keeps a child-relative parent distinct from qualified parent owners", async () => {
     await withGlobalSessions("main", async (cfg) => {
+      for (const agentId of ["main", "research"]) {
+        await replaceSessionEntry(
+          { agentId, sessionKey: `agent:${agentId}:main` },
+          { sessionId: `${agentId}-literal-main`, updatedAt: 1 },
+        );
+      }
       await replaceSessionEntry(
         { agentId: "main", sessionKey: "unknown" },
         { sessionId: "main-unknown", updatedAt: 1 },
@@ -194,9 +199,15 @@ describe("global session lookup ownership", () => {
       ).toEqual([
         "main-global",
         "main-unknown",
-        "research-global",
+        "research-literal-main",
         "research-agent:research:global",
       ]);
+      const readRetiredParent = createGatewaySessionEntryReader({
+        cfg: { ...cfg, agents: { ownership: "explicit", entries: { research: {} } } },
+        agentId: "research",
+        store: {},
+      });
+      expect(readRetiredParent("agent:main:main")?.sessionId).toBe("main-literal-main");
     });
   });
 
@@ -253,6 +264,11 @@ describe("global session lookup ownership", () => {
               exactRead: true,
             }),
           ).toThrow(failure);
+          failingSingleRead.mockClear();
+          const readParent = createGatewaySessionEntryReader({ cfg, agentId: "main", store: {} });
+          expect(() => readParent("agent:research:main")).toThrow(failure);
+          // A failed exact read must not become absence followed by an alias lookup.
+          expect(failingSingleRead).toHaveBeenCalledOnce();
         } finally {
           failingSingleRead.mockRestore();
         }
@@ -262,7 +278,7 @@ describe("global session lookup ownership", () => {
     });
   });
 
-  it("keeps deferred errors in visitor order without changing eager batch failure order", async () => {
+  it("keeps deferred errors in visitor order", async () => {
     await withStateDirEnv("gateway-deferred-lookup-errors-", async ({ stateDir }) => {
       const cfg: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, research: {} } },
@@ -283,9 +299,6 @@ describe("global session lookup ownership", () => {
         { key: "agent:retired-agent:main" },
         { key: "agent:main:main", agentId: "research" },
       ];
-      expect(() => resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets })).toThrow(
-        'belongs to "main"',
-      );
       const results = prepareGatewaySessionStoreTargetsReadOnly({
         cfg,
         targets,
@@ -337,17 +350,25 @@ describe("global session lookup ownership", () => {
       await withGlobalSessions("work", async (cfg) => {
         // Revisit Research after Main so shared sentinels cannot adopt the previous owner.
         const requests = ["research", "main", "research"].flatMap((agentId) =>
-          ["main", "work", "global"].map((suffix) => ({
-            key: `agent:${agentId}:${suffix}`,
-            agentId,
-            canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
-          })),
+          ["main", "work", "global"].flatMap((suffix) =>
+            ["", " "].map((padding) => ({
+              key: `${padding}agent:${agentId}:${suffix}${padding}`,
+              agentId,
+              canonicalKey: suffix === "global" ? `agent:${agentId}:global` : "global",
+            })),
+          ),
         );
         const targets =
           mode === "batch"
-            ? resolveGatewaySessionStoreTargetsReadOnly({
+            ? prepareGatewaySessionStoreTargetsReadOnly({
                 cfg,
                 targets: requests.map(({ key }) => ({ key })),
+                projection: "list",
+              }).map((result) => {
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
               })
             : requests.map(({ key }) =>
                 mode === "single"
@@ -378,9 +399,15 @@ describe("global session lookup ownership", () => {
         const read = (config: OpenClawConfig, key: string, agentId?: string) => {
           setRuntimeConfigSnapshot(config, config);
           return mode === "batch"
-            ? resolveGatewaySessionStoreTargetsReadOnly({
+            ? prepareGatewaySessionStoreTargetsReadOnly({
                 cfg: config,
                 targets: [{ key, agentId }],
+                projection: "list",
+              }).map((result) => {
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
               })
             : mode === "single"
               ? resolveGatewaySessionStoreTargetWithStore({ cfg: config, key, agentId })
@@ -414,7 +441,7 @@ describe("global session lookup ownership", () => {
     await withGlobalSessions("main", async (cfg) => {
       const latestShared = vi.fn<
         NonNullable<GatewayRequestContext["githubPublicationService"]>["latestShared"]
-      >(() => null);
+      >(async () => null);
       const context = {
         getRuntimeConfig: () => cfg,
         githubPublicationService: { latestShared },
@@ -454,6 +481,7 @@ describe("global session lookup ownership", () => {
             sessionId: agentId + "-global",
           }),
           undefined,
+          expect.any(Function),
         );
       }
     });
@@ -738,10 +766,14 @@ it.each([
       const allAgents = await listSessions({ client, context, request: { limit: 20 } });
       expect(allAgents.sessions.find((row) => row.key === created.key)).toMatchObject(expected);
 
-      const [batched] = resolveGatewaySessionStoreTargetsReadOnly({
+      const [batched] = prepareGatewaySessionStoreTargetsReadOnly({
         cfg,
         targets: [{ key: created.key, agentId: "work" }],
+        projection: "list",
       });
+      if (!batched?.ok) {
+        throw new Error("Expected prepared child lookup to succeed");
+      }
       const cachedRequest = {
         cfg,
         key: created.key,
@@ -752,7 +784,7 @@ it.each([
       };
       resolveGatewaySessionStoreTargetWithStore(cachedRequest);
       const cached = resolveGatewaySessionStoreTargetWithStore(cachedRequest);
-      for (const selected of [batched!, cached]) {
+      for (const selected of [batched.value, cached]) {
         expect(createGatewaySessionEntryReader({ cfg, ...selected })("global")?.modelOverride).toBe(
           "qwen3:14b",
         );

@@ -27,6 +27,45 @@ describe("CommandPalette session search", () => {
     vi.restoreAllMocks();
   });
 
+  it("classifies punctuation-normalized title hits as sessions and keeps them selectable", async () => {
+    const metadata = createSessionResult(
+      "agent:main:communication",
+      "Per-session communication controls in UI",
+    );
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => metadata);
+    const { gateway } = createGateway(true, {
+      methods: ["sessions.search"],
+      request: (method) =>
+        method === "sessions.search"
+          ? {
+              sessions: metadata.sessions,
+              results: [
+                {
+                  sessionKey: "agent:main:communication",
+                  sessionId: "communication",
+                  messageId: "message-communication",
+                  role: "assistant",
+                  timestamp: 42,
+                  snippet: "Per-session communication controls are available.",
+                  score: 1,
+                },
+              ],
+            }
+          : { models: [] },
+    });
+    const { palette } = await mountPalette(createContext(gateway, list));
+
+    await enterQuery(palette, "per session communi");
+    await vi.advanceTimersByTimeAsync(200);
+    await palette.updateComplete;
+
+    const buttons = [...palette.querySelectorAll("button")];
+    expect(buttons.some((button) => button.textContent?.match(/Sessions\s*1/u))).toBe(true);
+    expect(buttons.some((button) => button.textContent?.match(/Messages\s*0/u))).toBe(true);
+    findPaletteOption(palette, "Per-session communication controls in UI")?.click();
+    expect(palette.onSelectSession).toHaveBeenCalledWith("agent:main:communication");
+  });
+
   it.each([false, true])(
     "keeps transcript snippets with a server metadata match: %s",
     async (serverMatch) => {
@@ -65,7 +104,7 @@ describe("CommandPalette session search", () => {
       const { palette } = await mountPalette(createContext(gateway, list));
 
       await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await vi.waitFor(() =>
         expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
           1,
@@ -141,7 +180,7 @@ describe("CommandPalette session search", () => {
     const { gateway } = createGateway(true, { methods: ["sessions.search"], request });
     const { palette } = await mountPalette(createContext(gateway, list));
     await enterQuery(palette, "uncommonneedle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await palette.updateComplete;
 
     expect(palette.textContent).toContain("Older planning discussion");
@@ -166,7 +205,7 @@ describe("CommandPalette session search", () => {
     const { palette } = await mountPalette(createContext(gateway, list));
 
     await enterQuery(palette, "needle");
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     await vi.waitFor(() =>
       expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(1),
     );
@@ -239,7 +278,7 @@ describe("CommandPalette session search", () => {
       const { palette } = await mountPalette(createContext(gateway, list));
 
       await enterQuery(palette, "needle");
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
       await vi.waitFor(() =>
         expect(request.mock.calls.filter(([method]) => method === "sessions.search")).toHaveLength(
           1,

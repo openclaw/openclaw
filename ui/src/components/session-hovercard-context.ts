@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
@@ -10,6 +10,18 @@ export type SessionHovercardContextInput = {
   row?: SidebarSessionHovercardRow;
   automationLink?: { href: string; navigate: () => void };
 };
+
+function renderContextRow(
+  icon: TemplateResult,
+  value: string,
+  label: string,
+  title: string | typeof nothing = nothing,
+) {
+  return html`<div class="session-hovercard__context-row" aria-label=${label} title=${title}>
+    <span class="session-hovercard__context-icon" aria-hidden="true">${icon}</span>
+    <span class="session-hovercard__context-value session-hovercard__context-text">${value}</span>
+  </div>`;
+}
 
 function renderProgressHeadsUp(headsUp: ReturnType<typeof progressCardHeadsUp>) {
   if (!headsUp) {
@@ -49,6 +61,11 @@ export function renderSessionHovercardContext(
   headsUp: ReturnType<typeof progressCardHeadsUp>,
 ) {
   const context = row?.workContext;
+  const contextLabel = t(
+    context?.kind === "project"
+      ? "sessionHovercard.projectLabel"
+      : "sessionHovercard.workspaceLabel",
+  );
   const directory = context?.kind === "project" ? context.cwd : context?.path;
   const projectLocation = directory ?? context?.path;
   const placementIdentity =
@@ -66,58 +83,32 @@ export function renderSessionHovercardContext(
   return html`<div class="session-hovercard__context">
     ${
       context
-        ? html`<div
-            class="session-hovercard__context-row"
-            aria-label=${`${t(
-              context.kind === "project"
-                ? "sessionHovercard.projectLabel"
-                : "sessionHovercard.workspaceLabel",
-            )}: ${context.name}`}
-            title=${
-              projectLocation
-                ? `${t(
-                    context.kind === "project"
-                      ? "sessionHovercard.projectLabel"
-                      : "sessionHovercard.workspaceLabel",
-                  )}: ${projectLocation}`
-                : nothing
-            }
-          >
-            <span class="session-hovercard__context-icon" aria-hidden="true">${icons.folder}</span>
-            <span class="session-hovercard__context-value session-hovercard__context-text"
-              >${context.name}</span
-            >
-          </div>`
+        ? renderContextRow(
+            icons.folder,
+            context.name,
+            `${contextLabel}: ${context.name}`,
+            projectLocation ? `${contextLabel}: ${projectLocation}` : nothing,
+          )
         : nothing
     }
     ${
       context?.kind === "project" && context.branch
-        ? html`<div
-            class="session-hovercard__context-row"
-            aria-label=${`${t("sessionHovercard.branchLabel")}: ${context.branch}`}
-            title=${directory ?? nothing}
-          >
-            <span class="session-hovercard__context-icon" aria-hidden="true"
-              >${icons.gitBranch}</span
-            >
-            <span class="session-hovercard__context-value session-hovercard__context-text"
-              >${context.branch}</span
-            >
-          </div>`
+        ? renderContextRow(
+            icons.gitBranch,
+            context.branch,
+            `${t("sessionHovercard.branchLabel")}: ${context.branch}`,
+            directory ?? nothing,
+          )
         : nothing
     }
     ${
       placementIdentity
-        ? html`<div
-            class="session-hovercard__context-row"
-            aria-label=${placementIdentity.title}
-            title=${placementIdentity.title}
-          >
-            <span class="session-hovercard__context-icon" aria-hidden="true">${icons.server}</span>
-            <span class="session-hovercard__context-value session-hovercard__context-text"
-              >${placementIdentity.label}</span
-            >
-          </div>`
+        ? renderContextRow(
+            icons.server,
+            placementIdentity.label,
+            placementIdentity.title,
+            placementIdentity.title,
+          )
         : nothing
     }
     ${
@@ -138,17 +129,11 @@ export function renderSessionHovercardContext(
     }
     ${
       row?.boardFace === "dashboard"
-        ? html`<div
-            class="session-hovercard__context-row"
-            aria-label=${t("sessionsView.opensAsDashboard")}
-          >
-            <span class="session-hovercard__context-icon" aria-hidden="true"
-              >${icons.layoutDashboard}</span
-            >
-            <span class="session-hovercard__context-value session-hovercard__context-text"
-              >${t("sessionsView.opensAsDashboard")}</span
-            >
-          </div>`
+        ? renderContextRow(
+            icons.layoutDashboard,
+            t("sessionsView.opensAsDashboard"),
+            t("sessionsView.opensAsDashboard"),
+          )
         : nothing
     }
     ${

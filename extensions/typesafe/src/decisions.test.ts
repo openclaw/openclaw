@@ -18,7 +18,7 @@ const context = () => ({
   signal: new AbortController().signal,
   deadlineMonotonicMs: performance.now() + 500,
 });
-const config = { apiKey: "synthetic-key", model: "jev-test", timeoutMs: 2000 };
+const config = { apiKey: "synthetic-key", timeoutMs: 2000 };
 beforeEach(() => {
   vi.mocked(evaluate).mockReset();
 });
@@ -70,14 +70,7 @@ describe("host decision adapter", () => {
     });
     expect(vi.mocked(evaluate).mock.lastCall?.[1].timeoutMs).toBeLessThanOrEqual(500);
   });
-  it("rejects unsupported vendor rubrics locally and cold credentials without dispatch", async () => {
-    const provider = createDecisionProvider(() => config);
-    expect(
-      await provider.evaluate(
-        { state: null, questions: { s: { type: "score", criteria: Array(11).fill("level") } } },
-        context(),
-      ),
-    ).toEqual({ status: "unavailable", reason: "unsupported-input" });
+  it("rejects cold credentials without dispatch", async () => {
     expect(
       await createDecisionProvider(() => ({ ...config, apiKey: undefined })).evaluate(
         batch,

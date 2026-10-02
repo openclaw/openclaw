@@ -149,7 +149,7 @@ describe("defaults", () => {
 });
 
 describe("createWebhookAnomalyTracker", () => {
-  it("increments only tracked status codes and logs at configured cadence", () => {
+  it("ignores untracked statuses and empty keys and logs tracked events at configured cadence", () => {
     const logs: string[] = [];
     const tracker = createWebhookAnomalyTracker({
       trackedStatusCodes: [401],
@@ -158,27 +158,35 @@ describe("createWebhookAnomalyTracker", () => {
 
     const counts = [
       {
+        key: "k",
         statusCode: 415,
         message: (count: number) => `ignored:${count}`,
       },
       {
+        key: "",
+        statusCode: 401,
+        message: (count: number) => `ignored:${count}`,
+      },
+      {
+        key: "k",
         statusCode: 401,
         message: (count: number) => `hit:${count}`,
       },
       {
+        key: "k",
         statusCode: 401,
         message: (count: number) => `hit:${count}`,
       },
-    ].map(({ statusCode, message }) =>
+    ].map(({ key, statusCode, message }) =>
       tracker.record({
-        key: "k",
+        key,
         statusCode,
         message,
         log: (msg) => logs.push(msg),
       }),
     );
 
-    expect(counts).toEqual([0, 1, 2]);
+    expect(counts).toEqual([0, 0, 1, 2]);
     expect(logs).toEqual(["hit:1", "hit:2"]);
   });
 

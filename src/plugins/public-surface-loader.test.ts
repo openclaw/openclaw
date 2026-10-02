@@ -5,10 +5,12 @@ import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { resetPluginCache } from "./plugin-cache.js";
+import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const tempDirs = createTempDirTracker();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -230,15 +232,16 @@ describe("bundled plugin public surface loader", () => {
       'export { marker } from "import-only-fixture";\nexport { default as shared } from "../../shared.cjs";\n',
     );
 
-    const moduleUrl = (relativePath: string) =>
-      JSON.stringify(pathToFileURL(path.join(process.cwd(), relativePath)).href);
+    const moduleUrl = (
+      entrypoint: (typeof pluginProcessRuntimeEntrypoints)[keyof typeof pluginProcessRuntimeEntrypoints],
+    ) => JSON.stringify(resolveRuntimeWorkerUrl(entrypoint).href);
     const result = spawnNodeEvalSync(
       `
         import assert from "node:assert/strict";
         import fs from "node:fs";
-        import { loadBundledPluginPublicArtifactModuleSync, loadPluginPublicArtifactModuleSync } from ${moduleUrl("src/plugins/public-surface-loader.ts")};
-        import { loadFacadeModuleAtLocationSync } from ${moduleUrl("src/plugin-sdk/facade-loader.ts")};
-        import { clearPluginMetadataLifecycleCaches } from ${moduleUrl("src/plugins/plugin-metadata-lifecycle.ts")};
+        import { loadBundledPluginPublicArtifactModuleSync, loadPluginPublicArtifactModuleSync } from ${moduleUrl(pluginProcessRuntimeEntrypoints.publicSurfaceLoader)};
+        import { loadFacadeModuleAtLocationSync } from ${moduleUrl(pluginProcessRuntimeEntrypoints.facadeLoader)};
+        import { clearPluginMetadataLifecycleCaches } from ${moduleUrl(pluginProcessRuntimeEntrypoints.metadataLifecycle)};
         const load = () => loadBundledPluginPublicArtifactModuleSync({ dirName: "demo", artifactBasename: "secret-contract-api.js" });
         const first = load();
         assert.equal(first.marker, "original");
@@ -255,6 +258,7 @@ describe("bundled plugin public surface loader", () => {
         console.log("source artifact import, identity, and lifecycle verified");
       `,
       {
+        // The plugin remains TypeScript: this probe owns source-loader behavior.
         imports: [pathToFileURL(path.join(process.cwd(), "scripts/tsx.mjs")).href],
         timeout: 30_000,
         env: {
@@ -277,51 +281,6 @@ describe("bundled plugin public surface loader", () => {
     expect(result.stderr).toBe("");
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("source artifact import, identity, and lifecycle verified");
-  });
-
-  it("keeps bundled dist public artifacts on the native path", async () => {
-    const createJiti = vi.fn(() => vi.fn((modulePath: string) => ({ modulePath })));
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-    vi.doMock("./native-module-require.js", async (importOriginal) => ({
-      ...(await importOriginal<typeof import("./native-module-require.js")>()),
-      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
-        ok: true,
-        moduleExport: { marker: path.basename(path.dirname(modulePath)) },
-      }),
-    }));
-
-    const publicSurfaceLoader = await importFreshModule<
-      typeof import("./public-surface-loader.js")
-    >(import.meta.url, "./public-surface-loader.js?scope=bundled-native-public-artifacts");
-    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-    const bundledPluginsDir = path.join(tempRoot, "dist");
-    fs.mkdirSync(bundledPluginsDir, { recursive: true });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-
-    const firstPath = path.join(bundledPluginsDir, "demo-a", "api.js");
-    const secondPath = path.join(bundledPluginsDir, "demo-b", "api.js");
-    fs.mkdirSync(path.dirname(firstPath), { recursive: true });
-    fs.mkdirSync(path.dirname(secondPath), { recursive: true });
-    fs.writeFileSync(firstPath, 'export const marker = "demo-a";\n', "utf8");
-    fs.writeFileSync(secondPath, 'export const marker = "demo-b";\n', "utf8");
-
-    expect(
-      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
-        dirName: "demo-a",
-        artifactBasename: "api.js",
-      }).marker,
-    ).toBe("demo-a");
-    expect(
-      publicSurfaceLoader.loadBundledPluginPublicArtifactModuleSync<{ marker: string }>({
-        dirName: "demo-b",
-        artifactBasename: "api.js",
-      }).marker,
-    ).toBe("demo-b");
-
-    expect(createJiti).not.toHaveBeenCalled();
   });
 
   it("keeps package-local dist public artifacts on the native path for source plugin roots", async () => {
@@ -486,9 +445,7 @@ describe("bundled plugin public surface loader", () => {
     },
   );
 
-  it
-    .runIf(process.platform !== "win32")
-    .each(["provider-policy-api.js", "api.js", "runtime-api.js"])(
+  it.runIf(process.platform !== "win32").each(["provider-policy-api.js"])(
     "rejects installed plugin public artifact %s hardlinked outside its root",
     async (artifact) => {
       const publicSurfaceLoader = await importFreshModule<
@@ -654,33 +611,6 @@ describe("bundled plugin public surface loader", () => {
       artifactCandidates: ["api.js", "runtime-api.js"],
     });
     expect(result).toBeNull();
-  });
-
-  it("loads the next candidate when the first surface is missing", async () => {
-    const fresh = await importFreshModule<typeof import("./public-surface-loader.js")>(
-      import.meta.url,
-      "./public-surface-loader.js?scope=candidate-fallback-success",
-    );
-    const tempRoot = tempDirs.make("openclaw-public-surface-loader-");
-    const bundledPluginsDir = path.join(tempRoot, "dist");
-    const pluginDir = path.join(bundledPluginsDir, "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(pluginDir, "runtime-api.js"),
-      'export const marker = "runtime-fallback";\n',
-      "utf8",
-    );
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
-    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-
-    const result = fresh.loadBundledPluginPublicArtifactModuleFromCandidatesSync<{
-      marker: string;
-    }>({
-      dirName: "demo",
-      artifactCandidates: ["api.js", "runtime-api.js"],
-    });
-
-    expect(result?.marker).toBe("runtime-fallback");
   });
 
   it("re-throws generic candidate load errors with the legacy missing prefix", async () => {

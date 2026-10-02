@@ -394,6 +394,7 @@ function bindCronCreatorAuthorityResolver(params: {
       tools: snapshot.tools,
       provenance: snapshot.provenance,
       grant: mintCronCreatorAuthorityGrant(authority, operationSignal, snapshot.runtimeAuthority),
+      ...(snapshot.runtimeAuthority ? { holdsRuntimeAuthority: true as const } : {}),
     });
   };
 }
@@ -468,7 +469,13 @@ export function bindActiveOperatorTurnAuthority(runId: string | undefined):
     source: authority.callerOrigin.kind === "local" ? "local" : "channel-owner",
     assertActive: () => {
       authority.signal.throwIfAborted();
-      if (!authority.active || authority.runId !== normalizedRunId) {
+      if (
+        !authority.active ||
+        authority.runId !== normalizedRunId ||
+        authority.isCurrent?.() === false ||
+        (authority.managementEntitlement?.source === "channel-owner" &&
+          !authority.managementEntitlement.isCurrent())
+      ) {
         authority.signal.throwIfAborted();
         throw new Error("operator turn authority is no longer active");
       }

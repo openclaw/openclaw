@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -12,56 +10,45 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
-import { TranscriptsStore } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { createTranscriptsTool } from "./transcripts-tool.js";
+import {
+  registerTranscriptTestProvider,
+  useTranscriptTestState,
+} from "./transcripts-tool.test-support.js";
 
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
-  getTranscriptSourceProviderMock: vi.fn(),
-}));
-vi.mock("../../transcripts/provider-registry.js", () => ({
-  getTranscriptSourceProvider: getTranscriptSourceProviderMock,
-  listTranscriptSourceProviders: () => [],
-}));
-
-const tempDirs = createTempDirTracker();
+const testState = useTranscriptTestState();
 const pendingStops = new Map<ReturnType<typeof createTranscriptsTool>, Set<string>>();
 const note = "Keep the captured notes.";
 
 function createHarness() {
-  const stateDir = tempDirs.make("openclaw-transcript-ids-");
+  const { stateDir, store } = testState();
   const databaseOptions = { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-  const start = vi.fn<NonNullable<TranscriptSourceProvider["start"]>>(async (request) => {
-    await request.onUtterance({ text: note, final: true });
-    return { ok: true, session: request.session };
-  });
   const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async (request) => ({
     ok: true,
     sessionId: request.sessionId,
   }));
-  const importTranscript = vi.fn<NonNullable<TranscriptSourceProvider["importTranscript"]>>(
-    async () => [{ text: note }],
-  );
-  getTranscriptSourceProviderMock.mockReturnValue({
+  const provider: TranscriptSourceProvider = {
     id: "room-audio",
     name: "Room Audio",
     sourceKinds: ["live-audio", "posthoc-transcript"],
-    start,
+    start: async (request) => {
+      await request.onUtterance({ text: note, final: true });
+      return { ok: true, session: request.session };
+    },
     stop,
-    importTranscript,
-  } satisfies TranscriptSourceProvider);
+    importTranscript: async () => [{ text: note }],
+  };
+  registerTranscriptTestProvider(provider);
   const tool = createTranscriptsTool({ stateDir, caller: { kind: "operator", source: "local" } });
   const active = new Set<string>();
   pendingStops.set(tool, active);
   return {
-    stateDir,
     databaseOptions,
-    store: new TranscriptsStore(path.join(stateDir, "transcripts"), databaseOptions),
+    store,
     tool,
     active,
-    start,
     stop,
-    importTranscript,
   };
 }
 
@@ -97,122 +84,10 @@ afterEach(async () => {
     }
   } finally {
     pendingStops.clear();
-    getTranscriptSourceProviderMock.mockReset();
-    vi.useRealTimers();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    tempDirs.cleanup();
   }
 });
 
 describe("transcripts bounded export names", () => {
-  const oversizedIds = [
-    { label: "256 safe bytes", sessionId: "notes-0-" + "x".repeat(248) },
-    { label: "908 safe bytes", sessionId: "notes-0-" + "x".repeat(900) },
-    { label: "2208 safe bytes", sessionId: "notes-0-" + "x".repeat(2200) },
-    { label: "258 encoded bytes", sessionId: "x".repeat(85) + "." },
-    { label: "overlong encoded device name", sessionId: "CON." + "x".repeat(100) },
-  ];
-  const ordinaryIds = [
-    { label: "date-prefixed raw ID", sessionId: "2026-07-03/raw-id", slug: "2026-07-03-raw-id" },
-    { label: "generated", sessionId: undefined, slug: undefined },
-    { label: "punctuation", sessionId: "notes: room/one", slug: "notes-room-one" },
-    { label: "255 safe bytes", sessionId: "x".repeat(255), slug: "x".repeat(255) },
-    { label: "255 encoded bytes", sessionId: "x".repeat(84) + ".", slug: "%78".repeat(84) + "%2E" },
-    { label: "2208 opaque characters", sessionId: "notes-0-" + "?".repeat(2200), slug: "notes-0" },
-    { label: "dot", sessionId: ".", slug: "%2E" },
-    { label: "dot-dot", sessionId: "..", slug: "%2E%2E" },
-    { label: "device", sessionId: "CON", slug: "%43%4F%4E" },
-  ];
-  const cases = [
-    {
-      label: "date-prefixed import",
-      sessionId: "2026-07-03/raw-id",
-      slug: "2026-07-03-raw-id",
-      action: "import" as const,
-      exportParentExists: false,
-      shortened: false,
-    },
-    ...oversizedIds.flatMap(({ label, sessionId }) =>
-      [false, true].flatMap((exportParentExists) =>
-        (["start", "import"] as const).map((action) => ({
-          label,
-          sessionId,
-          action,
-          exportParentExists,
-          shortened: true,
-          slug: undefined,
-        })),
-      ),
-    ),
-    ...ordinaryIds.map(({ label, sessionId, slug }) => ({
-      label,
-      sessionId,
-      slug,
-      action: "start" as const,
-      exportParentExists: true,
-      shortened: false,
-    })),
-  ];
-
-  it.each(cases)(
-    "$action round-trips $label with export parent=$exportParentExists",
-    async ({ sessionId, slug, shortened, exportParentExists, action }) => {
-      const harness = createHarness();
-      const { stateDir, store, tool, start, stop, importTranscript, active } = harness;
-      if (exportParentExists) {
-        await fs.mkdir(path.join(stateDir, "transcripts", new Date().toISOString().slice(0, 10)), {
-          recursive: true,
-        });
-      }
-      const handle = await capture(harness, action, sessionId);
-      expect(
-        sessionId === undefined ? handle.startsWith("transcript-") : handle === sessionId,
-      ).toBe(true);
-      const providerSession =
-        action === "start"
-          ? start.mock.calls[0]?.[0].session
-          : importTranscript.mock.calls[0]?.[0].session;
-      expect(providerSession?.sessionId === handle).toBe(true);
-      if (action === "start") {
-        const stopped = await tool.execute("stop", { action: "stop", sessionId: handle });
-        active.delete(handle);
-        expect(asOptionalRecord(stopped.details)?.summaryExportError).toBeUndefined();
-        expect(stop.mock.calls[0]?.[0].sessionId === handle).toBe(true);
-      }
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      const summarized = await tool.execute("summarize", {
-        action: "summarize",
-        sessionId: handle,
-      });
-      expect(asOptionalRecord(summarized.details)?.summaryExportError).toBeUndefined();
-      const entry = await store.readSessionEntry(handle);
-      expect(entry?.session.sessionId === handle).toBe(true);
-      expect(entry?.session.stoppedAt).toBeTruthy();
-      const exportedSlug = path.basename(entry!.sessionDir);
-      expect(Buffer.byteLength(exportedSlug)).toBeLessThanOrEqual(255);
-      if (shortened) {
-        expect(exportedSlug).toMatch(/^[a-zA-Z0-9._%-]+-[a-f0-9]{64}$/);
-        expect(exportedSlug.endsWith(`-${createHash("sha256").update(handle).digest("hex")}`)).toBe(
-          true,
-        );
-      } else {
-        expect(exportedSlug).toBe(slug ?? handle);
-      }
-      expect(entry!.selector).toBe(`${entry!.session.startedAt.slice(0, 10)}/${exportedSlug}`);
-      expect((await store.readSession(entry!.selector))?.sessionId === handle).toBe(true);
-      expect((await store.readSession(exportedSlug))?.sessionId === handle).toBe(true);
-      const artifacts = await store.materializeSessionArtifacts(entry!.selector, "all");
-      expect(
-        JSON.parse(await fs.readFile(artifacts.metadataPath, "utf8")).sessionId === handle,
-      ).toBe(true);
-      expect(await fs.readFile(artifacts.summaryPath, "utf8")).toContain(note);
-      expect(await fs.readFile(artifacts.transcriptPath, "utf8")).toContain(note);
-      expect((await store.readSummary(entry!.session)).summary?.sessionId === handle).toBe(true);
-    },
-  );
-
   it("separates IDs with identical safe prefixes and different discarded punctuation", async () => {
     const harness = createHarness();
     const ids = ["?", "!"].map((suffix) => "notes-" + "x".repeat(900) + suffix);

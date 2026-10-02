@@ -26,6 +26,7 @@ import {
   activeClaimKey,
   createIngressSettleOwner,
   IngressAdoptionLostError,
+  isPreAdoptionState,
   resolveLaneKey,
   sortedKeys,
   type ActiveHandlerState,
@@ -39,7 +40,7 @@ import type {
   ChannelIngressQueue,
   ChannelIngressQueueClaim,
   ChannelIngressQueueRecord,
-} from "./ingress-queue.js";
+} from "./ingress-queue.types.js";
 import {
   resolveIngressFailureDisposition,
   resolveIngressRetryDelayMs,
@@ -109,6 +110,10 @@ export type ChannelIngressDrain = {
   dispose: () => void;
 };
 
+type OwnedChannelIngressDrain = ChannelIngressDrain & {
+  dispose(options: { waitForSettlements: true }): Promise<void>;
+};
+
 /** Creates a channel-agnostic durable ingress drain over an existing queue. */
 export function createChannelIngressDrain<
   TPayload,
@@ -116,7 +121,8 @@ export function createChannelIngressDrain<
   TCompletedMetadata = unknown,
 >(
   options: CreateChannelIngressDrainOptions<TPayload, TMetadata, TCompletedMetadata>,
-): ChannelIngressDrain {
+  retainOwnerUntilDispose = false,
+): OwnedChannelIngressDrain {
   const queue = options.queue;
   // Unique per drain instance so same-process peers do not share claim ownership.
   const ownerId = options.ownerId ?? createIngressDrainOwnerId();
@@ -153,9 +159,11 @@ export function createChannelIngressDrain<
   };
 
   const abortActiveClaims = () => {
-    // Retire before abort so replacements recover; Set.delete makes disposal repeat safe.
-    // Claim-token fencing prevents this owner from settling a recovered claim.
-    deregisterLiveIngressDrainInstance(ownerId);
+    // Joining monitors retain claim custody through accepted settlement writes.
+    // Standalone drains preserve abort-time recovery for uncooperative handlers.
+    if (!retainOwnerUntilDispose || disposed) {
+      deregisterLiveIngressDrainInstance(ownerId);
+    }
     const reason = disposed
       ? new Error("ingress-drain-disposed")
       : toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
@@ -192,11 +200,7 @@ export function createChannelIngressDrain<
     state.guillotined = true;
     clearStallTimer(state);
     clearClaimRefresh(state);
-    try {
-      state.abortController.abort(new Error("ingress claim lease reclaimed"));
-    } catch {
-      // AbortController.abort is not fallible in practice.
-    }
+    state.abortController.abort(new Error("ingress claim lease reclaimed"));
   };
 
   const armClaimRefresh = (state: ActiveHandlerState<TPayload, TMetadata>) => {
@@ -290,17 +294,11 @@ export function createChannelIngressDrain<
       state.guillotined = true;
       clearStallTimer(state);
       log(message);
-      try {
-        state.abortController.abort(timeoutError);
-      } catch {
-        // AbortController.abort is not fallible in practice.
-      }
+      state.abortController.abort(timeoutError);
       // Route the timeout through the canonical retry owner. A release/fail write
       // error must not falsely settle (would stop heartbeat and wedge recovery).
       void state
-        .settleOnce(async () => {
-          await applyFailureDisposition(state.claim, timeoutError);
-        })
+        .settleOnce(() => applyFailureDisposition(state.claim, timeoutError))
         .catch((err: unknown) => {
           log(
             `ingress drain: failed to settle stalled event ${displayId}; holding claim: ${formatError(err)}`,
@@ -314,10 +312,7 @@ export function createChannelIngressDrain<
     state: ActiveHandlerState<TPayload, TMetadata>,
     releaseOptions: { lastError?: string; recordAttempt?: boolean },
   ) => {
-    if (state.phase !== "deferred" && state.phase !== "dispatching") {
-      return;
-    }
-    if (state.guillotined || state.superseded) {
+    if (!isPreAdoptionState(state)) {
       return;
     }
     clearStallTimer(state);
@@ -348,9 +343,7 @@ export function createChannelIngressDrain<
         // Complete at adoption, not settle — frees the lane for later events.
         state.phase = "adopted";
         clearStallTimer(state);
-        await state.settleOnce(async () => {
-          await completeClaimWithRetry(state.claim);
-        });
+        await state.settleOnce(() => completeClaimWithRetry(state.claim));
       },
       onDeferred: () => {
         if (state.phase !== "dispatching") {
@@ -373,10 +366,7 @@ export function createChannelIngressDrain<
       },
       deferredHeartbeatIntervalMs: Math.max(1, Math.floor(adoptionStallTimeoutMs / 3)),
       onAdoptionFinalizing: () => {
-        if (state.phase !== "dispatching" && state.phase !== "deferred") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
+        if (!isPreAdoptionState(state)) {
           return;
         }
         // Adoption finalization (settlement hold) owns the claim; do not let a
@@ -384,16 +374,11 @@ export function createChannelIngressDrain<
         clearStallTimer(state);
       },
       onFailed: async (error) => {
-        if (state.phase !== "dispatching" && state.phase !== "deferred") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
+        if (!isPreAdoptionState(state)) {
           return;
         }
         // Keep recovery armed until disposition commits; removeActive clears it after success.
-        await state.settleOnce(async () => {
-          await applyFailureDisposition(state.claim, error);
-        });
+        await state.settleOnce(() => applyFailureDisposition(state.claim, error));
       },
       onCancelled: async () => {
         // Cancellation means ownership ended before delivery, so preserve every
@@ -441,6 +426,12 @@ export function createChannelIngressDrain<
       settleOnce: async () => {},
     } as ActiveHandlerState<TPayload, TMetadata>;
     state.settleOnce = createIngressSettleOwner(state, removeActive);
+    // Register ownership before dispatch starts. runOutsideAsyncWorkScope runs
+    // the task body synchronously up to its first await, so a handler that calls
+    // onDeferred() before awaiting would otherwise release a lane this state does
+    // not own yet, only for the post-dispatch registration to re-own it.
+    activeByClaim.set(activeClaimKey(claim), state);
+    laneOwnerByKey.set(laneKey, state);
     const lifecycle = createLifecycle(state);
     armStallWatchdog(state);
     armClaimRefresh(state);
@@ -486,9 +477,7 @@ export function createChannelIngressDrain<
         }
         if (result?.kind === "failed-retryable") {
           clearStallTimer(state);
-          await state.settleOnce(async () => {
-            await applyFailureDisposition(claim, result.error);
-          });
+          await state.settleOnce(() => applyFailureDisposition(claim, result.error));
           return;
         }
         // Default: dispatch returned without deferral — complete when channel
@@ -496,11 +485,7 @@ export function createChannelIngressDrain<
         // Mark adopted BEFORE tombstone retries so a write failure cannot release
         // a claim whose dispatch side effects already ran (replay risk).
         if (state.phase === "dispatching") {
-          state.phase = "adopted";
-          clearStallTimer(state);
-          await state.settleOnce(async () => {
-            await completeClaimWithRetry(claim);
-          });
+          await lifecycle.onAdopted();
         }
       } catch (err) {
         if (isStopped() || state.phase === "settled") {
@@ -519,16 +504,12 @@ export function createChannelIngressDrain<
           return;
         }
         clearStallTimer(state);
-        await state.settleOnce(async () => {
-          await applyFailureDisposition(claim, err);
-        });
+        await state.settleOnce(() => applyFailureDisposition(claim, err));
       } finally {
         releaseRootWork?.();
       }
     });
 
-    activeByClaim.set(activeClaimKey(claim), state);
-    laneOwnerByKey.set(laneKey, state);
     return state;
   };
 
@@ -576,8 +557,13 @@ export function createChannelIngressDrain<
 
     await recoverStaleClaims();
 
-    const pending = await queue.listPending({ limit: "all", orderBy });
-    const claims = await queue.listClaims();
+    // A release between separate reads can hide a lane's head from both collections.
+    const { pending, claims } = queue.listUnsettled
+      ? await queue.listUnsettled({ orderBy })
+      : {
+          pending: await queue.listPending({ limit: "all", orderBy }),
+          claims: await queue.listClaims(),
+        };
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
       claims
@@ -711,6 +697,44 @@ export function createChannelIngressDrain<
     return { started };
   };
 
+  function dispose(): void;
+  function dispose(disposeOptions: { waitForSettlements: true }): Promise<void>;
+  function dispose(disposeOptions?: { waitForSettlements: true }): void | Promise<void> {
+    if (disposeOptions?.waitForSettlements) {
+      if (!retainOwnerUntilDispose || !options.abortSignal?.aborted) {
+        return Promise.reject(
+          new Error("Joined ingress disposal requires an already-aborted retained owner"),
+        );
+      }
+      return (async () => {
+        for (;;) {
+          const states = [...activeByClaim.values()];
+          const settlements = states.flatMap((state) =>
+            state.settlement ? [state.settlement] : [],
+          );
+          if (settlements.length === 0) {
+            const failure = states.find((state) => state.settlementFailure)?.settlementFailure;
+            if (failure) {
+              throw failure.error;
+            }
+            // Keep the final empty check and retirement in the same synchronous turn.
+            dispose();
+            return;
+          }
+          await Promise.allSettled(settlements);
+        }
+      })();
+    }
+    disposed = true;
+    options.abortSignal?.removeEventListener("abort", abortActiveClaims);
+    abortActiveClaims();
+    // Snapshot: removeActive mutates activeByClaim during this sweep.
+    const activeStates = Array.from(activeByClaim.values());
+    for (const state of activeStates) {
+      removeActive(state);
+    }
+  }
+
   return {
     recoverStaleClaims,
     drainOnce,
@@ -719,15 +743,6 @@ export function createChannelIngressDrain<
       const tasks = [...activeByClaim.values()].map((state) => state.task);
       await Promise.allSettled(tasks);
     },
-    dispose: () => {
-      disposed = true;
-      options.abortSignal?.removeEventListener("abort", abortActiveClaims);
-      abortActiveClaims();
-      // Snapshot: removeActive mutates activeByClaim during this sweep.
-      const activeStates = Array.from(activeByClaim.values());
-      for (const state of activeStates) {
-        removeActive(state);
-      }
-    },
+    dispose,
   };
 }

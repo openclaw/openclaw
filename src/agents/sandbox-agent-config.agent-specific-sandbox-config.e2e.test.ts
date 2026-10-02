@@ -1,6 +1,7 @@
 // Verifies agent-specific sandbox config, workspace roots, and Docker setup commands.
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { splitSandboxBindSpec } from "./sandbox/bind-spec.js";
 import { sandboxMountOptionsReadOnly } from "./sandbox/workspace-mounts.js";
@@ -101,7 +102,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[2] === "{{.State.Running}}";
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
-  if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
+  if (command === "docker" && args[0] === "create") {
+    stdout = inspectCreatedDockerMounts(args[args.indexOf("--name") + 1]).containerId;
+  } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
     stdout = inspectCreatedDockerMounts(args[3]).containerId;
   } else if (
     command === "docker" &&
@@ -161,14 +164,11 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
     ).toEqual([
       {
         command: "docker",
-        args: ["inspect", "--format", "{{.Id}}", context.containerName],
-      },
-      {
-        command: "docker",
         args: ["inspect", "--format", mountInspectFormat, containerId],
       },
       { command: "docker", args: ["exec", containerId, "cat", "/proc/self/mountinfo"] },
     ]);
+    expect(spawnCalls).toContainEqual({ command: "docker", args: ["start", containerId] });
     expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
       path.join(context.workspaceDir, "marker.txt"),
     );

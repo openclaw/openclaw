@@ -17,11 +17,9 @@ it("resolves routing tokens and entries without loading transcript storage", asy
     { sessionEntry: undefined, store: undefined, expectedEntry: undefined },
   ]) {
     const resolved = await resolveSessionTranscriptFile({
-      sessionId: "requested-session",
       sessionKey,
       sessionEntry,
       sessionStore: store,
-      agentId: "main",
     });
 
     expect(resolved.sessionFile).toBe(sessionKey);

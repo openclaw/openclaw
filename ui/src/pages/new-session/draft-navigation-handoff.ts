@@ -1,5 +1,6 @@
 import type { ApplicationContext } from "../../app/context.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
+import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
@@ -18,6 +19,7 @@ export function retainDraft(
   }
   const routeKey = openedFor ?? catalog.routeKeyFromSearch(window.location.search);
   context.chatAttachmentHandoff.prepare({
+    reviewPrivateDraft: reviewPrivateComposerDraft,
     owner,
     paneId: NEW_SESSION_DRAFT_PANE_ID,
     scopeKey: routeKey,

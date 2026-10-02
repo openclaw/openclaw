@@ -4,6 +4,7 @@
 // silently resume the old session. Split from gateway-store.test.ts (max-lines).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayBrowserClientOptions } from "../api/gateway.ts";
+import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { loadDeviceAuthToken, storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -108,9 +109,15 @@ describe("createApplicationGateway stored device credential", () => {
       scopes: ["operator.read"],
     });
 
+    const recoveryKey = `${goalOperationScopePrefix(gatewayUrl, "principal")}session`;
+    const otherRecoveryKey = `${goalOperationScopePrefix(OTHER_GATEWAY, "principal")}session`;
+    sessionStorage.setItem(recoveryKey, JSON.stringify({ objective: "Private goal edit" }));
+    sessionStorage.setItem(otherRecoveryKey, JSON.stringify({ objective: "Other goal" }));
     expect(gateway.hasStoredDeviceToken?.()).toBe(true);
     const clientsBefore = clients.length;
     expect(gateway.forgetDeviceToken?.()).toBe(true);
+    expect(sessionStorage.getItem(recoveryKey)).toBeNull();
+    expect(sessionStorage.getItem(otherRecoveryKey)).toContain("Other goal");
 
     expect(loadDeviceAuthToken({ deviceId: DEVICE_ID, gatewayUrl, role: "operator" })).toBeNull();
     expect(

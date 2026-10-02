@@ -122,7 +122,6 @@ function createInvocation(method: WriteMethod, scope: "user" | "device" = "devic
                       agentQuestion: true,
                       humanMentioned: true,
                       scheduledTaskFailed: true,
-                      backgroundTaskFailed: true,
                     },
                     detailLevel: "private",
                     quietHours: { enabled: false, startMinute: 0, endMinute: 0, timeZone: "UTC" },

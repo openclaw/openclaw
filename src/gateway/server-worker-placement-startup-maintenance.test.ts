@@ -9,6 +9,7 @@ import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
@@ -38,6 +39,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   createWorkerPlacementDiskSpaceMonitor: runtimeFactoryMocks.createDiskSpace,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 type PlacementFixture = {
@@ -104,6 +106,8 @@ function createMaintenanceRuntime(params: {
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    scheduler: createTestGatewayScheduler(),
+    getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       workspaceResultInstanceId: () => "gateway-test",
@@ -118,14 +122,14 @@ function createMaintenanceRuntime(params: {
             (sessionKey === undefined || placement.sessionKey === sessionKey),
         ),
       retireSessionPlacement: vi.fn(),
-      pruneOrphanedWorkspaceReconciliations: () => {
+      pruneOrphanedWorkspaceReconciliations: async () => {
         params.onRecovery?.();
         if (params.recoveryError) {
           throw params.recoveryError;
         }
         return [];
       },
-      listWorkspaceReconciliationOwners: () => [],
+      listWorkspaceReconciliationOwners: async () => [],
       listPendingWorkspaceResults: () => [],
     } as never,
     environments: environments as never,
@@ -160,13 +164,13 @@ describe("worker placement session maintenance ownership", () => {
         workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
       };
       const repositories = getSessionRepositoryWorkspaceStore();
-      const repository = repositories.create({
+      const repository = await repositories.create({
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
         url: "https://github.com/openclaw/fixture.git",
         assertCurrent: () => {},
       });
-      repositories.bindBase({
+      await repositories.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit: "c".repeat(40),
@@ -194,7 +198,8 @@ describe("worker placement session maintenance ownership", () => {
         }
         const originalManifest = placement.workspaceBaseManifestRef;
         placement.workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`;
-        expect(additionalManifestRefs(currentPlacement)).toEqual([originalManifest]);
+        const currentManifestRefs = await additionalManifestRefs(currentPlacement);
+        expect(currentManifestRefs()).toEqual([originalManifest]);
       } finally {
         createRetention.mockRestore();
       }

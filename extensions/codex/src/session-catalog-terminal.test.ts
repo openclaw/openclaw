@@ -18,7 +18,7 @@ import {
 } from "./session-catalog.test-helpers.js";
 
 describe("Codex catalog terminals", () => {
-  it.each(["stdio", "unix", "websocket"] as const)(
+  it.each(["stdio", "websocket"] as const)(
     "keeps terminal capabilities and execution on the selected %s source",
     async (transport) => {
       const binDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-terminal-source-"));
@@ -54,16 +54,13 @@ describe("Codex catalog terminals", () => {
           start: { ...primary.appServer.start, transport },
         },
       };
-      const threadId =
-        transport === "stdio"
-          ? "123e4567-e89b-12d3-a456-426614174000"
-          : "123e4567-e89b-12d3-a456-426614174001";
+      const threadId = "123e4567-e89b-12d3-a456-426614174000";
       const control = createControl({
         listPage: async () => ({
           sessions: [
             {
               threadId,
-              name: transport === "stdio" ? "Secondary source session" : "Remote source session",
+              name: "Selected source session",
               cwd: "/synthetic/project",
               status: "idle",
               source: "cli",

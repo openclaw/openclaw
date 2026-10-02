@@ -213,14 +213,6 @@ export async function runIMessageCatchup(
         `imessage catchup: fetched ${sorted.length} rows across chats, ` +
           `capped to perRunLimit=${limit} (oldest first); next startup picks up the rest`,
       );
-      // Drop payloads we are no longer going to dispatch so the dispatch
-      // adapter does not have to defend against the discarded ones.
-      const keep = new Set(capped.map((row) => row.guid));
-      for (const guid of payloadByGuid.keys()) {
-        if (!keep.has(guid)) {
-          payloadByGuid.delete(guid);
-        }
-      }
     }
 
     // Clamp the raw watermark when cap-truncation hits so the catchup loop
@@ -267,13 +259,8 @@ export async function runIMessageCatchup(
       warnLog(`imessage catchup: missing payload for guid=${row.guid}, skipping`);
       return { ok: false };
     }
-    try {
-      await dispatchPayload(entry.message, entry.rawEnvelope);
-      return { ok: true };
-    } catch (err) {
-      warnLog(`imessage catchup: dispatch threw for guid=${row.guid}: ${String(err)}`);
-      return { ok: false };
-    }
+    await dispatchPayload(entry.message, entry.rawEnvelope);
+    return { ok: true };
   };
 
   return await performIMessageCatchup({

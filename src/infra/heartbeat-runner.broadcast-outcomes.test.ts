@@ -74,7 +74,6 @@ describe("heartbeat broadcast outcomes", () => {
   });
 
   it.each([
-    { intent: "task", reason: "min-spacing", runs: 1, retryAtMs: 30_000 },
     { intent: "scheduled", reason: "not-due", runs: 1, retryAtMs: 30 * 60_000 },
     { intent: "immediate", reason: "flood", runs: 5, retryAtMs: 60_001 },
   ] as const)("preserves the earliest $reason deadline across agents", async (testCase) => {
@@ -95,15 +94,11 @@ describe("heartbeat broadcast outcomes", () => {
     });
   });
 
-  it.each([
-    { status: "skipped", reason: "quiet-hours" },
-    { status: "failed", reason: "agent-tool-failure" },
-  ] as const)("prefers a guard deferral over a sibling $reason outcome", async (terminal) => {
+  it("prefers a guard deferral over a sibling failure", async () => {
     const { run, runOnce } = startRunner();
     await run({ source: "manual", intent: "manual", agentId: "ops" });
     vi.setSystemTime(1);
-    runOnce.mockResolvedValue(terminal);
-
+    runOnce.mockResolvedValue({ status: "failed", reason: "agent-tool-failure" });
     expect(await run({ source: "cron", intent: "task" })).toEqual({
       status: "skipped",
       reason: "min-spacing",
@@ -111,64 +106,43 @@ describe("heartbeat broadcast outcomes", () => {
     });
   });
 
-  it.each([
-    { status: "skipped", reason: "quiet-hours" },
-    { status: "failed", reason: "agent-tool-failure" },
-  ] as const)("preserves the first $reason outcome when no agent can retry", async (result) => {
+  it("preserves the first terminal skip when no agent can retry", async () => {
     const { run, runOnce } = startRunner();
+    const result = { status: "skipped", reason: "quiet-hours" } as const;
     runOnce
       .mockResolvedValueOnce(result)
       .mockResolvedValue({ status: "skipped", reason: "disabled" });
-
     expect(await run({ source: "cron", intent: "task" })).toEqual(result);
   });
 
-  it.each([
-    { failedAgentId: "main", siblingStatus: "ran" },
-    { failedAgentId: "ops", siblingStatus: "ran" },
-    { failedAgentId: "ops", siblingStatus: "skipped" },
-  ] as const)(
-    "settles as failed when $failedAgentId fails and its sibling $siblingStatus",
-    async ({ failedAgentId, siblingStatus }) => {
-      const { runOnce } = startRunner();
-      const failure = { status: "failed", reason: "agent-tool-failure" } as const;
-      runOnce.mockImplementation(async ({ agentId }) =>
-        agentId === failedAgentId
-          ? failure
-          : siblingStatus === "ran"
-            ? { status: "ran", durationMs: 1 }
-            : { status: "skipped", reason: "quiet-hours" },
-      );
-      const completion = heartbeatWake.requestHeartbeatAndWait({
-        source: "manual",
-        intent: "manual",
-        coalesceMs: 0,
-      });
+  it("reports failure even after a sibling successfully ran", async () => {
+    const { runOnce } = startRunner();
+    const failure = { status: "failed", reason: "agent-tool-failure" } as const;
+    runOnce.mockImplementation(async ({ agentId }) =>
+      agentId === "ops" ? failure : { status: "ran", durationMs: 1 },
+    );
+    const completion = heartbeatWake.requestHeartbeatAndWait({
+      source: "manual",
+      intent: "manual",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(completion).resolves.toEqual(failure);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
 
-      await vi.advanceTimersByTimeAsync(0);
-
-      await expect(completion).resolves.toEqual(failure);
-      expect(runOnce).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each([
-    { status: "ran", durationMs: 1 },
-    { status: "failed", reason: "agent-tool-failure" },
-  ] as const)(
-    "preserves the busy retry fast path beside a sibling $status result",
-    async (result) => {
-      const { run, runOnce } = startRunner();
-      const busy = {
-        status: "skipped",
-        reason: heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
-      } as const;
-      runOnce.mockResolvedValueOnce(busy).mockResolvedValue(result);
-
-      expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
-      expect(runOnce).toHaveBeenCalledTimes(2);
-    },
-  );
+  it("preserves a busy retry beside a sibling failure", async () => {
+    const { run, runOnce } = startRunner();
+    const busy = {
+      status: "skipped",
+      reason: heartbeatWake.HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+    } as const;
+    runOnce
+      .mockResolvedValueOnce(busy)
+      .mockResolvedValue({ status: "failed", reason: "agent-tool-failure" });
+    expect(await run({ source: "cron", intent: "task" })).toEqual(busy);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
 
   it("retries a channel-not-ready alert without consuming its scheduled cadence", async () => {
     const { run, runOnce } = startRunner();

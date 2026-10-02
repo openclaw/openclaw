@@ -2,11 +2,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  createSessionSqliteMigrationRun,
-  updateMigrationManifestTarget,
-  writeSessionSqliteMigrationManifest,
-} from "../../commands/doctor-session-sqlite-migration-run.js";
 import { buildStatusUpdateRows } from "../../commands/status-update-restart.js";
 import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -15,6 +10,12 @@ import {
   recordGatewayBootStart,
 } from "../../infra/gateway-boot-lifecycle.js";
 import * as runtimeGuard from "../../infra/runtime-guard.js";
+import {
+  createSessionSqliteMigrationRun,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+} from "../../infra/session-sqlite-migration-manifest.js";
+import * as updateCheck from "../../infra/update-check.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
 import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
 import {
@@ -24,10 +25,12 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -251,22 +254,24 @@ describe("update status Node runtime findings", () => {
     "preserves diagnostics with stored=$stored SQLite $sqliteVersion (JSON: $json)",
     async ({ json, stored, sqliteVersion, unavailable }) => {
       const recorded = stored ? createUpdateRun({ trigger: "cli" }) : undefined;
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       vi.resetModules();
       const sqlitePrototype: {
         prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;
       } = DatabaseSync.prototype;
       const realPrepare = sqlitePrototype.prepare;
-      const prepare = vi
-        .spyOn(DatabaseSync.prototype, "prepare")
-        .mockImplementation(function (this: DatabaseSync, sql) {
-          return realPrepare.call(
-            this,
-            sql === "SELECT sqlite_version() AS version"
-              ? `SELECT '${sqliteVersion}' AS version`
-              : sql,
-          );
-        });
+      const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+        this: DatabaseSync,
+        sql,
+      ) {
+        return realPrepare.call(
+          this,
+          sql === "SELECT sqlite_version() AS version"
+            ? `SELECT '${sqliteVersion}' AS version`
+            : sql,
+        );
+      });
       const freshGuard = await import("../../infra/runtime-guard.js");
       vi.spyOn(freshGuard, "detectRuntime").mockResolvedValue({
         kind: "node",
@@ -285,10 +290,21 @@ describe("update status Node runtime findings", () => {
       });
       const command = await import("./status.js");
       const ledger = await import("../../infra/update-run-ledger.js");
+      const readOwner = await import("../../state/openclaw-state-db-readonly.js");
+      const workerRead = vi.spyOn(readOwner, "executeExistingOpenClawStateRead");
       if (unavailable) {
-        expect(() => ledger.findActiveUpdateRun()).toThrow(
-          "SQLite support is unavailable or unsafe",
-        );
+        let nativeFailure: unknown;
+        expect(() => {
+          try {
+            ledger.findActiveUpdateRun();
+          } catch (error) {
+            nativeFailure = error;
+            throw error;
+          }
+        }).toThrow("SQLite support is unavailable or unsafe");
+        // The host SQLite spy cannot cross threads; deliver the same runtime refusal
+        // through the async read owner without replacing status or diagnostic logic.
+        workerRead.mockRejectedValue(nativeFailure);
       }
       await expect(command.updateStatusCommand({ json })).resolves.toBeUndefined();
       if (json) {
@@ -319,6 +335,7 @@ describe("update status Node runtime findings", () => {
       if (!stored) {
         expect(prepare).not.toHaveBeenCalled();
       }
+      workerRead.mockRestore();
       prepare.mockRestore();
       expect(recorded && ledger.getUpdateRun(recorded.runId)).toEqual(recorded);
     },
@@ -424,7 +441,8 @@ describe("update status Node runtime findings", () => {
   });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -433,6 +451,71 @@ afterEach(() => {
 });
 
 describe("update status readiness outcome", () => {
+  it.each([false, true])(
+    "prioritizes an active update over availability (finished=%s)",
+    async (finished) => {
+      vi.spyOn(updateCheck, "checkUpdateStatus").mockResolvedValue({
+        root: "/fixture/openclaw",
+        installKind: "package",
+        packageManager: "npm",
+        registry: { latestVersion: "9999.0.0" },
+      });
+      const run = createUpdateRun({ trigger: "cli" });
+      await recordDeferredPluginMigrations({
+        pending: [
+          {
+            pluginId: "sample",
+            reason: "Plugin upgrade did not complete.",
+            command: "openclaw doctor --fix",
+          },
+        ],
+      });
+      recordUpdateRunPhase(run.runId, "validating");
+      if (finished) {
+        finishUpdateRun(run.runId, { status: "succeeded" });
+      }
+      await updateStatusCommand({});
+      const output = runtime.log.mock.calls.flat().join("\n");
+      expect(output.includes("available ·")).toBe(finished);
+      expect(output.includes("Update available")).toBe(finished);
+      expect(output.includes("Let the current update or repair finish")).toBe(!finished);
+      if (!finished) {
+        expect(output).toContain("in progress · validating");
+        expect(output.trim()).toMatch(/Check progress with openclaw update status\.$/);
+      }
+      await updateStatusCommand({ json: true });
+      expect(runtime.writeJson.mock.lastCall?.[0]).toMatchObject({
+        availability: { available: true },
+      });
+    },
+  );
+
+  it("keeps a managed-service refusal and its code visible after a retained dry run", async () => {
+    const failed = createUpdateRun({ trigger: "cli" });
+    const failureFacts = [
+      { check: "managed-service-preflight", code: "inside-gateway-process-tree" },
+    ];
+    recordUpdateRunStep(failed.runId, {
+      step: "managed-service-preflight",
+      status: "failed",
+      failureFacts,
+    });
+    const failure = finishUpdateRun(failed.runId, {
+      status: "failed",
+      reason: "managed-service-preflight",
+    });
+    const preview = createUpdateRun({ trigger: "cli", preview: true });
+    finishUpdateRun(preview.runId, { status: "skipped", reason: "dry-run" });
+
+    await updateStatusCommand({ json: true });
+
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun).toEqual(failure);
+    expect(runtime.writeJson.mock.lastCall?.[0].lastRun.steps).toContainEqual(
+      expect.objectContaining({ failureFacts }),
+    );
+    expect(listUpdateRuns().map((run) => run.runId)).toEqual([preview.runId, failed.runId]);
+  });
+
   it("shows installed but unverified as a closed non-success outcome", async () => {
     const run = createUpdateRun({ trigger: "cli" });
     recordUpdateRunVerification(run.runId, { serviceRunning: true, readyz: false, settled: false });
@@ -468,13 +551,22 @@ describe("update status abandoned-run reporting", () => {
       const created = createUpdateRun({ trigger: "cli", origin: { nextAction: advice } });
       recordUpdateRunVerification(created.runId, {
         port: 19123,
-        serviceRunning: false,
-        versionMatch: false,
+        serviceRunning: true,
+        runningVersion: "2026.9.1",
+        versionMatch: true,
+        channelsReady: false,
+        readyz: true,
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.1" },
+      });
+      recordUpdateRunStep(created.runId, {
+        step: "gateway recovery verification",
+        status: "completed",
+        exitCode: 0,
       });
       const finished = finishUpdateRun(created.runId, {
         status: "failed",
-        reason: "restart-unhealthy",
-        after: { version: "2026.9.4" },
+        reason: "node-runtime-preflight",
+        after: { version: "2026.9.1" },
       });
       confirmGatewayReachable.mockResolvedValue({
         reachable: responding,
@@ -482,16 +574,29 @@ describe("update status abandoned-run reporting", () => {
         gatewayBuildId: undefined,
         activatedPluginErrors: [],
         unavailablePlugins: [],
-        channelProbeErrors: [],
+        channelProbeErrors: [{ id: "test-channel", error: "Channel probe failed" }],
       });
 
       await updateStatusCommand({});
 
       const output = runtime.log.mock.calls.flat().join("\n");
-      expect(output).toContain("service identity unavailable");
+      expect(output).toContain("Recorded recovery: verified serving 2026.9.1.");
+      expect(output).toContain(
+        "Recorded verification: service running (2026.9.1); version verified; channels not ready; HTTP ready.",
+      );
       expect(output).not.toContain("version mismatch");
+      expect(output).not.toContain("The gateway is running");
+      expect(output).not.toContain("chat available");
+      if (responding) {
+        expect(output).toContain(
+          "Current health: Gateway answered on the recorded port (2026.9.4).",
+        );
+      }
       expect(runtime.log).not.toHaveBeenCalledWith(advice);
       expect(output).toContain("Historical recovery advice:");
+      expect(output).toContain(
+        `Last recorded update (${new Date(created.createdAtMs).toISOString()}):`,
+      );
       expect(output).toContain(
         responding ? "supersedes saved claims" : "Current health unavailable",
       );
@@ -508,7 +613,7 @@ describe("update status abandoned-run reporting", () => {
   it.each([true, false])(
     "reports unreadable pending migration status without losing availability (JSON: %s)",
     async (json) => {
-      recordDeferredPluginMigrations({
+      await recordDeferredPluginMigrations({
         pending: [
           {
             pluginId: "codex",
@@ -606,23 +711,23 @@ describe("update status abandoned-run reporting", () => {
         reason: "The configured plugin package is missing.",
         command: "openclaw plugins install @openclaw/codex",
       };
-      recordDeferredPluginMigrations({ pending: [pending] });
+      await recordDeferredPluginMigrations({ pending: [pending] });
       await updateStatusCommand({ json });
       if (json) {
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings).toEqual([
-          expect.stringContaining('Plugin "codex" state migration is pending:'),
+          expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished:'),
         ]);
         expect(runtime.writeJson.mock.lastCall?.[0].migrationWarnings[0]).toContain(
           pending.command,
         );
       } else {
         const output = runtime.log.mock.calls.flat().join("\n");
-        expect(output).toContain('Plugin "codex" state migration is pending:');
+        expect(output).toContain('Plugin "codex" data/settings upgrade is unfinished:');
         expect(output).toContain(pending.command);
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
 
-      recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
+      await recordDeferredPluginMigrations({ pending: [], resolvedPluginIds: [pending.pluginId] });
       runtime.log.mockClear();
       runtime.writeJson.mockClear();
       await updateStatusCommand({ json });
@@ -630,7 +735,7 @@ describe("update status abandoned-run reporting", () => {
         expect(runtime.writeJson.mock.lastCall?.[0]).not.toHaveProperty("migrationWarnings");
       } else {
         expect(runtime.log.mock.calls.flat().join("\n")).not.toContain(
-          'Plugin "codex" state migration is pending:',
+          'Plugin "codex" data/settings upgrade is unfinished:',
         );
       }
       expect(getUpdateRun(run.runId)).toEqual(history);
@@ -677,7 +782,7 @@ describe("update status abandoned-run reporting", () => {
       });
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
       if (surface === "status") {
-        const rows = buildStatusUpdateRows(null);
+        const rows = await buildStatusUpdateRows(null);
         expect(rows).toContainEqual(
           expect.objectContaining({
             Item: "Update run",
@@ -758,7 +863,7 @@ describe("update status abandoned-run reporting", () => {
       }
       let output: string;
       if (surface === "status") {
-        output = JSON.stringify(buildStatusUpdateRows(null));
+        output = JSON.stringify(await buildStatusUpdateRows(null));
       } else {
         await updateStatusCommand({ json: surface === "json" });
         output =
@@ -774,6 +879,9 @@ describe("update status abandoned-run reporting", () => {
       });
       expect(output).toContain("treated as abandoned after 24 h");
       expect(output.includes("Historical update:")).toBe(laterRun !== "none");
+      if (surface === "text") {
+        expect(output.includes("Last recorded update (")).toBe(laterRun !== "active");
+      }
       expect(output.includes("run `openclaw update` to retry.")).toBe(laterRun === "none");
       expect(findActiveUpdateRun()?.runId).toBe(laterRun === "active" ? currentRunId : undefined);
       // A later read must still surface the advisory after the terminal write.

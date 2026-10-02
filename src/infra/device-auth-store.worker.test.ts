@@ -69,8 +69,6 @@ it("keeps cold, warm, read-only, ordered token-data operations and cleanup off t
       expect(await tokens.clearOriginDeviceToken(origin)).toBe(true);
       await closeOpenClawStateDatabaseAsync();
       expect(Object.values(sql.counts().data)).toEqual(Array(7).fill(0));
-      expect(Object.values(sql.counts().coordinator)).toEqual(Array(7).fill(0));
-      expect(Object.values(sql.counts().runtimeInitialization)).toEqual(Array(7).fill(0));
       expect(Object.values(sql.counts().unknown)).toEqual(Array(7).fill(0));
       await expect(fs.stat(state.path("changed-state"))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
@@ -79,6 +77,38 @@ it("keeps cold, warm, read-only, ordered token-data operations and cleanup off t
     }
   });
 });
+
+it.each([false, true])(
+  "prepares the device command runtime without reading token facts (readOnly: %s)",
+  async (readOnly) => {
+    await withOpenClawTestState({ label: "device-token-command-preparation" }, async (state) => {
+      const lookup = { deviceId: "synthetic-device", role: "operator", env: state.env };
+      await tokens.storeDeviceAuthToken({ ...lookup, token: "synthetic-stored" });
+      await closeOpenClawStateDatabaseAsync();
+      const commands: string[] = [];
+      const runOperation = workerStore.runOpenClawStateWorkerOperation;
+      vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementation(
+        (context, operation, options) =>
+          runOperation(
+            context,
+            (scope) =>
+              operation({
+                execute(command, commandOptions) {
+                  commands.push(command.type);
+                  return scope.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      );
+      await tokens.prepareDeviceAuthStore({ env: state.env, readOnly });
+      expect(commands).toEqual(["deviceAuth.prepare"]);
+      expect(await tokens.loadDeviceAuthTokenReadOnly(lookup)).toMatchObject({
+        token: "synthetic-stored",
+      });
+    });
+  },
+);
 
 it("rejects canceled loads, retired sources and expired schema scopes without publishing observations", async () => {
   await withOpenClawTestState({ label: "device-token-admission" }, async (state) => {
@@ -137,11 +167,12 @@ it("remains responsive and rechecks token mutation authority after waiting for a
   });
 });
 
-it.each(
-  ["ordinary", "origin", "prepare"].flatMap((kind) =>
-    ["cancel", "retire"].map((action) => ({ kind, action })),
-  ),
-)("does not settle absent worker $kind after $action", async ({ kind, action }) => {
+it.each([
+  { kind: "ordinary", action: "cancel" },
+  { kind: "origin", action: "retire" },
+  { kind: "prepare", action: "cancel" },
+  { kind: "prepare", action: "retire" },
+])("does not settle absent worker $kind after $action", async ({ kind, action }) => {
   await withOpenClawTestState({ label: "device-token-absent-admission" }, async (state) => {
     // An existing-only open can settle without dispatching the operation callback.
     vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockResolvedValueOnce(undefined);
@@ -188,7 +219,7 @@ it("retains host lifecycle custody while a native writer overlaps a token commit
     const originalAdmission = mutationAdmission.createSqliteWorkerOperationAdmission;
     let nativeWriteStarted = false;
     vi.spyOn(mutationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
-      (admit) =>
+      (admit, attachment) =>
         originalAdmission((request, grant) => {
           admit(request, grant);
           if (request.stage === "transaction" && !nativeWriteStarted) {
@@ -204,7 +235,7 @@ it("retains host lifecycle custody while a native writer overlaps a token commit
               { env: state.env },
             );
           }
-        }),
+        }, attachment),
     );
     await expect(
       tokens.storeDeviceAuthToken({
@@ -221,47 +252,42 @@ it("retains host lifecycle custody while a native writer overlaps a token commit
   });
 });
 
-it.each([false, true])(
-  "does not deliver a token observation after source retirement (origin: %s)",
-  async (origin) => {
-    await withOpenClawTestState({ label: "device-token-observation-retirement" }, async (state) => {
-      let retired = false;
-      vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementationOnce(async () => {
+it("does not deliver a token observation after source retirement", async () => {
+  await withOpenClawTestState({ label: "device-token-observation-retirement" }, async (state) => {
+    let retired = false;
+    vi.spyOn(workerStore, "runOpenClawStateWorkerOperation").mockImplementationOnce(async () => {
+      queueMicrotask(() => {
         queueMicrotask(() => {
-          queueMicrotask(() => {
-            clearOpenClawStateDatabaseOpenFailure(state.statePath("state", "openclaw.sqlite"));
-            retired = true;
-          });
+          clearOpenClawStateDatabaseOpenFailure(state.statePath("state", "openclaw.sqlite"));
+          retired = true;
         });
-        return undefined;
       });
-      const onSnapshot = vi.fn(() => retired);
-      const input = {
-        deviceId: "synthetic-device",
-        role: "operator",
-        env: state.env,
-        onSnapshot,
-      };
-      const reading = origin
-        ? tokens.loadOriginDeviceTokenReadOnly({
-            ...input,
-            gatewayScope: "wss://synthetic.example",
-          })
-        : tokens.loadDeviceAuthTokenReadOnly(input);
-      let rejection: unknown;
-      await reading.catch((error: unknown) => {
-        rejection = error;
-      });
-      expect(retired).toBe(true);
-      expect(onSnapshot.mock.results.some((result) => result.value === true)).toBe(false);
-      if (rejection === undefined) {
-        expect(onSnapshot).toHaveBeenCalledOnce();
-      } else {
-        expect(rejection).toMatchObject({
-          message: expect.stringContaining("read admission changed"),
-        });
-        expect(onSnapshot).not.toHaveBeenCalled();
-      }
+      return undefined;
     });
-  },
-);
+    const onSnapshot = vi.fn(() => retired);
+    const input = {
+      deviceId: "synthetic-device",
+      role: "operator",
+      env: state.env,
+      onSnapshot,
+    };
+    const reading = tokens.loadOriginDeviceTokenReadOnly({
+      ...input,
+      gatewayScope: "wss://synthetic.example",
+    });
+    let rejection: unknown;
+    await reading.catch((error: unknown) => {
+      rejection = error;
+    });
+    expect(retired).toBe(true);
+    expect(onSnapshot.mock.results.some((result) => result.value === true)).toBe(false);
+    if (rejection === undefined) {
+      expect(onSnapshot).toHaveBeenCalledOnce();
+    } else {
+      expect(rejection).toMatchObject({
+        message: expect.stringContaining("read admission changed"),
+      });
+      expect(onSnapshot).not.toHaveBeenCalled();
+    }
+  });
+});

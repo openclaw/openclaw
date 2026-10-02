@@ -9,34 +9,32 @@ import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { build, createLogger, type InlineConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiAssetManifest } from "../../../src/gateway/control-ui-asset-manifest.ts";
+import { controlUiCodeSplitting } from "../../config/control-ui-chunking.ts";
 import controlUiViteConfig from "../../vite.config.ts";
 
 describe("Control UI Vite build", () => {
   let root: string;
   let outDir: string;
-  let config: InlineConfig;
   const info = vi.fn<(message: string) => void>();
 
-  function captureLogs(level: "info" | "silent") {
+  function createConfig(level: "info" | "silent" = "silent"): InlineConfig {
     info.mockReset();
-    config.logLevel = level;
-    config.customLogger = createLogger(level, {
-      allowClearScreen: false,
-      console: { ...console, log: info, error: vi.fn() },
-    });
+    return {
+      ...controlUiViteConfig({ outDir }),
+      configFile: false,
+      root,
+      publicDir: false,
+      logLevel: level,
+      customLogger: createLogger(level, {
+        allowClearScreen: false,
+        console: { ...console, log: info, error: vi.fn() },
+      }),
+    };
   }
 
   beforeEach(async () => {
     root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "control-ui-vite-build-")));
     outDir = path.join(root, "dist");
-    config = {
-      ...controlUiViteConfig({ outDir }),
-      configFile: false,
-      root,
-      publicDir: false,
-      logLevel: "silent",
-    };
-    captureLogs("silent");
     await fs.writeFile(
       path.join(root, "index.html"),
       '<script>globalThis.fixtureBooted = true;</script><button>Load</button><script type="module" src="./main.js"></script>',
@@ -57,11 +55,209 @@ describe("Control UI Vite build", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it("omits already imported JavaScript from lazy preload tables, retaining lazy JS and CSS", async () => {
+    const config = createConfig();
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import { shared } from "./shared.js"; globalThis.shared = shared; globalThis.load = () => import("./lazy.js");',
+    );
+    await fs.writeFile(path.join(root, "shared.js"), 'export const shared = "shared";');
+    await fs.writeFile(path.join(root, "lazy-only.js"), 'export const lazy = "lazy-only";');
+    await fs.writeFile(
+      path.join(root, "lazy.js"),
+      'import { shared } from "./shared.js"; import { lazy } from "./lazy-only.js"; import "./lazy.css"; export const message = shared + lazy;',
+    );
+    const productionBuild = config.build!;
+    config.build = {
+      ...productionBuild,
+      rolldownOptions: {
+        ...productionBuild.rolldownOptions,
+        output: {
+          codeSplitting: {
+            groups: ["shared", "lazy-only"].map((name) => ({
+              name,
+              test: (id: string) => id === path.join(root, `${name}.js`),
+            })),
+          },
+        },
+      },
+    };
+    await build(config);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const entryName = names.find((name) => /^index-.*\.js$/u.test(name))!;
+    const entry = await fs.readFile(path.join(outDir, "assets", entryName), "utf8");
+    const table = /^const __vite__mapDeps=.*$/mu.exec(entry)?.[0];
+    expect(table).toBeDefined();
+    const sharedName = names.find((name) => /^shared-.*\.js$/u.test(name))!;
+    const lazyName = names.find((name) => /^lazy-only-.*\.js$/u.test(name))!;
+    expect(entry).toContain(sharedName);
+    expect(table).not.toContain(sharedName);
+    expect(table).toContain(lazyName);
+    expect(table).toMatch(/lazy-[^"/]+\.css/u);
+    expect(await fs.readFile(path.join(outDir, "index.html"), "utf8")).toContain(sharedName);
+  });
+
+  it("keeps page styles separate from measured JavaScript boot groups", async () => {
+    const config = createConfig();
+    const pages = fileURLToPath(new URL("../pages/", import.meta.url));
+    const first = path.join(pages, "chunk-fixture-first", "view.ts");
+    const second = path.join(pages, "chunk-fixture-second", "view.ts");
+    const lazy = path.join(pages, "chunk-fixture-lazy", "view.ts");
+    const firstCss = fileURLToPath(new URL("../styles/new-session.css", import.meta.url));
+    const secondCss = fileURLToPath(
+      new URL("../styles/chat/composer-progress.css", import.meta.url),
+    );
+    const lazyCss = path.join(path.dirname(lazy), "view.css");
+    const modules = new Map([
+      [first, 'import "../../styles/new-session.css"; export const message = "first";'],
+      [
+        second,
+        'import "../../styles/chat/composer-progress.css"; export const message = "second";',
+      ],
+      [lazy, 'import "./view.css"; export const message = "lazy";'],
+      [firstCss, ".first-page { color: red; }"],
+      [secondCss, ".second-page { color: blue; }"],
+      [lazyCss, ".lazy-page { color: purple; }"],
+    ]);
+    await fs.writeFile(path.join(root, "initial.css"), ".initial-page { color: green; }");
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      'import "./initial.css"; globalThis.loadFirst = () => import("fixture:first"); globalThis.loadSecond = () => import("fixture:second"); globalThis.loadLazy = () => import("fixture:lazy");',
+    );
+    config.plugins = [
+      {
+        name: "page-style-import-owners",
+        enforce: "pre",
+        resolveId(source, importer) {
+          if (source === "fixture:first") {
+            return first;
+          }
+          if (source === "fixture:second") {
+            return second;
+          }
+          if (source === "fixture:lazy") {
+            return lazy;
+          }
+          if (importer && source.startsWith(".")) {
+            const resolved = path.resolve(path.dirname(importer), source);
+            if (modules.has(resolved)) {
+              return resolved;
+            }
+          }
+          return null;
+        },
+        load(id) {
+          return modules.get(id);
+        },
+      },
+      ...(config.plugins ?? []),
+    ];
+    config.build = {
+      ...config.build,
+      rolldownOptions: {
+        ...config.build?.rolldownOptions,
+        output: {
+          strictExecutionOrder: true,
+          codeSplitting: {
+            ...controlUiCodeSplitting,
+            groups: controlUiCodeSplitting.groups.map((group) =>
+              group.name === "control-ui-boot-shared"
+                ? Object.assign({}, group, {
+                    test: (id: string) => [first, second, firstCss, secondCss].includes(id),
+                    minSize: 0,
+                  })
+                : group,
+            ),
+          },
+        },
+      },
+    };
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const lazyChunk = built.output.find((chunk) => chunk.type === "chunk" && lazy in chunk.modules);
+    expect(lazyChunk?.type === "chunk" && lazyCss in lazyChunk.modules).toBe(true);
+    const names = await fs.readdir(path.join(outDir, "assets"));
+    const styles = await Promise.all(
+      names
+        .filter((name) => name.endsWith(".css"))
+        .map(async (name) => ({
+          name,
+          source: await fs.readFile(path.join(outDir, "assets", name), "utf8"),
+        })),
+    );
+    const initial = styles.find(({ source }) => source.includes(".initial-page"))!;
+    const firstStyle = styles.find(({ source }) => source.includes(".first-page"))!;
+    const secondStyle = styles.find(({ source }) => source.includes(".second-page"))!;
+    expect(new Set([initial.name, firstStyle.name, secondStyle.name]).size).toBe(3);
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).toContain(initial.name);
+    expect(html).not.toContain(firstStyle.name);
+    expect(html).not.toContain(secondStyle.name);
+    const scripts = (
+      await Promise.all(
+        names
+          .filter((name) => name.endsWith(".js"))
+          .map((name) => fs.readFile(path.join(outDir, "assets", name), "utf8")),
+      )
+    ).join("\n");
+    expect(scripts).toContain(firstStyle.name);
+    expect(scripts).toContain(secondStyle.name);
+  });
+
+  it("prepares the sign-in gate offline without preloading it into ordinary chat navigation", async () => {
+    const config = createConfig();
+    const gate = fileURLToPath(new URL("../components/login-gate.ts", import.meta.url));
+    const feedback = fileURLToPath(
+      new URL("../components/login-offline-fixture.ts", import.meta.url),
+    );
+    const modules = new Map([
+      [gate, `import { message } from ${JSON.stringify(feedback)}; export const label = message;`],
+      [feedback, 'export const message = "Connect again when online";'],
+    ]);
+    await fs.writeFile(
+      path.join(root, "main.js"),
+      `globalThis.loadLogin = () => import(${JSON.stringify(gate)});`,
+    );
+    config.plugins = [
+      {
+        name: "offline-login-fixture",
+        enforce: "pre",
+        resolveId: (id) => (modules.has(id) ? id : null),
+        load: (id) => modules.get(id) ?? null,
+      },
+      ...(config.plugins ?? []),
+    ];
+    const built = await build(config);
+    if (Array.isArray(built) || !("output" in built)) {
+      throw new Error("Expected one production bundle");
+    }
+    const gateChunk = built.output.find(
+      (entry) => entry.type === "chunk" && entry.facadeModuleId === gate,
+    );
+    if (!gateChunk || gateChunk.type !== "chunk") {
+      throw new Error("Expected the dynamically imported sign-in gate");
+    }
+    const worker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
+    const boot = JSON.parse(/const OFFLINE_BOOT = (.+);/u.exec(worker)![1]!) as {
+      assets: Array<{ path: string }>;
+    };
+    const cached = new Set(boot.assets.map((asset) => asset.path));
+    expect(cached.has(gateChunk.fileName)).toBe(true);
+    for (const dependency of gateChunk.imports) {
+      expect(cached.has(dependency)).toBe(true);
+    }
+    const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
+    expect(html).not.toContain(gateChunk.fileName);
+  });
+
   it("preserves an unresolved import diagnostic with a fresh output directory", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     await fs.writeFile(path.join(root, "main.js"), 'import "./missing-module.js";');
 
     const result = build(config);
@@ -73,7 +269,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("reports completed compression work before build completion at a bounded cadence", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     let clockMs = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clockMs);
     const writeFileSync = fsSync.writeFileSync;
@@ -140,7 +336,30 @@ describe("Control UI Vite build", () => {
     await expect(fs.stat(path.join(outDir, "asset-manifest.json"))).resolves.toBeDefined();
   });
 
-  it("inventories final emitted bytes and compressed variants, excluding source maps", async () => {
+  it.each(
+    (["configured", "absolute override", "relative override", "output override"] as const).flatMap(
+      (output) => [false, true].map((release) => ({ output, release })),
+    ),
+  )("finalizes $output assets and maps (release=$release)", async ({ output, release }) => {
+    vi.stubEnv("OPENCLAW_CONTROL_UI_RELEASE_BUILD", release ? "1" : undefined);
+    const config = createConfig();
+    const configuredOutDir = outDir;
+    if (output !== "configured") {
+      outDir = path.join(root, "overridden-output");
+      config.build =
+        output === "output override"
+          ? {
+              ...config.build,
+              rolldownOptions: {
+                ...config.build?.rolldownOptions,
+                output: { dir: outDir },
+              },
+            }
+          : {
+              ...config.build,
+              outDir: output === "relative override" ? path.relative(root, outDir) : outDir,
+            };
+    }
     config.publicDir = fileURLToPath(new URL("../../public", import.meta.url));
     await fs.writeFile(
       path.join(root, "index.html"),
@@ -148,6 +367,9 @@ describe("Control UI Vite build", () => {
     );
     await build(config);
     expect(info).not.toHaveBeenCalled();
+    if (output !== "configured") {
+      await expect(fs.stat(configuredOutDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
 
     const manifest: ControlUiAssetManifest = JSON.parse(
       await fs.readFile(path.join(outDir, "asset-manifest.json"), "utf8"),
@@ -165,6 +387,7 @@ describe("Control UI Vite build", () => {
 
     const scripts = emitted.filter((name) => name.endsWith(".js"));
     expect(scripts.length).toBeGreaterThan(1);
+    expect(scripts.some((name) => emitted.includes(`${name}.map`))).toBe(true);
     expect(emitted.some((name) => name.endsWith(".css"))).toBe(true);
     for (const name of emitted.filter((fileName) => /\.(js|css)$/u.test(fileName))) {
       const source = await fs.readFile(path.join(outDir, "assets", name));
@@ -172,6 +395,11 @@ describe("Control UI Vite build", () => {
       const gzip = await fs.readFile(path.join(outDir, "assets", `${name}.gz`));
       expect(brotliDecompressSync(brotli)).toEqual(source);
       expect(gunzipSync(gzip)).toEqual(source);
+      if (name.endsWith(".js")) {
+        expect(source.toString("utf8").includes("sourceMappingURL="), name).toBe(
+          !release && emitted.includes(`${name}.map`),
+        );
+      }
     }
     const serviceWorker = await fs.readFile(path.join(outDir, "sw.js"), "utf8");
     const embeddedBuildId = /const EMBEDDED_CACHE_VERSION = "([^"]+)"/u.exec(serviceWorker)?.[1];
@@ -213,6 +441,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("changes the public asset version after a same-commit rebuild without changing worker identity", async () => {
+    const config = createConfig();
     const publicDir = path.join(root, "public");
     await fs.mkdir(publicDir);
     config.publicDir = publicDir;
@@ -236,6 +465,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("carries the Cloudflare Rocket Loader bypass on every emitted script tag", async () => {
+    const config = createConfig();
     await build(config);
 
     const html = await fs.readFile(path.join(outDir, "index.html"), "utf8");
@@ -247,6 +477,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("fails when a completed build emits outside the required assets directory", async () => {
+    const config = createConfig();
     config.build = { ...config.build, assetsDir: "bundles" };
 
     await expect(build(config)).rejects.toThrow(/ENOENT.*assets/u);
@@ -258,7 +489,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("preserves an output write failure without finalizing the build", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     await fs.mkdir(outDir);
     await fs.writeFile(path.join(outDir, "blocked"), "output obstruction");
     config.build = { ...config.build, emptyOutDir: false, assetsDir: "blocked" };
@@ -275,7 +506,7 @@ describe("Control UI Vite build", () => {
   });
 
   it("does not count an asset or report completion when its second sidecar write fails", async () => {
-    captureLogs("info");
+    const config = createConfig("info");
     const writeFileSync = fsSync.writeFileSync;
     vi.spyOn(fsSync, "writeFileSync").mockImplementation((file, ...args) => {
       if (String(file).endsWith(".gz")) {

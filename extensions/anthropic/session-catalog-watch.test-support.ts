@@ -48,7 +48,8 @@ export function createClaudeCatalogWatchDriver(home: string) {
       return watcher;
     },
   );
-  let monotonicNow = performance.now();
+  // Integer steps keep the exact arming interval independent of fractional host-clock precision.
+  let monotonicNow = 0;
   vi.spyOn(performance, "now").mockImplementation(() => monotonicNow);
   return {
     arm: () => {

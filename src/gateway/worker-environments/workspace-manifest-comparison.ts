@@ -36,9 +36,9 @@ export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
   }
 }
 
-export function manifestNodes(manifest: WorkerWorkspaceManifest): Map<string, WorkspaceNode> {
+export function manifestNodes(manifest: WorkerWorkspaceManifest) {
   const staged = stagedInputDirectoriesFromEntries(manifest.entries);
-  const nodes = new Map<string, WorkspaceNode>();
+  const nodes = new Map<string, Exclude<WorkspaceNode, undefined>>();
   for (const directory of manifest.directories ?? []) {
     if (!isDerivedWorkspacePath(directory, isStagedInputPath(directory, staged))) {
       nodes.set(directory, { path: directory, type: "directory" });

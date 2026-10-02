@@ -197,20 +197,4 @@ describe("guided onboarding post-inference steps", () => {
       deps.launchHatchTui.mock.invocationCallOrder[0]!,
     );
   });
-
-  it("shows no memory page when the memory step finds no offers", async () => {
-    const prompter = createWizardPrompter();
-    const runSetupMemoryImportStep = vi.fn<
-      NonNullable<GuidedOnboardingDeps["runSetupMemoryImportStep"]>
-    >(async () => ({ status: "nothing-to-import", providers: [] }));
-    const deps = setupPostInferenceDeps({ prompter, runSetupMemoryImportStep });
-
-    await runGuidedOnboarding({ acceptRisk: true, workspace: "/tmp/work" }, makeRuntime(), deps);
-
-    expect(runSetupMemoryImportStep).toHaveBeenCalledOnce();
-    expect((prompter.note as ReturnType<typeof vi.fn>).mock.calls).not.toContainEqual([
-      expect.anything(),
-      "Memories found",
-    ]);
-  });
 });

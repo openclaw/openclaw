@@ -85,7 +85,6 @@ ${functions}
 quiet_npm() { printf '%s\\n' "$FAKE_NPM_ROOT"; }
 run_with_heartbeat() { shift; "$@"; }
 print_install_audit() { :; }
-allow_legacy_update_warning() { return 1; }
 run_update_candidate "$BASELINE" applied --no-restart
 `,
     ],

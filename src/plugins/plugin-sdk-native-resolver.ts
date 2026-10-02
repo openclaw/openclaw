@@ -6,7 +6,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside, isPathStrictlyInside } from "../infra/path-guards.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { supportsNativeModuleAliasHooks, type BunPluginRuntime } from "./native-module-require.js";
+import {
+  isPluginSourceModulePath,
+  supportsNativeModuleAliasHooks,
+  type BunPluginRuntime,
+} from "./native-module-require.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginSdkHostFacts } from "./plugin-cache-sdk.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -126,7 +130,7 @@ function isNativeLoadableSdkTarget(targetPath: string): boolean {
     case ".mjs":
       return true;
     default:
-      return false;
+      return isPluginSourceModulePath(targetPath);
   }
 }
 
@@ -470,9 +474,8 @@ export function installOpenClawPluginSdkNativeResolver(
   const aliases = preparePluginLoaderAliases({
     modulePath: options.pluginModulePath ?? resolveLoaderModulePath(options),
     argv1: options.argv1 ?? process.argv[1],
-    moduleUrl: options.moduleUrl,
-    // Permanent native hooks require JavaScript even when the transformer prefers source.
-    pluginSdkResolution: "dist",
+    moduleUrl: options.moduleUrl ?? pathToFileURL(resolveLoaderModulePath(options)).href,
+    pluginSdkResolution: options.pluginSdkResolution,
     devSourceRoot: options.devSourceRoot,
   });
   const native = getPluginCache().sdk.native;

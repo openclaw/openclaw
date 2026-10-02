@@ -3,10 +3,7 @@ import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  applySessionStoreProjection,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
@@ -191,6 +188,9 @@ describe("sessions_search tool", () => {
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
+    expect(tool.parameters).toMatchObject({
+      properties: { limit: { description: expect.stringContaining("Maximum search results: 25") } },
+    });
     await expect(tool.execute("call-1", { query: "   " })).rejects.toThrow(
       "query must not be empty",
     );
@@ -484,14 +484,10 @@ describe("sessions_search tool", () => {
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
     const storePath = path.join(tempDirs.make("openclaw-sessions-search-"), "sessions.sqlite");
-    await applySessionStoreProjection({
-      storePath,
-      skipMaintenance: true,
-      update: (store) => {
-        store[targetSessionKey] = { sessionId: expectedSessionId, updatedAt: 1 };
-        return { persist: true, result: undefined };
-      },
-    });
+    replaceSessionEntrySync(
+      { storePath, sessionKey: targetSessionKey },
+      { sessionId: expectedSessionId, updatedAt: 1 },
+    );
     const requests: CallGatewayRequest[] = [];
     const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
       if (

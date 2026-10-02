@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   hasInboundMetadataSentinel,
@@ -59,164 +60,93 @@ function sanitizeUserVisibleToolTextResult(
   };
 }
 
-function sanitizeStringParam(
-  params: Record<string, unknown>,
-  field: string,
-  bootPrompt: string | undefined,
-): VisibleTextSuppressionReason | undefined {
-  if (typeof params[field] !== "string") {
-    return undefined;
-  }
-  const sanitized = sanitizeUserVisibleToolTextResult(params[field], bootPrompt);
-  params[field] = sanitized.text;
-  return sanitized.suppressionReason;
-}
-
-function sanitizeStringArrayParam(
-  params: Record<string, unknown>,
-  field: string,
-  bootPrompt: string | undefined,
-): VisibleTextSuppressionReason | undefined {
-  const value = params[field];
-  if (typeof value === "string") {
-    const sanitized = sanitizeUserVisibleToolTextResult(value, bootPrompt);
-    params[field] = sanitized.text;
-    return sanitized.suppressionReason;
-  }
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  let suppressionReason: VisibleTextSuppressionReason | undefined;
-  params[field] = value.map((entry) => {
-    if (typeof entry !== "string") {
-      return entry;
-    }
-    const sanitized = sanitizeUserVisibleToolTextResult(entry, bootPrompt);
-    suppressionReason ??= sanitized.suppressionReason;
-    return sanitized.text;
-  });
-  return suppressionReason;
-}
-
-function sanitizePresentationTextFieldsResult(
+function sanitizePresentationTextFields(
   value: unknown,
-  bootPrompt: string | undefined,
-): { value: unknown; suppressionReason?: VisibleTextSuppressionReason } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return { value };
+  sanitizeText: (text: string, trim?: boolean) => string,
+): unknown {
+  if (!isRecord(value)) {
+    return value;
   }
-  let suppressionReason: VisibleTextSuppressionReason | undefined;
+  const sanitizeFields = (record: Record<string, unknown>, fields: string[], trim = false) => {
+    for (const field of fields) {
+      if (typeof record[field] === "string") {
+        record[field] = sanitizeText(record[field], trim);
+      }
+    }
+  };
+  const sanitizeStrings = (entries: unknown[], trim = false) =>
+    entries.map((entry) => (typeof entry === "string" ? sanitizeText(entry, trim) : entry));
   const sanitizeRecordArray = (entries: unknown[], field: "label" | "name") =>
     entries.map((entry) => {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      if (!isRecord(entry)) {
         return entry;
       }
-      // SAFETY: The guard establishes a non-null, non-array record before cloning.
-      const sanitized = { ...(entry as Record<string, unknown>) };
-      // Keep sanitizing after suppression; the first reason only labels the outcome.
-      const reason = sanitizeStringParam(sanitized, field, bootPrompt);
-      suppressionReason ??= reason;
+      const sanitized = { ...entry };
+      sanitizeFields(sanitized, [field]);
       return sanitized;
     });
-  const presentation = { ...(value as Record<string, unknown>) };
-  if (typeof presentation.title === "string") {
-    const sanitized = sanitizeUserVisibleToolTextResult(presentation.title, bootPrompt);
-    presentation.title = sanitized.text;
-    suppressionReason ??= sanitized.suppressionReason;
-  }
+  const presentation = { ...value };
+  sanitizeFields(presentation, ["title"]);
   if (Array.isArray(presentation.blocks)) {
     presentation.blocks = presentation.blocks.map((block) => {
-      if (!block || typeof block !== "object" || Array.isArray(block)) {
+      if (!isRecord(block)) {
         return block;
       }
-      const sanitizedBlock = { ...(block as Record<string, unknown>) };
-      for (const field of ["text", "placeholder", "title", "xLabel", "yLabel"]) {
-        if (typeof sanitizedBlock[field] === "string") {
-          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock[field], bootPrompt);
-          sanitizedBlock[field] = sanitized.text;
-          suppressionReason ??= sanitized.suppressionReason;
-        }
-      }
+      const sanitizedBlock = { ...block };
+      sanitizeFields(sanitizedBlock, ["text", "placeholder", "title", "xLabel", "yLabel"]);
       if (normalizeOptionalLowercaseString(sanitizedBlock.type) === "table") {
-        if (typeof sanitizedBlock.caption === "string") {
-          const sanitized = sanitizeUserVisibleToolTextResult(sanitizedBlock.caption, bootPrompt);
-          sanitizedBlock.caption = sanitized.text.trim();
-          suppressionReason ??= sanitized.suppressionReason;
-        }
+        sanitizeFields(sanitizedBlock, ["caption"], true);
         if (Array.isArray(sanitizedBlock.headers)) {
-          sanitizedBlock.headers = sanitizedBlock.headers.map((header) => {
-            if (typeof header !== "string") {
-              return header;
-            }
-            const sanitized = sanitizeUserVisibleToolTextResult(header, bootPrompt);
-            suppressionReason ??= sanitized.suppressionReason;
-            return sanitized.text.trim();
-          });
+          sanitizedBlock.headers = sanitizeStrings(sanitizedBlock.headers, true);
         }
         if (Array.isArray(sanitizedBlock.rows)) {
-          sanitizedBlock.rows = sanitizedBlock.rows.map((row) => {
-            if (!Array.isArray(row)) {
-              return row;
-            }
-            return row.map((cell) => {
-              if (typeof cell !== "string") {
-                return cell;
-              }
-              const sanitized = sanitizeUserVisibleToolTextResult(cell, bootPrompt);
-              suppressionReason ??= sanitized.suppressionReason;
-              return sanitized.text.trim();
-            });
-          });
+          sanitizedBlock.rows = sanitizedBlock.rows.map((row) =>
+            Array.isArray(row) ? sanitizeStrings(row, true) : row,
+          );
         }
       }
       if (Array.isArray(sanitizedBlock.buttons)) {
         sanitizedBlock.buttons = sanitizedBlock.buttons.map((button) => {
-          if (!button || typeof button !== "object" || Array.isArray(button)) {
+          if (!isRecord(button)) {
             return button;
           }
-          const sanitizedButton = { ...(button as Record<string, unknown>) };
-          if (typeof sanitizedButton.label === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.label, bootPrompt);
-            sanitizedButton.label = sanitized.text;
-            suppressionReason ??= sanitized.suppressionReason;
-          }
+          const sanitizedButton = { ...button };
+          sanitizeFields(sanitizedButton, ["label"]);
           if (typeof sanitizedButton.url === "string") {
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedButton.url, bootPrompt);
-            if (sanitized.text) {
-              sanitizedButton.url = sanitized.text;
+            const url = sanitizeText(sanitizedButton.url);
+            if (url) {
+              sanitizedButton.url = url;
             } else {
               delete sanitizedButton.url;
             }
-            suppressionReason ??= sanitized.suppressionReason;
           }
           for (const webAppField of ["webApp", "web_app"]) {
             const webApp = sanitizedButton[webAppField];
-            if (!webApp || typeof webApp !== "object" || Array.isArray(webApp)) {
+            if (!isRecord(webApp)) {
               continue;
             }
-            const sanitizedWebApp = { ...(webApp as Record<string, unknown>) };
+            const sanitizedWebApp = { ...webApp };
             if (typeof sanitizedWebApp.url !== "string") {
               continue;
             }
-            const sanitized = sanitizeUserVisibleToolTextResult(sanitizedWebApp.url, bootPrompt);
-            if (sanitized.text) {
-              sanitizedWebApp.url = sanitized.text;
+            const url = sanitizeText(sanitizedWebApp.url);
+            if (url) {
+              sanitizedWebApp.url = url;
               sanitizedButton[webAppField] = sanitizedWebApp;
             } else {
               delete sanitizedButton[webAppField];
             }
-            suppressionReason ??= sanitized.suppressionReason;
           }
           const action = sanitizedButton.action;
-          if (action && typeof action === "object" && !Array.isArray(action)) {
-            const sanitizedAction = { ...(action as Record<string, unknown>) };
+          if (isRecord(action)) {
+            const sanitizedAction = { ...action };
             if (
               (sanitizedAction.type === "url" || sanitizedAction.type === "web-app") &&
               typeof sanitizedAction.url === "string"
             ) {
-              const sanitized = sanitizeUserVisibleToolTextResult(sanitizedAction.url, bootPrompt);
-              if (sanitized.text) {
-                sanitizedAction.url = sanitized.text;
+              const url = sanitizeText(sanitizedAction.url);
+              if (url) {
+                sanitizedAction.url = url;
                 sanitizedButton.action = sanitizedAction;
               } else if (
                 sanitizedAction.type === "web-app" &&
@@ -234,7 +164,6 @@ function sanitizePresentationTextFieldsResult(
                 delete sanitizedButton.webApp;
                 delete sanitizedButton.web_app;
               }
-              suppressionReason ??= sanitized.suppressionReason;
             }
           }
           return sanitizedButton;
@@ -244,14 +173,7 @@ function sanitizePresentationTextFieldsResult(
         sanitizedBlock.options = sanitizeRecordArray(sanitizedBlock.options, "label");
       }
       if (Array.isArray(sanitizedBlock.categories)) {
-        sanitizedBlock.categories = sanitizedBlock.categories.map((category) => {
-          if (typeof category !== "string") {
-            return category;
-          }
-          const sanitized = sanitizeUserVisibleToolTextResult(category, bootPrompt);
-          suppressionReason ??= sanitized.suppressionReason;
-          return sanitized.text;
-        });
+        sanitizedBlock.categories = sanitizeStrings(sanitizedBlock.categories);
       }
       if (Array.isArray(sanitizedBlock.segments)) {
         sanitizedBlock.segments = sanitizeRecordArray(sanitizedBlock.segments, "label");
@@ -262,7 +184,7 @@ function sanitizePresentationTextFieldsResult(
       return sanitizedBlock;
     });
   }
-  return { value: presentation, ...(suppressionReason ? { suppressionReason } : {}) };
+  return presentation;
 }
 
 function readFirstStringParam(params: Record<string, unknown>, keys: readonly string[]): string {
@@ -281,13 +203,12 @@ function readStructuredAttachmentMediaParam(value: unknown): string | undefined 
   }
   let media: string | undefined;
   for (const attachment of value) {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+    if (!isRecord(attachment)) {
       continue;
     }
-    const record = attachment as Record<string, unknown>;
     for (const key of ["media", "mediaUrl", "path", "filePath", "fileUrl", "url"]) {
       // Preserve eager alias reads; earlier content must not hide a later accessor error.
-      media = readToolStringParam(record, key) || media;
+      media = readToolStringParam(attachment, key) || media;
     }
   }
   return media;
@@ -321,20 +242,14 @@ export function sanitizeMessageToolVisiblePayload(
   params: Record<string, unknown>,
   agentSessionKey?: string,
 ): VisibleTextSuppressionReason | undefined {
-  // Sanitize outbound text fields in three layers:
-  //
-  // 1. `stripFormattedReasoningMessage` — drops reasoning blocks
-  //    that some models emit into tool arguments.
-  // 2. `stripInternalRuntimeContext` — removes internal-runtime-context
-  //    delimited blocks (the same strip applied to final replies via
-  //    `sanitizeUserFacingText`). Catches wrapped BOOT.md or webchat
-  //    runtime-context echoes that preserve the marker lines.
-  // 3. `stripBootEchoFromOutboundText` — defense-in-depth check against
-  //    the active boot prompt for this session. Catches verbatim echoes
-  //    that paraphrase out the wrapper markers but reproduce a
-  //    substantial chunk of the boot prompt content. Refs #53732.
   const bootPromptForSession = getBootEchoContextForSession(agentSessionKey);
   let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
+  const sanitizeText = (text: string, trim = false) => {
+    const sanitized = sanitizeUserVisibleToolTextResult(text, bootPromptForSession);
+    // Keep sanitizing after suppression; the first reason only labels the outcome.
+    suppressedVisiblePayloadReason ??= sanitized.suppressionReason;
+    return trim ? sanitized.text.trim() : sanitized.text;
+  };
   parseJsonMessageParam(params, "presentation");
   parseInteractiveParam(params);
   for (const field of [
@@ -345,29 +260,25 @@ export function sanitizeMessageToolVisiblePayload(
     "SendMessage",
     "quoteText",
     "quote_text",
+    "pollQuestion",
+    "poll_question",
   ]) {
-    const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
-    suppressedVisiblePayloadReason ??= suppressionReason;
-  }
-  for (const field of ["pollQuestion", "poll_question"]) {
-    const suppressionReason = sanitizeStringParam(params, field, bootPromptForSession);
-    suppressedVisiblePayloadReason ??= suppressionReason;
+    if (typeof params[field] === "string") {
+      params[field] = sanitizeText(params[field]);
+    }
   }
   for (const field of ["pollOption", "poll_option"]) {
-    const suppressionReason = sanitizeStringArrayParam(params, field, bootPromptForSession);
-    suppressedVisiblePayloadReason ??= suppressionReason;
+    const value = params[field];
+    if (typeof value === "string") {
+      params[field] = sanitizeText(value);
+    } else if (Array.isArray(value)) {
+      params[field] = value.map((entry) =>
+        typeof entry === "string" ? sanitizeText(entry) : entry,
+      );
+    }
   }
-  const sanitizedPresentation = sanitizePresentationTextFieldsResult(
-    params.presentation,
-    bootPromptForSession,
-  );
-  params.presentation = sanitizedPresentation.value;
-  suppressedVisiblePayloadReason ??= sanitizedPresentation.suppressionReason;
-  const sanitizedInteractive = sanitizePresentationTextFieldsResult(
-    params.interactive,
-    bootPromptForSession,
-  );
-  params.interactive = sanitizedInteractive.value;
-  suppressedVisiblePayloadReason ??= sanitizedInteractive.suppressionReason;
+  for (const field of ["presentation", "interactive"]) {
+    params[field] = sanitizePresentationTextFields(params[field], sanitizeText);
+  }
   return suppressedVisiblePayloadReason;
 }

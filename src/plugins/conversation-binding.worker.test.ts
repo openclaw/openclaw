@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,7 +16,9 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
+  getCurrentPluginConversationBinding,
   requestPluginConversationBinding,
   resolvePluginConversationBindingApproval,
 } from "./conversation-binding.js";
@@ -31,6 +34,7 @@ function createBindingFixture() {
   const records = new Map<string, SessionBindingRecord>();
   return {
     bind: vi.fn(async (input: SessionBindingBindInput): Promise<SessionBindingRecord> => {
+      input.assertCurrent?.();
       const record: SessionBindingRecord = {
         bindingId: `binding-${records.size + 1}`,
         targetSessionKey: input.targetSessionKey,
@@ -92,9 +96,7 @@ function createDiscordCodexBindRequest(
 async function requestPendingBinding(input: PluginBindingRequestInput) {
   const request = await requestPluginConversationBinding(input);
   expect(request.status).toBe("pending");
-  if (request.status !== "pending") {
-    throw new Error("expected pending bind request");
-  }
+  assert(request.status === "pending", "expected pending bind request");
   return request;
 }
 
@@ -124,17 +126,54 @@ describe("plugin conversation approval worker lifetime", () => {
     registerSessionBindingAdapter(createAdapter("discord", "isolated"));
   });
 
+  it.each(["before-commit", "after-commit"] as const)(
+    "preserves binding admission and settlement when authority changes %s",
+    async (revokeAt) => {
+      const input = createDiscordCodexBindRequest("channel:owner-check", "original binding");
+      const pending = await requestPendingBinding(input);
+      const approved = await approveBindingRequest(pending.approvalId, "allow-once");
+      expect(approved.status).toBe("approved");
+      assert(approved.status === "approved", "expected approved bind result");
+      const original = approved.binding;
+      const bind = sessionBindingState.bind.getMockImplementation();
+      assert(bind, "expected binding adapter fixture");
+      let ownerCurrent = true;
+      sessionBindingState.bind.mockImplementationOnce(async (request) => {
+        if (revokeAt === "before-commit") {
+          ownerCurrent = false;
+        }
+        const result = await bind(request);
+        ownerCurrent = false;
+        return result;
+      });
+      const result = requestPluginConversationBinding({
+        ...input,
+        binding: { summary: "replacement binding" },
+        assertCurrent: () => {
+          if (!ownerCurrent) {
+            throw new Error("Command owner was revoked");
+          }
+        },
+      });
+      if (revokeAt === "before-commit") {
+        await expect(result).rejects.toThrow("Command owner was revoked");
+        await expect(getCurrentPluginConversationBinding(input)).resolves.toEqual(original);
+      } else {
+        await expect(result).resolves.toMatchObject({
+          status: "bound",
+          binding: { summary: "replacement binding" },
+        });
+        await expect(getCurrentPluginConversationBinding(input)).resolves.toMatchObject({
+          summary: "replacement binding",
+        });
+      }
+    },
+  );
+
   it("keeps the actual approval and reopen flow off the application SQLite thread", async () => {
     await closeOpenClawStateDatabaseAsync();
-    const native = requireNodeSqlite();
-    const counters = [
-      ...(["prepare", "exec", "close"] as const).map((method) =>
-        vi.spyOn(native.DatabaseSync.prototype, method),
-      ),
-      ...(["get", "all", "run", "iterate"] as const).map((method) =>
-        vi.spyOn(native.StatementSync.prototype, method),
-      ),
-    ];
+    requireNodeSqlite();
+    const sql = observeMainThreadSql({ includeClose: true });
     try {
       const pending = await requestPendingBinding(
         createDiscordCodexBindRequest("channel:worker", "worker proof"),
@@ -152,9 +191,9 @@ describe("plugin conversation approval worker lifetime", () => {
           )
         ).status,
       ).toBe("bound");
-      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0, 0]);
+      sql.expectIdle();
     } finally {
-      counters.forEach((counter) => counter.mockRestore());
+      sql.restore();
     }
   });
 

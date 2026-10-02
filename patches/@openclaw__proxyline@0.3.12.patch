@@ -1,0 +1,44 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 234afd2f3c418e4d168c0715f55e4bce6b77998f..9c85c2a8ded74cbe09d6340460ba6e89a68d659c 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -1,6 +1,6 @@
+ export { openProxyConnectTunnel, type OpenProxyConnectTunnelOptions } from "./connect.js";
+ export type { ProxyConnectOptions } from "./proxy-socket.js";
+-export { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured, type AmbientNodeProxyAgentOptions, } from "./node-http.js";
++export { createAmbientNodeProxyAgent, ProxylineNodeProxyAgent, hasAmbientNodeProxyConfigured, type AmbientNodeProxyAgentOptions, } from "./node-http.js";
+ export { installGlobalProxy, installProxyline } from "./runtime.js";
+ export { isProxylineDispatcher, PROXYLINE_DISPATCHER_BRAND } from "./dispatcher-brand.js";
+ export { ProxylineError, redactProxyUrl, resolveProxyTlsCa, type ProxylineTlsOptions, } from "./shared.js";
+diff --git a/dist/index.d.ts.map b/dist/index.d.ts.map
+index d21740744848dce60a98123445cbbc0dfb18a1a9..8dc6fad502c5c40accffca00f6202748204de636 100644
+--- a/dist/index.d.ts.map
++++ b/dist/index.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../src/index.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,sBAAsB,EAAE,KAAK,6BAA6B,EAAE,MAAM,cAAc,CAAC;AAC1F,YAAY,EAAE,mBAAmB,EAAE,MAAM,mBAAmB,CAAC;AAC7D,OAAO,EACL,2BAA2B,EAC3B,6BAA6B,EAC7B,KAAK,4BAA4B,GAClC,MAAM,gBAAgB,CAAC;AACxB,OAAO,EAAE,kBAAkB,EAAE,gBAAgB,EAAE,MAAM,cAAc,CAAC;AACpE,OAAO,EAAE,qBAAqB,EAAE,0BAA0B,EAAE,MAAM,uBAAuB,CAAC;AAC1F,OAAO,EACL,cAAc,EACd,cAAc,EACd,iBAAiB,EACjB,KAAK,mBAAmB,GACzB,MAAM,aAAa,CAAC;AACrB,YAAY,EACV,cAAc,EACd,2BAA2B,EAC3B,qBAAqB,EACrB,sBAAsB,EACtB,iBAAiB,EACjB,cAAc,EACd,eAAe,EACf,aAAa,EACb,gBAAgB,EAChB,gBAAgB,EAChB,sBAAsB,GACvB,MAAM,YAAY,CAAC"}
+\ No newline at end of file
++{"version":3,"file":"index.d.ts","sourceRoot":"","sources":["../src/index.ts"],"names":[],"mappings":"AAAA,OAAO,EAAE,sBAAsB,EAAE,KAAK,6BAA6B,EAAE,MAAM,cAAc,CAAC;AAC1F,YAAY,EAAE,mBAAmB,EAAE,MAAM,mBAAmB,CAAC;AAC7D,OAAO,EACL,2BAA2B,EAC3B,uBAAuB,EACvB,6BAA6B,EAC7B,KAAK,4BAA4B,GAClC,MAAM,gBAAgB,CAAC;AACxB,OAAO,EAAE,kBAAkB,EAAE,gBAAgB,EAAE,MAAM,cAAc,CAAC;AACpE,OAAO,EAAE,qBAAqB,EAAE,0BAA0B,EAAE,MAAM,uBAAuB,CAAC;AAC1F,OAAO,EACL,cAAc,EACd,cAAc,EACd,iBAAiB,EACjB,KAAK,mBAAmB,GACzB,MAAM,aAAa,CAAC;AACrB,YAAY,EACV,cAAc,EACd,2BAA2B,EAC3B,qBAAqB,EACrB,sBAAsB,EACtB,iBAAiB,EACjB,cAAc,EACd,eAAe,EACf,aAAa,EACb,gBAAgB,EAChB,gBAAgB,EAChB,sBAAsB,GACvB,MAAM,YAAY,CAAC"}
+\ No newline at end of file
+diff --git a/dist/index.js b/dist/index.js
+index 104b875a72dde24a0cdafd5dff10bd35b48352d3..5c5f4380da9eb2eea3d5e7224e090a84b549059e 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -1,5 +1,5 @@
+ export { openProxyConnectTunnel } from "./connect.js";
+-export { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured, } from "./node-http.js";
++export { createAmbientNodeProxyAgent, ProxylineNodeProxyAgent, hasAmbientNodeProxyConfigured, } from "./node-http.js";
+ export { installGlobalProxy, installProxyline } from "./runtime.js";
+ export { isProxylineDispatcher, PROXYLINE_DISPATCHER_BRAND } from "./dispatcher-brand.js";
+ export { ProxylineError, redactProxyUrl, resolveProxyTlsCa, } from "./shared.js";
+diff --git a/src/index.ts b/src/index.ts
+index 0660114b1218b444e1e1d4bd20762f276f8f3913..50f4304f076ddcde0baace885845df775316183e 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -2,6 +2,7 @@ export { openProxyConnectTunnel, type OpenProxyConnectTunnelOptions } from "./co
+ export type { ProxyConnectOptions } from "./proxy-socket.js";
+ export {
+   createAmbientNodeProxyAgent,
++  ProxylineNodeProxyAgent,
+   hasAmbientNodeProxyConfigured,
+   type AmbientNodeProxyAgentOptions,
+ } from "./node-http.js";

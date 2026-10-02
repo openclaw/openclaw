@@ -49,7 +49,6 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId: "memory-core",
       selectedKind: "memory",
-      registry: { plugins: [{ id: "memory-core", kind: "memory" }] },
     });
 
     expect(result.changed).toBe(false);
@@ -69,69 +68,47 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId: "memory-core",
       selectedKind: "memory",
-      registry: {
-        plugins: [
-          { id: "memory", kind: "memory" },
-          { id: "memory-core", kind: "memory" },
-        ],
-      },
     });
 
     expect(result.changed).toBe(true);
     expect(result.config.plugins).not.toHaveProperty("slots");
-    expect(result.config.plugins?.entries?.memory?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.memory?.enabled).toBe(true);
   });
 
   it.each([
     {
-      name: "selects the slot and disables other entries for the same kind",
+      name: "selects the slot and preserves other enabled entries",
       config: createMemoryConfig({
         slots: { memory: "memory-core" },
         entries: { "memory-core": { enabled: true } },
       }),
-      expectedDisabled: false,
-      expectedWarnings: [
-        'Exclusive slot "memory" switched from "memory-core" to "memory".',
-        'Disabled other "memory" slot plugins: memory-core.',
-      ],
+      expectedCoreEnabled: true,
     },
     {
-      name: "warns when the slot falls back to a default",
+      name: "selects an implicit default slot without adding other entries",
       config: createMemoryConfig(),
-      expectedWarnings: [
-        'Exclusive slot "memory" switched from "memory-core" to "memory".',
-        'Disabled other "memory" slot plugins: memory-core.',
-      ],
+      expectedCoreEnabled: undefined,
     },
     {
-      name: "keeps disabled competing plugins disabled without adding disable warnings",
+      name: "preserves other disabled entries when selecting the slot",
       config: createMemoryConfig({
         entries: {
           "memory-core": { enabled: false },
         },
       }),
-      expectedDisabled: false,
-      expectedWarnings: ['Exclusive slot "memory" switched from "memory-core" to "memory".'],
+      expectedCoreEnabled: false,
     },
-  ] as const)("$name", ({ config, expectedDisabled, expectedWarnings }) => {
+  ] as const)("$name", ({ config, expectedCoreEnabled }) => {
     const result = applyExclusiveSlotSelection({
       config,
       selectedId: "memory",
       selectedKind: "memory",
-      registry: {
-        plugins: [
-          { id: "memory-core", kind: "memory" },
-          { id: "memory", kind: "memory" },
-        ],
-      },
     });
 
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.slots?.memory).toBe("memory");
-    if (expectedDisabled != null) {
-      expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(expectedDisabled);
-    }
-    expect(result.warnings).toEqual(expectedWarnings);
+    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(expectedCoreEnabled);
+    expect(result.warnings).toEqual([]);
   });
 
   it.each([
@@ -142,19 +119,17 @@ describe("applyExclusiveSlotSelection", () => {
       }),
       selectedId: "memory",
       selectedKind: "memory",
-      registry: { plugins: [{ id: "memory", kind: "memory" }] },
     },
     {
       name: "skips changes when no exclusive slot applies",
       config: {} as OpenClawConfig,
       selectedId: "custom",
     },
-  ] as const)("$name", ({ config, selectedId, selectedKind, registry }) => {
+  ] as const)("$name", ({ config, selectedId, selectedKind }) => {
     const result = applyExclusiveSlotSelection({
       config,
       selectedId,
       ...(selectedKind ? { selectedKind } : {}),
-      ...(registry ? { registry: { plugins: [...registry.plugins] } } : {}),
     });
 
     expect(result.changed).toBe(false);
@@ -176,19 +151,12 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId: "dual-plugin",
       selectedKind: ["memory", "context-engine"],
-      registry: {
-        plugins: [
-          { id: "memory-core", kind: "memory" },
-          { id: "legacy", kind: "context-engine" },
-          { id: "dual-plugin", kind: ["memory", "context-engine"] },
-        ],
-      },
     });
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.slots?.memory).toBe("dual-plugin");
     expect(result.config.plugins?.slots?.contextEngine).toBe("dual-plugin");
-    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(false);
-    expect(result.config.plugins?.entries?.legacy?.enabled).toBe(false);
+    expect(result.config.plugins?.entries?.["memory-core"]?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.legacy?.enabled).toBe(true);
   });
 
   it("does not disable a dual-kind plugin that still owns another slot", () => {
@@ -204,21 +172,13 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId: "new-memory",
       selectedKind: "memory",
-      registry: {
-        plugins: [
-          { id: "dual-plugin", kind: ["memory", "context-engine"] },
-          { id: "new-memory", kind: "memory" },
-        ],
-      },
     });
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.slots?.memory).toBe("new-memory");
-    // dual-plugin still owns contextEngine — must NOT be disabled
-    expect(result.config.plugins?.entries?.["dual-plugin"]?.enabled).not.toBe(false);
+    expect(result.config.plugins?.entries?.["dual-plugin"]?.enabled).toBe(true);
   });
 
   it("does not disable a dual-kind plugin that owns another slot via default", () => {
-    // contextEngine is NOT explicitly set — defaults to "legacy"
     const config: OpenClawConfig = {
       plugins: {
         slots: { memory: "legacy" },
@@ -231,17 +191,10 @@ describe("applyExclusiveSlotSelection", () => {
       config,
       selectedId: "new-memory",
       selectedKind: "memory",
-      registry: {
-        plugins: [
-          { id: "legacy", kind: ["memory", "context-engine"] },
-          { id: "new-memory", kind: "memory" },
-        ],
-      },
     });
     expect(result.changed).toBe(true);
     expect(result.config.plugins?.slots?.memory).toBe("new-memory");
-    // legacy still owns contextEngine via default — must NOT be disabled
-    expect(result.config.plugins?.entries?.legacy?.enabled).not.toBe(false);
+    expect(result.config.plugins?.entries?.legacy?.enabled).toBe(true);
   });
 });
 

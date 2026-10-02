@@ -39,8 +39,20 @@ const enDesktop = {
     switchToViewOnly: "Switch to view only",
     viewOnly: "View only",
     control: "Control",
-    agentInputPaused:
-      "You control this desktop. Agent input is paused until you switch to view only.",
+    audio: {
+      unavailable: "Audio unavailable",
+      setupUnavailable:
+        "Desktop audio setup is unavailable. Ask the operator to check that pulseaudio and pulseaudio-utils are installed, then restart the managed desktop.",
+      reconnect: "Reconnect desktop for audio",
+      connecting: "Connecting desktop audio…",
+      unmute: "Unmute desktop audio",
+      mute: "Mute desktop audio",
+      blocked:
+        "Audio playback was blocked. Allow sound for this site, then click Unmute desktop audio again.",
+      unsupported:
+        "Desktop audio requires a browser with Web Audio support. Try a current browser.",
+      failed: "Desktop audio disconnected or could not start. Reconnect the desktop to try again.",
+    },
     keyboard: "Keyboard",
     keyboardInput: "Remote desktop keyboard input",
     touchControls: "Remote desktop controls",
@@ -56,12 +68,14 @@ const enDesktop = {
     reconnect: en.desktop.reconnect,
     passwordPrompt: "Enter the VNC password for this machine.",
     passwordLabel: "VNC password",
-    accountPrompt: "Enter a macOS account to authenticate Screen Sharing.",
+    accountPrompt:
+      "Enter a macOS account allowed in System Settings → General → Sharing. Remote Management also requires Observe/Control permissions.",
     usernameLabel: "macOS username",
     accountPasswordLabel: "macOS password",
     controlTaken: "Another operator took control",
     controlTakenBy: "{operator} took control",
     disconnected: "Desktop disconnected: {reason}",
+    disconnectedClean: "Desktop disconnected",
     closeCode: "connection closed with code {code}",
     unknownReason: "unknown reason",
     errors: {

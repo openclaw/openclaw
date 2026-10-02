@@ -8,9 +8,10 @@ export type PanelLoadingSkeletonVariant =
   | "chat"
   | "desktop"
   | "discussion"
+  | "document"
+  | "file-list"
   | "files"
   | "review"
-  | "tasks"
   | "terminal";
 
 class PanelLoadingSkeleton extends OpenClawLitElement {
@@ -343,7 +344,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
     `;
   }
 
-  private renderContent() {
+  override render() {
     switch (this.variant) {
       case "board":
         return html`
@@ -389,6 +390,16 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             </div>
           </div>
         `;
+      case "file-list":
+        return html`<div class="rows">${this.rows(5)}</div>`;
+      case "document":
+        return html`
+          <div class="skeleton file-heading medium"></div>
+          <div class="code">
+            ${this.line()} ${this.line()} ${this.line("medium")} ${this.line()}
+            ${this.line("short")}
+          </div>
+        `;
       case "review":
         return html`
           <div class="summary">
@@ -411,11 +422,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
             ${this.line("medium")} ${this.line()} ${this.line("short")} ${this.line("long")}
           </div>
         `;
-      case "tasks":
-        return html`
-          <div class="toolbar">${this.line("short")}</div>
-          <div class="rows">${this.rows(4)}</div>
-        `;
       default:
         return html`
           <div class="toolbar">
@@ -425,10 +431,6 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
           <div class="rows">${this.rows(5)}</div>
         `;
     }
-  }
-
-  override render() {
-    return html`${this.renderContent()}`;
   }
 }
 

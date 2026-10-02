@@ -17,6 +17,8 @@ export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
   cosineSimilarity,
+  encodeMemoryEmbedding,
+  decodeMemoryEmbedding,
   createMemorySearchDeadlineControl,
   extractProjectKeysFromCuratedEntry,
   DEFAULT_MEMORY_READ_LINES,
@@ -70,6 +72,7 @@ export {
   runWithConcurrency,
   splitCuratedMarkdownEntries,
   statRegularFile,
+  stopMemorySqliteWalMaintenance,
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 

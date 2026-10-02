@@ -3,35 +3,40 @@ import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "./channel.js";
 
 describe("telegram session route", () => {
-  it("scopes direct topic session suffixes by chat id", async () => {
-    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      target: "12345:topic:99",
-    });
+  it.each([
+    { accountId: undefined, base: "agent:main:main" },
+    { accountId: "work", base: "agent:main:telegram:work:direct" },
+  ])(
+    "keeps same direct topic ids distinct across chats for $accountId",
+    async ({ accountId, base }) => {
+      const first = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        accountId,
+        target: "12345:topic:99",
+      });
+      const second = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {},
+        agentId: "main",
+        accountId,
+        target: "67890:topic:99",
+      });
 
-    expect(route?.sessionKey).toBe("agent:main:main:thread:12345:99");
-    expect(route?.baseSessionKey).toBe("agent:main:main");
-    expect(route?.threadId).toBe(99);
-  });
-
-  it("keeps same direct topic ids distinct across chats", async () => {
-    const first = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      target: "12345:topic:99",
-    });
-    const second = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      target: "67890:topic:99",
-    });
-
-    expect(first?.sessionKey).toBe("agent:main:main:thread:12345:99");
-    expect(second?.sessionKey).toBe("agent:main:main:thread:67890:99");
-    expect(first?.threadId).toBe(99);
-    expect(second?.threadId).toBe(99);
-  });
+      expect(first?.sessionKey).toBe(
+        accountId
+          ? "agent:main:telegram:work:direct:12345:thread:12345:99"
+          : "agent:main:main:thread:12345:99",
+      );
+      expect(first?.baseSessionKey).toBe(accountId ? `${base}:12345` : base);
+      expect(second?.sessionKey).toBe(
+        accountId
+          ? "agent:main:telegram:work:direct:67890:thread:67890:99"
+          : "agent:main:main:thread:67890:99",
+      );
+      expect(first?.threadId).toBe(99);
+      expect(second?.threadId).toBe(99);
+    },
+  );
 
   it("returns native topic ids for username direct topic targets", async () => {
     const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
@@ -105,18 +110,26 @@ describe("telegram session route", () => {
     expect(route?.recipientSessionExact).toBe(true);
   });
 
-  it("uses inbound named-account isolation for direct sessions", async () => {
-    const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
-      cfg: {},
-      agentId: "main",
-      accountId: "work",
-      target: "12345",
-    });
+  it.each([
+    { defaultAccount: undefined, expected: "agent:main:telegram:work:direct:12345" },
+    { defaultAccount: "work", expected: "agent:main:main" },
+  ])(
+    "classifies direct sessions with defaultAccount=$defaultAccount",
+    async ({ defaultAccount, expected }) => {
+      const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
+        cfg: {
+          channels: { telegram: { defaultAccount, accounts: { work: {}, personal: {} } } },
+        },
+        agentId: "main",
+        accountId: "work",
+        target: "12345",
+      });
 
-    expect(route?.sessionKey).toBe("agent:main:telegram:work:direct:12345");
-    expect(route?.baseSessionKey).toBe("agent:main:telegram:work:direct:12345");
-    expect(route?.recipientSessionExact).toBe(true);
-  });
+      expect(route?.sessionKey).toBe(expected);
+      expect(route?.baseSessionKey).toBe(expected);
+      expect(route?.recipientSessionExact).toBe(true);
+    },
+  );
 
   it("keeps group topic ids in the group peer route instead of adding a thread suffix", async () => {
     const route = await telegramPlugin.messaging?.resolveOutboundSessionRoute?.({
@@ -148,6 +161,41 @@ describe("telegram session route", () => {
     expect(direct?.to).toBe("telegram:-100:direct-topic:99");
     expect(direct?.threadId).toBe(99);
     expect(forum?.sessionKey).toBe("agent:main:telegram:group:-100:topic:99");
+  });
+
+  it.each([
+    { rawId: "-1001:Topic:77", threadId: "77", target: "-1001:topic:77" },
+    {
+      rawId: "-1001:direct-topic:77",
+      threadId: "direct-topic:77",
+      target: "-1001:direct-topic:77",
+    },
+  ])("round-trips registered session topic $rawId", ({ rawId, threadId, target }) => {
+    const conversation = telegramPlugin.messaging?.resolveSessionConversation?.({
+      kind: "group",
+      rawId,
+    });
+    expect(conversation).toMatchObject({
+      id: "-1001",
+      threadId,
+      parentConversationCandidates: ["-1001"],
+    });
+    expect(
+      telegramPlugin.messaging?.resolveSessionTarget?.({
+        kind: "group",
+        id: conversation!.id,
+        threadId: conversation!.threadId,
+      }),
+    ).toBe(target);
+  });
+
+  it("keeps topicless sessions and username targets outside topic parsing", () => {
+    expect(
+      telegramPlugin.messaging?.resolveSessionConversation?.({ kind: "group", rawId: "-1001" }),
+    ).toBeNull();
+    expect(
+      telegramPlugin.messaging?.resolveSessionTarget?.({ kind: "channel", id: "@OpenClawTeam" }),
+    ).toBe("@OpenClawTeam");
   });
 
   it("skips unusable command candidates and preserves a later direct topic", () => {

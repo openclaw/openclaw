@@ -75,7 +75,8 @@ stability contract.
 ### Gateway version requirement
 
 The Gateway resolves short references at the session store owner, and the
-Control UI and CLI use the returned canonical key. Short links require a current
+Control UI and CLI use the returned canonical key and owning agent, including
+global sessions reached through a stale URL. Short links require a current
 Gateway. If an older or custom Gateway rejects the `shortId` selector, upgrade
 it or use a full session key.
 

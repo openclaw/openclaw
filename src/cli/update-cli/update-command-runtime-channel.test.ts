@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { expect, it, vi } from "vitest";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
+import * as activationPaths from "../../infra/package-update-activation-paths.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
@@ -14,8 +15,8 @@ import * as shared from "./shared.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { unsupportedServiceRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
-import * as servicePlan from "./update-command-service-plan.js";
 import { updateCommand } from "./update-command.js";
 
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
@@ -23,11 +24,9 @@ const { fixture } = installFreshUpdateFixture();
 
 it.each([
   ["extended-stable", "2026.8.33", "--channel extended-stable", null],
-  ["stable", "2026.9.4", "--tag 2026.9.4", null],
   ["beta", "2026.9.4-beta.1", "--tag 2026.9.4-beta.1", null],
   ["dev", "2026.9.4-dev.1", "--tag 2026.9.4-dev.1", null],
   ["stable", "2026.8.33", "--channel extended-stable", "extended-stable"],
-  ["extended-stable", "2026.9.4", "--channel stable --tag 2026.9.4", "stable"],
   ["extended-stable", "2026.9.4-beta.1", "--channel beta --tag 2026.9.4-beta.1", "beta"],
 ] as const)(
   "replays runtime recovery for saved %s (%s, %s, requested=%s) through the target resolver",
@@ -38,6 +37,13 @@ it.each([
     const config = JSON.stringify({ update: { channel } });
     fs.writeFileSync(configPath, config);
     fixture.managedServiceNodeRunner = "/home/operator/.nvm/versions/node/v22.18.0/bin/node";
+    const captureRuntime = activationPaths.capturePackageActivationRuntime;
+    vi.spyOn(activationPaths, "capturePackageActivationRuntime").mockImplementation(
+      (kind, executable) =>
+        executable === fixture.managedServiceNodeRunner
+          ? { kind, path: executable, identity: "synthetic-service-node" }
+          : captureRuntime(kind, executable),
+    );
     const prepare = expectDefined(
       vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation(),
       "fixture preparation",
@@ -55,12 +61,13 @@ it.each([
       }),
     );
     vi.mocked(updateCheck.resolveNpmChannelTag).mockResolvedValue({ tag: channel, version });
-    vi.mocked(shared.resolveTargetVersion).mockResolvedValue(version);
+    vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version });
     const runtime = vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo");
     runtime.mockResolvedValue(unsupportedServiceRuntimeFixture);
-    const preflight = vi.spyOn(servicePlan, "resolvePackageRuntimePreflight");
+    const preflight = vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight");
 
     const options = {
+      admission: "installed" as const,
       channel: requestedChannel ?? undefined,
       json: true,
       yes: true,

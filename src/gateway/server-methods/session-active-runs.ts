@@ -12,7 +12,7 @@ import {
   type ProjectedAgentRunIndex,
 } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
+import { chatRunBelongsToAgent, resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Active-run matcher including hidden remote lifecycle projections. */
@@ -91,14 +91,10 @@ function isTrackedActiveSessionRunForKey(
   if (!requestedAgentId) {
     return false;
   }
-  const activeAgentId = resolveChatRunOwnerAgentId({
-    agentId: active.agentId,
-    sessionKey: active.sessionKey,
-    defaultAgentId,
-  });
-  return activeAgentId
-    ? normalizeAgentId(activeAgentId) === normalizeAgentId(requestedAgentId)
-    : false;
+  return chatRunBelongsToAgent(
+    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
+    requestedAgentId,
+  );
 }
 
 function isTrackedActiveSessionRunForSessionId(
@@ -114,12 +110,9 @@ function isTrackedActiveSessionRunForSessionId(
   if (!requestedAgentId) {
     return false;
   }
-  return (
-    resolveChatRunOwnerAgentId({
-      agentId: active.agentId,
-      sessionKey: active.sessionKey,
-      defaultAgentId,
-    }) === normalizeAgentId(requestedAgentId)
+  return chatRunBelongsToAgent(
+    { agentId: active.agentId, sessionKey: active.sessionKey, defaultAgentId },
+    requestedAgentId,
   );
 }
 
@@ -150,24 +143,22 @@ export function hasTrackedActiveSessionRun(params: {
   canonicalKey: string;
   agentId?: string;
   defaultAgentId?: string;
-  excludeRunIds?: ReadonlySet<string>;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context);
   return activeRuns.some(
     (active) =>
-      !params.excludeRunIds?.has(active.runId) &&
-      (isTrackedActiveSessionRunForKey(
+      isTrackedActiveSessionRunForKey(
         active,
         params.canonicalKey,
         params.agentId,
         params.defaultAgentId,
       ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          params.agentId,
-          params.defaultAgentId,
-        )),
+      isTrackedActiveSessionRunForKey(
+        active,
+        params.requestedKey,
+        params.agentId,
+        params.defaultAgentId,
+      ),
   );
 }
 

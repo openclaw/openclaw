@@ -1,9 +1,9 @@
-// Memory Wiki plugin module implements log behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile } from "openclaw/plugin-sdk/security-runtime";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { listMemoryWikiPagePaths } from "./bounded-walk.js";
 
 type MemoryWikiLogEntry = {
   type: "init" | "vault-generation" | "ingest" | "okf-import" | "compile" | "lint";
@@ -68,37 +68,20 @@ export async function loadMemoryWikiVaultIdentity(
   for (const line of raw.split(/\r?\n/)) {
     try {
       const parsed = JSON.parse(line) as MemoryWikiLogEntry;
-      const candidateVaultGeneration = parsed.details?.[VAULT_GENERATION_FIELD];
-      if (
-        !vaultGeneration &&
-        typeof candidateVaultGeneration === "string" &&
-        candidateVaultGeneration.trim()
-      ) {
-        vaultGeneration = candidateVaultGeneration.trim();
-      }
-      const candidateReservationId = parsed.details?.[COMPILED_CACHE_RESERVATION_ID_FIELD];
-      const normalizedReservationId =
-        typeof candidateReservationId === "string" && candidateReservationId.trim()
-          ? candidateReservationId.trim()
-          : undefined;
-      const candidateCompiledCachePublicationId =
-        parsed.details?.[COMPILED_CACHE_PUBLICATION_ID_FIELD];
-      if (
-        typeof candidateCompiledCachePublicationId === "string" &&
-        candidateCompiledCachePublicationId.trim()
-      ) {
+      vaultGeneration ??= normalizeOptionalString(parsed.details?.[VAULT_GENERATION_FIELD]) ?? null;
+      const normalizedReservationId = normalizeOptionalString(
+        parsed.details?.[COMPILED_CACHE_RESERVATION_ID_FIELD],
+      );
+      const candidateCompiledCachePublicationId = normalizeOptionalString(
+        parsed.details?.[COMPILED_CACHE_PUBLICATION_ID_FIELD],
+      );
+      if (candidateCompiledCachePublicationId) {
         const candidateParent = parsed.details?.[COMPILED_CACHE_PARENT_PUBLICATION_ID_FIELD];
         const normalizedParent =
-          candidateParent === null
-            ? null
-            : typeof candidateParent === "string" && candidateParent.trim()
-              ? candidateParent.trim()
-              : undefined;
-        const candidateSourceGeneration = parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD];
-        const normalizedSourceGeneration =
-          typeof candidateSourceGeneration === "string" && candidateSourceGeneration.trim()
-            ? candidateSourceGeneration.trim()
-            : undefined;
+          candidateParent === null ? null : normalizeOptionalString(candidateParent);
+        const normalizedSourceGeneration = normalizeOptionalString(
+          parsed.details?.[COMPILED_CACHE_SOURCE_GENERATION_FIELD],
+        );
         // A commit must reference both the prior publication and a reservation
         // already present in the log; it cannot recreate either after rollback.
         if (
@@ -106,7 +89,7 @@ export async function loadMemoryWikiVaultIdentity(
           normalizedReservationId === compiledCacheReservationId &&
           normalizedSourceGeneration
         ) {
-          compiledCachePublicationId = candidateCompiledCachePublicationId.trim();
+          compiledCachePublicationId = candidateCompiledCachePublicationId;
           compiledCacheSourceGeneration = normalizedSourceGeneration;
         }
       } else if (normalizedReservationId) {
@@ -127,29 +110,20 @@ export async function loadMemoryWikiVaultIdentity(
 export async function resolveMemoryWikiVaultSourceGeneration(vaultRoot: string): Promise<string> {
   const files = (
     await Promise.all(
-      COMPILED_SOURCE_DIRECTORIES.map(async (relativeDir) => {
-        const entries = await walkMemoryWikiDirectory(vaultRoot, relativeDir);
-        return entries
-          .filter((entry) => entry.kind === "file" && entry.relativePath.endsWith(".md"))
-          .map((entry) => {
-            return {
-              absolutePath: path.join(vaultRoot, entry.relativePath),
-              relativePath: entry.relativePath.split(path.sep).join("/"),
-            };
-          })
-          .filter((entry) => path.basename(entry.relativePath) !== "index.md");
-      }),
+      COMPILED_SOURCE_DIRECTORIES.map((relativeDir) =>
+        listMemoryWikiPagePaths(vaultRoot, relativeDir),
+      ),
     )
   )
     .flat()
-    .toSorted((left, right) => left.relativePath.localeCompare(right.relativePath));
+    .toSorted((left, right) => left.localeCompare(right));
   const hash = createHash("sha256");
   for (const file of files) {
-    const relativePath = Buffer.from(file.relativePath);
+    const relativePath = Buffer.from(file);
     const pathLength = Buffer.allocUnsafe(4);
     pathLength.writeUInt32BE(relativePath.byteLength);
     const contentDigest = createHash("sha256")
-      .update(await fs.readFile(file.absolutePath))
+      .update(await fs.readFile(path.join(vaultRoot, file)))
       .digest();
     hash.update(pathLength).update(relativePath).update(contentDigest);
   }

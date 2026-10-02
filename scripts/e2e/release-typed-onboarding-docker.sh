@@ -9,7 +9,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TARGET_ROOT_DIR="$(cd "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}" && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
-source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
 source "$ROOT_DIR/scripts/e2e/lib/prepublish-plugin-registry.sh"
 source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
 

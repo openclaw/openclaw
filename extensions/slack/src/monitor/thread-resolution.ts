@@ -74,13 +74,13 @@ async function resolveThreadTsFromHistory(params: {
   channelId: string;
   messageTs: string;
 }) {
-  const response = (await params.client.conversations.history({
+  const response = await params.client.conversations.history({
     channel: params.channelId,
     latest: params.messageTs,
     oldest: params.messageTs,
     inclusive: true,
     limit: 1,
-  })) as { messages?: Array<{ ts?: string; thread_ts?: string }> };
+  });
   const message =
     response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
   return normalizeThreadTs(message?.thread_ts);
@@ -101,19 +101,16 @@ export function createSlackThreadTsResolver(params: {
     if (!entry) {
       return undefined;
     }
-    if (entry.expiresAt === 0) {
-      cache.delete(key);
-      cache.set(key, entry);
-      return entry.threadTs;
-    }
-    const normalizedNow = asDateTimestampMs(now);
-    if (
-      normalizedNow === undefined ||
-      asDateTimestampMs(entry.expiresAt) === undefined ||
-      entry.expiresAt <= normalizedNow
-    ) {
-      cache.delete(key);
-      return undefined;
+    if (entry.expiresAt !== 0) {
+      const normalizedNow = asDateTimestampMs(now);
+      if (
+        normalizedNow === undefined ||
+        asDateTimestampMs(entry.expiresAt) === undefined ||
+        entry.expiresAt <= normalizedNow
+      ) {
+        cache.delete(key);
+        return undefined;
+      }
     }
     cache.delete(key);
     cache.set(key, entry);

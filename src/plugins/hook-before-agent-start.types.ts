@@ -1,4 +1,3 @@
-// before_model_resolve hook
 export type PluginHookBeforeModelResolveAttachment = {
   kind: "image" | "video" | "audio" | "document" | "other";
   mimeType?: string;
@@ -18,7 +17,6 @@ export type PluginHookBeforeModelResolveResult = {
   providerOverride?: string;
 };
 
-// before_prompt_build hook
 export type PluginHookBeforePromptBuildEvent = {
   prompt: string;
   /** Current request before projection. Empty means no textual request; omission is legacy. */

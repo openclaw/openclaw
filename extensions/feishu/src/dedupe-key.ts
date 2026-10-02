@@ -7,10 +7,6 @@ import { parsePostContent } from "./post.js";
 
 type FeishuMessageDedupeInput = Pick<FeishuMessageEvent, "message" | "sender">;
 
-function readExternalKey(value: unknown): string | undefined {
-  return normalizeFeishuExternalKey(typeof value === "string" ? value : "");
-}
-
 function parseContentRecord(content: string): Record<string, unknown> | null {
   try {
     return readRecord(JSON.parse(content));
@@ -19,13 +15,11 @@ function parseContentRecord(content: string): Record<string, unknown> | null {
   }
 }
 
-function buildMediaDedupeKey(messageId: string, mediaParts: string[]): string {
-  return JSON.stringify([messageId, ...mediaParts]);
-}
-
 function resolvePostMediaParts(content: string): string[] {
-  const { attachments } = parsePostContent(content);
-  // Replay keys live for 24 hours across restarts; keep their shipped grouped order and duplicates.
+  const { attachments } = parsePostContent(content, { includeTopLevelFiles: false });
+  // Replay keys live for 24 hours across restarts; keep their shipped grouped
+  // order and duplicates. Top-level post files[] belong to download only;
+  // including them here would invalidate pre-upgrade captioned-post records.
   return (["image", "file"] as const).flatMap((kind) =>
     attachments
       .filter((attachment) => attachment.kind === kind)
@@ -43,8 +37,8 @@ function resolveMessageMediaParts(messageType: string, content: string): string[
     return [];
   }
 
-  const imageKey = readExternalKey(parsed.image_key);
-  const fileKey = readExternalKey(parsed.file_key);
+  const imageKey = normalizeFeishuExternalKey(parsed.image_key);
+  const fileKey = normalizeFeishuExternalKey(parsed.file_key);
   switch (messageType) {
     case "image":
       return imageKey ? [`image_key:${imageKey}`] : [];
@@ -52,9 +46,6 @@ function resolveMessageMediaParts(messageType: string, content: string): string[
     case "audio":
     case "sticker":
       return fileKey ? [`file_key:${fileKey}`] : [];
-    case "video":
-    case "media":
-      return fileKey ? [`file_key:${fileKey}`] : imageKey ? [`image_key:${imageKey}`] : [];
     default:
       return fileKey ? [`file_key:${fileKey}`] : imageKey ? [`image_key:${imageKey}`] : [];
   }
@@ -104,10 +95,18 @@ export function resolveFeishuMessageDedupeKey(event: FeishuMessageDedupeInput): 
   const messageType = event.message.message_type.trim();
   const mediaParts = resolveMessageMediaParts(messageType, event.message.content);
   if (mediaParts.length > 0) {
-    return buildMediaDedupeKey(messageId, mediaParts);
+    return JSON.stringify([messageId, ...mediaParts]);
   }
   if (messageType === "text") {
     return resolveTextRetryDedupeKey(event) ?? messageId;
+  }
+  if (messageType === "post") {
+    const retryKey = resolveTextRetryDedupeKey(event);
+    if (!retryKey) {
+      return messageId;
+    }
+    const topicId = event.message.root_id?.trim() || event.message.thread_id?.trim();
+    return topicId ? JSON.stringify([retryKey, topicId]) : retryKey;
   }
   return messageId;
 }
