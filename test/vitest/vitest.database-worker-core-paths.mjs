@@ -11,6 +11,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/status/status-plugin-health.runtime.test.ts",
   "src/status/status-plugin-health.installed.test.ts",
   "src/agents/tool-schema-quarantine.test.ts",
+  "src/agents/sessions/session-manager.anchor-dedup-3state.test.ts",
+
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-recovery.test.ts",
   "src/agents/embedded-agent-runner/run.compaction-runtime.test.ts",

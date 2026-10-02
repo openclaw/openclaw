@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Resolves the effective parent for a transcript message append inside the write transaction. */
 import { sql } from "kysely";
 import {
@@ -11,6 +12,7 @@ import type {
   TranscriptMessageAppendOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { walkSessionCurrentTurn } from "./session-entry-navigation.js";
 import { projectTranscriptNavigationSql } from "./session-model-context-projection.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -254,6 +256,91 @@ export function isTranscriptEntryOnActivePathInTransaction(
     readTranscriptNavigationEvents(database, sessionId),
     entryId,
   );
+}
+
+/**
+ * Durable mirror of the manager's in-memory current-turn walk
+ * (`resolveCurrentTurnEntryId`): walk up from the canonical append cursor, skipping the
+ * same traversable metadata/compaction/runtime-context rows, and return the first
+ * non-traversable entry id -- the canonical current turn. Visible-path membership alone
+ * is insufficient: an ancestor user turn whose turn another manager completed still sits
+ * on the visible path, but it is no longer the current turn.
+ */
+export function resolveTranscriptCanonicalCurrentTurnEntryIdInTransaction(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  sessionId: string,
+): string | null {
+  const tree = scanSessionTranscriptTree(readCurrentTurnNavigationEvents(database, sessionId));
+  const walk = walkSessionCurrentTurn(tree.appendParentId, PREPARED_ASSISTANT_MAX_ANCESTORS);
+  let next = walk.next();
+  while (!next.done) {
+    const id = next.value;
+    const node = id ? tree.byId.get(id) : undefined;
+    const facts = node
+      ? {
+          id: node.id,
+          parentId: node.parentId,
+          traversable: isTranscriptNavigationRowTraversable(node.entry),
+        }
+      : undefined;
+    next = walk.next(facts);
+  }
+  return next.value;
+}
+
+/**
+ * Like readTranscriptNavigationEvents but additionally retains `customType`, which the shared
+ * navigation projection strips. The current-turn traversability rules must classify
+ * `custom_message` rows by customType (runtime-context is traversable); without it every
+ * custom_message would look like a non-traversable turn boundary.
+ */
+function readCurrentTurnNavigationEvents(
+  database: Pick<OpenClawAgentDatabase, "db" | "path">,
+  sessionId: string,
+): unknown[] {
+  const db = getSessionKysely(database.db);
+  return Array.from(
+    iterateSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_events")
+        .select(
+          /* kysely-allow-raw: current-turn walk needs the customType discriminator plus tree facts. */ sql<string>`json_set(
+            ${projectTranscriptNavigationSql(transcriptEventNavigationSql())},
+            '$.customType',
+            json_extract(${transcriptEventNavigationSql()}, '$.customType')
+          )`.as("event_json"),
+        )
+        .where("session_id", "=", sessionId)
+        .orderBy("seq", "asc"),
+    ),
+    (row) => JSON.parse(row.event_json) as unknown,
+  );
+}
+
+/**
+ * Mirrors `isSessionContextMetadataEntry` + the manager current-turn walk traversability for
+ * a durable navigation row (committed events have no in-memory interrupted-tail view).
+ */
+function isTranscriptNavigationRowTraversable(record: unknown): boolean {
+  if (!isRecord(record)) {
+    return false;
+  }
+  switch (record.type) {
+    case "thinking_level_change":
+    case "model_change":
+    case "custom":
+    case "label":
+    case "session_info":
+    case "compaction":
+      return true;
+    case "custom_message":
+      // OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE ("openclaw.runtime-context") rows are
+      // context metadata, not a turn boundary.
+      return record.customType === "openclaw.runtime-context";
+    default:
+      return false;
+  }
 }
 
 function transcriptEntryIsAncestor(

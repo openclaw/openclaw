@@ -1,5 +1,5 @@
 import {
-  readActiveTranscriptEntryAnchor,
+  readActiveTranscriptEntryAnchorStatus,
   readTranscriptMutationAtSync,
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
@@ -556,18 +556,45 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         "idempotencyKey" in current.message &&
         current.message.idempotencyKey === message.idempotencyKey
       ) {
-        const anchor = this.persistenceTarget
-          ? readActiveTranscriptEntryAnchor({ ...this.persistenceTarget, entryId: current.id })
-          : undefined;
-        if (this.persistenceTarget && !anchor) {
-          throw new Error(`Session transcript anchor was not returned: ${current.id}`);
+        // Detached managers have no durable store to certify against; dedup is purely
+        // in-memory here, so return the existing turn without an anchor.
+        if (!this.persistenceTarget) {
+          return {
+            entryId: current.id,
+            message: current.message,
+            appended: false,
+          };
         }
-        return {
+        // Read the anchor and the reconcile state in a single DB snapshot so we can tell
+        // apart the two ways an anchor can be missing.
+        const { anchor, indexDirty, cachedIdentityExists } = readActiveTranscriptEntryAnchorStatus({
+          ...this.persistenceTarget,
           entryId: current.id,
-          message: current.message,
-          ...(anchor ? { anchor } : {}),
-          appended: false,
-        };
+        });
+        if (anchor) {
+          return {
+            entryId: current.id,
+            message: current.message,
+            anchor,
+            appended: false,
+          };
+        }
+        // (a) Transiently dirty projection index (#152511): a concurrent side-append marks
+        // the index dirty for ~0.5-10s. Hard-throwing there turned a benign duplicate
+        // delivery into "Session transcript anchor was not returned". Degrade to an
+        // idempotent no-op without a certifying anchor.
+        if (indexDirty && cachedIdentityExists) {
+          return {
+            entryId: current.id,
+            message: current.message,
+            appended: false,
+          };
+        }
+        // (b) Clean index but the cached current turn has no active row: another writer
+        // removed/rewrote it (stale cache). Do NOT false-acknowledge a non-existent turn --
+        // preserve the rejection. The distinct canonical-adoption invariant in
+        // session-manager-persistence.ts (result.messageId !== entry.id) remains untouched.
+        throw new Error(`Session transcript anchor was not returned: ${current.id}`);
       }
     }
     const entry: SessionMessageEntry = {
