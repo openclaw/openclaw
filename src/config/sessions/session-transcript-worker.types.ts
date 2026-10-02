@@ -17,7 +17,6 @@ import type {
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
-import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-contract.js";
 import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
@@ -72,7 +71,10 @@ import type {
   SessionEntryCurrentSource,
 } from "./session-entry-current.types.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
-import type { PublishedSessionTranscriptArchive } from "./session-history-archive-pruning.types.js";
+import type {
+  PublishedSessionTranscriptArchive,
+  SessionArchivePruningRead,
+} from "./session-history-archive-pruning.types.js";
 import type {
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
@@ -480,11 +482,8 @@ type SessionArchivePresenceWorkerInput = TranscriptArchivePresenceRead & {
   kind: "session-archive-presence";
 };
 
-export type SessionArchivePruningWorkerInput = {
+export type SessionArchivePruningWorkerInput = SessionArchivePruningRead & {
   kind: "session-archive-pruning";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-  expectedIdentity: AgentDatabaseExecutionFileIdentity;
 };
 
 type SessionHistoricalEvictionCandidatesWorkerInput = {
@@ -562,7 +561,7 @@ export type SessionTranscriptWorkerValues = {
   );
   "session-archive-pruning": {
     kind: "session-archive-pruning";
-    result: PublishedSessionTranscriptArchive | null;
+    result: PublishedSessionTranscriptArchive[];
   };
   "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };

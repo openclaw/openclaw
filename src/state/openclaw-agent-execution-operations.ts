@@ -208,6 +208,10 @@ export async function loadAgentPendingInputOperations() {
 export async function loadAgentArchivePruningOperations() {
   const kernel = await import("../config/sessions/session-history-archive-pruning.worker.js");
   return {
+    "session.archivePruning.pruneRetention": (
+      input: Parameters<typeof kernel.pruneSessionArchivesByRetentionInDatabase>[2],
+      { open, options, admit },
+    ) => kernel.pruneSessionArchivesByRetentionInDatabase(open(), options, input, admit),
     "session.archivePruning.deletePublished": (
       input: Parameters<typeof kernel.deletePublishedSessionArchiveInDatabase>[2],
       { open, options, admit },
