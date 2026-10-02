@@ -19,7 +19,11 @@ export async function preserveGatewayAuthTokenForService(params: {
   const provider = resolveDefaultSecretProviderAlias(params.cfg, "store", {
     preferFirstProviderForSource: true,
   });
-  for (const entry of listSecretStoreEntries({ scope, database })) {
+  for (const entry of await listSecretStoreEntries({
+    scope,
+    database,
+    assertCurrent: params.assertCurrent,
+  })) {
     const stored = readSecretStoreValue({ scope, database, name: entry.name });
     if (!stored.ok) {
       if (stored.error.code === "SECRET_STORE_NOT_FOUND") {
