@@ -2341,23 +2341,19 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
   });
 
   it("does not impose a second aggregate timeout on delegated native compaction", async () => {
-    const { markRuntimeCompactionDelegate } =
+    const { compactionWatchdogResets } =
       await import("../../context-engine/compaction-watchdog.js");
     const started = createDeferred<() => void>();
     const terminal = createDeferred<Awaited<ReturnType<ContextEngine["compact"]>>>();
-    // Mark only this invocation's delegate; shared mockReset does not clear WeakSet identity.
-    const compact = markRuntimeCompactionDelegate(
-      vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
-        const resetTimeout = runtimeContext?.compactionTimeoutReset;
-        if (typeof resetTimeout !== "function") {
-          throw new Error("Delegated compaction must receive its progress reset callback");
-        }
-        started.resolve(() => {
-          resetTimeout();
-        });
-        return await terminal.promise;
-      }),
-    );
+    // Stand in for the runtime delegate: it finds the reset through the host signal.
+    const compact = vi.fn<ContextEngine["compact"]>(async ({ abortSignal }) => {
+      const resetTimeout = abortSignal && compactionWatchdogResets.get(abortSignal);
+      if (!resetTimeout) {
+        throw new Error("Delegated compaction must receive its progress reset callback");
+      }
+      started.resolve(resetTimeout);
+      return await terminal.promise;
+    });
     resolveContextEngineMock.mockResolvedValue({
       info: { ownsCompaction: false },
       compact,

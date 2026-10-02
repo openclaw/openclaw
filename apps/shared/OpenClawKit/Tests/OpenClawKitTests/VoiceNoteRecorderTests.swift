@@ -416,7 +416,6 @@ final class VoiceNoteRecorderTests: XCTestCase {
         let control = OpenClawChatVoiceNoteControl(recorder: recorder, isTalkActive: false)
         let button = OpenClawVoiceNoteButton(
             control: control,
-            compact: false,
             isComposerEnabled: true,
             isAttachmentInputEnabled: false)
 

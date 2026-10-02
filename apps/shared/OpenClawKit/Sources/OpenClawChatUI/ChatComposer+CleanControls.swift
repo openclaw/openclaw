@@ -134,17 +134,17 @@ extension OpenClawChatComposer {
                 }
                 if !sections.pinned.isEmpty {
                     Section("Pinned") {
-                        self.cleanInlineModelOptions(sections.pinned)
+                        self.modelOptions(sections.pinned, showsDefaultBadge: false)
                     }
                 }
                 if !sections.recent.isEmpty {
                     Section("Recent") {
-                        self.cleanInlineModelOptions(sections.recent)
+                        self.modelOptions(sections.recent, showsDefaultBadge: false)
                     }
                 }
                 ForEach(sections.providers) { provider in
                     Section(provider.displayName) {
-                        self.cleanInlineModelOptions(provider.models)
+                        self.modelOptions(provider.models, showsDefaultBadge: false)
                     }
                 }
             }
@@ -228,18 +228,6 @@ extension OpenClawChatComposer {
                 .contentShape(Rectangle())
         }
         #endif
-    }
-
-    private func cleanInlineModelOptions(_ models: [OpenClawChatModelChoice]) -> some View {
-        ForEach(models) { model in
-            let unavailable = self.viewModel.modelUnavailableDescription(model)
-            self.modelMenuOption(
-                [model.displayLabel, model.capabilityDescription, unavailable].compactMap(\.self)
-                    .filter { !$0.isEmpty }.joined(separator: " — "),
-                selectionID: model.selectionID)
-                .disabled(unavailable != nil)
-                .accessibilityHint(unavailable ?? "")
-        }
     }
 
     private var cleanInlineEffortMenu: some View {

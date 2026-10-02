@@ -150,23 +150,18 @@ extension OpenClawChatViewModel {
             : nil
         let next: String
         do {
-            let created = if let routeLease {
-                try await routeLease.createSession(
-                    key: requested,
-                    label: nil,
-                    agentID: requestedAgentID,
-                    parentSessionKey: parentSessionKey,
-                    worktree: worktree ? true : nil,
-                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+            let create: OpenClawChatNewSessionRouteLease.CreateSession = if let routeLease {
+                routeLease.createSession
             } else {
-                try await self.transport.createSession(
-                    key: requested,
-                    label: nil,
-                    agentID: requestedAgentID,
-                    parentSessionKey: parentSessionKey,
-                    worktree: worktree ? true : nil,
-                    worktreeBaseRef: worktree ? worktreeBaseRef : nil)
+                self.transport.createSession
             }
+            let created = try await create(
+                requested,
+                nil,
+                requestedAgentID,
+                parentSessionKey,
+                worktree ? true : nil,
+                worktree ? worktreeBaseRef : nil)
             let createdKey = created.key.trimmingCharacters(in: .whitespacesAndNewlines)
             next = createdKey.isEmpty ? requested : createdKey
         } catch {

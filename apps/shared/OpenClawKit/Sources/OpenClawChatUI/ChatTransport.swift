@@ -1455,7 +1455,7 @@ public enum OpenClawChatSessionRoutingContract {
         serverSupportsGuard: Bool) -> String?
     {
         guard serverSupportsGuard else { return nil }
-        return self.normalize(contract)
+        return contract?.trimmedNonEmpty?.lowercased()
     }
 
     public static func make(
@@ -1463,9 +1463,9 @@ public enum OpenClawChatSessionRoutingContract {
         mainKey: String?,
         defaultAgentID: String?) -> String?
     {
-        let normalizedScope = self.normalize(scope)
-        let normalizedMainKey = self.normalize(mainKey)
-        let normalizedDefaultAgentID = self.normalize(defaultAgentID)
+        let normalizedScope = scope?.trimmedNonEmpty?.lowercased()
+        let normalizedMainKey = mainKey?.trimmedNonEmpty?.lowercased()
+        let normalizedDefaultAgentID = defaultAgentID?.trimmedNonEmpty?.lowercased()
         guard let normalizedScope, let normalizedMainKey, let normalizedDefaultAgentID else { return nil }
         return "\(normalizedScope)|\(normalizedMainKey)|\(normalizedDefaultAgentID)"
     }
@@ -1473,7 +1473,7 @@ public enum OpenClawChatSessionRoutingContract {
     /// Scope and agent ids cannot contain `|`; parse from both ends so an
     /// older custom main key containing the delimiter still round-trips.
     public static func parse(_ contract: String?) -> Components? {
-        guard let normalized = normalize(contract),
+        guard let normalized = contract?.trimmedNonEmpty?.lowercased(),
               let firstSeparator = normalized.firstIndex(of: "|"),
               let lastSeparator = normalized.lastIndex(of: "|"),
               firstSeparator != lastSeparator
@@ -1483,11 +1483,6 @@ public enum OpenClawChatSessionRoutingContract {
         let defaultAgentID = String(normalized[normalized.index(after: lastSeparator)...])
         guard !scope.isEmpty, !mainKey.isEmpty, !defaultAgentID.isEmpty else { return nil }
         return Components(scope: scope, mainKey: mainKey, defaultAgentID: defaultAgentID)
-    }
-
-    private static func normalize(_ value: String?) -> String? {
-        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
     }
 }
 

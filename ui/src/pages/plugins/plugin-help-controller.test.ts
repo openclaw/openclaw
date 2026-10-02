@@ -7,6 +7,15 @@ import { PluginHelpController } from "./plugin-help-controller.ts";
 import type { PluginsPageViewModel } from "./plugins-page-view.ts";
 import type { PluginSettingsField } from "./settings-editor.ts";
 
+function createController() {
+  return new PluginHelpController({
+    addController: vi.fn(),
+    removeController: vi.fn(),
+    requestUpdate: vi.fn(),
+    updateComplete: Promise.resolve(true),
+  });
+}
+
 afterEach(() => {
   window.history.replaceState({}, "", "/");
   vi.restoreAllMocks();
@@ -17,12 +26,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
   async (change) => {
     const { context, setPathname, setGatewayToken } = createContext(vi.fn());
     setPathname("/settings/plugins/first");
-    const controller = new PluginHelpController({
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    });
+    const controller = createController();
     const model = (id: string) =>
       ({
         context,
@@ -65,12 +69,7 @@ it.each(["plugin", "route", "connection", "disconnect"])(
 it("publishes the local plugin identity when its catalog entry has no package name", () => {
   const { context, setPathname } = createContext(vi.fn());
   setPathname("/plugins/local-entry");
-  const controller = new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
+  const controller = createController();
   controller.update({
     context,
     connected: true,
@@ -91,12 +90,7 @@ it("publishes the local plugin identity when its catalog entry has no package na
 it("publishes catalog declarations without turning a provider into a tool", () => {
   const { context, setPathname } = createContext(vi.fn());
   setPathname("/plugins/video");
-  const controller = new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
+  const controller = createController();
   controller.update({
     context,
     connected: true,
@@ -151,12 +145,7 @@ it.each([
   async ({ path, label, value, expected, sensitive }) => {
     const { context, setPathname } = createContext(vi.fn());
     setPathname("/settings/plugins/workboard");
-    const controller = new PluginHelpController({
-      addController: vi.fn(),
-      removeController: vi.fn(),
-      requestUpdate: vi.fn(),
-      updateComplete: Promise.resolve(true),
-    });
+    const controller = createController();
     controller.update({
       context,
       connected: true,
@@ -185,12 +174,7 @@ it.each([
 it("keeps catalog declarations while the installed inspection is pending", () => {
   const { context, setPathname } = createContext(vi.fn());
   setPathname("/plugins/workboard");
-  const controller = new PluginHelpController({
-    addController: vi.fn(),
-    removeController: vi.fn(),
-    requestUpdate: vi.fn(),
-    updateComplete: Promise.resolve(true),
-  });
+  const controller = createController();
   const model = {
     context,
     connected: true,

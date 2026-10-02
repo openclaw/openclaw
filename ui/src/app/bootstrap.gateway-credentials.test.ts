@@ -23,6 +23,7 @@ function setNativeAuth(auth: { gatewayUrl: string; token?: string; password?: st
 }
 
 beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
   vi.stubGlobal("localStorage", createStorageMock());
   vi.stubGlobal("sessionStorage", createStorageMock());
 });

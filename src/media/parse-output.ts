@@ -267,6 +267,23 @@ function findQuotedMediaReferenceEnd(payload: string, start: number, quote: stri
   return -1;
 }
 
+// A reply that serializes its references into a JSON array states each one with the same quote pair the
+// scan below already reads, so the wrapper comes off first and the members are read as a list. Only a whole
+// `[…]` qualifies: an unquoted payload still reports no list, and one bracketed reference reports no list
+// either, so `MEDIA:["/tmp/a.png"]` keeps `main`'s whole-payload reading and its salvage of a path followed
+// by serialized JSON.
+function stripSerializedJsonArrayWrapper(payload: string): string {
+  const trimmed = payload.trim();
+  if (
+    trimmed.length < 2 ||
+    trimmed.charAt(0) !== "[" ||
+    trimmed.charAt(trimmed.length - 1) !== "]"
+  ) {
+    return payload;
+  }
+  return trimmed.slice(1, -1);
+}
+
 // The references a payload lists, when every token in it is an explicitly quoted reference and there are
 // at least two of them; `null` otherwise, which sends the caller back to `main`'s reading. Counting
 // tokens is too weak a test for a list: `MEDIA:'/tmp/parents' photos/photo.png'` also starts and ends
@@ -280,7 +297,8 @@ function findQuotedMediaReferenceEnd(payload: string, start: number, quote: stri
 // A member of a list is a reference in its own right, so the caller validates it with the same contract a
 // standalone quoted reference gets — bare filenames included, since `MEDIA:"image.png"` is accepted on its
 // own — and a member the caller rejects stays out of its neighbours rather than being welded into one.
-function readQuotedMediaReferenceList(payload: string): string[] | null {
+function readQuotedMediaReferenceList(rawPayload: string): string[] | null {
+  const payload = stripSerializedJsonArrayWrapper(rawPayload);
   const tokens: string[] = [];
   let index = 0;
   while (index < payload.length) {
