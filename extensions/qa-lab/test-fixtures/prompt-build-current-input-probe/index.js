@@ -7,13 +7,10 @@ export default {
   register(api) {
     api.on("before_prompt_build", (event, ctx) => {
       captures.beforePromptBuild.push({
-        keys: Object.keys(event).sort(),
-        hasCurrentUserMessage: Object.prototype.hasOwnProperty.call(event, "currentUserMessage"),
+        keys: Object.keys(event).toSorted(),
+        hasCurrentUserMessage: Object.hasOwn(event, "currentUserMessage"),
         currentUserMessage: event.currentUserMessage ?? null,
-        hasCurrentUserMessageId: Object.prototype.hasOwnProperty.call(
-          event,
-          "currentUserMessageId",
-        ),
+        hasCurrentUserMessageId: Object.hasOwn(event, "currentUserMessageId"),
         currentUserMessageId: event.currentUserMessageId ?? null,
         prompt: typeof event.prompt === "string" ? event.prompt : null,
         trigger: ctx?.trigger ?? null,

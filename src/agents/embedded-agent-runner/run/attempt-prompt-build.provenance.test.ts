@@ -219,6 +219,7 @@ describe("prompt-build hook current-input identity", () => {
     const preparedUserTurnMessage: PersistedUserTurnMessage = {
       role: "user",
       content: "Handoff payload",
+      timestamp: 1,
       idempotencyKey: "run-admitted:user",
     };
     const { capturedEvents } = await assembleWithCapturedHookCtx(
@@ -239,6 +240,7 @@ describe("prompt-build hook current-input identity", () => {
     const preparedUserTurnMessage: PersistedUserTurnMessage = {
       role: "user",
       content: [{ type: "image", mimeType: "image/png", data: "synthetic-image" }],
+      timestamp: 1,
       idempotencyKey: "run-image-only:user",
     };
     const { capturedEvents } = await assembleWithCapturedHookCtx(
