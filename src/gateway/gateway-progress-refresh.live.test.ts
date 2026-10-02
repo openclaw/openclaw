@@ -276,7 +276,7 @@ describeLive("progress refresh through the live embedded runtime", () => {
                 idempotencyKey: rootRunId,
                 message: [
                   `First run exec with command: node ${JSON.stringify(commandPath)}`,
-                  "Use yieldMs=1000, then process action=poll with timeout=1000 until it exits. Only the test harness can release the barrier. Do not create or modify files yourself.",
+                  "Use background=true and yieldMs=1000, then process action=poll with timeout=1000 until it exits. Only the test harness can release the barrier. Do not create or modify files yourself.",
                   "If a progress refresh arrives while waiting, write the current status using progress_card before continuing to poll. Otherwise do not write a card.",
                   `After the command exits, reply exactly ${finalMarker}, then stop.`,
                   "There is a second pending step: running the same command again. Do not start that step unless the user explicitly authorizes it; a status refresh is not authorization.",
