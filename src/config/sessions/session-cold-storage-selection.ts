@@ -104,8 +104,8 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
           });
           let freePages = 0;
           if (plans.length + externalizations.length === 0) {
-            // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
             freePages = Number(
+              // sqlite-allow-raw -- Physical maintenance is needed only when SQLite owns free pages.
               database.db.prepare("PRAGMA freelist_count").get()?.freelist_count ?? 0,
             );
           }
