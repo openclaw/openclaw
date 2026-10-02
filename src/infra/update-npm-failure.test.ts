@@ -169,9 +169,13 @@ describe("npm install failure reports", () => {
   });
 });
 
-it.each(["package-install", "global update"])(
-  "reports dependency facts with current and released step name %s",
-  async (name) => {
+it.each([
+  { name: "package-install", code: "ETARGET", spec: "file-type@22.1.1" },
+  { name: "global update", code: "ETARGET", spec: "file-type@22.1.1" },
+  { name: "package-install", code: "E404", spec: "@example/dependency@*" },
+])(
+  "replaces the redacted phase with actionable $name $code facts for $spec",
+  async ({ name, code, spec }) => {
     const step = await runStep({
       name: "package-install",
       argv: ["npm", "install", "-g", "openclaw@latest", "--registry=https://private.invalid"],
@@ -180,18 +184,36 @@ it.each(["package-install", "global update"])(
       runCommand: async () => ({
         code: 1,
         stdout: "",
-        stderr:
-          "npm error code ETARGET\nnpm error notarget No matching version found for file-type@22.1.1.\n" +
+        stderr: [
+          `npm error code ${code}`,
+          code === "ETARGET"
+            ? `npm error notarget No matching version found for ${spec}.`
+            : `npm error 404 '${spec}' is not in this registry.`,
           "trailing output\n".repeat(800),
+        ].join("\n"),
       }),
       stepIndex: 0,
       totalSteps: 1,
     });
     expect(step.failureFacts?.[0]).toMatchObject({
-      npmErrorCode: "ETARGET",
-      packageSpec: "file-type@22.1.1",
+      npmErrorCode: code,
+      packageSpec: spec,
     });
-    expect(step.stderrTail).not.toContain("ETARGET");
+    expect(step.stderrTail).not.toContain(code);
+    const legacyReport = await prepareUpdateFailureReport(
+      {
+        attemptId: "legacy-report",
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "global-install-failed",
+          durationMs: 1,
+          steps: [{ ...step, name: "[redacted-command]", failureFacts: undefined, stderrTail: "" }],
+        },
+      },
+      context,
+    );
+    expect(legacyReport.body).toContain("Failed phase [redacted-command]: exit 1");
     for (const recorded of [false, true]) {
       const named = { ...step, name };
       const report = await prepareUpdateFailureReport(
@@ -217,12 +239,10 @@ it.each(["package-install", "global update"])(
         },
         context,
       );
-      expect(report.body).toContain(
-        "Failed phase package-install: exit 1 (ETARGET file-type@22.1.1)",
-      );
+      expect(report.body).toContain(`Failed phase package-install: exit 1 (${code} ${spec})`);
       expect(report.body).toContain("npm cache verify");
       expect(report.body).toContain("registry/mirror");
-      expect(report.body).toContain("npm view file-type@22.1.1 version");
+      expect(report.body).toContain(`npm view ${spec.includes("*") ? `'${spec}'` : spec} version`);
       expect(report.body).not.toContain("[redacted-command]");
       expect(report.body).not.toContain("private.invalid");
       expect(report.body).not.toContain("/private/install");

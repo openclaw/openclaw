@@ -1,6 +1,7 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { formatErrorMessage } from "./errors.js";
+import { parseNpmErrorCode } from "./npm-error.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { createUpdateErrorFact, createUpdateFailureFact } from "./update-failure-facts.js";
 import { createGlobalInstallEnv } from "./update-global.js";
@@ -138,7 +139,7 @@ export async function runStep(opts: RunStepOptions): Promise<UpdateStepResult> {
           {
             check: name,
             code:
-              result.stderr.match(/\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u)?.[1] ??
+              parseNpmErrorCode(result.stderr) ??
               (result.termination && result.termination !== "exit"
                 ? result.termination
                 : "command-failed"),

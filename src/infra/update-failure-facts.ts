@@ -200,8 +200,8 @@ export function createUpdateFailureFact(
             "unknown",
         }
       : {}),
-    ...(fact.packageSpec && npmFailurePackageName(line(fact.packageSpec, 200))
-      ? { packageSpec: line(fact.packageSpec, 200) }
+    ...(fact.packageSpec && npmFailurePackageName(fact.packageSpec)
+      ? { packageSpec: fact.packageSpec }
       : {}),
   };
 }

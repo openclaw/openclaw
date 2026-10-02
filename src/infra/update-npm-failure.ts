@@ -3,26 +3,22 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  normalizeSupportDiagnosticErrorCode,
   redactSupportDiagnosticLine,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
 import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
-import {
-  npmFailureCode,
-  npmFailurePackageSpec,
-  parseNpmErrorCode,
-  type NpmFailureCode,
-} from "./npm-error.js";
-import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
-
-type NpmFailureFact = UpdateFailureFact & { check: "npm" | "bun"; code: NpmFailureCode };
+import { npmFailurePackageSpec, parseNpmErrorCode } from "./npm-error.js";
+import type { UpdateFailureFact } from "./update-failure-facts.js";
+import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 
 function sanitizeNpmLines(lines: readonly string[], context: SupportRedactionContext): string[] {
   const marker = " …[truncated]";
   return lines.slice(0, 5).map((line) => {
     const message = redactSupportDiagnosticLine(line, context, Number.MAX_SAFE_INTEGER).replace(
       /^(npm (?:ERR!|error) code)\s+\S+/u,
-      (_match, prefix: string) => `${prefix} ${npmFailureCode(line.split(/\s+/u)[3])}`,
+      (_match, prefix: string) =>
+        `${prefix} ${normalizeSupportDiagnosticErrorCode(line.split(/\s+/u)[3]) ?? "unknown"}`,
     );
     return Buffer.byteLength(message) > 200
       ? `${truncateUtf8Prefix(message, 200 - Buffer.byteLength(marker))}${marker}`
@@ -36,16 +32,17 @@ export function createNpmFailureFacts(
   stderr: string,
   env: NodeJS.ProcessEnv = process.env,
   manager: "npm" | "bun" = "npm",
-): NpmFailureFact[] {
-  const lines = stripAnsi(`${stderr}\n${stdout}`)
+): UpdateFailureFact[] {
+  const output = stripAnsi(`${stderr}\n${stdout}`);
+  const lines = output
     .split(/[\r\n\u2028\u2029]/u)
     .map((line) => line.trim())
     .filter((line) =>
-      manager === "npm" ? /^npm (?:ERR!|error)(?:\s|$)/u.test(line) : /^error:/u.test(line),
+      manager === "npm" ? /^npm (?:ERR!|error)(?:\s|$)/u.test(line) : line.startsWith("error:"),
     );
-  const code = parseNpmErrorCode(stripAnsi(`${stderr}\n${stdout}`));
+  const code = normalizeSupportDiagnosticErrorCode(parseNpmErrorCode(output)) ?? "unknown";
   const npmErrorCode = UPDATE_NPM_ERROR_CODES.find((entry) => entry === code) ?? "unknown";
-  const packageSpec = npmFailurePackageSpec(stripAnsi(stderr));
+  const packageSpec = npmFailurePackageSpec(output);
   const context = { env, stateDir: resolveStateDir(env) };
   // The existing ledger admits five 200-character facts. Stay within that contract
   // and a stricter UTF-8 budget instead of introducing a second diagnostic store.
@@ -53,17 +50,11 @@ export function createNpmFailureFacts(
     lines.length ? lines : [`${manager} error (no error lines captured)`],
     context,
   ).map((message, index) => ({
-    ...createUpdateFailureFact(
-      {
-        check: manager,
-        code,
-        message,
-        ...(index === 0 ? { npmErrorCode, ...(packageSpec ? { packageSpec } : {}) } : {}),
-      },
-      env,
-    ),
     check: manager,
     code,
+    message,
+    npmErrorCode: index === 0 ? npmErrorCode : undefined,
+    packageSpec: index === 0 ? packageSpec : undefined,
   }));
 }
 
@@ -75,15 +66,10 @@ export function formatNpmFailureFacts(
   if (!npm.length) {
     return [];
   }
-  const code = npmFailureCode(npm[0]?.code);
-  const remedy =
-    code === "EACCES" || code === "EPERM"
-      ? "Check the npm global prefix and run the update as its owning account: https://docs.openclaw.ai/cli/update."
-      : code === "ENOSPC"
-        ? "Free disk space on the npm prefix and cache volumes, then retry the update."
-        : code === "E404" || code === "ETARGET"
-          ? `Run npm cache verify, check the configured npm registry/mirror, and run npm view ${npm[0]?.packageSpec ? quoteCliArg(npm[0].packageSpec) : "<spec>"} version before retrying the update.`
-          : undefined;
+  const code = normalizeSupportDiagnosticErrorCode(npm[0]?.code) ?? "unknown";
+  const remedy = updatePreflightDetailMessage(
+    `npm-${code === "EPERM" ? "EACCES" : code === "E404" ? "ETARGET" : code}`,
+  )?.replace("<spec>", npm[0]?.packageSpec ? quoteCliArg(npm[0].packageSpec) : "<spec>");
   return [
     `${npm[0]?.check} failure code: ${code}`,
     ...sanitizeNpmLines(

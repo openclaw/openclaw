@@ -14,7 +14,7 @@ import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
 import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
 import {
-  createStagedPackageInstall,
+  prepareStagedPackageInstall,
   discardPackageUpdateStage,
   resolveNpmUpdateLifecyclePolicy,
   runPackageUpdateLifecycle,
@@ -57,14 +57,8 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 import { resolvePnpmGlobalDirFromGlobalRoot } from "./update-native-package-owner.js";
-import {
-  prepareNativePackageStage,
-  resolveNativeInstallSpecFromCwd,
-} from "./update-native-package-stage.js";
-import {
-  readPackageManagerProbeValue,
-  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
-} from "./update-npm-prefix.js";
+import { resolveNativeInstallSpecFromCwd } from "./update-native-package-stage.js";
+import { readPackageManagerProbeValue } from "./update-npm-prefix.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
@@ -79,73 +73,6 @@ type PackageUpdateStepsResult = {
   failedStep: UpdateStepResult | null;
   recovery: UpdateRecovery;
 };
-
-async function prepareStagedPackageInstall(
-  installTarget: ResolvedGlobalInstallTarget,
-  packageName: string,
-  nativeOptions?: { env: NodeJS.ProcessEnv; globalBinDir?: string; installSpec: string },
-): Promise<
-  | { stagedInstall: StagedPackageInstall; failedStep: null }
-  | { stagedInstall: null; failedStep: UpdateStepResult }
-> {
-  const startedAt = Date.now();
-  try {
-    if (nativeOptions) {
-      const native = await prepareNativePackageStage({
-        installTarget,
-        packageName,
-        ...nativeOptions,
-      });
-      if (!native) {
-        throw new Error("Cannot resolve the native package manager's staging owner.");
-      }
-      // Isolated pnpm resolves its newly created owner after installation.
-      const packageRoot = path.join(native.globalRoot, packageName);
-      return {
-        stagedInstall: {
-          prefix: native.projectRoot,
-          layout: {
-            prefix: native.projectRoot,
-            globalRoot: native.globalRoot,
-            binDir: native.binDir,
-          },
-          packageRoot,
-          installTarget: { ...installTarget, globalRoot: native.globalRoot, packageRoot },
-          native,
-        },
-        failedStep: null,
-      };
-    }
-    return {
-      stagedInstall: await createStagedPackageInstall(installTarget, packageName),
-      failedStep: null,
-    };
-  } catch (err) {
-    const targetLayout =
-      installTarget.manager === "npm"
-        ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
-            allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
-          })
-        : null;
-    return {
-      stagedInstall: null,
-      failedStep: await classifyPackageUpdatePermissionFailure(
-        {
-          name: "package-stage",
-          command: `prepare staged ${installTarget.manager} install`,
-          cwd: targetLayout?.prefix ?? installTarget.globalRoot ?? process.cwd(),
-          durationMs: Date.now() - startedAt,
-          exitCode: 1,
-          stdoutTail: null,
-          stderrTail: formatErrorMessage(err),
-        },
-        installTarget,
-        nativeOptions?.env,
-        err,
-      ),
-    };
-  }
-}
 
 /**
  * Stages and verifies a global package update before the swap owner publishes it.
@@ -504,7 +431,7 @@ export async function runGlobalPackageUpdateSteps(params: {
                 : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
               : ["--omit=optional"]),
           ],
-          cwd: stagedInstall.native?.projectRoot ?? preparedSpec.installCwd,
+          cwd: stagedInstall.native?.projectRoot ?? preparedSpec.installCwd ?? undefined,
           env: stagedInstall.native?.env ?? commandEnv,
           timeoutMs: workTimeoutMs,
         }),
@@ -791,4 +718,3 @@ export async function runGlobalPackageUpdateSteps(params: {
     }
   }
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

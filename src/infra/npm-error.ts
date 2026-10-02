@@ -1,43 +1,15 @@
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { validRange } from "semver";
-import { UPDATE_NPM_ERROR_CODES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
+import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 
-const NPM_FAILURE_CODES = [
-  ...UPDATE_NPM_ERROR_CODES,
-  "EPERM",
-  "EEXIST",
-  "ENOENT",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ECONNREFUSED",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
-  "EPIPE",
-  "E401",
-  "E403",
-  "EOTP",
-  "ERESOLVE",
-  "EBADENGINE",
-  "EUSAGE",
-  "EOVERRIDE",
-  "EINVALIDTAGNAME",
-  "EUNSUPPORTEDPROTOCOL",
-  "CERT_HAS_EXPIRED",
-  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
-  "SELF_SIGNED_CERT_IN_CHAIN",
-  "DEPTH_ZERO_SELF_SIGNED_CERT",
-] as const;
-export type NpmFailureCode = (typeof NPM_FAILURE_CODES)[number];
-
-export function npmFailureCode(value: string | undefined): NpmFailureCode {
-  return NPM_FAILURE_CODES.find((code) => code === value) ?? "unknown";
-}
-
 /** Shared npm error classification for install, metadata, and permission failures. */
-export function parseNpmErrorCode(text: string): NpmFailureCode {
-  const explicit = /\bnpm (?:ERR!|error) code (\S+)/u.exec(text)?.[1];
+export function parseNpmErrorCode(text: string): string | undefined {
+  const explicit = /\bnpm (?:ERR!|error) code ([A-Z][A-Z0-9_]+)/u.exec(text)?.[1];
   if (explicit) {
-    return npmFailureCode(explicit);
+    // Local diagnostics retain custom codes; public npm facts apply the shared allowlist.
+    return explicit;
   }
   if (
     /No version matching "[^"\n]+" found for specifier "[^"\n]+" \(but package exists\)/u.test(text)
@@ -53,9 +25,8 @@ export function parseNpmErrorCode(text: string): NpmFailureCode {
   return (
     text
       .match(/\b[A-Z][A-Z0-9_]+\b/gu)
-      ?.map(npmFailureCode)
-      .find((code) => code !== "unknown") ??
-    (/is not in this registry/iu.test(text) ? "E404" : "unknown")
+      ?.map(normalizeSupportDiagnosticErrorCode)
+      .find(Boolean) ?? (/is not in this registry/iu.test(text) ? "E404" : undefined)
   );
 }
 
@@ -76,7 +47,12 @@ export function npmFailurePackageSpec(text: string): string | undefined {
 }
 
 export function npmFailurePackageName(spec: string): string | undefined {
-  if (spec.length > 200) {
+  if (
+    spec.length > 200 ||
+    containsAsciiControlCharacter(spec) ||
+    /[\u2028\u2029]/u.test(spec) ||
+    redactSensitiveText(spec, { mode: "tools" }) !== spec
+  ) {
     return undefined;
   }
   const parsed = parseRegistryNpmSpec(spec);
