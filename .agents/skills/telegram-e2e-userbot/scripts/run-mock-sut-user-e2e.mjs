@@ -794,17 +794,17 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-function processGroupExists(child) {
-  if (!child.pid) return false;
+function processGroupState(child) {
+  if (!child.pid) return "gone";
   try {
     process.kill(-child.pid, 0);
-    return true;
+    return "alive";
   } catch (error) {
-    if (error.code === "ESRCH") return false;
+    if (error.code === "ESRCH") return "gone";
     // macOS can report EPERM while an exiting group awaits reap. Keep waiting
     // for ESRCH; EPERM never confirms cleanup, and setuid ps cannot run confined.
     if (error.code === "EPERM") {
-      return true;
+      return "unconfirmed";
     }
     throw error;
   }
@@ -826,20 +826,24 @@ export function watchChildCompletion(child) {
   });
 }
 
-function waitForProcessGroupExit(child, timeoutMs) {
+function waitForProcessGroupExit(child, timeoutMs, acceptedTimeoutMs = timeoutMs) {
   return new Promise((resolveWait, reject) => {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    let accepted = false;
     const poll = () => {
+      let state;
       try {
-        if (!processGroupExists(child)) {
-          resolveWait(true);
-          return;
-        }
+        state = processGroupState(child);
       } catch (error) {
         reject(error);
         return;
       }
-      if (Date.now() >= deadline) {
+      if (state === "gone") {
+        resolveWait(true);
+        return;
+      }
+      accepted ||= state === "alive";
+      if (Date.now() - startedAt >= (accepted ? acceptedTimeoutMs : timeoutMs)) {
         resolveWait(false);
         return;
       }
@@ -861,6 +865,11 @@ async function stopChild(child, graceMs) {
   return await currentTelegramRun().stopChild(child, graceMs);
 }
 
+// The kernel delivers SIGKILL only when an uninterruptible syscall returns; loaded
+// macOS hosts held APFS rename() for 15-194 s (2026-10). A member that answers a
+// probe after SIGKILL has it pending, so a later EPERM means exiting, not unkillable.
+const KILLED_GROUP_EXIT_MS = 300_000;
+
 async function stopChildProcess(child, graceMs = 5_000) {
   if (!child) return;
   signalChild(child, "SIGTERM");
@@ -870,11 +879,12 @@ async function stopChildProcess(child, graceMs = 5_000) {
   ]);
   if (childExited && groupExited) return;
   signalChild(child, "SIGKILL");
-  const stopped = await Promise.all([
-    waitForExit(child, 2_000),
-    waitForProcessGroupExit(child, 2_000),
-  ]);
-  if (stopped.some((value) => !value))
+  // A group that only ever answers EPERM cannot be confirmed: fail closed quickly.
+  // A gone group means the child was reaped, so its exit wait returns at once.
+  if (
+    !(await waitForProcessGroupExit(child, 2_000, KILLED_GROUP_EXIT_MS)) ||
+    !(await waitForExit(child, 2_000))
+  )
     throw new Error(`Telegram process group did not stop: ${child.pid}`);
 }
 

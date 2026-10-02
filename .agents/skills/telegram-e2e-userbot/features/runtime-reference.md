@@ -283,6 +283,8 @@ proof directory outside runner scratch.
 Failed fixture cleanup can leave a private lease directory with `lease.json`
 and credential/runtime state. Process groups and pipes must be joined before
 release; adapters returning a teardown receipt must return `verified: true`.
+After SIGKILL, a group that still answers probes is waiting on a kernel call and
+gets up to 300 seconds; a group that only answers `EPERM` fails cleanup after 2 seconds.
 A false or missing verification in a returned receipt retains the consumer,
 lease, scratch, and recovery state. Preserve that directory and the failure evidence. The
 receipt contains a secret broker handle: exclude it from proof exports and

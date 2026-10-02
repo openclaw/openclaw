@@ -6,6 +6,7 @@ import { t } from "../i18n/index.ts";
 import {
   PRESENTATION_CHANGED_EVENT,
   type PresentationBinding,
+  type PresentationValue,
 } from "../lit/presentation-binding.ts";
 import { updateCodeBlockWidthOverflow } from "./markdown-code-blocks.ts";
 import { enhanceMarkdownTables, releaseMarkdownTables } from "./markdown-tables.ts";
@@ -75,15 +76,13 @@ class MarkdownBlocksDirective extends AsyncDirective {
     }
   }
 
-  render(_active = true, _presentation?: PresentationBinding) {
+  render(_presented: PresentationValue = true) {
     return nothing;
   }
 
-  override update(
-    part: ElementPart,
-    [active = true, presentation]: [boolean?, PresentationBinding?],
-  ) {
+  override update(part: ElementPart, [presented = true]: [PresentationValue?]) {
     const previousOwner = this.presentation?.owner;
+    const presentation = typeof presented === "boolean" ? undefined : presented;
     this.presentation = presentation;
     if (previousOwner !== presentation?.owner) {
       previousOwner?.removeEventListener(PRESENTATION_CHANGED_EVENT, this.handlePresentationChange);
@@ -99,7 +98,7 @@ class MarkdownBlocksDirective extends AsyncDirective {
       this.release();
       this.root = root;
     }
-    this.active = active && presentation?.isPresented() !== false;
+    this.active = typeof presented === "boolean" ? presented : presented.isPresented();
     if (this.active) {
       this.scheduleScan();
     } else {

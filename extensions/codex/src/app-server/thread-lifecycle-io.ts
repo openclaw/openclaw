@@ -16,7 +16,6 @@ import {
   resolveCodexAppServerClientInstanceId,
 } from "./client.js";
 import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
-import { markStartedCodexManagedThread } from "./managed-thread-store.js";
 import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
@@ -591,7 +590,7 @@ export async function startFreshCodexThread(
     let committed: boolean;
     try {
       await lifecycleTiming.measure("thread-start-mark-managed", () =>
-        markStartedCodexManagedThread(params.bindingStore.managedThreads, {
+        params.bindingStore.managedThreads?.mark({
           sourceHomeId: managedSourceHomeId,
           threadId: response.thread.id,
           ...(rolloutPath ? { rolloutPath } : {}),

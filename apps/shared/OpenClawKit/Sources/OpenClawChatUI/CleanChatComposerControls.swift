@@ -268,12 +268,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
             Button {
                 self.showsPhotoPicker = true
             } label: {
-                Label {
-                    Text("Photo Library")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "photo.on.rectangle")
-                }
+                chatActionLabel(Text("Photo Library"), systemImage: "photo.on.rectangle")
             }
             .disabled(!self.isAttachmentInputEnabled)
 
@@ -281,12 +276,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
             Button {
                 self.showsCameraPicker = true
             } label: {
-                Label {
-                    Text("Camera")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "camera")
-                }
+                chatActionLabel(Text("Camera"), systemImage: "camera")
             }
             .disabled(
                 !self.isAttachmentInputEnabled ||
@@ -296,12 +286,7 @@ struct OpenClawChatAttachmentMenu<ExtraItems: View>: View {
             Button {
                 self.showsFileImporter = true
             } label: {
-                Label {
-                    Text("File")
-                        .font(OpenClawChatTypography.body)
-                } icon: {
-                    Image(systemName: "folder")
-                }
+                chatActionLabel(Text("File"), systemImage: "folder")
             }
             .disabled(!self.isAttachmentInputEnabled)
 

@@ -160,6 +160,24 @@ describe("memory capability ownership", () => {
     expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toHaveLength(1);
   });
 
+  it("strips the provider runtime from an unselected consolidation sidecar", () => {
+    const { registry, add, selected } = fixture();
+    add("memory-sidecar", {
+      providerRuntime: {
+        async open() {
+          return { provider: null };
+        },
+      },
+      promptBuilder: () => ["consolidation"],
+    });
+    const sidecar = selected();
+    expect(sidecar?.capability.providerRuntime).toBeUndefined();
+    expect(sidecar?.capability.promptBuilder?.({ availableTools: new Set() })).toEqual([
+      "consolidation",
+    ]);
+    expect(registry.registry.diagnostics.filter(({ level }) => level === "warn")).toHaveLength(1);
+  });
+
   it("merges sidecar consolidation without lending its recall authorization to the slot owner", async () => {
     const { config, add, selected } = fixture();
     add("acme-memory", { runtime: createStubMemoryRuntime() }, { memorySlotSelected: true });

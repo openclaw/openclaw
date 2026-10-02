@@ -78,24 +78,13 @@ type TelegramInboundMessage = {
 };
 
 export function createTelegramInboundProcessing({
-  params: {
-    cfg,
-    accountId,
-    ownerAgentId,
-    telegramDeps,
-    bot,
-    opts,
-    runtime,
-    mediaMaxBytes,
-    logger,
-    resolveGroupActivation,
-    resolveGroupRequireMention,
-  },
+  params: handlerParams,
   message,
 }: {
   params: RegisterTelegramHandlerParams;
   message: TelegramMessagePipeline;
 }): TelegramInboundProcessing {
+  const { accountId, bot, runtime, mediaMaxBytes, logger } = handlerParams;
   const {
     resolveMediaRuntime,
     recordMessageResolvedMedia,
@@ -103,21 +92,10 @@ export function createTelegramInboundProcessing({
     createSpooledReplayParticipantForBufferedWork,
   } = message;
   const { cancelPending, inboundDebouncer, resolveTelegramDebounceLane } =
-    createTelegramInboundBuffers({ params: { cfg, accountId, bot, runtime, opts }, message });
+    createTelegramInboundBuffers({ params: handlerParams, message });
 
   const { handleMediaGroup, resolveUnaddressedGroupMediaDisposition } = createTelegramInboundMedia({
-    params: {
-      accountId,
-      ownerAgentId,
-      telegramDeps,
-      bot,
-      opts,
-      runtime,
-      mediaMaxBytes,
-      logger,
-      resolveGroupActivation,
-      resolveGroupRequireMention,
-    },
+    params: handlerParams,
     message,
   });
   const processInboundMessage = async (

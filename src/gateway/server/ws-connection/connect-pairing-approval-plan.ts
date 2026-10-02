@@ -102,8 +102,19 @@ export function resolveLocalPairingApproval(
 ): PairingApprovalPlan["localApproval"] {
   const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
   const { role, isControlUi, isWebchat, isNativeAppUi, authMethod, pairingLocality } = state;
+  // Adding a first node role is not a token replacement. Keep real node-token
+  // repairs, scope upgrades, and browser requests on their existing approval path.
+  const addingLocalNodeRole =
+    role === "node" &&
+    reason === "role-upgrade" &&
+    existingPairedDevice?.publicKey === state.devicePublicKey &&
+    !existingPairedDevice?.tokens?.node &&
+    scopes.length === 0 &&
+    !params.hasBrowserOriginHeader &&
+    !isControlUi &&
+    !isWebchat;
   const allowSilentLocalPairing =
-    !(existingPairedDevice && role !== "operator") &&
+    (!existingPairedDevice || role === "operator" || addingLocalNodeRole) &&
     shouldAllowSilentLocalPairing({
       autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
       locality: pairingLocality,

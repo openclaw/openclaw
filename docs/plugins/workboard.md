@@ -609,10 +609,10 @@ SQLite opening, queries, and transactions run in a background database worker.
 Disabling or reloading the plugin drains admitted storage work before closing
 its connections.
 
-Installations that used Workboard in the `.28` release can run
-`openclaw doctor --fix` to migrate the shipped legacy plugin-state namespaces
-(`workboard.cards`, `workboard.boards`, `workboard.notify`, and, if present,
-`workboard.attachments`) into the relational database.
+Installations with retained pre-July 2026 Workboard plugin-state KV data must
+upgrade through OpenClaw `2026.9.7` and run `openclaw doctor --fix` before upgrading
+to the latest version. Current Doctor reports this requirement without changing
+the legacy rows; current relational SQLite stores remain supported.
 
 ## Troubleshooting
 

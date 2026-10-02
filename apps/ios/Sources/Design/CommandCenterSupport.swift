@@ -1,4 +1,5 @@
 import OpenClawChatUI
+import OpenClawKit
 import SwiftUI
 
 struct CommandSessionRow: View {
@@ -263,12 +264,12 @@ struct CommandSessionActionsModifier: ViewModifier {
             ? mainKey
             : String(mainKey.split(separator: ":", maxSplits: 2, omittingEmptySubsequences: false)[2])
         guard !self.isArchived, !self.session.isArchived, self.session.isMain != true,
-              self.normalized(self.session.sessionId) != nil,
+              self.session.sessionId?.trimmedNonEmpty != nil,
               self.session.kind != "global", self.session.kind != "unknown",
               key != "main", key != "global", key != "unknown", sessionName != configuredMain,
-              !sessionName.hasPrefix("subagent:"), self.normalized(self.session.spawnedBy) == nil
+              !sessionName.hasPrefix("subagent:"), self.session.spawnedBy?.trimmedNonEmpty == nil
         else { return false }
-        guard let parent = self.normalized(self.session.parentSessionKey) else { return true }
+        guard let parent = self.session.parentSessionKey?.trimmedNonEmpty else { return true }
         // Ordinary dashboard conversations link to Home without becoming nested children.
         return agentID.map { parent == "agent:\($0):main" } ?? false
     }
@@ -315,7 +316,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                 self.draftText = ""
                 self.editor = .newGroup
             }
-            if self.normalized(self.session.category) != nil {
+            if self.session.category?.trimmedNonEmpty != nil {
                 self.actionButton("Remove from Group", systemImage: "folder.badge.minus") {
                     self.actions.moveToGroup(nil)
                 }
@@ -369,14 +370,14 @@ struct CommandSessionActionsModifier: ViewModifier {
     }
 
     private func beginRename() {
-        self.draftText = self.normalized(self.session.label)
-            ?? self.normalized(self.session.displayName)
+        self.draftText = self.session.label?.trimmedNonEmpty
+            ?? self.session.displayName?.trimmedNonEmpty
             ?? ""
         self.editor = .rename
     }
 
     private func commitEditor() {
-        let value = self.normalized(self.draftText)
+        let value = self.draftText.trimmedNonEmpty
         switch self.editor {
         case .rename:
             self.actions.rename(value)
@@ -391,12 +392,6 @@ struct CommandSessionActionsModifier: ViewModifier {
             break
         }
         self.editor = nil
-    }
-
-    private func normalized(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }
 

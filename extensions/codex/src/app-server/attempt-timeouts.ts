@@ -38,11 +38,6 @@ export function isCodexAppServerStartupError(
   );
 }
 
-function resolvePositiveIntegerTimeoutMs(value: number | undefined, fallbackMs: number): number {
-  const fallback = resolveTimerTimeoutMs(fallbackMs, 1);
-  return resolveTimerTimeoutMs(value, fallback);
-}
-
 export async function withCodexStartupTimeout<T>(params: {
   timeoutMs: number;
   signal: AbortSignal;
@@ -100,16 +95,16 @@ export function resolveCodexStartupTimeoutMs(params: {
   timeoutMs: number;
   timeoutFloorMs?: number;
 }): number {
-  const timeoutFloorMs = resolvePositiveIntegerTimeoutMs(
+  const timeoutFloorMs = resolveTimerTimeoutMs(
     params.timeoutFloorMs,
     CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
   );
-  const timeoutMs = resolvePositiveIntegerTimeoutMs(params.timeoutMs, timeoutFloorMs);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, timeoutFloorMs);
   return Math.max(timeoutFloorMs, timeoutMs);
 }
 
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
-  const timeout = resolvePositiveIntegerTimeoutMs(timeoutMs, 1);
+  const timeout = resolveTimerTimeoutMs(timeoutMs, 1);
   const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
   return addTimerTimeoutGraceMs(timeout, grace) ?? timeout;
 }

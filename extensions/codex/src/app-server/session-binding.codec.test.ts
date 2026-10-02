@@ -198,7 +198,6 @@ describe("Codex app-server binding codec", () => {
   it("maps the legacy sidecar update timestamp to the history watermark", () => {
     const updatedAt = "2026-01-01T00:00:00.000Z";
     const stored = importBinding({
-      schemaVersion: 1,
       createdAt: "2025-12-31T00:00:00.000Z",
       updatedAt,
     });
@@ -208,40 +207,28 @@ describe("Codex app-server binding codec", () => {
     expect(stored?.binding).not.toHaveProperty("updatedAt");
   });
 
-  it("normalizes version 1 destructive approval modes during import", () => {
+  it.each(["allow", "deny", "auto", "ask"])("preserves imported approval mode %s", (mode) => {
     const stored = importBinding({
-      schemaVersion: 1,
       pluginAppPolicyContext: {
-        fingerprint: "policy-1",
+        fingerprint: "policy-2",
         apps: {
-          allow: pluginEntry({
-            configKey: "allow",
-            pluginName: "allow-plugin",
-            destructiveApprovalMode: "auto",
-          }),
-          prompt: pluginEntry({
-            configKey: "prompt",
-            pluginName: "prompt-plugin",
-            destructiveApprovalMode: "on-request",
-          }),
+          app: pluginEntry({ destructiveApprovalMode: mode }),
         },
         pluginAppIds: {},
       },
     });
 
-    expect(stored?.binding.pluginAppPolicyContext?.apps.allow?.destructiveApprovalMode).toBe(
-      "allow",
-    );
-    expect(stored?.binding.pluginAppPolicyContext?.apps.prompt?.destructiveApprovalMode).toBe(
-      "auto",
-    );
+    expect(stored?.binding.pluginAppPolicyContext?.apps.app?.destructiveApprovalMode).toBe(mode);
   });
 
-  it("drops imported policy contexts with a forbidden appId field", () => {
+  it.each([
+    { destructiveApprovalMode: "ask", appId: "not-allowed" },
+    { destructiveApprovalMode: "on-request" },
+  ])("drops invalid imported policy contexts: %j", (fields) => {
     const invalid = importBinding({
       pluginAppPolicyContext: {
         fingerprint: "policy-2",
-        apps: { app: pluginEntry({ destructiveApprovalMode: "ask", appId: "not-allowed" }) },
+        apps: { app: pluginEntry(fields) },
         pluginAppIds: {},
       },
     });

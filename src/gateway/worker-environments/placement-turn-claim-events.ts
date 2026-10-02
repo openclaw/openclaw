@@ -21,6 +21,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
+import type { FastMode } from "../../shared/fast-mode.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
@@ -80,6 +81,9 @@ type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
 export type WorkerTurnPromptCacheContext = Readonly<{
   boundaryCount: number;
   promptCacheKey?: string;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
 }>;
 
 type BoundWorkerTurnOwner = {

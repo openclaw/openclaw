@@ -170,6 +170,10 @@ function schemaLooksObject(schema: JsonSchemaRecord): boolean {
 function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSchemaRecord[] {
   const schemas: JsonSchemaRecord[] = [];
   for (const alternative of schemaAlternatives(schema)) {
+    if (Object.keys(alternative).length === 0) {
+      schemas.push(alternative);
+      continue;
+    }
     if (schemaLooksArray(alternative)) {
       const index = parseConfigPathArrayIndex(segment);
       if (index !== undefined) {
@@ -186,6 +190,8 @@ function propertySchema(schema: JsonSchemaRecord, segment: PathSegment): JsonSch
     const explicit = properties?.[segment];
     if (isPlainRecord(explicit)) {
       schemas.push(explicit);
+    } else if (alternative.additionalProperties === true) {
+      schemas.push({});
     } else if (isPlainRecord(alternative.additionalProperties)) {
       schemas.push(alternative.additionalProperties);
     }

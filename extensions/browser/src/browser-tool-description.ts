@@ -64,7 +64,6 @@ export function createBrowserToolDefinition(
   };
 }
 
-/** Build the Browser tool guidance shared by lazy registration and runtime execution. */
 function describeBrowserTool(opts: {
   targetDefault: "sandbox" | "host";
   hostHint: string;

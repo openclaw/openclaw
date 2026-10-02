@@ -103,10 +103,7 @@ const contextEngineSchema = z
     projection: contextEngineProjectionSchema.optional().catch(undefined),
   })
   .strict();
-const destructiveApprovalModeSchema = z
-  .enum(["allow", "deny", "auto", "ask"])
-  .optional()
-  .catch(undefined);
+const destructiveApprovalModeSchema = z.enum(["allow", "deny", "auto", "ask"]).optional();
 // Account-connected apps are admitted without a plugin package; both entry
 // shapes must round-trip or stored policy context silently drops on read.
 const accountAppPolicyEntrySchema = z
@@ -115,7 +112,7 @@ const accountAppPolicyEntrySchema = z
     appName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
-    destructiveApprovalMode: destructiveApprovalModeSchema,
+    destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
   .strict();
@@ -127,7 +124,7 @@ const pluginAppPolicyEntrySchema = z
     pluginName: z.string(),
     allowDestructiveActions: z.boolean(),
     allowOpenWorld: z.boolean().optional(),
-    destructiveApprovalMode: destructiveApprovalModeSchema,
+    destructiveApprovalMode: destructiveApprovalModeSchema.catch(undefined),
     mcpServerNames: z.array(z.string()),
   })
   .strict();
@@ -139,8 +136,12 @@ const pluginAppPolicyContextSchema = z
   })
   .strict();
 const legacyAppPolicyEntrySchema = z.union([
-  accountAppPolicyEntrySchema.strip(),
-  pluginAppPolicyEntrySchema.strip(),
+  accountAppPolicyEntrySchema
+    .extend({ destructiveApprovalMode: destructiveApprovalModeSchema })
+    .strip(),
+  pluginAppPolicyEntrySchema
+    .extend({ destructiveApprovalMode: destructiveApprovalModeSchema })
+    .strip(),
 ]);
 const threadBindingSchema = z
   .object({
@@ -622,10 +623,7 @@ export function assertCodexBindingMayBeReplaced(
   }
 }
 
-export function readPluginAppPolicyContext(
-  value: unknown,
-  bindingSchemaVersion: 1 | 2,
-): PluginAppPolicyContext | undefined {
+export function readPluginAppPolicyContext(value: unknown): PluginAppPolicyContext | undefined {
   const record = asOptionalRecord(value);
   if (!record || typeof record.fingerprint !== "string") {
     return undefined;
@@ -637,21 +635,15 @@ export function readPluginAppPolicyContext(
   const parsedApps: PluginAppPolicyContext["apps"] = {};
   for (const [appId, rawEntry] of Object.entries(apps)) {
     const entry = asOptionalRecord(rawEntry);
-    if (!entry) {
+    if (!entry || "appId" in entry) {
       return undefined;
     }
-    const destructiveApprovalMode = readDestructiveApprovalMode(
-      entry.destructiveApprovalMode,
-      bindingSchemaVersion,
-    );
-    if ("appId" in entry || destructiveApprovalMode === "invalid") {
-      return undefined;
-    }
-    const parsed = legacyAppPolicyEntrySchema.safeParse({ ...entry, destructiveApprovalMode });
+    const parsed = legacyAppPolicyEntrySchema.safeParse(entry);
     if (!parsed.success) {
       return undefined;
     }
     const validated = parsed.data;
+    const { destructiveApprovalMode } = validated;
     const policy = {
       allowDestructiveActions: validated.allowDestructiveActions,
       ...(validated.allowOpenWorld !== undefined
@@ -688,26 +680,4 @@ export function readPluginAppPolicyContext(
     apps: parsedApps,
     pluginAppIds: parsedPluginAppIds,
   };
-}
-
-function readDestructiveApprovalMode(
-  value: unknown,
-  bindingSchemaVersion: 1 | 2,
-): PluginAppPolicyContext["apps"][string]["destructiveApprovalMode"] | undefined | "invalid" {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "allow" || value === "deny") {
-    return value;
-  }
-  if (value === "auto") {
-    return bindingSchemaVersion === 1 ? "allow" : "auto";
-  }
-  if (value === "ask" && bindingSchemaVersion === 2) {
-    return "ask";
-  }
-  if (value === "on-request" && bindingSchemaVersion === 1) {
-    return "auto";
-  }
-  return "invalid";
 }

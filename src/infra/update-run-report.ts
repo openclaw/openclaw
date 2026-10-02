@@ -160,6 +160,11 @@ function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
 }
 
+function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undefined {
+  const sha = identity.sha?.slice(0, 8);
+  return identity.version ? `${identity.version}${sha ? ` (${sha})` : ""}` : sha;
+}
+
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
   if (run.target?.installationMethod === "ocm") {
     return nextAction ? [] : run.origin.nextAction ? [run.origin.nextAction] : [];
@@ -209,9 +214,9 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
-  // Git updates can change commits without changing the package version.
-  const before = run.before.sha?.slice(0, 8) ?? run.before.version;
-  const after = run.after.sha?.slice(0, 8) ?? run.after.version;
+  // Keep the version visible and distinguish Git updates within the same version.
+  const before = formatUpdateVersion(run.before);
+  const after = formatUpdateVersion(run.after);
   const reason = bounded(
     run.reason?.trim() ||
       (run.status === "failed" &&
