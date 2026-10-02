@@ -24,7 +24,7 @@ import {
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 import type { WorkerLiveEventApplicationResult, WorkerLiveEventReceiver } from "./live-events.js";
-import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
+import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   acknowledgeWorkerTurnFinishing,
   getWorkerTurnToolSurface,
@@ -34,38 +34,19 @@ import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerTranscriptCommitOutcome } from "./transcript-commit-store.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
-import type {
-  WorkerGatewayToolRuntime,
-  WorkerGatewayToolSink,
-} from "./worker-gateway-tool-contract.js";
+import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
 import { workerSessionToolErrorResult } from "./worker-session-tool-result.js";
 import {
   createWorkerComputerRpc,
   type WorkerComputerExecutor,
 } from "./worker-turn-computer-rpc.js";
-
-type WorkerProcessTurnBinding = {
-  turnClaim: WorkerSessionTurnClaim;
-  credentialHash: string;
-};
-
-type WorkerTerminalTurnFence = WorkerProcessTurnBinding & {
-  transcriptSeq: number;
-  liveSeq: number;
-};
-
-type WorkerPendingTerminalTurnFence = WorkerProcessTurnBinding & {
-  terminalLiveSeq: number;
-};
-
-type WorkerTurnRequest =
-  | { kind: "inference" }
-  | { kind: "live"; seq: number }
-  | { kind: "transcript"; seq: number }
-  | { kind: "session-tool" }
-  | { kind: "tool-surface"; surface: WorkerGatewayToolRuntime | undefined };
-
-type WorkerPlacementValidation = "sessionless" | "durable" | "invalid";
+import type {
+  WorkerProcessTurnBinding,
+  WorkerTerminalTurnFence,
+  WorkerPendingTerminalTurnFence,
+  WorkerTurnRequest,
+  WorkerPlacementValidation,
+} from "./worker-turn-rpc.types.js";
 
 type WorkerTranscriptCommitServiceResult =
   | WorkerTranscriptCommitOutcome
@@ -265,6 +246,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     identity: WorkerConnectionIdentity,
     runEpoch: number,
     request: WorkerTurnRequest,
+    preparedPlacement?: WorkerPlacementValidation,
   ):
     | { ok: true }
     | { ok: false; closeReason: WorkerProtocolCloseReason }
@@ -277,7 +259,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
         ? request.surface && getWorkerTurnToolSurface(identity) === request.surface
           ? "durable"
           : "invalid"
-        : validateWorkerPlacement(identity);
+        : (preparedPlacement ?? validateWorkerPlacement(identity));
     if (placement === "invalid") {
       return { ok: false, closeReason: "placement-mismatch" };
     }
@@ -339,11 +321,13 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!source) {
         return { ok: false, closeReason: "placement-mismatch" };
       }
-      const assertCurrent: () => undefined = () => {
-        const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-          kind: "transcript",
-          seq: request.seq,
-        });
+      const assertCurrent = (preparedPlacement?: WorkerPlacementValidation): undefined => {
+        const binding = validateAttachedWorkerRequest(
+          identity,
+          request.runEpoch,
+          { kind: "transcript", seq: request.seq },
+          preparedPlacement,
+        );
         if (!binding.ok) {
           throw new WorkerTranscriptAuthorityError(binding);
         }
@@ -370,10 +354,13 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           if (!placement || !processTurn) {
             return { ok: false, closeReason: "placement-mismatch" };
           }
-          options.placementStore?.updateAckCursors({
+          await options.placementStore?.updateAckCursors({
             claim: placement,
             transcriptSeq: request.seq,
+            // The ACK worker owns durable placement validation under its transaction.
+            assertCurrent: () => assertCurrent("durable"),
           });
+          assertCurrent();
           recordAckCursor(processTurn, { transcriptSeq: request.seq });
         }
         return result;
@@ -450,11 +437,14 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const validateLiveEvent = (
     identity: WorkerConnectionIdentity,
     request: WorkerLiveEventParams,
+    preparedPlacement?: WorkerPlacementValidation,
   ): Exclude<WorkerLiveEventServiceResult, { ok: true }> | undefined => {
-    const binding = validateAttachedWorkerRequest(identity, request.runEpoch, {
-      kind: "live",
-      seq: request.seq,
-    });
+    const binding = validateAttachedWorkerRequest(
+      identity,
+      request.runEpoch,
+      { kind: "live", seq: request.seq },
+      preparedPlacement,
+    );
     if (!binding.ok) {
       if ("closeReason" in binding) {
         return binding;
@@ -532,10 +522,22 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       ) {
         // Only finishing authority crosses the durable boundary. Its live cursor
         // and workspace-result recovery fence commit in one placement transaction.
-        options.placementStore?.updateAckCursors({
+        await placementStore.updateAckCursors({
           claim: placement,
           liveSeq: result.result.ackedSeq,
+          assertCurrent: () => {
+            const ackInvalid = validateLiveEvent(identity, request, "durable");
+            if (ackInvalid) {
+              throw new Error("Worker live event authority closed during ACK");
+            }
+            source.receiptAuthority();
+          },
         });
+        const staleAfterAck = validateLiveEvent(identity, request);
+        if (staleAfterAck) {
+          return staleAfterAck;
+        }
+        source.receiptAuthority();
         acknowledgeWorkerTurnFinishing(
           identity,
           result.result.ackedSeq,

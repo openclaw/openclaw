@@ -1,4 +1,3 @@
-// Memory Core plugin module owns shared manager synchronization state.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -10,7 +9,7 @@ import {
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
-  MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   type MemorySessionSyncTarget,
   type MemorySource,
   type MemoryWorkspaceFiles,
@@ -38,7 +37,10 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import { MEMORY_INDEX_META_KEY, readMemoryIndexMetadata } from "./manager-retrieval-read.js";
+import {
+  MEMORY_INDEX_META_KEY as META_KEY,
+  readMemoryIndexMetadata,
+} from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
@@ -77,8 +79,6 @@ export type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
 };
 
-const META_KEY = MEMORY_INDEX_META_KEY;
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");

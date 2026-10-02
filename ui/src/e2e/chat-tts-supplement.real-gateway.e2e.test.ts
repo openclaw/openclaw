@@ -290,7 +290,7 @@ suite.define(() => {
               });
               await page.addInitScript(() => {
                 localStorage.setItem(
-                  "openclaw:control-ui:community-invite",
+                  "openclaw:control-ui:community-invite:v2",
                   JSON.stringify({ dismissedAtMs: 1770000000000 }),
                 );
               });

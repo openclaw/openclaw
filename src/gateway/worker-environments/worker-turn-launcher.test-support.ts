@@ -119,11 +119,11 @@ export const reconcileUnchangedLocalWorkspace: WorkerTurnTunnelHandle["reconcile
     };
   };
 
-export function acknowledgeCompletedWorkerTurn(
+export async function acknowledgeCompletedWorkerTurn(
   claim: WorkerSessionTurnClaim,
   transcriptLeafId: string,
-): SpawnResult {
-  createWorkerSessionPlacementGate(placements).updateAckCursors({
+): Promise<SpawnResult> {
+  await createWorkerSessionPlacementGate(placements).updateAckCursors({
     claim,
     transcriptSeq: 2,
     liveSeq: 1,

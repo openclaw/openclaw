@@ -13,6 +13,7 @@ export type LlamaServerArchive = {
   archiveRoot: string;
   name: string;
   sha256: string;
+  url?: string;
   regularFileAliases: RegularFileAliases;
   limits?: ArchiveExtractLimits;
 };
@@ -22,8 +23,24 @@ export type LlamaServerAsset = LlamaServerArchive & {
   arch: string;
   backend: "metal" | "cpu" | "cuda";
   executable: string;
-  dependencies?: ReadonlyArray<LlamaServerArchive & { files: readonly string[] }>;
+  dependencies?: readonly LlamaServerDependency[];
 };
+
+export type WindowsVcRuntimeDependency = {
+  archive: "vc-redist";
+  containerOffset: number;
+  containerSize: number;
+  files: ReadonlyArray<{ source: string; target: string }>;
+  name: string;
+  nestedCabinet: string;
+  sha256: string;
+  size: number;
+  url: string;
+};
+
+export type LlamaServerDependency =
+  | (LlamaServerArchive & { files: readonly string[] })
+  | WindowsVcRuntimeDependency;
 
 const MEBIBYTE = 1024 * 1024;
 const CUDA_ARCHIVE_LIMITS = {
@@ -31,6 +48,42 @@ const CUDA_ARCHIVE_LIMITS = {
   maxExtractedBytes: 600 * MEBIBYTE,
   maxEntryBytes: 521 * MEBIBYTE,
 };
+
+// llama.cpp's Windows release binaries dynamically link the Visual C++ runtime.
+// Keep the current supported runtime app-local because managed llama-server runs
+// outside any MSIX package graph, including Store-installed OpenClaw. The pinned
+// Burn container metadata selects only the imported runtime DLLs from Microsoft's
+// signed 14.51.36247 redistributable bundles.
+const WINDOWS_X64_VC_RUNTIME = {
+  archive: "vc-redist",
+  name: "VC_redist.x64.exe",
+  url: "https://download.visualstudio.microsoft.com/download/pr/ebdab8e5-1d7b-4d9f-a11b-cbb1720c3b12/843068991DAAA1F73AD9F6239BCE4D0F6A07A51F18C37EA2A867E9BECA71295C/VC_redist.x64.exe",
+  sha256: "843068991daaa1f73ad9f6239bce4d0f6a07a51f18c37ea2a867e9beca71295c",
+  size: 18_731_856,
+  containerOffset: 630_000,
+  containerSize: 18_091_661,
+  nestedCabinet: "a4",
+  files: [
+    { source: "msvcp140.dll_amd64", target: "msvcp140.dll" },
+    { source: "vcruntime140.dll_amd64", target: "vcruntime140.dll" },
+    { source: "vcruntime140_1.dll_amd64", target: "vcruntime140_1.dll" },
+  ],
+} as const satisfies WindowsVcRuntimeDependency;
+
+const WINDOWS_ARM64_VC_RUNTIME = {
+  archive: "vc-redist",
+  name: "VC_redist.arm64.exe",
+  url: "https://download.visualstudio.microsoft.com/download/pr/ece44298-3977-4f73-ab91-c13fe79cfea8/B70EF586669A620A0A30A1156969C05C6A3831DC8F8BC992DA75779D2A92F944/VC_redist.arm64.exe",
+  sha256: "b70ef586669a620a0a30a1156969c05c6a3831dc8f8bc992da75779d2a92f944",
+  size: 11_870_816,
+  containerOffset: 684_112,
+  containerSize: 11_176_508,
+  nestedCabinet: "a1",
+  files: [
+    { source: "msvcp140.dll_arm64", target: "msvcp140.dll" },
+    { source: "vcruntime140.dll_arm64", target: "vcruntime140.dll" },
+  ],
+} as const satisfies WindowsVcRuntimeDependency;
 
 // These basenames are authenticated by the adjacent release checksum. Archive-provided
 // links are ignored; update this manifest together with each pinned llama.cpp release.
@@ -124,6 +177,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
         files: ["cublas64_12.dll", "cublasLt64_12.dll", "cudart64_12.dll"],
         limits: { ...CUDA_ARCHIVE_LIMITS, maxEntries: 3 },
       },
+      WINDOWS_X64_VC_RUNTIME,
     ],
   },
   {
@@ -136,6 +190,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     sha256: "c1058fe5764a687275c8d20d6bbc1454e787cdbb8ebb8c37a2f959f2b144dc77",
     executable: "llama-server.exe",
     regularFileAliases: [],
+    dependencies: [WINDOWS_ARM64_VC_RUNTIME],
   },
   {
     platform: "win32",
@@ -147,6 +202,7 @@ const LLAMA_SERVER_ASSETS: LlamaServerAsset[] = [
     sha256: "9df3158ed228a641a4b127942d7f459f24c9e13f04682659d05c00c80099b6b5",
     executable: "llama-server.exe",
     regularFileAliases: [],
+    dependencies: [WINDOWS_X64_VC_RUNTIME],
   },
 ];
 

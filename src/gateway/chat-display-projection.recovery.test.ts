@@ -172,7 +172,7 @@ it("retires the empty failure when its fallback answer reaches the output limit"
   ]);
 });
 
-it("refreshes SSE history after an appended failure recovers", () => {
+it("refreshes SSE history after an appended failure recovers", async () => {
   const state = SessionHistorySseState.fromSnapshot({
     target: { sessionId: "session", sessionKey: "agent:main:test" },
     snapshot: {
@@ -182,10 +182,12 @@ it("refreshes SSE history after an appended failure recovers", () => {
       assistantErrorPending: false,
     },
   });
-  expect(state.appendInlineMessage({ message: failed, messageSeq: 2 })?.message).toMatchObject({
+  expect(
+    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
+  ).toMatchObject({
     stopReason: "error",
   });
-  expect(state.appendInlineMessage({ message: answer, messageSeq: 3 })).toEqual({
+  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
     shouldRefresh: true,
   });
 });

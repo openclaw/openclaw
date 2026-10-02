@@ -167,6 +167,7 @@ public enum ChatSessionSidebarModel {
         groups: [OpenClawChatSessionGroup] = [],
         excludesMainSession: Bool = false,
         query: String,
+        rankedSearch: Bool = false,
         sessionRoutingContract: String? = nil,
         viewOptions: ViewOptions? = nil,
         observedOrder: ObservedOrder = .init()) -> [Section]
@@ -179,6 +180,14 @@ public enum ChatSessionSidebarModel {
             excludesMainSession: excludesMainSession,
             sessionRoutingContract: sessionRoutingContract,
             viewOptions: viewOptions)
+        if rankedSearch {
+            // Apply sidebar visibility before the palette's ten-result cap, preserving incoming relevance order.
+            // ui/src/components/command-palette-session-search.ts:63.
+            let visible = Set(entries.map(OpenClawChatSessionSidebarData.identity))
+            let nodes = sessions.filter { visible.contains(OpenClawChatSessionSidebarData.identity($0)) }
+                .prefix(10).flatMap { self.tree(from: [$0]) }
+            return nodes.isEmpty ? [] : [.init(id: "search", title: String(localized: "Search results"), nodes: nodes)]
+        }
         let ordered: [OpenClawChatSessionEntry]
         if viewOptions?.sort == .created {
             var order = observedOrder
@@ -679,7 +688,9 @@ public enum ChatSessionSidebarModel {
                 return false
             }
             return entry.key == selectedSessionKey ||
-                (!self.isHiddenInternalSession(entry.key) && entry.archived != true &&
+                (!self
+                    .isHiddenInternalSession(entry.key) &&
+                    (entry.archived != true || viewOptions?.showArchived == true) &&
                     (viewOptions?.includes(entry) ?? true))
         }
         if !(excludesMainSession && selectedIsMain),
