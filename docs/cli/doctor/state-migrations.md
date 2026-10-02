@@ -27,6 +27,16 @@ The pre-July plugin install index at `plugins/installs.json` is no longer import
 or archived. Doctor preserves it and stops with the same intermediate-upgrade
 guidance. July-era SQLite plugin install records remain supported.
 
+Session records that need the retired `room` → `groupChannel` conversion are refused
+without changing their original bytes. Preserve the state, install OpenClaw
+`2026.9.5`, run `openclaw doctor --fix`, then upgrade again. A canonical
+`groupChannel` with an ignored `room` field remains unchanged.
+
+The July Doctor importer could still write `provider` and `lastProvider` aliases.
+Doctor retains their repair, backs up existing SQLite rows, and updates canonical
+delivery metadata and its query projections together. Runtime reads require that
+repair; canonical delivery fields and unrelated stored values keep their values.
+
 ## Legacy state migration
 
 When Doctor selects a legacy home such as `~/.clawdbot`, it drains open database

@@ -333,6 +333,12 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readSuggestions: reader(
+      "session-suggestions",
+      "suggestions",
+      (input) => ({ kind: "session-suggestions", ...input }),
+      (value) => value.suggestions,
+    ),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(

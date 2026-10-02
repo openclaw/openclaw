@@ -300,7 +300,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       version: "9999.0.0",
     });
     vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
-      target,
       version: /^\d/u.test(target) ? target : "9999.0.0",
       nodeEngine: ">=22.19.0",
     }));

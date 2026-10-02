@@ -28,6 +28,7 @@ export type StoredSessionSuggestion = {
   createdAt: number;
   state: StoredSessionSuggestionState;
 };
+export type SessionSuggestionListParams = { authorId?: string; pendingOnly?: boolean };
 export type SessionSuggestionDispatchClaim =
   | { kind: "busy" }
   | { kind: "mismatch"; resolution: StoredSessionSuggestionResolution }

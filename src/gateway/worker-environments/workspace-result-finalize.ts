@@ -107,6 +107,7 @@ export async function recoverWorkspaceBeforeTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   workspace: WorkerSessionWorkspace;
+  signal?: AbortSignal;
 }): Promise<void> {
   if (params.workspace.kind === "repository") {
     return;
@@ -119,19 +120,26 @@ export async function recoverWorkspaceBeforeTurn(params: {
   };
   const journal = createWorkspaceResultJournal({ ...params, assertCurrent }).adapter;
   try {
-    await params.workspaceOperations.run(params.placement.environmentId, async () => {
-      assertCurrent();
-      const pending = await journal.load();
-      if (pending) {
-        await recoverWorkerWorkspaceReconciliation({
-          root: localWorkspaceDir,
-          journal: pending,
-          assertCurrent,
-        });
-        await journal.abort();
-      }
-    });
+    await params.workspaceOperations.run(
+      params.placement.environmentId,
+      async () => {
+        assertCurrent();
+        const pending = await journal.load();
+        if (pending) {
+          await recoverWorkerWorkspaceReconciliation({
+            root: localWorkspaceDir,
+            journal: pending,
+            assertCurrent,
+          });
+          await journal.abort();
+        }
+      },
+      params.signal,
+    );
   } catch (error) {
+    if (params.signal?.aborted && error === params.signal.reason) {
+      throw error;
+    }
     throw new WorkerWorkspaceReconciliationError(
       `Cloud worker workspace recovery could not complete: ${workspaceError(error)}`,
       { cause: error },
@@ -334,7 +342,7 @@ function appendWorkspaceConflict(
 
 export async function executeRemoteExecTurn(params: {
   environments: RemoteExecEnvironmentService;
-  onHandoff: () => void;
+  onHandoff: (custody?: { requiresTerminalReceipt: true }) => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
@@ -357,7 +365,7 @@ export async function executeRemoteExecTurn(params: {
   ) {
     throw new Error("Active remote-exec placement does not match its attached environment");
   }
-  await recoverWorkspaceBeforeTurn(params);
+  await recoverWorkspaceBeforeTurn({ ...params, signal: params.turn.abortSignal });
   params.assertRunCurrent?.();
   const tunnel = await waitForTurnOperation({
     start: () =>
