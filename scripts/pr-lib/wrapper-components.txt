@@ -538,6 +538,7 @@ src/config/sessions/session-history-worker-errors.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-incognito-lifecycle-contract.ts
 src/config/sessions/session-incognito-lifecycle.ts
+src/config/sessions/cli-session-binding.ts
 src/config/sessions/session-incognito-side-data-contract.ts
 src/config/sessions/session-incognito-transcript-contract.ts
 src/config/sessions/session-model-context-projection.ts
