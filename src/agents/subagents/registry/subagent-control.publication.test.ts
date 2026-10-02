@@ -404,6 +404,17 @@ it.each([
       });
       await successorCompleted.promise;
       expect(subagentRuns.get("publication-b1")?.execution.status).toBe("terminal");
+      if (priorChildKill && !handoff) {
+        // Successor admission retires the first child's delayed cleanup authority.
+        await expect(fixture.settle()).rejects.toMatchObject({
+          message: "Failed to settle subagent cleanup roots",
+          errors: [
+            expect.objectContaining({
+              message: "Subagent kill publication lost its original claim",
+            }),
+          ],
+        });
+      }
     } finally {
       stopObserving();
       cancellationClock?.mockRestore();

@@ -33,11 +33,13 @@ vi.mock("./subagent-registry-requester-yield.js", () => ({
   settleRequesterTurnAfterSessionSpawns: vi.fn(),
 }));
 vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
+  refreshFrozenResultFromSession: vi.fn(),
+}));
+vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   buildSafeLifecycleErrorMeta: (error: unknown) => ({
     message: error instanceof Error ? error.message : String(error),
   }),
   maskLifecycleIdentifier: () => "synthetic",
-  refreshFrozenResultFromSession: vi.fn(),
 }));
 vi.mock("../completion/subagent-completion-admission.store.js", () => ({
   blockSubagentCompletionDelivery: completionDeliveryMocks.blockSubagentCompletionDelivery,

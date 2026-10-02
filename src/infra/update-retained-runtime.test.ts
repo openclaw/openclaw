@@ -6,9 +6,15 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import * as processCensus from "./openclaw-process-census.js";
 import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
@@ -16,6 +22,7 @@ import {
 import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { openSqliteWorkerStore, type SqliteWorkerStore } from "./sqlite-worker-store.js";
+import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
@@ -58,54 +65,103 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each([false, true])(
-  "preserves the update outcome when disposable runtime removal fails (failed=%s)",
-  async (failed) => {
-    const base = tempDirs.make("openclaw-retained-runtime-cleanup-");
+it.for([false, true])(
+  "defers runtime deletion until eligible maintenance without losing settled work (failed=%s)",
+  async (failed, { signal }) => {
+    const base = await fs.realpath(tempDirs.make("openclaw-retained-runtime-cleanup-"));
     const root = await fixture(base, "npm");
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
     const original = new Error("original update failure");
-    const remove = fs.rm;
-    let denyRemoval = false;
-    let directory: Parameters<typeof fs.rm>[0] | undefined;
+    const entered = createDeferred();
+    const release = createDeferred();
+    const removed = vi.spyOn(fs, "rm");
+    const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
+    vi.spyOn(os, "tmpdir").mockReturnValue(base);
+    vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
+    let directory: string | undefined;
+    let store: SqliteWorkerStore<Operations> | undefined;
+    let acceptedWrite: Promise<string[]> | undefined;
+    let resourcesSettled = false;
     const receipt: { metrics?: Awaited<ReturnType<RetainUpdateRuntime>> } = {};
-    const cleanup = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-      if (denyRemoval) {
-        directory = args[0];
-        denyRemoval = false;
-        throw new Error("retained runtime removal denied");
-      }
-      return await remove(...args);
-    });
-    try {
-      const result = withRetainedUpdateRuntime(moduleUrl, async (retain) => {
-        receipt.metrics = await retain({
-          mutationRoots: [root],
-          timeoutMs: 30_000,
-          assertCurrent() {},
-        });
-        denyRemoval = true;
-        if (failed) {
-          throw original;
-        }
-        return receipt.metrics;
+    const assertResourcesSettled = vi.fn(() => expect(resourcesSettled).toBe(true));
+    const maintain = () =>
+      temporaryArtifacts.maintainRetainedUpdateRuntimes({
+        packageRoots: [root],
+        repair: true,
+        assertCurrent() {},
+        assertResourcesSettled,
       });
+    const result = withRetainedUpdateRuntime(moduleUrl, async (retain) => {
+      receipt.metrics = await retain({
+        mutationRoots: [root],
+        timeoutMs: 30_000,
+        assertCurrent() {},
+      });
+      const name = (await fs.readdir(base)).find((entry) =>
+        entry.startsWith("openclaw-update-runtime-"),
+      );
+      assert.ok(name);
+      directory = path.join(base, name);
+      const source = captureRuntimeWorkerSource(
+        pathToFileURL(path.join(root, "dist/state/store.js")),
+      );
+      assert.ok(source.runtimeGeneration);
+      store = await openSqliteWorkerStore<Operations>({
+        ...source,
+        databasePath: path.join(base, "retained.sqlite"),
+        input: undefined,
+      });
+      stores.add(store);
+      source.runtimeGeneration.retain({}, async () => {
+        entered.resolve();
+        await release.promise;
+        resourcesSettled = true;
+      });
+      acceptedWrite = store.execute({ type: "append", input: "accepted before exit" });
+      void acceptedWrite.catch(() => undefined);
       if (failed) {
-        await expect(result).rejects.toBe(original);
-      } else {
-        expect(await result).toBe(receipt.metrics);
+        throw original;
       }
-      assert.ok(receipt.metrics);
-      expect(receipt.metrics.linked + receipt.metrics.copied).toBe(6);
-      assert.ok(typeof directory === "string");
-      expect(directory).toContain("openclaw-update-runtime-");
+      return receipt.metrics;
+    });
+    const settled = result.then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          settled,
+          "Updater returned before worker settlement",
+        ),
+        signal,
+      );
+      expect(await maintain()).toContainEqual(
+        expect.stringContaining("the creating update still owns this runtime"),
+      );
+      expect(assertResourcesSettled).not.toHaveBeenCalled();
+      assert.ok(directory);
       expect((await stat(directory)).isDirectory()).toBe(true);
     } finally {
-      cleanup.mockRestore();
-      if (directory) {
-        await remove(directory, { recursive: true, force: true });
-      }
+      release.resolve();
+      await settled;
     }
+    expect(await settled).toEqual(failed ? { error: original } : { value: receipt.metrics });
+    expect(resourcesSettled).toBe(true);
+    expect(await acceptedWrite).toEqual(["retained:accepted before exit"]);
+    assert.ok(directory && store);
+    await expect(store.execute({ type: "append", input: "escaped" })).rejects.toThrow();
+    expect(removed.mock.calls.some(([target]) => String(target) === directory)).toBe(false);
+    expect((await stat(directory)).isDirectory()).toBe(true);
+    expect(reportRetained).toHaveBeenCalledWith(
+      directory,
+      expect.stringContaining("worker generation settled; cleanup deferred"),
+    );
+    expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
+    expect(assertResourcesSettled).toHaveBeenCalledOnce();
+    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(root, "dist/state/store.js"), "utf8")).toBe(backend);
   },
 );
 
@@ -512,12 +568,12 @@ it.each(["npm", "pnpm", "pnpm-workspace", "git", "git-linked"] as const)(
       expect(await retainedStore.execute({ type: "append", input: "first" })).toEqual([
         "retained:first",
       ]);
-      // Scope cleanup must join this accepted native write before retiring its tree.
+      // Deferring tree deletion must still join accepted native writes.
       acceptedWrite = retainedStore.execute({ type: "append", input: "second" });
       void acceptedWrite.catch(() => undefined);
     });
     assert.ok(retainedPath && retainedStore);
-    await expect(readFile(retainedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(retainedPath, "utf8")).toBe(backend);
     expect(await acceptedWrite).toEqual(["retained:first", "retained:second"]);
     await expect(retainedStore.execute({ type: "append", input: "escaped" })).rejects.toThrow();
     expect(await unrelated.execute({ type: "append", input: "still open" })).toEqual([
@@ -551,6 +607,7 @@ it.each(["pnpm10", "pnpm11", "bun-custom", "bun-custom-no-env"] as const)(
     };
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
     let retainedPath: string | undefined;
+    let retainedStore: SqliteWorkerStore<Operations> | undefined;
     await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
       await retain({
         mutationRoots: [root],
@@ -577,13 +634,15 @@ it.each(["pnpm10", "pnpm11", "bun-custom", "bun-custom-no-env"] as const)(
         databasePath: path.join(base, "retained.sqlite"),
         input: undefined,
       });
+      retainedStore = store;
       stores.add(store);
       expect(await store.execute({ type: "append", input: "after-owner-removal" })).toEqual([
         "retained:after-owner-removal",
       ]);
     });
-    assert.ok(retainedPath);
-    await expect(stat(retainedPath)).rejects.toMatchObject({ code: "ENOENT" });
+    assert.ok(retainedPath && retainedStore);
+    expect(await readFile(retainedPath, "utf8")).toBe(backend);
+    await expect(retainedStore.execute({ type: "append", input: "escaped" })).rejects.toThrow();
   },
 );
 
@@ -666,6 +725,7 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
       return await link(source, destination);
     });
     let retained: string | undefined;
+    let retainedStore: SqliteWorkerStore<Operations> | undefined;
     try {
       await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
         await retain({
@@ -697,13 +757,15 @@ it.each(["git", "alias", "ancestor", "npm", "pnpm10", "pnpm11", "bun"] as const)
           databasePath: path.join(base, "retained.sqlite"),
           input: undefined,
         });
+        retainedStore = store;
         stores.add(store);
         expect(await store.execute({ type: "append", input: "after replacement" })).toEqual([
           "retained:after replacement",
         ]);
       });
-      assert.ok(retained);
-      await expect(stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
+      assert.ok(retained && retainedStore);
+      expect(await readFile(retained, "utf8")).toBe(backend);
+      await expect(retainedStore.execute({ type: "append", input: "escaped" })).rejects.toThrow();
     } finally {
       links.mockRestore();
       temporaryRoot.mockRestore();
@@ -728,23 +790,25 @@ it.each(["EACCES", "EROFS"])(
     });
     const moduleUrl = pathToFileURL(path.join(root, "dist/updater.mjs")).href;
     let retained: string | undefined;
+    let generation: ReturnType<typeof captureRuntimeWorkerSource>["runtimeGeneration"];
     try {
       await withRetainedUpdateRuntime(moduleUrl, async (retain) => {
         await retain({ mutationRoots: [root], timeoutMs: 30_000, assertCurrent() {} });
-        retained = fileURLToPath(
-          captureRuntimeWorkerSource(
-            resolveRuntimeWorkerUrl({
-              currentModuleUrl: moduleUrl,
-              sourceWorkerName: "store",
-              distWorkerPath: "state/store.js",
-            }),
-          ).moduleUrl,
+        const source = captureRuntimeWorkerSource(
+          resolveRuntimeWorkerUrl({
+            currentModuleUrl: moduleUrl,
+            sourceWorkerName: "store",
+            distWorkerPath: "state/store.js",
+          }),
         );
+        retained = fileURLToPath(source.moduleUrl);
+        generation = source.runtimeGeneration;
         expect(retained.startsWith(`${temporary}${path.sep}`)).toBe(true);
         expect(await readFile(retained, "utf8")).toBe(backend);
       });
-      assert.ok(retained);
-      await expect(stat(retained)).rejects.toMatchObject({ code: "ENOENT" });
+      assert.ok(retained && generation);
+      expect(await readFile(retained, "utf8")).toBe(backend);
+      expect(() => generation!.resolve(pathToFileURL(retained!))).toThrow("generation is closing");
     } finally {
       allocation.mockRestore();
       temporaryRoot.mockRestore();

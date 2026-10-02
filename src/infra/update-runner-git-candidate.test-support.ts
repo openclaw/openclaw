@@ -7,6 +7,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
@@ -522,7 +523,8 @@ export async function assertCandidateCommandEnvironment(params: {
   update: (options: Partial<UpdateRunnerOptions>) => Promise<UpdateRunResult>;
 }) {
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", params.root);
-  const inheritedPath = `${path.join(params.directory, "other-tools")}${path.delimiter}${process.env.PATH ?? ""}`;
+  const otherTools = path.join(params.directory, "other-tools");
+  const inheritedPath = `${otherTools}${path.delimiter}${process.env.PATH ?? ""}`;
   vi.stubEnv("PATH", inheritedPath);
   const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
   await params.advanceRemote();
@@ -532,7 +534,14 @@ export async function assertCandidateCommandEnvironment(params: {
     if (argv[0] === "pnpm" && argv[1] === "build") {
       built = true;
       expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
-      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(nodeRuntime.path));
+      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(otherTools);
+      const observed = await runCommandWithTimeout(["node", "-p", "process.execPath"], {
+        cwd: options.cwd,
+        env: options.env,
+        timeoutMs: 5000,
+      });
+      expect(observed.code, observed.stderr).toBe(0);
+      expect(observed.stdout.trim()).toBe(await fs.realpath(nodeRuntime.path));
     }
     return params.runCommand(argv, options);
   });
@@ -540,6 +549,12 @@ export async function assertCandidateCommandEnvironment(params: {
     prepareGitExposure: async (candidateRoot, _sha, env) => {
       exposed = true;
       expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+      expect(
+        resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
+          cwd: candidateRoot,
+          useCache: false,
+        }),
+      ).toBe(nodeRuntime.path);
     },
   });
   expect(result.status).toBe("ok");

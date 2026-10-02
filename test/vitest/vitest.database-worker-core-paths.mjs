@@ -574,6 +574,7 @@ export const databaseWorkerCoreTestFiles = [
   "test/runtime-agent.codex-initialization.integration.test.ts",
   "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
   "packages/memory-host-sdk/src/host/session-files-archive-identity.test.ts",
+  "packages/memory-host-sdk/src/host/session-files.test.ts",
   "packages/memory-host-sdk/src/host/session-transcript-corpus.test.ts",
   "src/agents/harness/native-hook-relay-store.test.ts",
   "src/agents/harness/native-hook-relay.approval-binding.test.ts",
@@ -916,6 +917,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["packages/memory-host-sdk/src/host/session-files.test.ts", "unitFastIsolated"],
   ["src/commands/doctor-maintenance.session-workers.test.ts", "unitFast"],
   ["src/commands/doctor-session-canonical-keys.completions.test.ts", "unitFast"],
   ["src/plugins/installed-plugin-index-store.availability.test.ts", "unitFast"],

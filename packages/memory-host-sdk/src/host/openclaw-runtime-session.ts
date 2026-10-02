@@ -32,15 +32,14 @@ export async function prepareSessionEntryInWorker(
   return prepare(...args);
 }
 
-export async function readSessionEntrySummariesInWorker(
-  input: Parameters<
-    typeof import("../../../../src/config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
-  >[0],
+export async function readSessionTranscriptCorpusInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-inventory-runtime.js").readSessionTranscriptCorpusInWorker
+  >
 ) {
-  const captured = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
-  const { readSessionEntrySummariesInWorker: read } =
-    await import("../../../../src/config/sessions/session-entry-read-runtime.js");
-  return read(captured);
+  const { readSessionTranscriptCorpusInWorker: read } =
+    await import("../../../../src/config/sessions/session-transcript-inventory-runtime.js");
+  return read(...args);
 }
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";

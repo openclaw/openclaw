@@ -142,6 +142,13 @@ path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
 
+Package publication hashes the candidate before activation and the installed
+package after publication. Launcher publication checks package identities without
+repeatedly hashing both generations. Retirement verifies the live package before
+deleting obsolete backups; rollback still hashes a backup before restoring it
+and verifies the restored bytes. These improvements belong to the installed
+updater and do not change an older updater already running.
+
 An older installed updater that stops with `Package rollback verification byte
 limit exceeded` cannot obtain this repair from its staged candidate. Use the
 installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),

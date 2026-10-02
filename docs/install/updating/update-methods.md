@@ -74,6 +74,10 @@ Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for
 source changes; the live checkout's workspace settings are preserved.
+Candidate commands keep the qualified Node first among Node providers on `PATH`,
+while preserving launcher-only prefixes such as scoped pnpm shims ahead of it.
+This also applies when the selected Node directory was already on `PATH`; its
+package-manager executables do not displace those scoped launchers.
 
 Before activating a package or Git update, the updater also checks discoverable
 managed Gateways that share the physical installation. An observed live sibling

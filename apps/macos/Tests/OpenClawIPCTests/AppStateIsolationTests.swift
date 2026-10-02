@@ -35,7 +35,7 @@ struct AppStateIsolationTests {
             GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":true,"service":{"loaded":false}}"#)
             GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
             defer {
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
                 state.connectionMode = previousMode
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
@@ -74,7 +74,7 @@ struct AppStateIsolationTests {
             #expect(manager.log != failureLog)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
 
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             await connection.shutdown()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
@@ -106,7 +106,7 @@ struct AppStateIsolationTests {
             let port = GatewayEnvironment.gatewayPort()
             await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             defer {
-                manager.setTestingDesiredActive(false)
+                manager.desiredActive = false
                 state.connectionMode = previousMode
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.setTestingDaemonStatusPayload(nil)
@@ -126,7 +126,7 @@ struct AppStateIsolationTests {
             #expect(manager.lastFailureReason == reason)
             #expect(!GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().contains { $0.first == "install" })
 
-            manager.setTestingDesiredActive(false)
+            manager.desiredActive = false
             await connection.shutdown()
             await GatewayEndpointStore.shared.setLocalUnavailableReason(nil)
         }

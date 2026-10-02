@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.waits next download saves it plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
