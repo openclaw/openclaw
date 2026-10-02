@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { it, vi } from "vitest";
 import { getSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { registerPluginSubagentRunFromGateway } from "./agent-subagent-registration.js";
 import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
