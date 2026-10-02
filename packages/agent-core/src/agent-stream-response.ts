@@ -51,6 +51,20 @@ export type ExecutedToolCallBatch = {
 
 type AssistantMessageUpdateEvent = Extract<AssistantMessageEvent, { contentIndex: number }>;
 
+export function appendTextDeltaToAssistantMessage(
+  message: AssistantMessage,
+  contentIndex: number,
+  delta: string,
+): AssistantMessage {
+  const content = [...message.content];
+  const currentContent = content[contentIndex];
+  content[contentIndex] =
+    currentContent?.type === "text"
+      ? { ...currentContent, text: currentContent.text + delta }
+      : { type: "text", text: delta };
+  return { ...message, content };
+}
+
 function resolveAssistantMessageUpdate(
   event: AssistantMessageUpdateEvent,
   currentMessage: AssistantMessage,
@@ -61,13 +75,7 @@ function resolveAssistantMessageUpdate(
   if (event.type !== "text_delta") {
     return currentMessage;
   }
-  const content = [...currentMessage.content];
-  const currentContent = content[event.contentIndex];
-  content[event.contentIndex] =
-    currentContent?.type === "text"
-      ? { ...currentContent, text: currentContent.text + event.delta }
-      : { type: "text", text: event.delta };
-  return { ...currentMessage, content };
+  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
 }
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
