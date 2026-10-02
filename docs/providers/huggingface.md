@@ -76,6 +76,12 @@ with the `inference-api` scope enabled and no client secret, sign in with:
 openclaw models auth login --provider huggingface --method oauth
 ```
 
+You can also choose **Hugging Face OAuth** during interactive onboarding:
+
+```bash
+openclaw onboard --auth-choice huggingface-oauth
+```
+
 Enter your app's public client ID, then open the displayed Hugging Face URL on
 any device and enter the code. The Gateway host does not need a browser or an
 inbound callback port. An `HF_TOKEN` is an access token, not an OAuth client ID.

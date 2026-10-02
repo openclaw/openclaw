@@ -71,11 +71,22 @@
       "choiceHint": "Inference API (HF token)",
       "groupId": "huggingface",
       "groupLabel": "Hugging Face",
-      "groupHint": "Inference API (HF token)",
+      "groupHint": "OAuth or API key",
       "optionKey": "huggingfaceApiKey",
       "cliFlag": "--huggingface-api-key",
       "cliOption": "--huggingface-api-key <key>",
       "cliDescription": "Hugging Face API key (HF token)"
+    },
+    {
+      "provider": "huggingface",
+      "method": "oauth",
+      "choiceId": "huggingface-oauth",
+      "choiceLabel": "Hugging Face OAuth",
+      "choiceHint": "Device code (public OAuth app required)",
+      "groupId": "huggingface",
+      "groupLabel": "Hugging Face",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference"]
     }
   ],
   "configGroups": [
