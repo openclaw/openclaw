@@ -2,7 +2,7 @@ import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
-import { syncPopoverLabel } from "../../components/web-awesome-popover.ts";
+import { syncPopoverExpanded, syncPopoverLabel } from "../../components/web-awesome-popover.ts";
 import { t } from "../../i18n/index.ts";
 import {
   normalizeSessionsGroupBy,
@@ -77,12 +77,6 @@ function renderFilterToggle(params: {
   `;
 }
 
-function setPreviousSiblingExpanded(event: Event, expanded: boolean) {
-  if (event.currentTarget instanceof Element) {
-    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
-  }
-}
-
 export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProps) {
   // Archived timestamps are intentionally stale, so recency only applies to the active view.
   const filterInputs = [
@@ -129,8 +123,8 @@ export function renderSessionsAdvancedFilters(props: SessionsAdvancedFiltersProp
       for="sessions-filter-popover-trigger"
       placement="bottom-end"
       without-arrow
-      @wa-show=${(event: Event) => setPreviousSiblingExpanded(event, true)}
-      @wa-hide=${(event: Event) => setPreviousSiblingExpanded(event, false)}
+      @wa-show=${syncPopoverExpanded}
+      @wa-hide=${syncPopoverExpanded}
     >
       <div class="sessions-filter-popover__panel">
         <div class="sessions-filter-popover__fields">

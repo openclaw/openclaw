@@ -233,7 +233,7 @@ enum CommandResolver {
         // Packaging and optimization are independent: even DEBUG apps must use
         // their signed payload, including after relocation or checkout removal.
         if bundle.bundleURL.pathExtension == "app" {
-            return try BundledNodeWorker.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
+            return try BundledRuntime.launch(bundle: bundle, desktopSharingEnabled: desktopSharingEnabled)
         }
         #if DEBUG
         let root = projectRoot ?? self.projectRoot()
@@ -292,6 +292,20 @@ enum CommandResolver {
     }
 
     static func resolveLocalCLI(searchPaths: [String]?, projectRoot: URL?) async -> LocalCLIResolution {
+        if BundledRuntime.isBundledApp {
+            do {
+                if let runtime = try BundledRuntime.seeded() {
+                    return .executable(runtime.cliCommand)
+                }
+            } catch {
+                return .unavailable(error.localizedDescription)
+            }
+            // Existing external and managed Node installs remain inspectable before adoption.
+            if let openclawPath = openclawExecutable(searchPaths: searchPaths) {
+                return .executable([openclawPath])
+            }
+            return .unavailable("OpenClaw's bundled runtime is not prepared. Retry setup in OpenClaw.app.")
+        }
         let root = projectRoot ?? self.projectRoot()
         if let openclawPath = projectOpenClawExecutable(projectRoot: root) {
             return .executable([openclawPath])
@@ -481,9 +495,9 @@ enum CommandResolver {
         return trimmed
     }
 
-    private static func isValidSSHComponent(_ value: String, allowLeadingDash: Bool = false) -> Bool {
+    private static func isValidSSHComponent(_ value: String) -> Bool {
         if value.isEmpty { return false }
-        if !allowLeadingDash, value.hasPrefix("-") { return false }
+        if value.hasPrefix("-") { return false }
         let invalid = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
         return value.rangeOfCharacter(from: invalid) == nil
     }
@@ -492,15 +506,9 @@ enum CommandResolver {
         let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.isValidSSHComponent(trimmedHost) else { return nil }
         let trimmedUser = user?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let normalizedUser: String?
-        if let trimmedUser {
-            guard self.isValidSSHComponent(trimmedUser) else { return nil }
-            normalizedUser = trimmedUser.isEmpty ? nil : trimmedUser
-        } else {
-            normalizedUser = nil
-        }
+        if let trimmedUser, !self.isValidSSHComponent(trimmedUser) { return nil }
         guard port > 0, port <= 65535 else { return nil }
-        return SSHParsedTarget(user: normalizedUser, host: trimmedHost, port: port)
+        return SSHParsedTarget(user: trimmedUser, host: trimmedHost, port: port)
     }
 
     private static func sshTargetString(_ target: SSHParsedTarget) -> String {

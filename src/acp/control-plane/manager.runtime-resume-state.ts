@@ -1,11 +1,10 @@
-/** Recovery helpers for stale ACP persistent session ids and early runtime exits. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import type { AcpRuntimeError } from "../runtime/errors.js";
-import type { AcpSessionControlBinding } from "../runtime/session-control-owner.js";
+import type { AcpSessionControlBinding } from "../runtime/session-meta-control.types.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import {
   assertAcpRuntimeOwnerSupport,
@@ -18,12 +17,10 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 
-/** Detects acpx exits that are safe to retry with a fresh runtime handle. */
 export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
 }
 
-/** acpx detail code for a persistent session that can no longer be resumed and must be re-created. */
 const SESSION_RESUME_REQUIRED_DETAIL_CODE = "SESSION_RESUME_REQUIRED";
 
 // Backends wrap missing-session errors differently; the structured cause code

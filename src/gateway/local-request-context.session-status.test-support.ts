@@ -16,6 +16,7 @@ export function mockSessionStatusModelDependencies() {
       return {
         snapshot,
         pluginGeneration: {
+          remoteCatalog: null,
           pluginMetadataSnapshot: snapshot.metadataSnapshot,
           inlineProviderModels: snapshot.inlineProviderModels,
           configuredCatalogEntries: snapshot.modelCatalog.entries,

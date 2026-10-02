@@ -6,6 +6,7 @@ import type {
   WorkerProfile,
   WorkerProvider,
 } from "../../plugins/types.js";
+import { notifyListeners } from "../../shared/listeners.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
 import {
   normalizeWorkerMachineOptions,
@@ -35,13 +36,9 @@ export function createWorkerMachineCatalog(
   const machineCatalogChanged = (profileId: string, catalog: MachineCatalog) => {
     if (machineCatalogs.get(profileId) === catalog) {
       machineShapeVersion += 1;
-      for (const listener of machineShapeListeners) {
-        try {
-          listener(profileId);
-        } catch {
-          options.warn("Worker machine metadata change reporting failed");
-        }
-      }
+      notifyListeners(machineShapeListeners, profileId, () => {
+        options.warn("Worker machine metadata change reporting failed");
+      });
     }
   };
 

@@ -1,4 +1,3 @@
-// OpenClaw gateway methods host the setup/repair conversation for clients.
 import {
   buildSystemAgentInferenceUnavailableErrorDetails,
   buildSystemAgentSessionInvalidatedErrorDetails,
@@ -32,7 +31,6 @@ import { buildOnboardingWelcome } from "../../system-agent/onboarding-welcome.js
 import { appendTranscriptReset, readTranscriptTail } from "../../system-agent/transcript-store.js";
 import { resolveUserPath } from "../../utils.js";
 import { WizardSession } from "../../wizard/session.js";
-import { listVisiblePendingApprovalRequests } from "./approval-shared.js";
 import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
@@ -125,20 +123,6 @@ async function evictOldestSession(
 }
 
 export const systemAgentHandlers: GatewayRequestHandlers = {
-  "openclaw.approval.list": async ({ respond, client, context }) => {
-    const manager = context.systemAgentApprovalManager;
-    respond(
-      true,
-      manager
-        ? await listVisiblePendingApprovalRequests({
-            manager,
-            client,
-            ...(client?.authenticatedUserProfile ? { getCfg: context.getRuntimeConfig } : {}),
-          })
-        : [],
-      undefined,
-    );
-  },
   "openclaw.chat.history": defineValidatedGatewayHandler(
     "openclaw.chat.history",
     validateSystemAgentChatHistoryParams,
@@ -451,7 +435,10 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         let welcomeQuestion: SystemAgentChatQuestion | undefined;
         try {
           if (params.welcomeVariant === "onboarding") {
-            const onboardingWelcome = await buildOnboardingWelcome({ engine });
+            const onboardingWelcome = await buildOnboardingWelcome({
+              engine,
+              locale: client?.connect.locale,
+            });
             welcome = onboardingWelcome.text;
             welcomeQuestion = onboardingWelcome.question;
           } else if (params.welcomeVariant === "new-agent") {

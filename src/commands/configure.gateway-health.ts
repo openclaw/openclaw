@@ -29,61 +29,34 @@ export async function runGatewayHealthCheck(params: {
   const remoteWsUrl = params.cfg.gateway?.mode === "remote" ? remoteUrl : undefined;
   const probeMode = remoteWsUrl ? "remote" : "local";
   const wsUrl = remoteWsUrl ?? localLinks.wsUrl;
-  let token: string | undefined;
-  let password: string | undefined;
-  // Remote and local probe credentials belong to different trust surfaces.
-  // Keep their resolution separate so one target never receives the other's secrets.
-  if (probeMode === "remote") {
-    const remoteProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: params.cfg,
-      env: process.env,
-      mode: "remote",
-    });
-    if (remoteProbeAuth.warning) {
-      const hasResolvedRemoteAuth = Boolean(
-        remoteProbeAuth.auth.token || remoteProbeAuth.auth.password,
-      );
-      note(
-        [
-          "Could not resolve remote gateway SecretRef for health check.",
-          remoteProbeAuth.warning,
-          ...(hasResolvedRemoteAuth
-            ? ["Continuing with the other configured remote credential."]
-            : [
-                "Health check skipped to avoid falling back to ambient credentials.",
-                `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
-              ]),
-        ].join("\n"),
-        "Gateway auth",
-      );
-      // A failed ref does not invalidate a resolved sibling config credential.
-      // Skip only when generic health auth could otherwise recover ambient auth.
-      if (!hasResolvedRemoteAuth) {
-        return "skipped";
-      }
-    }
-    ({ token, password } = remoteProbeAuth.auth);
-  } else {
-    const localProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
-      cfg: params.cfg,
-      env: process.env,
-      mode: "local",
-      localPrecedence: "env-first",
-    });
-    if (localProbeAuth.warning) {
-      note(
-        [
-          "Could not resolve local gateway SecretRef for health check.",
-          localProbeAuth.warning,
-          "Health check skipped to avoid falling back to ambient credentials.",
-          `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
-        ].join("\n"),
-        "Gateway auth",
-      );
+  const probeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+    cfg: params.cfg,
+    env: process.env,
+    mode: probeMode,
+    ...(probeMode === "local" ? { localPrecedence: "env-first" as const } : {}),
+  });
+  if (probeAuth.warning) {
+    // Only remote mode can retain a resolved sibling credential after a failed ref.
+    const canUseOtherCredential =
+      probeMode === "remote" && Boolean(probeAuth.auth.token || probeAuth.auth.password);
+    note(
+      [
+        `Could not resolve ${probeMode} gateway SecretRef for health check.`,
+        probeAuth.warning,
+        ...(canUseOtherCredential
+          ? ["Continuing with the other configured remote credential."]
+          : [
+              "Health check skipped to avoid falling back to ambient credentials.",
+              `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
+            ]),
+      ].join("\n"),
+      "Gateway auth",
+    );
+    if (!canUseOtherCredential) {
       return "skipped";
     }
-    ({ token, password } = localProbeAuth.auth);
   }
+  const { token, password } = probeAuth.auth;
 
   try {
     const gatewayProbe = await waitForGatewayReachable({

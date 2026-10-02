@@ -1,5 +1,6 @@
 import { format } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -84,8 +85,8 @@ vi.mock("./update-requester-authority.js", () => ({
 vi.mock("./update-run-ledger.js", () => ({
   adoptUpdateRun: vi.fn(),
   getUpdateRun: fixture.terminal,
-  recordUpdateRunStep: fixture.recordStep,
 }));
+vi.mock("./update-run-write.async.js", () => ({ recordUpdateRunStepAsync: fixture.recordStep }));
 
 const originalArgv = process.argv;
 const originalExitCode = process.exitCode;
@@ -540,7 +541,7 @@ it.each([
   const doctor = vi.fn();
   vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
   fixture.ownerLease.mockReturnValue(owner);
-  fixture.recordStep.mockImplementation((runId: string, step: unknown) => ({
+  fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
     runId,
     status: "running",
     steps: [step],
@@ -599,11 +600,15 @@ it.each([
     );
     // The receipt is a retained `finalize:` step whose key carries the identity,
     // so published parents' detail compaction cannot erase it.
-    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith("synthetic-run", {
-      step: "finalize:predecessor-stop:7:1000:631:f",
-      status: "completed",
-      endedAtMs: 7,
-    });
+    expect(fixture.recordStep).toHaveBeenCalledExactlyOnceWith(
+      "synthetic-run",
+      {
+        step: "finalize:predecessor-stop:7:1000:631:f",
+        status: "completed",
+        endedAtMs: 7,
+      },
+      expect.objectContaining({ assertCurrent: expect.any(Function) }),
+    );
     if (!uncertain) {
       expect(fixture.stopService.mock.invocationCallOrder[0]).toBeLessThan(
         doctor.mock.invocationCallOrder[0] ?? 0,

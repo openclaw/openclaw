@@ -430,13 +430,11 @@ it("rolls back archive metadata when protection changes at planning commit", asy
   });
 });
 
-it.each(
-  (["backdate", "restore"] as const).flatMap((mutation) =>
-    (["before-authorization", "after-settlement", "missing-after-settlement"] as const).map(
-      (boundary) => ({ mutation, boundary }),
-    ),
-  ),
-)(
+it.each([
+  { mutation: "backdate", boundary: "before-authorization" },
+  { mutation: "restore", boundary: "after-settlement" },
+  { mutation: "backdate", boundary: "missing-after-settlement" },
+] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

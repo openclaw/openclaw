@@ -33,19 +33,11 @@ function stringifyToolResultContent(
   return "";
 }
 
-export function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
+export function convertAnthropicMessagesToResponsesInput(
+  messages: AnthropicMessage[],
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
+  for (const message of messages) {
     const content = message.content;
     if (typeof content === "string") {
       items.push({
@@ -105,9 +97,7 @@ export function convertAnthropicMessagesToResponsesInput(params: {
       items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
     // A tool-result-only turn has no user message: it continues the active turn.
-    for (const item of [...toolUseItems, ...toolResultItems]) {
-      items.push(item);
-    }
+    items.push(...toolUseItems, ...toolResultItems);
   }
   return items;
 }

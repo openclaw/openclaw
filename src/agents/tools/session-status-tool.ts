@@ -1,3 +1,4 @@
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   ElevatedLevel,
@@ -44,7 +45,7 @@ import {
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { readNonNegativeIntegerParam, readToolStringParam } from "./common.js";
+import { readNonNegativeIntegerParam, readToolStringParam, textResult } from "./common.js";
 import {
   resolveGatewayToolOperatorSelection,
   wrapGatewayPersonalToolExecution,
@@ -93,10 +94,7 @@ function compactSessionStateEventPayload(
       ? payload.outcome
       : undefined;
   const channel = readStringValue(payload.channel);
-  const turns =
-    typeof payload.turns === "number" && Number.isSafeInteger(payload.turns) && payload.turns > 0
-      ? payload.turns
-      : undefined;
+  const turns = asPositiveSafeInteger(payload.turns);
   return outcome || channel || turns !== undefined
     ? {
         ...(outcome ? { outcome } : {}),
@@ -799,28 +797,25 @@ export function createSessionStatusTool(opts?: {
                 : null;
 
           await assertStatusVisible();
-          return {
-            content: [{ type: "text", text: visibleStatusText }],
-            details: {
-              ok: true,
-              sessionKey: scopedResolved.key,
-              agentId,
-              changedModel,
-              stateVersion,
-              ...(stateChanges ? { stateChanges } : {}),
-              ...(modelRaw !== undefined
-                ? {
-                    model: resultOverrideModel ?? defaultModelForCard,
-                    ...((resultOverrideProvider ?? providerForCard)
-                      ? { modelProvider: resultOverrideProvider ?? providerForCard }
-                      : {}),
-                    modelOverride: modelOverrideForResult,
-                  }
-                : {}),
-              statusText: visibleStatusText,
-              ...routeDetails,
-            },
-          };
+          return textResult(visibleStatusText, {
+            ok: true,
+            sessionKey: scopedResolved.key,
+            agentId,
+            changedModel,
+            stateVersion,
+            ...(stateChanges ? { stateChanges } : {}),
+            ...(modelRaw !== undefined
+              ? {
+                  model: resultOverrideModel ?? defaultModelForCard,
+                  ...((resultOverrideProvider ?? providerForCard)
+                    ? { modelProvider: resultOverrideProvider ?? providerForCard }
+                    : {}),
+                  modelOverride: modelOverrideForResult,
+                }
+              : {}),
+            statusText: visibleStatusText,
+            ...routeDetails,
+          });
         },
       });
     }),

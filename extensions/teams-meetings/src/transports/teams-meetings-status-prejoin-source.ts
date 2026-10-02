@@ -8,24 +8,14 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   return MeetingPlatformAdapter.createStatusPreludeSource(params, {
     controlLookupSource: `const buttons = [...document.querySelectorAll("button")];
   const findTextButton = (pattern) => buttons.find((button) => !button.disabled && pattern.test(label(button)));`,
-    lifecycleSource: `  const continueInBrowser = first(selectors.continueInBrowser) ||
+    lifecycleSource: (sources) => `  const continueInBrowser = first(selectors.continueInBrowser) ||
     findTextButton(/continue on this browser|join on the web|use the web app|continue without the app/i);
   if (canMutateSession && identityVerifiedBeforeCall && continueInBrowser) {
     continueInBrowser.click();
     notes.push("Continued to the Teams web client.");
     await waitForUi();
   }
-  const guestInput = first(selectors.guestName) || [...document.querySelectorAll("input")].find((input) =>
-    /enter your name|type your name|your name|display name/i.test(label(input) + " " + (input.placeholder || ""))
-  );
-  if (canMutateSession && identityVerifiedBeforeCall && autoJoin && guestInput && !guestInput.value) {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    guestInput.focus();
-    if (setter) setter.call(guestInput, ${JSON.stringify(params.guestName)});
-    else guestInput.value = ${JSON.stringify(params.guestName)};
-    guestInput.dispatchEvent(new Event("input", { bubbles: true }));
-    guestInput.dispatchEvent(new Event("change", { bubbles: true }));
-  }
+${sources.guestName(false)}
   const leave = first(selectors.leave);
   const continueWithoutDevices = findTextButton(/^continue without audio or video$/i);
   let dismissedDevicePrompt = false;
@@ -76,21 +66,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
     markerAgeMs < 5_000 &&
     !leave
   );
-  const identityPreservedInCall = Boolean(
-    !currentIdentity &&
-    priorMeeting?.identity === expectedIdentity &&
-    leave &&
-    leave.isConnected !== false &&
-    (
-      identityAdoptedInCall ||
-      identityRerenderedInCall ||
-      (
-        priorMeeting?.inCallControl === leave &&
-        priorMeeting?.inCallUrl === location.href
-      )
-    )
-  );
-  const identityVerified = identityVerifiedBeforeCall || identityPreservedInCall;
+${sources.preservedIdentity}
   const inCall = Boolean(identityVerified && leave);
   if (canMutateSession && identityVerified && meetingOwnerConflict) {
     // The tab can survive a Teams SPA meeting/session change. Old hidden bridges
@@ -138,112 +114,29 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
   if (identityVerified && !inCall && join && cameraState !== "off") {
     controlManualAction = manualActionFor("teams-camera-required", "Turn the Teams camera off and verify the camera control shows it is off, then retry joining.");
   }
-  const { isVirtualAudioDevice, isVirtualAudioDeviceNode, microphoneDeviceRoots, selectedMicrophoneLabel } = meetingAudioInput;
-  let audioInputRouted;
-  let audioInputDeviceLabel;
-  let audioInputRouteError;
-  const ensureVirtualAudioInput = async () => {
-    if (!navigator.mediaDevices?.enumerateDevices) return false;
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const input = devices.find(
-        (device) => device.kind === "audioinput" && isVirtualAudioDevice(device.label)
-      );
-      if (!input?.deviceId) return false;
-      audioInputDeviceLabel = input.label || "Virtual audio device";
-      // Teams hides the selected-device control after admission. Reopen the in-call audio
-      // options and verify the current selection before unmuting; installed devices alone
-      // do not prove which microphone Teams is using.
-      const preparedInput = window.__openclawTeamsMeeting;
+${sources.virtualAudioInput({
+  selectionSource: `      const preparedInput = window.__openclawTeamsMeeting;
       const preparedSelection = Boolean(
         readOnly &&
         preparedInput?.identity === expectedIdentity &&
         (!sessionId || preparedInput?.sessionId === sessionId) &&
         preparedInput?.audioInputDeviceId === input.deviceId
       );
-      let selected = Boolean(selectedMicrophoneLabel()) || preparedSelection;
-      if (!selected && canMutateSession) {
-        const settings = first(selectors.deviceSettings);
-        if (settings) {
-          settings.click();
-          await waitForUi();
-        }
-        const { control } = microphoneDeviceRoots();
-        if (control?.tagName?.toLowerCase() === "select") {
-          const options = [...control.options];
-          const option = options.find(isVirtualAudioDeviceNode);
-          if (option) {
-            control.value = option.value;
-            control.dispatchEvent(new Event("change", { bubbles: true }));
-            await waitForUi();
-          }
-        } else if (control) {
-          clickable(control)?.click?.();
-          await waitForUi();
-        }
-        const choices = microphoneDeviceRoots().roots.flatMap((root) =>
-          selectors.audioDeviceOptions.flatMap((selector) => [
-            ...(root.querySelectorAll?.(selector) || []),
-          ])
-        );
-        const choice = choices.find(isVirtualAudioDeviceNode);
-        if (choice && choice.getAttribute?.("aria-selected") !== "true") {
-          clickable(choice)?.click?.();
-          await waitForUi();
-        }
-        selected = Boolean(selectedMicrophoneLabel());
-      }
-      if (selected && window.__openclawTeamsMeeting?.identity === expectedIdentity) {
+      let selected = Boolean(selectedMicrophoneLabel()) || preparedSelection;`,
+  afterSelectionSource: `      if (selected && window.__openclawTeamsMeeting?.identity === expectedIdentity) {
         window.__openclawTeamsMeeting.audioInputDeviceId = input.deviceId;
       }
-      return selected;
-    } catch (error) {
-      audioInputRouteError = error?.message || String(error);
-      return false;
-    }
-  };
-  if (identityVerified && !inCall && allowMicrophone && microphone) {
-    audioInputRouted = await ensureVirtualAudioInput();
-    if (!audioInputRouted) {
-      if (canMutateSession && microphoneState === "on") {
-        microphone.click();
-        await refreshMicrophoneState();
-      }
-      controlManualAction = manualActionFor("teams-audio-choice-required", "Select the OpenClaw virtual audio device as the Teams microphone and verify it is selected before enabling talk-back.");
-    } else if (canMutateSession && microphoneState === "off") {
-      microphone.click();
-      await refreshMicrophoneState();
-      if (microphoneState === "on") {
-        notes.push("Unmuted the Teams microphone after verifying the virtual audio input.");
-      }
-    }
-    if (audioInputRouted && microphoneState !== "on") {
+`,
+})}
+${sources.prejoinMicrophone({
+  unroutedSource: `      controlManualAction = manualActionFor("teams-audio-choice-required", "Select the OpenClaw virtual audio device as the Teams microphone and verify it is selected before enabling talk-back.");`,
+  afterRoutedSource: `    if (audioInputRouted && microphoneState !== "on") {
       controlManualAction = manualActionFor("teams-microphone-required", "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.");
     }
-  } else if (canMutateSession && identityVerified && !inCall && !allowMicrophone && microphoneState === "on") {
-      microphone.click();
-      await refreshMicrophoneState();
-      if (microphoneState === "off") {
-        notes.push("Muted the Teams microphone for observe-only mode.");
-      }
-  }
-  if (identityVerified && inCall && allowMicrophone) {
-    if (!selectedMicrophoneLabel() && canMutateSession && microphoneState === "on") {
-      microphone?.click();
-      await refreshMicrophoneState();
-    }
-    audioInputRouted = await ensureVirtualAudioInput();
-    if (audioInputRouted && canMutateSession && microphoneState === "off") {
-      microphone?.click();
-      await refreshMicrophoneState();
-    } else if (!audioInputRouted && canMutateSession && microphoneState === "on") {
-      microphone?.click();
-      await refreshMicrophoneState();
-      if (microphoneState === "off") {
-        notes.push("Muted the Teams microphone because the virtual audio input could not be reverified.");
-      }
-    }
-  }
+`,
+  muteInCall: false,
+})}
+${sources.inCallMicrophone}
   if (identityVerified && !inCall && join && !allowMicrophone && microphoneState !== "off") {
     controlManualAction = manualActionFor("teams-microphone-required", "Mute the Teams microphone and verify the microphone control shows it is off, then retry joining.");
   }
@@ -256,7 +149,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
       controlManualAction = manualActionFor("teams-microphone-required", "Unmute the Teams microphone and verify the microphone control shows it is on, then retry joining.");
     }
   }`,
-    manualActionSource: `  const pageText = text(document.body);
+    manualActionSource: (sources) => `  const pageText = text(document.body);
   const pageTextLower = pageText.toLowerCase();
   const lobbyWaiting = Boolean(first(selectors.lobby)) ||
     /someone will let you in shortly|waiting for someone to let you in|when someone admits you|you.?re in the lobby|we.?ve let people in the meeting know you.?re waiting/i.test(pageTextLower);
@@ -268,37 +161,7 @@ export function teamsMeetingStatusPreludeSource(params: MeetingStatusPreludePara
     hostname.endsWith(".microsoftonline.com") ||
     tenantLoginRequired ||
     (Boolean(signInControl) && !guestInput && !join && /sign in to (?:join|continue)|sign in to your account/i.test(pageTextLower));
-  let microphonePermissionState;
-  if (allowMicrophone && navigator.permissions?.query) {
-    try {
-      microphonePermissionState = (await navigator.permissions.query({ name: "microphone" })).state;
-    } catch {}
-  }
-  const devicePermissionPrompt = !dismissedDevicePrompt && Boolean(
-    first(selectors.permissionPrompt) || continueWithoutDevices
-  );
-  // Teams shows the same no-audio/video warning when only camera access is denied.
-  // A granted microphone plus the verified virtual audio input is sufficient for talk-back.
-  const permissionRequired = devicePermissionPrompt &&
-    (!allowMicrophone || microphonePermissionState !== "granted");
-  let manualAction;
-  if (committedOwnerConflict && !canMutateSession) {
-    manualAction = manualActionFor("teams-session-conflict", "This Teams tab is owned by another active meeting session.");
-  } else if (!inCall && loginRequired) {
-    manualAction = manualActionFor("teams-login-required", tenantLoginRequired ? "This Teams tenant requires sign-in or email verification. Complete it in the OpenClaw browser profile, then retry." : "Sign in to Microsoft Teams in the OpenClaw browser profile, then retry the meeting join.");
-  } else if (!inCall && lobbyWaiting) {
-    manualAction = manualActionFor("teams-admission-required", "Admit the OpenClaw guest from the Microsoft Teams lobby, then retry speech.");
-  } else if (!inCall && permissionRequired) {
-    manualAction = manualActionFor("teams-permission-required", allowMicrophone ? "Allow microphone permission for Teams in the OpenClaw browser profile, then retry." : "Dismiss the Teams device-permission prompt or continue without devices, then retry.");
-  } else if (!inCall && controlManualAction) {
-    manualAction = controlManualAction;
-  }
-  let clickedJoin = false;
-  if (canMutateSession && identityVerified && autoJoin && !inCall && join && !join.disabled && !manualAction) {
-    join.click();
-    clickedJoin = true;
-    notes.push("Clicked the Teams guest join button.");
-  }`,
+${sources.manualActions({ loginDisplayName: "Microsoft Teams", inCallControls: false })}`,
     platform: {
       displayName: "Teams",
       globals: {

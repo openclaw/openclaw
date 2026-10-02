@@ -14,6 +14,12 @@ and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
 feedback learnings are no longer imported from JSON files. If those sources
 remain, Doctor preserves them and directs you to [upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
 and run its migrations first. Existing SQLite state remains authoritative.
+Doctor archives a retired Telegram `thread-bindings-*.json` file as a completed
+no-op only when it is a regular file containing exactly version `1` and an empty
+`bindings` array. Nonempty, malformed, symlinked, or otherwise uncertain files
+remain preserved for operator review. If archiving a verified empty file fails,
+Doctor keeps the original bytes for a later retry and reports a recoverable
+warning. This cleanup failure does not block an update.
 Retired `subagents/runs.json` files are also ignored and left untouched;
 transient runs are never restored from them.
 
@@ -41,6 +47,41 @@ including loose `agent/settings.json` files without an agent owner, remain untou
 and deferred. Doctor reports the retained source and continues independent migrations;
 startup reports remaining readiness advisories. An advisory never hides a separate
 required-store refusal.
+
+Doctor also converts older session-row pending-delivery, model-fallback, and
+memory-flush fields to their current structured state. Published
+`v2026.7.2-beta.5` wrote these fields directly into schema-v16 session rows;
+stable `v2026.8.1` upgrades retain those stored values. This durable upgrade
+path needs a migration even though current writers already emit structured state.
+Before rewriting an
+existing database, it saves and reports a verified SQLite backup, including the
+original row values. Pending reply text, destinations, intent IDs, timestamps,
+and memory-flush counts retain their previous meaning; existing current values
+take precedence. Obsolete retry and error details remain in the backup.
+This repair changes only those state fields. Transcript locators, other raw
+metadata, split snapshots, and malformed identity fields remain with their
+existing repair owners; scalar repair never invents or certifies an identity.
+SQLite changes only the affected top-level JSON fields, preserving unrelated
+opaque values, including numeric tokens that JavaScript cannot represent exactly.
+Doctor uses the existing snapshot and bounded rewrite owners. Its captured file
+identity also reaches the normal database admission owner, which checks it before
+changing permissions, journal mode, schema, or rows. Doctor supplies these facts
+through the database owner's internal repair admission; plugin SDK options stay
+unchanged. A repair cannot adopt a replacement file after its backup or begin a
+mutation after its owner has retired.
+Ordinary session reads require this repair instead of converting the old fields
+in memory. A Doctor preview reports the affected rows without changing them and
+defers further session inspection until `doctor --fix` runs. The update-time
+Doctor pass performs the same repair before the candidate resumes sessions.
+The migration prelude upgrades database schemas before retrying deferred scalar
+repairs. Standalone session import keeps its existing `doctor --fix` prerequisite
+for older schemas; session recovery restores or repairs its selected database
+before inspecting and converting scalar state.
+If the recovered database still needs a schema upgrade, recovery reports the
+`doctor --fix` prerequisite instead of claiming success.
+Repair failures stop Doctor instead of becoming optional health warnings. If a
+later batch is interrupted, earlier committed batches stay canonical and the
+original backups remain available; rerunning Doctor repairs the remaining rows.
 
 If Doctor is interrupted during an agent schema or media migration, stop other
 OpenClaw processes using that state and rerun `openclaw doctor --fix`. Doctor
@@ -203,6 +244,12 @@ Repair exits nonzero while retained legacy state still blocks agent turns, even 
 When Doctor runs inside an update or repair, let that command finish before
 following recovery advice from an intermediate plugin warning. The updater may
 complete package convergence and run Doctor again before it exits.
+
+Doctor can finish an installation-only deferral once the installed plugin's
+metadata confirms it has no state migration or inspection to run, including when
+its channel is disabled or it no longer has a config entry. This preserves the
+plugin's activation settings and saved configuration. Previously recorded state
+migration or inspection obligations still require the plugin to complete them.
 
 If the installed plugin still has not reported migration completion, run
 `openclaw doctor --fix`. If that cannot complete the migration, report the

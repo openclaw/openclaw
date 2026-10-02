@@ -10,10 +10,8 @@ import {
 } from "../src/gateway/control-ui-route-preloads.ts";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { CONTROL_UI_LOCALE_ENTRIES } from "./lib/control-ui-i18n-config.ts";
-
-function isMetricsRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+import { isRecord } from "./lib/record-shared.mjs";
+import { escapeRegExp } from "./lib/regexp.mjs";
 
 const KIB = 1024;
 const STARTUP_JS_BASELINE_RATCHET_BYTES = 4096;
@@ -56,6 +54,9 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 // accompany an intentional loading or chunking decision.
 const controlUiPerformanceBudgets = {
   startupJsRequests: 18,
+  // Main 098173f9f5d4 with facade optimization measured chat/new at 31/32 requests.
+  // Allow 3 above the maximum while catching the roughly 19-request facade regression.
+  routeBootJsRequests: 35,
   startupCssRequests: 1,
   // Approved measured upload-control baseline; retain the fixed growth and variance allowances.
   startupJsGzipBytes: 371_771,
@@ -134,10 +135,6 @@ function largestAsset(assets: Array<ReturnType<typeof readAssetMetrics>>) {
   return assets.toSorted(
     (left, right) => right.gzipBytes - left.gzipBytes || left.file.localeCompare(right.file),
   )[0]!;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
 function controlUiLocaleAssetIdentity(
@@ -309,6 +306,16 @@ export function evaluateControlUiPerformanceBudgets(
       "count",
     ],
   ];
+  if (metrics.routeBoot) {
+    for (const route of ["chat", "new"] as const) {
+      checks.push([
+        `${route} boot JS requests`,
+        metrics.routeBoot[route].js.requests,
+        budgets.routeBootJsRequests,
+        "count",
+      ]);
+    }
+  }
   const violations = checks.flatMap(([metric, actual, limit, unit]) =>
     actual > limit ? [{ metric, actual, limit, unit }] : [],
   );
@@ -447,7 +454,7 @@ export function formatControlUiPerformanceReport(
     for (const route of ["chat", "new"] as const) {
       const boot = metrics.routeBoot[route];
       lines.push(
-        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS)`,
+        `  ${route} boot JS: ${formatAssetSummary(boot.js)} (${boot.js.gzipBytes - metrics.startup.js.gzipBytes} B beyond initial-entry JS; limit: ${formatRequestCount(budgets.routeBootJsRequests)})`,
         `  ${route} boot CSS: ${formatAssetSummary(boot.css)}`,
       );
       if (baseMetrics) {
@@ -528,7 +535,7 @@ function isIsoDate(value: string): boolean {
 function readControlUiStartupBudgetBaseline(baselinePath: string): ControlUiStartupBudgetBaseline {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(baselinePath, "utf8"));
-    const record: Record<string, unknown> = isMetricsRecord(parsed) ? parsed : {};
+    const record: Record<string, unknown> = isRecord(parsed) ? parsed : {};
     const { startupJsGzipBytes, reason, updatedAt } = record;
     if (
       typeof startupJsGzipBytes !== "number" ||
@@ -623,6 +630,7 @@ export function runControlUiPerformanceCheck(
 function main(argv: string[] = process.argv.slice(2)): void {
   let json = false;
   let reportOnly = false;
+  let distDir: string | undefined;
   let baseDistDir: string | undefined;
   let updateBaseline = false;
   let reason: string | undefined;
@@ -633,12 +641,16 @@ function main(argv: string[] = process.argv.slice(2)): void {
       json = true;
     } else if (arg === "--report-only") {
       reportOnly = true;
-    } else if (arg === "--base-dist") {
+    } else if (arg === "--base-dist" || arg === "--dist") {
       const value = argv[++index];
       if (!value || value.startsWith("--")) {
-        throw new Error("--base-dist requires a directory");
+        throw new Error(`${arg} requires a directory`);
       }
-      baseDistDir = path.resolve(value);
+      if (arg === "--dist") {
+        distDir = path.resolve(value);
+      } else {
+        baseDistDir = path.resolve(value);
+      }
     } else if (arg === "--update-baseline") {
       updateBaseline = true;
     } else if (arg === "--reason") {
@@ -670,10 +682,12 @@ function main(argv: string[] = process.argv.slice(2)): void {
   if (json && updateBaseline) {
     throw new Error("--json cannot be combined with --update-baseline");
   }
-  if (updateBaseline && (reportOnly || baseDistDir)) {
-    throw new Error("--report-only and --base-dist cannot be combined with --update-baseline");
+  if (updateBaseline && (reportOnly || baseDistDir || distDir)) {
+    throw new Error(
+      "--report-only, --base-dist and --dist cannot be combined with --update-baseline",
+    );
   }
-  const distDir = path.resolve(SCRIPT_DIR, "../dist/control-ui");
+  distDir ??= path.resolve(SCRIPT_DIR, "../dist/control-ui");
   if (updateBaseline) {
     if (startupJsBytes !== undefined) {
       const currentBaseline = readControlUiStartupBudgetBaseline(

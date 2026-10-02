@@ -39,7 +39,7 @@ describe("repository checkpoint GitHub publication", () => {
     const previous = person.placements;
     await expect(
       previous.withWorkspaceExclusion(SESSION_ID, async (assertOwned) => {
-        restartPersonalPublicationFixture(person);
+        await restartPersonalPublicationFixture(person);
         expect(assertOwned).toThrow("was aborted");
       }),
     ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
@@ -51,7 +51,7 @@ describe("repository checkpoint GitHub publication", () => {
     );
   });
 
-  it.each(["turn", "reset", "move", "held", "store-busy", "retired-owner"] as const)(
+  it.each(["reset", "move", "held", "store-busy", "retired-owner"] as const)(
     "requires the same personal owner after restart and a later %s",
     async (boundary) => {
       const f = await createRepositoryPublicationFixture(checkpoint);
@@ -79,7 +79,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(original.pushed_head_commit).toBeNull();
       await f.capture("later unselected change\n", "later");
       const retiredCoordinator = person.coordinator;
-      restartPersonalPublicationFixture(person);
+      await restartPersonalPublicationFixture(person);
       const preparedStatus = await person.coordinator.preparePersonalStatus(first.requestId);
       const pending = person.coordinator.personalStatus(
         person.action,

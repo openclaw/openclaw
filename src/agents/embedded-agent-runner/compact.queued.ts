@@ -351,7 +351,7 @@ async function compactEmbeddedAgentSessionImpl(
     };
     const run = async () => {
       owner.captureContext();
-      ensureContextEnginesInitialized();
+      await ensureContextEnginesInitialized();
       const contextEngine = await owner.resolveEngine(() =>
         resolveContextEngine(preparedParams.config, {
           agentDir: preparedParams.agentDir,

@@ -1,4 +1,3 @@
-// Status helpers normalize plugin health and setup state into user-facing status summaries.
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ChannelStatusAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
@@ -206,12 +205,7 @@ export function buildBaseChannelStatusSummary<TExtra extends StatusSnapshotExtra
 
 /** Extend the base summary with probe fields while preserving stable null defaults. */
 export function buildProbeChannelStatusSummary<TExtra extends Record<string, unknown>>(
-  snapshot: {
-    configured?: boolean | null;
-    running?: boolean | null;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
+  snapshot: Parameters<typeof buildBaseChannelStatusSummary>[0] & {
     probe?: unknown;
     lastProbeAt?: number | null;
   },
@@ -226,13 +220,8 @@ export function buildProbeChannelStatusSummary<TExtra extends Record<string, unk
 
 /** Build webhook channel summaries with a stable default mode. */
 export function buildWebhookChannelStatusSummary<TExtra extends StatusSnapshotExtra>(
-  snapshot: {
-    configured?: boolean | null;
+  snapshot: Parameters<typeof buildBaseChannelStatusSummary>[0] & {
     mode?: string | null;
-    running?: boolean | null;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
   },
   extra?: TExtra,
 ) {
@@ -245,12 +234,7 @@ export function buildWebhookChannelStatusSummary<TExtra extends StatusSnapshotEx
 /** Build the standard per-account status payload from config metadata plus runtime state. */
 export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtra>(
   params: {
-    account: {
-      accountId: string;
-      name?: string;
-      enabled?: boolean;
-      configured?: boolean;
-    };
+    account: ComputedAccountStatusBase;
     runtime?: RuntimeLifecycleSnapshot | null;
     probe?: unknown;
   },
@@ -279,11 +263,7 @@ export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtr
 
 /** Convenience wrapper when the caller already has flattened account fields instead of an account object. */
 export function buildComputedAccountStatusSnapshot<TExtra extends StatusSnapshotExtra>(
-  params: {
-    accountId: string;
-    name?: string;
-    enabled?: boolean;
-    configured?: boolean;
+  params: ComputedAccountStatusBase & {
     runtime?: RuntimeLifecycleSnapshot | null;
     probe?: unknown;
   },
@@ -403,16 +383,9 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
 
 /** Build token-based channel status summaries with optional mode reporting. */
 export function buildTokenChannelStatusSummary(
-  snapshot: {
-    configured?: boolean | null;
+  snapshot: Parameters<typeof buildProbeChannelStatusSummary>[0] & {
     tokenSource?: string | null;
-    running?: boolean | null;
     mode?: string | null;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
-    probe?: unknown;
-    lastProbeAt?: number | null;
   },
   opts?: { includeMode?: boolean },
 ) {

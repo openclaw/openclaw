@@ -92,12 +92,6 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
 
 type ApproveCommandParams = Pick<Parameters<CommandHandler>[0], "cfg" | "command" | "ctx">;
 
-function buildResolvedByLabel(params: ApproveCommandParams): string {
-  const channel = params.command.channel;
-  const sender = params.command.senderId ?? "unknown";
-  return `${channel}:${sender}`;
-}
-
 type ApproveCommandBehavior =
   | { kind: "allow" }
   | { kind: "ignore" }
@@ -197,7 +191,7 @@ export async function handleApproveCommandFromContext(
     return null;
   };
 
-  const resolvedBy = buildResolvedByLabel(params);
+  const resolvedBy = `${params.command.channel}:${params.command.senderId ?? "unknown"}`;
   const callApprovalMethod = async (approvalKind: ChannelApprovalKind): Promise<void> => {
     // Channel senders deciding an OpenClaw change carry their identity so the
     // Gateway's final decision guard rechecks live custody (channel approvers,

@@ -2,11 +2,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { resetFileLockStateForTest } from "../../infra/file-lock.js";
 import {
   detectSharedAuthStoreMigration,
   migrateSharedAuthStore,
 } from "../../infra/state-migrations.shared-auth-store.js";
+import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
 import { resolveOpenAICodexAuthIdentity } from "../../plugin-sdk/provider-openai-chatgpt-auth.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";

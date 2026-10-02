@@ -164,11 +164,9 @@ type ControlUiAvatarMeta = {
   avatarReason: string | null;
 };
 
-function controlUiAvatarResolutionMeta(resolved: AgentAvatarResolution | null): {
-  avatarSource: string | null;
-  avatarStatus: AgentAvatarResolution["kind"] | null;
-  avatarReason: string | null;
-} {
+function controlUiAvatarResolutionMeta(
+  resolved: AgentAvatarResolution | null,
+): Omit<ControlUiAvatarMeta, "avatarUrl"> {
   if (!resolved) {
     return { avatarSource: null, avatarStatus: null, avatarReason: null };
   }
@@ -694,15 +692,12 @@ export async function handleControlUiAvatarRequest(
     requestAuth.assertCurrent();
     const resolved = projection.resolution;
     if (url.searchParams.get("meta") === "1") {
-      const meta = controlUiAvatarResolutionMeta(resolved);
       const avatarUrl =
         gatewayAssistantAvatarUrl(projection, basePath, agentId) ??
         (resolved?.kind === "remote" ? resolved.url : null);
       sendJson(res, 200, {
         avatarUrl,
-        avatarSource: meta.avatarSource,
-        avatarStatus: meta.avatarStatus,
-        avatarReason: meta.avatarReason,
+        ...controlUiAvatarResolutionMeta(resolved),
       } satisfies ControlUiAvatarMeta);
       return true;
     }
@@ -822,16 +817,13 @@ function isSafeRelativePath(relPath: string) {
     return false;
   }
   const normalized = path.posix.normalize(relPath);
-  if (path.posix.isAbsolute(normalized) || path.win32.isAbsolute(normalized)) {
-    return false;
-  }
-  if (normalized.startsWith("../") || normalized === "..") {
-    return false;
-  }
-  if (normalized.includes("\0")) {
-    return false;
-  }
-  return true;
+  return !(
+    path.posix.isAbsolute(normalized) ||
+    path.win32.isAbsolute(normalized) ||
+    normalized.startsWith("../") ||
+    normalized === ".." ||
+    normalized.includes("\0")
+  );
 }
 
 // The default SPA entry infers /__openclaw__ as its base path before bootstrap.
@@ -973,19 +965,14 @@ export async function handleControlUiHttpRequest(
   }
 
   const root = rootState.path;
-  const rootReal = await (async () => {
-    if (rootState.realPath) {
-      return rootState.realPath;
-    }
-    try {
-      return await fs.promises.realpath(root);
-    } catch (error) {
+  const rootReal =
+    rootState.realPath ||
+    (await fs.promises.realpath(root).catch((error: unknown) => {
       if (isExpectedSafePathError(error)) {
         return null;
       }
       throw error;
-    }
-  })();
+    }));
   if (!rootReal) {
     respondControlUiAssetsUnavailable(res);
     return true;

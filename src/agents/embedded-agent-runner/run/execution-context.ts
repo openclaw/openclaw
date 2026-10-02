@@ -1,3 +1,4 @@
+import type { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -13,6 +14,7 @@ import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 export type PreparedEmbeddedRunInput = {
   /** Retain lazy-writer cleanup with this prepared runtime after its logical result. */
   onInitialWriterPrepared: (resource: AsyncDisposable) => void;
+  preReplyGeneration?: Awaited<ReturnType<typeof prepareCronRootSessionGeneration>>;
   runParams: RunEmbeddedAgentParamsWithSessionFile;
   sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
   contextEngineAgentId?: string;

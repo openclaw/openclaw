@@ -29,7 +29,12 @@ async function prepareUnchangedWorkspace(options?: {
     await fs.writeFile(path.join(root, "result.txt"), options.localContent);
   }
   const ref = workerWorkspaceResultRef("unchanged-result");
-  const journal = { load: () => undefined, begin: vi.fn(), commit: vi.fn(), abort: vi.fn() };
+  const journal = {
+    load: async () => undefined,
+    begin: vi.fn(async () => {}),
+    commit: vi.fn(async () => {}),
+    abort: vi.fn(async () => {}),
+  };
   const record = vi.fn();
   const publishAcceptedManifest = vi.fn();
   let remoteFences = 0;

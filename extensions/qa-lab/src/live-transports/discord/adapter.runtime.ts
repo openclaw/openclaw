@@ -152,16 +152,16 @@ export async function createDiscordQaTransportAdapter(
           mention: input.text.includes("@openclaw"),
         });
         assertActive();
-        return await context.messages.addInboundMessage({
-          ...input,
-          accountId,
-          senderId: driverIdentity.id,
-        });
+      } else {
+        const text = input.text.replaceAll("@openclaw", `<@${runtimeEnv.sutApplicationId}>`);
+        const sent = await sendChannelMessage(
+          runtimeEnv.driverBotToken,
+          runtimeEnv.channelId,
+          text,
+        );
+        assertActive();
+        afterSnowflake = sent.id;
       }
-      const text = input.text.replaceAll("@openclaw", `<@${runtimeEnv.sutApplicationId}>`);
-      const sent = await sendChannelMessage(runtimeEnv.driverBotToken, runtimeEnv.channelId, text);
-      assertActive();
-      afterSnowflake = sent.id;
       return await context.messages.addInboundMessage({
         ...input,
         accountId,

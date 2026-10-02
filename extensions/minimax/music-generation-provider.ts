@@ -10,6 +10,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  createProviderOperationTimeoutError,
   postJsonRequest,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
@@ -125,12 +126,6 @@ function createGeneratedMusicTooLargeError(maxBytes: number): Error {
   return new Error(`MiniMax generated music download exceeds ${maxBytes} bytes`);
 }
 
-function createMinimaxMusicTimeoutError(deadline: ProviderOperationDeadline): Error {
-  const timeoutLabel =
-    typeof deadline.timeoutMs === "number" ? ` after ${deadline.timeoutMs}ms` : "";
-  return new Error(`${deadline.label} timed out${timeoutLabel}`);
-}
-
 function resolveStreamEnvelopeMaxBytes(maxBytes: number): number {
   return Math.max(
     STREAM_ENVELOPE_OVERHEAD_BYTES,
@@ -145,7 +140,7 @@ async function readResponseBufferWithDeadline(
 ): Promise<Buffer> {
   return await readResponseWithLimit(response, maxBytes, {
     timeoutMs: () => resolveBodyReadTimeoutMs(deadline),
-    onTimeout: () => createMinimaxMusicTimeoutError(deadline),
+    onTimeout: () => createProviderOperationTimeoutError(deadline),
     onOverflow: ({ maxBytes: limit }) => createGeneratedMusicTooLargeError(limit),
   });
 }

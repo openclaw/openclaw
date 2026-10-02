@@ -44,7 +44,7 @@ import { environmentsSessionHandlers } from "./environments.session.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 const GATEWAY_ENVIRONMENT: EnvironmentSummary = {
   id: "gateway",
@@ -482,84 +482,65 @@ export const environmentsHandlers: GatewayRequestHandlers = {
       "worker environment destruction failed",
     );
   },
-  "worker.desktop.observe": async ({
-    params,
-    respond,
-    context,
-    client,
-    hasCurrentClientAuthority,
-  }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateWorkerDesktopObserveParams,
-        "worker.desktop.observe",
+  "worker.desktop.observe": defineValidatedGatewayHandler(
+    "worker.desktop.observe",
+    validateWorkerDesktopObserveParams,
+    ({ params, respond, context, client, hasCurrentClientAuthority }) =>
+      respondDesktopObserve({
+        request: {
+          source: { kind: "environment", environmentId: params.environmentId },
+          ...(params.control === undefined ? {} : { control: params.control }),
+        },
         respond,
-      )
-    ) {
-      return;
-    }
-    await respondDesktopObserve({
-      request: {
-        source: { kind: "environment", environmentId: params.environmentId },
-        ...(params.control === undefined ? {} : { control: params.control }),
-      },
-      respond,
-      context,
-      requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
-    });
-  },
-  "worker.desktop.launch": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateWorkerDesktopLaunchParams,
-        "worker.desktop.launch",
+        context,
+        requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+      }),
+  ),
+  "worker.desktop.launch": defineValidatedGatewayHandler(
+    "worker.desktop.launch",
+    validateWorkerDesktopLaunchParams,
+    ({ params, respond, context }) =>
+      respondDesktopLaunch({
+        environmentId: params.environmentId,
+        app: params.app,
         respond,
-      )
-    ) {
-      return;
-    }
-    await respondDesktopLaunch({
-      environmentId: params.environmentId,
-      app: params.app,
-      respond,
-      context,
-    });
-  },
-  "desktop.observe": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
-    if (!assertValidParams(params, validateDesktopObserveParams, "desktop.observe", respond)) {
-      return;
-    }
-    await respondDesktopObserve({
-      request: params,
-      respond,
-      context,
-      requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
-    });
-  },
-  "desktop.launch": async ({ params, respond, context }) => {
-    if (!assertValidParams(params, validateDesktopLaunchParams, "desktop.launch", respond)) {
-      return;
-    }
-    await respondDesktopLaunch({
-      environmentId: params.source.environmentId,
-      app: params.app,
-      respond,
-      context,
-    });
-  },
-  "desktop.release": async ({ params, respond, client, hasCurrentClientAuthority }) => {
-    if (!assertValidParams(params, validateDesktopReleaseParams, "desktop.release", respond)) {
-      return;
-    }
-    const { releaseDesktopObserverToken } = await import("../desktop/observe-bridge.js");
-    await respondUnavailableOnThrow(respond, async () => {
-      const released = await releaseDesktopObserverToken(
-        params.wsPath,
-        resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
-      );
-      respond(true, { released }, undefined);
-    });
-  },
+        context,
+      }),
+  ),
+  "desktop.observe": defineValidatedGatewayHandler(
+    "desktop.observe",
+    validateDesktopObserveParams,
+    ({ params, respond, context, client, hasCurrentClientAuthority }) =>
+      respondDesktopObserve({
+        request: params,
+        respond,
+        context,
+        requester: resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+      }),
+  ),
+  "desktop.launch": defineValidatedGatewayHandler(
+    "desktop.launch",
+    validateDesktopLaunchParams,
+    ({ params, respond, context }) =>
+      respondDesktopLaunch({
+        environmentId: params.source.environmentId,
+        app: params.app,
+        respond,
+        context,
+      }),
+  ),
+  "desktop.release": defineValidatedGatewayHandler(
+    "desktop.release",
+    validateDesktopReleaseParams,
+    async ({ params, respond, client, hasCurrentClientAuthority }) => {
+      const { releaseDesktopObserverToken } = await import("../desktop/observe-bridge.js");
+      await respondUnavailableOnThrow(respond, async () => {
+        const released = await releaseDesktopObserverToken(
+          params.wsPath,
+          resolveDesktopObserveRequester({ client, hasCurrentClientAuthority }),
+        );
+        respond(true, { released }, undefined);
+      });
+    },
+  ),
 };

@@ -41,12 +41,10 @@ async function buildDaemonStatusSummary(
   };
 }
 
-/** Returns the gateway daemon status summary. */
 export async function getDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
   return await buildDaemonStatusSummary("gateway", timeoutMs);
 }
 
-/** Returns the node service status summary. */
 export async function getNodeDaemonStatusSummary(timeoutMs?: number): Promise<DaemonStatusSummary> {
   return await buildDaemonStatusSummary("node", timeoutMs);
 }

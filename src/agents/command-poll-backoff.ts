@@ -17,9 +17,6 @@ function calculateBackoffMs(consecutiveNoOutputPolls: number): number {
 
 /**
  * Record a command poll and return suggested retry delay.
- * @param state Session state to track polling in
- * @param commandId Unique identifier for the command being polled
- * @param hasNewOutput Whether this poll returned new output
  * @returns Suggested delay in milliseconds before next poll
  */
 export function recordCommandPoll(
@@ -45,9 +42,6 @@ export function recordCommandPoll(
   return calculateBackoffMs(newCount);
 }
 
-/**
- * Reset poll count for a command (e.g., when command completes).
- */
 export function resetCommandPollCount(state: SessionState, commandId: string): void {
   state.commandPollCounts?.delete(commandId);
 }

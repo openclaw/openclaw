@@ -211,24 +211,20 @@ export function pruneExpiredCacheTtlToolResults(params: {
     }
     (next ??= messages.slice())[index] = replacement;
   };
-  const clearCacheTtlToolResult = (message: CacheTtlToolResultMessage) => ({
-    ...message,
-    content: [{ type: "text" as const, text: settings.placeholder }],
-  });
   if (
     !params.pruneNewRounds ||
     !params.lastCacheTouchAt ||
     settings.ttlMs <= 0 ||
     params.now - params.lastCacheTouchAt < settings.ttlMs
   ) {
-    return next ?? unchanged;
+    return unchanged;
   }
   const cutoff =
     messages.flatMap((message, index) => (message.role === "assistant" ? [index] : [])).at(-3) ??
     -1;
   const start = messages.findIndex((message) => message.role === "user");
   if (cutoff < 0 || start < 0) {
-    return next ?? unchanged;
+    return unchanged;
   }
   const estimate = params.dropThinkingBlocksForEstimate ? dropThinkingBlocks(messages) : messages;
   // Thinking removal preserves positions; reuse costs only within this pruning pass.
@@ -236,7 +232,7 @@ export function pruneExpiredCacheTtlToolResults(params: {
   let totalChars = messageChars.reduce((sum, chars) => sum + chars, 0);
   const charWindow = params.contextWindowTokens * 4;
   if (totalChars / charWindow < 0.3) {
-    return next ?? unchanged;
+    return unchanged;
   }
   let pruned = false;
   const eligible: { index: number; chars: number }[] = [];
@@ -282,7 +278,10 @@ export function pruneExpiredCacheTtlToolResults(params: {
       if (message?.role !== "toolResult") {
         continue;
       }
-      const cleared = clearCacheTtlToolResult(message);
+      const cleared = {
+        ...message,
+        content: [{ type: "text" as const, text: settings.placeholder }],
+      };
       totalChars += cacheTtlMessageChars(cleared) - chars;
       recordProjection(index, cleared, "hard");
       pruned = true;
@@ -479,12 +478,6 @@ export function truncateToolResultText(
     minimumRawWeight: options.minimumRawWeight,
   });
 }
-
-const calculateMaxToolResultChars = (contextWindowTokens: number) =>
-  calculateMaxToolResultCharsWithCap(
-    contextWindowTokens,
-    resolveAutoLiveToolResultMaxChars(contextWindowTokens),
-  );
 
 export function resolveLiveToolResultAggregateMaxChars(params: {
   contextWindowTokens: number;
@@ -746,7 +739,11 @@ function resolveToolResultBudgets(params: {
 }): { maxChars: number; aggregateBudgetChars: number } {
   const maxChars = Math.max(
     1,
-    params.maxCharsOverride ?? calculateMaxToolResultChars(params.contextWindowTokens),
+    params.maxCharsOverride ??
+      calculateMaxToolResultCharsWithCap(
+        params.contextWindowTokens,
+        resolveAutoLiveToolResultMaxChars(params.contextWindowTokens),
+      ),
   );
   return {
     maxChars,
@@ -1310,17 +1307,7 @@ function buildToolResultReplacementPlan(params: {
   aggregateBudgetChars: number;
   minKeepChars?: number;
   protectTrailingToolResults?: boolean;
-}): {
-  branch: ToolResultBranchEntry[];
-  replacements: ToolResultReplacement[];
-  oversizedReplacementCount: number;
-  aggregateReplacementCount: number;
-  aggregatePressureExceeded: boolean;
-  oversizedReducibleChars: number;
-  aggregateReducibleChars: number;
-  toolResultCount: number;
-  totalToolResultChars: number;
-} {
+}) {
   const minKeepChars = params.minKeepChars ?? MIN_KEEP_CHARS;
   const protectedEntryIds = params.protectTrailingToolResults
     ? getTrailingToolResultEntryIds(params.branch)
@@ -1409,11 +1396,7 @@ function buildRecoveryToolResultReplacementPlan(params: {
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
-}): {
-  maxChars: number;
-  aggregateBudgetChars: number;
-  plan: ReturnType<typeof buildToolResultReplacementPlan>;
-} {
+}) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
   const projectedBranch = params.projectionState
     ? projectToolResultBranch({

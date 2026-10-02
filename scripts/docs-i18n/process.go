@@ -43,10 +43,7 @@ func processFile(ctx context.Context, translator docsTranslator, tm *Translation
 		return false, "", err
 	}
 
-	segments, err := extractSegments(body, relPath)
-	if err != nil {
-		return false, "", err
-	}
+	segments := extractSegments(body, relPath)
 
 	namespace := cacheNamespace()
 	for i := range segments {

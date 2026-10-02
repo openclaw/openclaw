@@ -329,10 +329,7 @@ export async function fetchCopilotModelCatalog(
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);
-      if (!def) {
-        continue;
-      }
-      if (seen.has(def.id)) {
+      if (!def || seen.has(def.id)) {
         continue;
       }
       seen.add(def.id);

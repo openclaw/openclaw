@@ -40,12 +40,8 @@ import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
-export type {
-  CronConfigJobRuntimeEntry,
-  CronQuarantinedJob,
-  LoadedCronStore,
-  QuarantinedCronConfigJob,
-} from "./store/types.js";
+export type { CronConfigJobRuntimeEntry, LoadedCronStore } from "./store/types.js";
+export type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types-shared.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
 const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
@@ -236,17 +232,17 @@ async function saveCronStoreWithWorker<Value>(
 }
 
 /** Maintenance hooks retain their owning synchronous database transaction. */
-function saveCronJobsStoreChangesWithRevisionNative(
+function saveCronJobsStoreChangesNative(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
   opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
-): CronStoreCommit<CronStoreFile> {
+): CronStoreFile {
   assertCronStoreCanPersist(next);
   const storeKey = cronStoreKey(path.resolve(storePath));
   const prepared = prepareCronStoreChanges(previous, next);
   if (prepared.changedIds.size === 0) {
-    return { value: previous, revision: getCronJobsStoreRevision(storeKey) };
+    return previous;
   }
   const { transactionHooks, ...options } = opts ?? {};
   return commitCronStoreNative(
@@ -255,40 +251,31 @@ function saveCronJobsStoreChangesWithRevisionNative(
       saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
     transactionHooks,
     "cron.config-mutation",
-  );
+  ).value;
 }
 
-/** Commits scheduler-disabled CRUD rows and retains this operation's revision fact. */
-export async function saveCronJobsStoreChangesWithRevision(
-  storePath: string,
-  previous: CronStoreFile,
-  next: CronStoreFile,
-  opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
-): Promise<CronStoreCommit<CronStoreFile>> {
-  if (opts?.transactionHooks) {
-    return saveCronJobsStoreChangesWithRevisionNative(storePath, previous, next, opts);
-  }
-  assertCronStoreCanPersist(next);
-  const storeKey = cronStoreKey(path.resolve(storePath));
-  const prepared = prepareCronStoreChanges(previous, next);
-  if (prepared.changedIds.size === 0) {
-    return { value: previous, revision: getCronJobsStoreRevision(storeKey) };
-  }
-  const { transactionHooks: _hooks, ...options } = opts ?? {};
-  const input = structuredClone({ storeKey, changes: prepared, options });
-  return await saveCronStoreWithWorker(storeKey, (scope) =>
-    scope.execute({ type: "cron.saveChanges", input }),
-  );
-}
-
-/** Commits only scheduler-disabled CRUD rows against authoritative SQLite state. */
+/** Commits maintenance changes against authoritative SQLite state. */
 export async function saveCronJobsStoreChanges(
   storePath: string,
   previous: CronStoreFile,
   next: CronStoreFile,
   opts?: CronStoreChangesOptions & { transactionHooks?: CronStoreTransactionHooks },
 ): Promise<CronStoreFile> {
-  return (await saveCronJobsStoreChangesWithRevision(storePath, previous, next, opts)).value;
+  if (opts?.transactionHooks) {
+    return saveCronJobsStoreChangesNative(storePath, previous, next, opts);
+  }
+  assertCronStoreCanPersist(next);
+  const storeKey = cronStoreKey(path.resolve(storePath));
+  const prepared = prepareCronStoreChanges(previous, next);
+  if (prepared.changedIds.size === 0) {
+    return previous;
+  }
+  const { transactionHooks: _hooks, ...options } = opts ?? {};
+  const input = structuredClone({ storeKey, changes: prepared, options });
+  const committed = await saveCronStoreWithWorker(storeKey, (scope) =>
+    scope.execute({ type: "cron.saveChanges", input }),
+  );
+  return committed.value;
 }
 
 /** Doctor fingerprint hooks retain their owning synchronous database transaction. */

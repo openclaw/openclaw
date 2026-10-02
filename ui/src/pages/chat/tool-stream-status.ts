@@ -253,17 +253,17 @@ function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload)
     return;
   }
   if (phase === "end") {
-    if (data.willRetry === true && completed) {
-      // Compaction already succeeded, but the run is still retrying.
-      // Keep that distinct state until the matching lifecycle end arrives.
-      setCompactionStatus(host, payload.runId, "retrying", itemId);
-      return;
-    }
     if (completed) {
-      setCompactionStatus(host, payload.runId, "complete", itemId);
-      return;
+      // Successful compaction can precede a retry; only lifecycle end completes it.
+      setCompactionStatus(
+        host,
+        payload.runId,
+        data.willRetry === true ? "retrying" : "complete",
+        itemId,
+      );
+    } else {
+      host.compactionStatus = null;
     }
-    host.compactionStatus = null;
   }
 }
 

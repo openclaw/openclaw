@@ -1,4 +1,3 @@
-/** Authorized tree and admin subagent kill orchestration. */
 import { resolveSubagentLabel } from "../../../auto-reply/reply/subagents-utils.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -38,7 +37,6 @@ async function killLatestSubagentRun(params: {
   scope: KillScope;
   suppressTaskDelivery?: boolean;
   beforeSessionKill?: () => boolean;
-  expectedRunId?: string;
   expectedGeneration?: number;
   expectedOwnerKey?: string;
 }): Promise<{
@@ -48,16 +46,16 @@ async function killLatestSubagentRun(params: {
 }> {
   const { tree, scope } = params;
   for (
-    let pending = scope.cancellationControl?.prepareRead?.();
+    let pending = scope.cancellationControl.prepareRead?.();
     pending;
-    pending = scope.cancellationControl?.prepareRead?.()
+    pending = scope.cancellationControl.prepareRead?.()
   ) {
     await pending;
   }
   const matchesExpected = (entry: SubagentRunRecord) =>
     (params.expectedGeneration === undefined || entry.generation === params.expectedGeneration) &&
     (!params.expectedOwnerKey || entry.requesterSessionKey === params.expectedOwnerKey);
-  scope.cancellationControl?.assertCurrent();
+  scope.cancellationControl.assertCurrent();
   const entry = tree.entry;
   const session = tree.session;
   if (!session) {
@@ -363,8 +361,6 @@ export async function killSubagentRunAdmin(
         tree,
         scope,
         beforeSessionKill: control?.beforeSessionKill,
-        // Resolve stable task identity once; a later replacement must not inherit this Stop.
-        expectedRunId: expectedRunId || (expectedTaskRunId ? entry.runId : undefined),
         expectedGeneration: params.expectedGeneration,
         expectedOwnerKey: params.expectedOwnerKey?.trim() || undefined,
       });

@@ -1,7 +1,3 @@
-/**
- * Executes compaction while owning the transcript lock, session lifecycle,
- * hooks and optional successor transcript rotation.
- */
 import {
   preserveCompactionReplayWindow,
   resolveCompactionReplayEligibility,

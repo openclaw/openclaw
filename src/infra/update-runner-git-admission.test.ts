@@ -10,12 +10,17 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runPackageUpdateDoctor } from "../cli/update-cli/update-command-package.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as diskSpace from "./disk-space.js";
+import { collectNestedErrorCandidates } from "./error-graph-internal.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { resolveCandidateNodeRuntimeForTest } from "./update-runner-git-candidate.test-support.js";
 import { withGitTargetInspectionRoot } from "./update-runner-git-target.js";
 import { updateGitCheckout } from "./update-runner-git.js";
-import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  UpdateRunnerOptions,
+  UpdateStepProgress,
+} from "./update-runner-types.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
@@ -412,31 +417,76 @@ describe("Git database admission", () => {
     },
   );
 
-  it("refuses insufficient object-volume capacity before stopping the Gateway", async () => {
-    const state = fixture();
-    const before = state.git(state.install, "rev-parse", "HEAD");
-    const prepareMutation = vi.fn();
-    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
-      targetPath: state.install,
-      checkedPath: state.install,
-      availableBytes: 0,
-      totalBytes: 1024,
-    });
-    try {
-      const result = await state.run({ beforeGitMutation: prepareMutation });
-      expect(result).toMatchObject({ status: "error", reason: "snapshot-capacity-insufficient" });
-      expect(result.steps).toContainEqual(
-        expect.objectContaining({
-          name: "git update pack capacity",
-          stderrTail: expect.stringContaining("0 bytes available"),
-        }),
+  it.each([false, true])(
+    "refuses insufficient object-volume capacity before stopping the Gateway (reporting rejects: %s)",
+    async (reportingRejects) => {
+      const state = fixture();
+      const before = state.git(state.install, "rev-parse", "HEAD");
+      const prepareMutation = vi.fn();
+      const reportingError = new Error("Git pack capacity receipt rejected");
+      const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>(
+        async (step) => {
+          if (reportingRejects && step.name === "git update pack capacity") {
+            throw reportingError;
+          }
+        },
       );
-      expect(prepareMutation).not.toHaveBeenCalled();
-      expect(state.git(state.install, "rev-parse", "HEAD")).toBe(before);
-    } finally {
-      capacity.mockRestore();
-    }
-  });
+      const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue({
+        targetPath: state.install,
+        checkedPath: state.install,
+        availableBytes: 0,
+        totalBytes: 1024,
+      });
+      try {
+        const outcome = await state
+          .run({
+            beforeGitMutation: prepareMutation,
+            progress: { onStepComplete },
+          })
+          .then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+          );
+        if (reportingRejects) {
+          expect("error" in outcome).toBe(true);
+          const errors = collectNestedErrorCandidates(
+            "error" in outcome ? outcome.error : undefined,
+          );
+          expect(errors).toContain(reportingError);
+          expect(onStepComplete).toHaveBeenCalledWith(
+            expect.objectContaining({ name: "git update pack capacity", exitCode: 1 }),
+          );
+          expect(errors).toContainEqual(
+            expect.objectContaining({
+              exitCode: 1,
+              stderrTail: expect.stringMatching(
+                /snapshot-capacity-insufficient: Git update pack and index need [\s\S]*0 bytes available/,
+              ),
+            }),
+          );
+        } else {
+          if ("error" in outcome) {
+            throw outcome.error;
+          }
+          const { result } = outcome;
+          expect(result).toMatchObject({
+            status: "error",
+            reason: "snapshot-capacity-insufficient",
+          });
+          expect(result.steps).toContainEqual(
+            expect.objectContaining({
+              name: "git update pack capacity",
+              stderrTail: expect.stringContaining("0 bytes available"),
+            }),
+          );
+        }
+        expect(prepareMutation).not.toHaveBeenCalled();
+        expect(state.git(state.install, "rev-parse", "HEAD")).toBe(before);
+      } finally {
+        capacity.mockRestore();
+      }
+    },
+  );
 
   it("continues with a warning when object-volume capacity is unknown", async () => {
     const state = fixture();

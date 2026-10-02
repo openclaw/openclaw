@@ -1,4 +1,3 @@
-// Media parse helpers normalize media references from user and channel input.
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -27,7 +26,6 @@ export function isRelativeAssistantMediaReference(url: string): boolean {
   return Boolean(trimmed) && !RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE.test(trimmed);
 }
 
-/** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
   | {
       type: "text";
@@ -97,12 +95,6 @@ function looksLikeLocalFilePath(candidate: string): boolean {
     candidate.startsWith("\\\\") ||
     (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
   );
-}
-
-// Recognize safe local file path patterns for media approval, rejecting
-// traversal and unsupported home-dir paths so they never reach downstream load/send logic.
-function isLikelyLocalPath(candidate: string): boolean {
-  return !hasTraversalOrUnsupportedHomeDirPrefix(candidate) && looksLikeLocalFilePath(candidate);
 }
 
 function normalizeRemoteMediaHostname(value: string): string {
@@ -194,14 +186,13 @@ function isValidMedia(
     }
   }
 
-  if (isLikelyLocalPath(candidate)) {
-    return true;
-  }
-
   // Hard reject traversal/unsupported home-dir patterns before the bare-filename fallback
   // to prevent path traversal bypasses (e.g. "../../.env" matching HAS_FILE_EXT).
   if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
     return false;
+  }
+  if (looksLikeLocalFilePath(candidate)) {
+    return true;
   }
 
   // Accept bare filenames (e.g. "image.png") only when the caller opts in.
@@ -256,20 +247,12 @@ function unwrapQuoted(value: string): string | undefined {
   return trimmed.slice(1, -1).trim();
 }
 
-function normalizeMarkdownImageDestination(destination: string): string {
-  return normalizeMediaSource(destination.trim());
-}
-
 function cleanLineText(text: string): string {
   return text.replace(/[ \t]{2,}/g, " ").trim();
 }
 
 const MAX_MARKDOWN_IMAGE_LINE_LENGTH = 20_000;
 const MAX_MARKDOWN_IMAGE_MATCHES_PER_LINE = 50;
-
-function isRemoteMarkdownImageMedia(candidate: string): boolean {
-  return hasHttpUrlPrefix(candidate) && isValidMedia(candidate);
-}
 
 function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): string {
   const pieces: string[] = [];
@@ -350,9 +333,9 @@ function collectMarkdownImageSegments(params: {
     segmentPieces.push(before);
     visiblePieces.push(before);
 
-    const target = normalizeMarkdownImageDestination(match.destination);
+    const target = normalizeMediaSource(match.destination.trim());
     const selectedTarget = params.allowlist?.get(target);
-    if (selectedTarget || (!params.allowlist && isRemoteMarkdownImageMedia(target))) {
+    if (selectedTarget || (!params.allowlist && hasHttpUrlPrefix(target) && isValidMedia(target))) {
       extractedImages.push(match);
       const beforeText = params.preserveTrailingWhitespace
         ? segmentPieces.join("")
@@ -416,10 +399,7 @@ export function splitMediaOutput(
     imageExtraction?.allowlist === undefined
       ? undefined
       : new Map(
-          imageExtraction.allowlist.map((source) => [
-            normalizeMarkdownImageDestination(source),
-            source,
-          ]),
+          imageExtraction.allowlist.map((source) => [normalizeMediaSource(source.trim()), source]),
         );
   const extractMarkdownImages = imageExtraction !== undefined;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
@@ -451,7 +431,6 @@ export function splitMediaOutput(
 
   const codeBlocks = findCodeRegions(trimmedRaw).filter((region) => region.block);
 
-  // Line-wise parsing preserves visible text while letting MEDIA-only lines disappear cleanly.
   const lines = trimmedRaw.split("\n");
   const keptLines: string[] = [];
   const markdownImages =
@@ -615,7 +594,6 @@ export function splitMediaOutput(
         // from internal tools like TTS). They should never leak as visible text.
         foundMediaToken = true;
       } else {
-        // If no valid media was found in this match, keep the original token text.
         pieces.push(match[0]);
       }
 
@@ -626,7 +604,6 @@ export function splitMediaOutput(
 
     const cleanedLine = cleanLineText(pieces.join(""));
 
-    // If the line becomes empty, drop it.
     if (cleanedLine) {
       keptLines.push(cleanedLine);
       lineSegments.push({ type: "text", text: cleanedLine });

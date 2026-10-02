@@ -7,7 +7,7 @@ import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import { isPackageActivationControlName } from "./package-update-activation-paths.js";
+import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
 import {
@@ -112,11 +112,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   const stores = new Set<string>();
   const moduleAliases = new Map<string, string>();
   const moduleOwners = new Set<string>();
-  const isRecoveryControl = (file: string) => {
+  const isRecoveryArtifact = (file: string) => {
     for (let current = file; path.dirname(current) !== current; current = path.dirname(current)) {
       if (
         moduleOwners.has(path.dirname(current)) &&
-        isPackageActivationControlName(path.basename(current))
+        isPackageUpdateRecoveryArtifactName(path.basename(current))
       ) {
         return true;
       }
@@ -325,8 +325,8 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     }
     for (const entry of entries) {
       const file = path.join(directory, entry.name);
-      if (isRecoveryControl(file)) {
-        // Installation control state is not a dependency of the retained code.
+      if (isRecoveryArtifact(file)) {
+        // Recovery controls and retained backups are not runtime dependencies.
         continue;
       } else if (isOwnedHostEdge(file)) {
         // The complete-wave owner pass records the authoritative host identity.
@@ -435,11 +435,11 @@ export async function prepareUpdateCandidatePluginTrees(params: {
     const stagingLookup = lookupRoots(staging);
     let added = false;
     for (const [file, { real, target }] of edges) {
-      if (isRecoveryControl(file)) {
+      if (isRecoveryArtifact(file)) {
         edges.delete(file);
         continue;
       }
-      if (isRecoveryControl(real) || isRecoveryControl(target)) {
+      if (isRecoveryArtifact(real) || isRecoveryArtifact(target)) {
         throw new Error("Package recovery state cannot be a runtime dependency.");
       }
       const directory = stagingLookup(real);
@@ -525,7 +525,7 @@ export async function prepareUpdateCandidatePluginTrees(params: {
   );
   const entries = [...footprints.values()].filter((entry) => {
     if (
-      isRecoveryControl(entry.path) ||
+      isRecoveryArtifact(entry.path) ||
       insideHost(entry.path) ||
       copyOwner(entry.path) === undefined
     ) {

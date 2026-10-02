@@ -417,7 +417,7 @@ interface AgentRunOptions {
   label?: string;
   model?: string;
   thinking?: string;
-  fastMode?: boolean | "auto";
+  fastMode?: boolean | "auto" | "ultrafast";
   agentId?: string;
   schema?: AgentJsonSchema;
   phase?: string;

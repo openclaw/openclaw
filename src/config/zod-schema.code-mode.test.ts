@@ -4,23 +4,7 @@ import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 describe("Code Mode config schema", () => {
   it("accepts Code Mode config in the runtime zod schema", () => {
     expect(ToolsSchema.parse({ codeMode: true })?.codeMode).toBe(true);
-    expect(
-      ToolsSchema.parse({
-        codeMode: {
-          enabled: true,
-          executor: "quickjs",
-          mode: "only",
-          timeoutMs: 5000,
-          memoryLimitBytes: 67_108_864,
-          maxOutputBytes: 65_536,
-          maxSnapshotBytes: 10_485_760,
-          maxPendingToolCalls: 8,
-          snapshotTtlSeconds: 900,
-          searchDefaultLimit: 4,
-          maxSearchLimit: 12,
-        },
-      })?.codeMode,
-    ).toEqual({
+    const codeMode = {
       enabled: true,
       executor: "quickjs",
       mode: "only",
@@ -32,7 +16,8 @@ describe("Code Mode config schema", () => {
       snapshotTtlSeconds: 900,
       searchDefaultLimit: 4,
       maxSearchLimit: 12,
-    });
+    };
+    expect(ToolsSchema.parse({ codeMode })?.codeMode).toEqual(codeMode);
     expect(
       ToolsSchema.safeParse({
         codeMode: {

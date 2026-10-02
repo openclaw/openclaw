@@ -13,15 +13,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-request-guards";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
-const ErrorCodes = {
-  AGENT_TIMEOUT: "AGENT_TIMEOUT",
-  APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
-  INVALID_REQUEST: "INVALID_REQUEST",
-  NOT_LINKED: "NOT_LINKED",
-  NOT_PAIRED: "NOT_PAIRED",
-  UNAVAILABLE: "UNAVAILABLE",
-} as const;
-
 type RpcResponse =
   | { id: string; ok: true; payload: unknown; meta?: Record<string, unknown> }
   | { id: string; ok: false; error: GatewayMethodDispatchError; meta?: Record<string, unknown> };
@@ -32,11 +23,6 @@ type ParsedRequest = {
   params?: unknown;
 };
 
-type RequestBodyLimitFailureCode =
-  | "PAYLOAD_TOO_LARGE"
-  | "REQUEST_BODY_TIMEOUT"
-  | "CONNECTION_CLOSED";
-
 type ReadJsonBodyResult =
   | { ok: true; value: unknown }
   | {
@@ -46,25 +32,21 @@ type ReadJsonBodyResult =
       closeAfterResponse?: boolean;
     };
 
-function createError(code: string, message: string): GatewayMethodDispatchError {
-  return { code, message };
-}
-
 function rpcHttpStatus(response: RpcResponse): number {
   if (response.ok) {
     return 200;
   }
   switch (response.error.code) {
-    case ErrorCodes.INVALID_REQUEST:
+    case "INVALID_REQUEST":
       return 400;
-    case ErrorCodes.APPROVAL_NOT_FOUND:
+    case "APPROVAL_NOT_FOUND":
       return 404;
-    case ErrorCodes.UNAVAILABLE:
+    case "UNAVAILABLE":
       return 503;
-    case ErrorCodes.AGENT_TIMEOUT:
+    case "AGENT_TIMEOUT":
       return 504;
-    case ErrorCodes.NOT_LINKED:
-    case ErrorCodes.NOT_PAIRED:
+    case "NOT_LINKED":
+    case "NOT_PAIRED":
       return 409;
     default:
       return 500;
@@ -80,18 +62,6 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 
 function sendError(res: ServerResponse, status: number, error: { type: string; message: string }) {
   sendJson(res, status, { ok: false, error });
-}
-
-function statusForBodyErrorCode(code: RequestBodyLimitFailureCode): number {
-  switch (code) {
-    case "PAYLOAD_TOO_LARGE":
-      return 413;
-    case "REQUEST_BODY_TIMEOUT":
-      return 408;
-    case "CONNECTION_CLOSED":
-      return 400;
-  }
-  return 400;
 }
 
 async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResult> {
@@ -116,7 +86,8 @@ async function readAdminJsonBody(req: IncomingMessage): Promise<ReadJsonBodyResu
   }
   return {
     ok: false,
-    status: statusForBodyErrorCode(body.code),
+    status:
+      body.code === "PAYLOAD_TOO_LARGE" ? 413 : body.code === "REQUEST_BODY_TIMEOUT" ? 408 : 400,
     message: body.error,
     closeAfterResponse: body.code !== "CONNECTION_CLOSED",
   };
@@ -145,28 +116,11 @@ function readRpcRequestBody(body: unknown):
   };
 }
 
-function methodNotAllowed(id: string, method: string): RpcResponse {
-  return {
-    id,
-    ok: false,
-    error: createError(
-      ErrorCodes.INVALID_REQUEST,
-      `admin HTTP RPC method is not supported: ${method}`,
-    ),
-  };
-}
-
-function commandsList(id: string): RpcResponse {
-  return {
-    id,
-    ok: true,
-    payload: {
-      methods: listAdminHttpRpcAllowedMethods(),
-    },
-  };
-}
-
 async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
+  const unavailable: GatewayMethodDispatchError = {
+    code: "UNAVAILABLE",
+    message: "gateway method failed before returning a response",
+  };
   try {
     const response = await dispatchGatewayMethod(request.method, request.params);
     if (response.ok) {
@@ -180,19 +134,14 @@ async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
     return {
       id: request.id,
       ok: false,
-      error:
-        response.error ??
-        createError(ErrorCodes.UNAVAILABLE, "gateway method failed before returning a response"),
+      error: response.error ?? unavailable,
       ...(response.meta ? { meta: response.meta } : {}),
     };
   } catch {
     return {
       id: request.id,
       ok: false,
-      error: createError(
-        ErrorCodes.UNAVAILABLE,
-        "gateway method failed before returning a response",
-      ),
+      error: unavailable,
     };
   }
 }
@@ -243,14 +192,23 @@ export async function handleAdminHttpRpcRequest(
   }
 
   if (!isAdminHttpRpcAllowedMethod(parsed.request.method)) {
-    const response = methodNotAllowed(parsed.request.id, parsed.request.method);
-    sendJson(res, rpcHttpStatus(response), response);
+    sendJson(res, 400, {
+      id: parsed.request.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: `admin HTTP RPC method is not supported: ${parsed.request.method}`,
+      },
+    });
     return true;
   }
 
   if (parsed.request.method === "commands.list") {
-    const response = commandsList(parsed.request.id);
-    sendJson(res, 200, response);
+    sendJson(res, 200, {
+      id: parsed.request.id,
+      ok: true,
+      payload: { methods: listAdminHttpRpcAllowedMethods() },
+    });
     return true;
   }
 

@@ -59,9 +59,9 @@ it.each([
         defaults: { model: null, modelProvider: null, contextTokens: null },
         people: [{ identity: { type: "profile", id: "person" }, label: "Person", sessionCount: 0 }],
         activityPulse: {
-          since: 0,
-          until: 86_400_000,
-          hours: Array.from({ length: 24 }, () => 0),
+          since: new Date(2026, 8, 20).getTime(),
+          until: new Date(2026, 8, 28).getTime(),
+          buckets: Array.from({ length: 8 }, () => 0),
           sessions: 0,
           started: 0,
           running: 0,

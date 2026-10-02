@@ -31,6 +31,16 @@ schema version is unchanged.
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
 
+The per-agent companion table `session_reactions` stores message reaction rows
+at the same schema version. The canonical database-open additive schema installs it on
+existing databases without changing `user_version`; older readers ignore the
+table. Rows bind the session key, transcript session ID, persisted message event
+ID, emoji, and reacting identity without changing transcript bytes. Deleting the
+session node cascades to its reactions. Transcript replacement and suffix removal
+delete reactions for removed message identities in the same transaction, while
+a reset makes old-instance rows inert. Downgrade leaves the table intact and disables Control UI reactions until
+a supporting build returns. No transcript backfill or rewrite is required.
+
 Admitted agent and cached shared-state handles retain their schema version and
 table facts. The handle owner revokes these facts after local DDL or transaction
 rollback. A fresh `PRAGMA data_version` probe observes foreign commits on the next
@@ -116,6 +126,18 @@ version: `session_watch_cursors.watcher_store_path`,
 Their writers ensure them idempotently on first use; reads do not install them.
 Older readers ignore the columns. NULL remains unknown, so Gateway notification
 delivery does not assign historical records to a current parent by key alone.
+
+Subagent runs record the known owning agent for raw child keys such as `global`
+in the optional `childAgentId` field inside `subagent_runs.payload_json`.
+Agent-qualified child keys do not record this field. This is a payload-only
+addition: no DDL, new column, or schema-version bump is required. The session
+store is derived from the agent and current configuration, just as it is for
+agent-qualified keys. Legacy rows without that binding continue to resolve their
+agent through the current configuration, without migration or backfill.
+Cancellation clears queues only for the resolved agent. Downgraded writers retain
+the field in `payload_json` because
+`normalizeSubagentRunState` mutates the parsed record in place rather than
+rebuilding it from known fields.
 
 Cron standing-grant definition generations use three bare nullable projections on
 `cron_jobs`: `grant_definition_revision`, `grant_definition_generation`, and

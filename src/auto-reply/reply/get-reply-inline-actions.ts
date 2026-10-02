@@ -1,5 +1,8 @@
-/** Handles inline slash commands, skill invocations, and abort actions before model runs. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeNullableString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
@@ -85,13 +88,8 @@ function getBuiltinSlashCommands(): Set<string> {
 }
 
 function resolveSlashCommandName(commandBodyNormalized: string): string | null {
-  const trimmed = commandBodyNormalized.trim();
-  if (!trimmed.startsWith("/")) {
-    return null;
-  }
-  const match = trimmed.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const name = normalizeOptionalLowercaseString(match?.[1]) ?? "";
-  return name ? name : null;
+  const match = commandBodyNormalized.trim().match(/^\/([^\s:]+)(?::|\s|$)/);
+  return normalizeOptionalLowercaseString(match?.[1]) ?? null;
 }
 
 function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefined): boolean {
@@ -105,7 +103,6 @@ function isMentionOnlyResidualText(text: string, wasMentioned: boolean | undefin
   return /^(?:<@[!&]?[A-Za-z0-9._:-]+>|<!(?:here|channel|everyone)>|[:,.!?-]|\s)+$/u.test(trimmed);
 }
 
-/** Result of attempting to handle an inbound message as an inline action. */
 type InlineActionResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
@@ -118,29 +115,15 @@ type InlineActionResult =
     };
 
 function extractTextFromToolResult(result: unknown): string | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const content = (result as { content?: unknown }).content;
-  const text = typeof content === "string" ? content : collectTextContentBlocks(content).join("");
-  const trimmed = text.trim();
-  return trimmed ? trimmed : null;
+  const content = asOptionalObjectRecord(result)?.content;
+  return normalizeNullableString(
+    typeof content === "string" ? content : collectTextContentBlocks(content).join(""),
+  );
 }
 
 function extractBlockedToolReason(result: unknown): string | null {
-  if (!result || typeof result !== "object") {
-    return null;
-  }
-  const details = (result as { details?: unknown }).details;
-  if (!details || typeof details !== "object") {
-    return null;
-  }
-  const status = (details as { status?: unknown }).status;
-  if (status !== "blocked") {
-    return null;
-  }
-  const reason = (details as { reason?: unknown }).reason;
-  return typeof reason === "string" && reason.trim() ? reason.trim() : null;
+  const details = asOptionalObjectRecord(asOptionalObjectRecord(result)?.details);
+  return details?.status === "blocked" ? normalizeNullableString(details.reason) : null;
 }
 
 /** Handles inline actions or returns continue when the message should become a model turn. */
@@ -284,8 +267,7 @@ export async function handleInlineActions(params: {
           "blocked",
         );
       }
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return finishCommand();
     }
     if (cutoff) {
       await (
@@ -310,8 +292,7 @@ export async function handleInlineActions(params: {
     command.to &&
     command.from !== command.to
   ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
+    return finishCommand();
   }
 
   const slashCommandName = getStandaloneSlashCommandName(command.commandBodyNormalized);
@@ -368,8 +349,7 @@ export async function handleInlineActions(params: {
       logVerbose(
         `Ignoring /${skillInvocation.command.name} from unauthorized sender: ${command.senderId || "<unknown>"}`,
       );
-      typing.cleanup();
-      return { kind: "reply", reply: undefined };
+      return finishCommand();
     }
 
     const dispatch = skillInvocation.command.dispatch;
@@ -646,20 +626,16 @@ export async function handleInlineActions(params: {
       ...(skillSelections ? { explicitSkillSelections: skillSelections } : {}),
     };
   }
-  const remainingBodyAfterInlineStatus = (() => {
-    const stripped = stripStructuralPrefixes(cleanedBody);
-    if (!isGroup) {
-      return stripped.trim();
-    }
-    return stripMentions(stripped, ctx, cfg, agentId).trim();
-  })();
+  const strippedBody = stripStructuralPrefixes(cleanedBody);
+  const remainingBodyAfterInlineStatus = (
+    isGroup ? stripMentions(strippedBody, ctx, cfg, agentId) : strippedBody
+  ).trim();
   if (
     didSendInlineStatus &&
     (remainingBodyAfterInlineStatus.length === 0 ||
       isMentionOnlyResidualText(remainingBodyAfterInlineStatus, ctx.WasMentioned))
   ) {
-    typing.cleanup();
-    return { kind: "reply", reply: undefined };
+    return finishCommand();
   }
 
   const commandBodyBeforeRun = command.commandBodyNormalized;

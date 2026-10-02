@@ -1,5 +1,6 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TalkClientToolCallResult } from "../../../../../packages/gateway-protocol/src/schema/channels.js";
+import type { AgentWaitResult as GatewayAgentWaitResult } from "../../../../../src/agents/run-wait.types.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../../../../../src/talk/agent-consult-tool.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
@@ -180,17 +181,10 @@ type ChatPayload = {
   message?: unknown;
 };
 
-type AgentWaitResult = {
+type AgentWaitResult = Omit<Partial<GatewayAgentWaitResult>, "status" | "timeoutPhase"> & {
   status?: string;
-  error?: string;
-  stopReason?: string;
-  endedAt?: number;
-  pendingError?: boolean;
   timeoutPhase?: string;
-  providerStarted?: boolean;
   aborted?: boolean;
-  livenessState?: string;
-  yielded?: boolean;
 };
 
 const EMPTY_FINAL_FALLBACK_GRACE_MS = 500;

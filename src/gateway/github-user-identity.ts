@@ -17,6 +17,7 @@ import { normalizeGitHubLogin } from "../utils/github-login.js";
 import type { GatewayAuthResult } from "./auth.js";
 import { gitHubPublicApi, githubApiToken } from "./github-public-api.js";
 import type { AuthenticatedGitHubIdentitySync } from "./github-user-identity.types.js";
+import { firstHeaderValue } from "./http-header-value.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
 const CLOUDFLARE_ACCESS_ASSERTION_HEADER = "cf-access-jwt-assertion";
@@ -40,10 +41,6 @@ type GitHubIdentityMetadataCache = {
 };
 const identityMetadataCaches = new WeakMap<typeof fetch, GitHubIdentityMetadataCache>();
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
 function cloudflareAccessIssuer(assertion: string): URL {
   if (Buffer.byteLength(assertion, "utf8") > ACCESS_ASSERTION_MAX_BYTES) {
     throw new Error("Cloudflare Access assertion is invalid");
@@ -61,13 +58,9 @@ function cloudflareAccessIssuer(assertion: string): URL {
   if (!isRecord(payload) || typeof payload.iss !== "string") {
     throw new Error("Cloudflare Access assertion issuer is invalid");
   }
-  let issuer: URL;
-  try {
-    issuer = new URL(payload.iss);
-  } catch {
-    throw new Error("Cloudflare Access assertion issuer is invalid");
-  }
+  const issuer = URL.parse(payload.iss);
   if (
+    !issuer ||
     issuer.protocol !== "https:" ||
     issuer.username ||
     issuer.password ||
@@ -284,7 +277,7 @@ function cloudflareAccessAssertion(params: {
     return undefined;
   }
   const principal = params.authResult.user?.trim();
-  const assertion = headerValue(
+  const assertion = firstHeaderValue(
     params.requestHeaders?.[CLOUDFLARE_ACCESS_ASSERTION_HEADER],
   )?.trim();
   return principal && assertion ? { assertion, principal } : undefined;

@@ -8,7 +8,9 @@ import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
+import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { presentedContent } from "../../../lit/presentation-binding.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
@@ -380,8 +382,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
-        ${progressCard} ${queue} ${renderChatGoalRecovery(props.goalRecovery, props.connected)}
-        ${goalCard}
+        ${presentedContent(props.progressCardVisibility ?? true, progressCard)} ${queue}
+        ${renderChatGoalRecovery(props.goalRecovery, props.connected)} ${goalCard}
       </div>
       ${
         showComposerInput
@@ -538,6 +540,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     @focus=${handleSelect}
                     @pointerup=${handleSelect}
                     @keyup=${(event: KeyboardEvent) => {
+                      clearCompositionEnd(event);
                       state.emojiMenu.handleKeyup(event);
                       if (
                         event.key.startsWith("Arrow") ||

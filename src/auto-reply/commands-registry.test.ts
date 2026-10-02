@@ -512,6 +512,7 @@ describe("commands registry", () => {
     expect(fast.textAliases).toEqual(["/fast"]);
     expect(fast.category).toBe("options");
     const modeArg = requireCommandArg(fast, "mode");
+    expect(modeArg.description).toContain("ultrafast");
     expect(typeof modeArg.choices).toBe("function");
     const menu = requireCommandArgMenu({
       command: fast,

@@ -3,16 +3,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizePersistedSessionEntryShape } from "../commands/doctor/shared/session-entry-shape.js";
 import { normalizeRestartRecoveryEntryFields } from "../config/sessions/restart-recovery-state.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   hydrateSessionStoreSkillPromptRefs,
   projectSessionStoreForPersistence,
 } from "../config/sessions/skill-prompt-blobs.js";
-import {
-  normalizePersistedSessionEntryShape,
-  stripRuntimeOnlySessionSkillsFields,
-} from "../config/sessions/store-entry-shape.js";
+import { stripRuntimeOnlySessionSkillsFields } from "../config/sessions/store-entry-shape.js";
 import {
   applyFileBackedSessionStoreMaintenance,
   type SessionMaintenanceApplyReport,
@@ -311,20 +309,20 @@ async function archiveRemovedSessionTranscripts(params: {
   reason: "deleted";
   restrictToStoreDir: true;
 }): Promise<Set<string>> {
-  const { archiveSessionTranscripts } = await loadSessionArchiveRuntime();
+  const { archiveSessionTranscriptsDetailed } = await loadSessionArchiveRuntime();
   const archivedDirs = new Set<string>();
   for (const [sessionId, sessionFile] of params.removedSessionFiles) {
     if (params.referencedSessionIds.has(sessionId)) {
       continue;
     }
-    const archived = archiveSessionTranscripts({
+    const archived = archiveSessionTranscriptsDetailed({
       sessionId,
       storePath: params.storePath,
       sessionFile,
       reason: params.reason,
       restrictToStoreDir: params.restrictToStoreDir,
     });
-    for (const archivedPath of archived) {
+    for (const { archivedPath } of archived) {
       archivedDirs.add(path.dirname(archivedPath));
     }
   }

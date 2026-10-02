@@ -3,7 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionsResolveParams } from "../../packages/gateway-protocol/src/index.js";
 import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -13,6 +13,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState as withRawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import {
+  createArtifactSessionAccess,
+  prepareArtifactSessionResolution,
+} from "./server-methods/artifacts-session-resolution.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { identifiedClient } from "./server-methods/sessions-read-cache.test-support.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
@@ -425,6 +429,52 @@ describe("gateway session lookups", () => {
       } finally {
         parse.mockRestore();
       }
+    });
+  });
+
+  it("keeps a shared-store run scoped to its logical owner", async () => {
+    await withOpenClawTestState({ label: "lookup-shared-owner" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      const sharedConfig: OpenClawConfig = {
+        agents: {
+          entries: { main: { default: true }, ops: {} },
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+        session: { scope: "global", store: storePath },
+      };
+      setRuntimeConfigSnapshot(sharedConfig);
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      replaceSessionEntrySync(
+        { agentId: "ops", storePath, sessionKey: "global" },
+        { sessionId: "shared-run", updatedAt: 1 },
+      );
+      const projection = await projectionFor(sharedConfig);
+      expect(
+        projection.findBySessionId({ sessionId: "shared-run", agentId: "main", federated: true }),
+      ).toMatchObject([{ agentId: "ops", key: "global", storeTarget: { agentId: "main" } }]);
+      expect(resolveSessionForRun("shared-run", { agentId: "ops", projection })).toEqual({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      expect
+        .soft(resolveSessionForRun("shared-run", { agentId: "main", projection }))
+        .toBeUndefined();
+      expect.soft(resolveSessionForRun("shared-run", { projection })).toEqual({
+        sessionKey: "global",
+        agentId: "ops",
+      });
+      const resolveArtifacts = await prepareArtifactSessionResolution(
+        { runId: "shared-run" },
+        projection,
+      );
+      using access = createArtifactSessionAccess({
+        getRuntimeConfig: () => sharedConfig,
+        client: null,
+      });
+      expect(await resolveArtifacts(access)).toMatchObject({
+        sessionKey: "global",
+        agentId: "ops",
+      });
     });
   });
 

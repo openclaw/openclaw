@@ -239,15 +239,12 @@ describe("subagent registry lifecycle error grace", () => {
     }
   });
 
-  const {
-    flushAsync,
-    waitForCleanupHandledFalse,
-    waitForDeliveredCleanup,
-    waitForFrozenResult,
-    waitForFrozenResultText,
-  } = createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
+  const { flushAsync, waitForDeliveredCleanup, waitForFrozenResult, waitForFrozenResultText } =
+    createLifecycleWaits(MAIN_REQUESTER_SESSION_KEY);
 
   const waitForAgentCallCount = (count: number) => agentCallWaits.waitForAgentCallCount(count);
+  const waitForCleanupHandledFalse = (runId: string) =>
+    agentCallWaits.waitForCleanupHandledFalse(runId);
 
   function registerCompletionRun(
     runId: string,
@@ -395,7 +392,11 @@ describe("subagent registry lifecycle error grace", () => {
       status: "yielded",
     });
     expect(onYield).toHaveBeenCalledOnce();
-    expect(onYield).toHaveBeenCalledWith("Wait for the visible dashboard child", undefined);
+    expect(onYield).toHaveBeenCalledWith(
+      "Wait for the visible dashboard child",
+      undefined,
+      undefined,
+    );
 
     await settleYieldedCliTurn({
       requesterTurnRunId,

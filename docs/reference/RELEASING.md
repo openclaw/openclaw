@@ -39,6 +39,11 @@ line retires when it falls outside the two supported completed months.
 Versions use `year.month.patch`, without zero-padding. The patch is a release
 number within the month, not a day of the month. Regular releases use patches
 below `33`; extended-stable starts at `33`. Git tags add `v`, as in `v2026.9.6`.
+Release tags are annotated and signed. The shared publication workflow verifies
+the tag signature before checkout or evidence downloads and refuses lightweight,
+unsigned, or unverified tags. This also applies to recovery and republishing:
+historical unsigned tags are not eligible for the shared publication workflow,
+and recovery must use a new signed release version rather than replacing a tag.
 
 Published npm versions and release tags are never replaced. A fix receives a
 new version. Historical alpha-only versions do not advance the regular release
@@ -69,17 +74,39 @@ decision, GitHub step summary, and release evidence manifest. This policy is not
 an operator-selectable input or waiver. Ordinary PR, push, scheduled, and main CI
 still require Windows shards to pass.
 
-Every other selected validation lane remains blocking: macOS Node and other
-normal CI jobs, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
+Every failed test needs an explicit release-lead decision: blocker or flake.
+Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
+issue or PR on `main`, and retain the original failure. A still-failing eligible
+`normalCi` job can use the authenticated `recorded-flake` classification workflow;
+its receipt binds the parent, child run, exact job attempt, Release SHA, reason,
+and tracking link. The decision, manifest, and release verification notes retain
+the failure. Do not re-cut, change tooling, or start another Full Release
+Validation for a flake. See [recorded flakes](/reference/full-release-validation/continuation#record-a-flake).
+
+Other children stay strict in v1; extending classification to them is follow-up
+work. Non-classifiable jobs remain blocking: the CI coverage gate, seal/evidence,
+Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
-run still blocks. Publication waivers cannot bypass failures or required
+run still blocks. A failed CI gate is accepted only when its own log proves that
+every non-passing entry selected a failed advisory job; missing, skipped, or
+cancelled coverage blocks. Publication waivers cannot bypass failures or required
 coverage. Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
+
+Dependency advisories never block or delay a release. Release dependency
+evidence records every advisory finding, at any severity, and CI dispatched by
+release validation or publication reports a failing dependency audit as a
+warning. The dependency fix ships through `main` after publication. Only a
+known-malware finding stops publication.
+
+The health of `main` CI does not gate a release. Validation and publication run
+from the release branch with pinned release tooling, so a red `main` is not a
+reason to wait, re-cut, or pause.
 
 See [Full release validation](/reference/full-release-validation) for coverage
 by profile and how to interpret the results.

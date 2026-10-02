@@ -60,6 +60,23 @@ source against the admitted inventory. SQLite snapshots keep their separate
 integrity, content, and publication checks. An unavailable addon alone does not
 justify skipping those checks or abandoning a snapshot that can be made safely.
 
+## Windows path boundaries
+
+An explicitly configured UNC root, such as `\\server\share\workspace`, and
+ordinary extended drive paths such as `\\?\C:\workspace` remain supported.
+Existing filesystem and permission requirements for each operation still apply.
+
+A path confined to a workspace, plugin root, or extraction destination must use
+that boundary's own share. A foreign UNC share or device namespace is rejected
+before lookup, even if a filesystem alias could point back inside the boundary.
+Use a relative path or the admitted root's host and share spelling. Host and
+share comparisons ignore ASCII case; Unicode lookalikes do not identify the same
+host. OpenClaw preserves valid local plugin aliases, including short names and
+trusted roots whose canonical location is a network share.
+
+Do not strip `\\?\` or `\\.\` indiscriminately to work around a rejection.
+Ambiguous namespace spellings can change which host or device Windows reaches.
+
 ## What stays protected without native acceleration
 
 With the helper off, OpenClaw still gets fs-safe's Node-only guardrails:

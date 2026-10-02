@@ -322,6 +322,10 @@ describe("startGatewayEventSubscriptions", () => {
     if (!claimId) {
       throw new Error("expected terminal event claim");
     }
+    agentEventHandlerMocks.resolveSession.mockReturnValueOnce({
+      sessionKey: "global",
+      agentId: "research",
+    });
     agentEventHandlerMocks.persistLifecycle.mockRejectedValue(new Error("terminal write rejected"));
     unsubs = startGatewayEventSubscriptions(createParams());
 
@@ -337,7 +341,11 @@ describe("startGatewayEventSubscriptions", () => {
 
     await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
     expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
-      expect.objectContaining({ assertCommitAllowed: expect.any(Function) }),
+      expect.objectContaining({
+        sessionKey: "global",
+        agentId: "research",
+        assertCommitAllowed: expect.any(Function),
+      }),
     );
     expect(agentEventHandlerMocks.resolveSession).toHaveBeenCalledWith(runId, {
       agentId: undefined,

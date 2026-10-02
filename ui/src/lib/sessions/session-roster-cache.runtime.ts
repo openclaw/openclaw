@@ -1,21 +1,14 @@
-import { clearBootRecords } from "../../app/boot-record.ts";
-import { isPrimarySessionListQuery } from "./session-list-query.ts";
 import {
   openSessionRosterDatabase,
-  parseSessionRosterRecord,
   resetSessionRosterDatabase,
   rosterRequestResult,
   rosterTransactionDone,
-  sessionRosterQuery,
-  isPersistableSessionRow,
-  stripVolatileSessionRowFields,
-} from "./session-roster-cache.reader.ts";
+} from "./session-roster-cache-database.ts";
 import {
   invalidateSessionRosterCache,
   SESSION_ROSTER_MAX_AGE_MS,
-  SESSION_ROSTER_MAX_BYTES,
   SESSION_ROSTER_STORE_NAME,
-  sessionRosterCacheGeneration,
+  sessionRosterGeneration,
   type SessionRosterRecord,
 } from "./session-roster-cache.ts";
 
@@ -24,34 +17,17 @@ const latestPublications = new Map<string, number>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let writeChain = Promise.resolve();
 
-function boundedRecord(record: SessionRosterRecord): SessionRosterRecord | null {
-  try {
-    if (!isPrimarySessionListQuery(record.query)) {
-      return null;
-    }
-    const stripped = {
-      ...record,
-      query: sessionRosterQuery(record.query),
-      result: {
-        ...record.result,
-        sessions: record.result.sessions
-          .filter(isPersistableSessionRow)
-          .map(stripVolatileSessionRowFields),
-      },
-    };
-    const json = JSON.stringify(stripped, (key, value: unknown) =>
-      key === "avatarUrl" || key === "channelAvatarUrl" ? undefined : value,
-    );
-    return new TextEncoder().encode(json).byteLength <= SESSION_ROSTER_MAX_BYTES
-      ? parseSessionRosterRecord(JSON.parse(json))
-      : null;
-  } catch {
-    return null;
-  }
-}
+type PendingRosterWrite = { record: SessionRosterRecord; generation: number };
+const currentWrite = ({ record, generation }: PendingRosterWrite) =>
+  generation === sessionRosterGeneration(record.scope);
 
-async function writeRecords(records: SessionRosterRecord[], generation: number): Promise<void> {
-  if (generation !== sessionRosterCacheGeneration) {
+async function writeRecords(records: PendingRosterWrite[]): Promise<void> {
+  if (!records.some(currentWrite)) {
+    return;
+  }
+  const { boundSessionRosterRecord, parseSessionRosterRecord } =
+    await import("./session-roster-cache.reader.ts");
+  if (!records.some(currentWrite)) {
     return;
   }
   const database = await openSessionRosterDatabase();
@@ -59,7 +35,7 @@ async function writeRecords(records: SessionRosterRecord[], generation: number):
     return;
   }
   try {
-    if (generation !== sessionRosterCacheGeneration) {
+    if (!records.some(currentWrite)) {
       return;
     }
     const transaction = database.transaction(SESSION_ROSTER_STORE_NAME, "readwrite");
@@ -76,8 +52,12 @@ async function writeRecords(records: SessionRosterRecord[], generation: number):
       }
       next.set(record.scope, record);
     }
-    for (const value of records) {
-      const record = boundedRecord(value);
+    for (const write of records) {
+      if (!currentWrite(write)) {
+        continue;
+      }
+      const value = write.record;
+      const record = boundSessionRosterRecord(value);
       if (record) {
         store.put(record);
         next.set(record.scope, record);
@@ -118,26 +98,57 @@ export async function flushSessionRosters(): Promise<void> {
     clearTimeout(timer);
     timer = null;
   }
-  const records = [...pending.values()];
+  const records = [...pending.values()].map((record) => ({
+    record,
+    generation: sessionRosterGeneration(record.scope),
+  }));
   pending.clear();
-  const generation = sessionRosterCacheGeneration;
   if (records.length > 0) {
-    writeChain = writeChain.then(() => writeRecords(records, generation));
+    writeChain = writeChain.then(() => writeRecords(records));
   }
   await writeChain;
 }
 
-export async function clearCachedBootState(): Promise<void> {
-  invalidateSessionRosterCache();
-  clearBootRecords();
-  if (timer !== null) {
+/** Retire one exact roster key; omitted scope is an explicit full-cache reset. */
+export async function clearCachedBootState(scope?: string): Promise<void> {
+  invalidateSessionRosterCache(scope);
+  if (scope !== undefined) {
+    pending.delete(scope);
+    latestPublications.delete(scope);
+  } else {
+    pending.clear();
+    latestPublications.clear();
+  }
+  // A scoped retirement must not strand another owner’s scheduled publication.
+  if (pending.size === 0 && timer !== null) {
     clearTimeout(timer);
     timer = null;
   }
-  pending.clear();
-  latestPublications.clear();
+  // A successor write must wait for deletion as well as the retired writer's lazy load.
+  const precedingWrites = writeChain;
+  writeChain = (async () => {
+    try {
+      await precedingWrites;
+    } finally {
+      if (scope === undefined) {
+        await resetSessionRosterDatabase();
+      } else {
+        const database = await openSessionRosterDatabase();
+        if (database) {
+          try {
+            const transaction = database.transaction(SESSION_ROSTER_STORE_NAME, "readwrite");
+            const completed = rosterTransactionDone(transaction);
+            const store = transaction.objectStore(SESSION_ROSTER_STORE_NAME);
+            store.delete(scope);
+            await completed;
+          } finally {
+            database.close();
+          }
+        }
+      }
+    }
+  })();
   await writeChain;
-  await resetSessionRosterDatabase();
 }
 
 if (

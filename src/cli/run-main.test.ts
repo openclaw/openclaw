@@ -1,9 +1,12 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
+import process from "node:process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveManifestCommandAliasOwnerInRegistry,
   resolveManifestToolOwnerInRegistry,
   type PluginManifestCommandAliasRegistry,
 } from "../plugins/manifest-command-aliases.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
@@ -20,12 +23,27 @@ import {
 import { runCli } from "./run-main.js";
 
 const cliArgs = (...args: string[]) => ["node", "openclaw", ...args];
+vi.mock("node:process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:process")>()),
+  // Stock Bun cannot clear its nonconfigurable native exitCode accessor after help sets zero.
+  default: Object.create(globalThis.process, {
+    exitCode: { value: undefined, writable: true, enumerable: true, configurable: true },
+  }),
+}));
 const runGatewayCommand = vi.hoisted(() => vi.fn());
+const sqliteAdmission = vi.hoisted(() => ({
+  initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
+  selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+}));
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+}));
 vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
 // Keep Commander parsing independent of native startup; run-main.exit and
 // command-execution-startup tests own bootstrap and admission behavior.
 vi.mock("./gateway-cli/pre-bootstrap.js", () => ({
-  selectGatewayRunEnvironment: async () => true,
+  selectGatewayRunEnvironment: sqliteAdmission.selectGatewayEnvironment,
   prepareGatewayRunBootstrap: async () => false,
   recheckGatewayRunBootstrap: async () => {
     throw new Error("Commander parsing fixture unexpectedly rechecked Gateway bootstrap");
@@ -47,16 +65,64 @@ vi.mock("../logging/console.js", async (importOriginal) => ({
   enableConsoleCapture: vi.fn(),
 }));
 
-describe("Gateway fast-path Commander parsing", () => {
+describe("CLI host admission and Gateway fast-path parsing", () => {
   const previousExitCode = process.exitCode;
   beforeEach(() => {
     process.exitCode = undefined;
     runGatewayCommand.mockClear();
+    sqliteAdmission.initialize.mockReset().mockResolvedValue();
+    sqliteAdmission.selectGatewayEnvironment.mockClear();
     vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   });
   afterEach(() => {
     process.exitCode = previousExitCode;
     vi.restoreAllMocks();
+  });
+
+  it("awaits SQLite admission before Gateway environment selection can read state", async () => {
+    const entered = createDeferredCore();
+    const decided = createDeferredCore();
+    sqliteAdmission.initialize.mockImplementationOnce(() => {
+      entered.resolve();
+      return decided.promise;
+    });
+    const starting = runCli(cliArgs("gateway", "run"));
+    try {
+      await Promise.race([entered.promise, starting]);
+      expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
+      expect(sqliteAdmission.selectGatewayEnvironment).not.toHaveBeenCalled();
+      expect(runGatewayCommand).not.toHaveBeenCalled();
+    } finally {
+      decided.resolve();
+      await starting;
+    }
+    expect(sqliteAdmission.selectGatewayEnvironment).toHaveBeenCalledOnce();
+    expect(runGatewayCommand).toHaveBeenCalledOnce();
+  });
+
+  it.each([["node", "run"], ["node", "worker"], ["worker"]])(
+    "admits the long-lived host before CLI bootstrap: %j",
+    async (...args) => {
+      const stopped = new Error("SQLite admission reached before host bootstrap");
+      sqliteAdmission.initialize.mockRejectedValueOnce(stopped);
+      await expect(runCli(cliArgs(...args))).rejects.toBe(stopped);
+      expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([["gateway"], ["gateway", "status"], ["node", "run"], ["worker"], ["config", "get"]])(
+    "keeps help paths free of SQLite capability admission: %j",
+    async (...args) => {
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      await runCli(cliArgs(...args, "--help"));
+      expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps version output free of SQLite capability admission", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runCli(cliArgs("--version"));
+    expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
   });
 
   it.each([

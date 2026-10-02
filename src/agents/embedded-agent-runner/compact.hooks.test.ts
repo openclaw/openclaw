@@ -410,7 +410,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   );
 
   it("restricts compact endpoint tools and omits private skills under a finite policy", async () => {
-    resolveSkillsPromptMock.mockReturnValue("PRIVATE_SKILL_MARKER");
+    resolveSkillsPromptMock.mockResolvedValue("PRIVATE_SKILL_MARKER");
     createOpenClawCodingToolsMock.mockReturnValue(
       ["read", "exec"].map((name) => ({
         name,

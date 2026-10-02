@@ -12,6 +12,36 @@ public protocol OpenClawChatGatewayTransport: OpenClawChatTransport {
 }
 
 extension OpenClawChatGatewayTransport {
+    public func reactionsRouteLease(
+        routeID: UUID,
+        access: OpenClawChatReactionAccess,
+        isCurrent: @escaping @Sendable () async -> Bool,
+        request: @escaping @Sendable (OpenClawChatGatewayRequest) async throws -> Data)
+        -> OpenClawChatReactionsRouteLease
+    {
+        OpenClawChatReactionsRouteLease(
+            routeID: routeID,
+            access: access,
+            isCurrent: isCurrent,
+            list: { sessionKey, agentID in
+                let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+                let data = try await request(OpenClawChatGatewayRequests.reactionsList(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID))
+                return try OpenClawChatGatewayPayloadCodec.decodeReactionsList(data)
+            },
+            set: { sessionKey, agentID, messageID, emoji, remove in
+                let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
+                let data = try await request(OpenClawChatGatewayRequests.reactionsSet(
+                    sessionKey: target.sessionKey,
+                    agentID: target.agentID,
+                    messageID: messageID,
+                    emoji: emoji,
+                    remove: remove))
+                return try OpenClawChatGatewayPayloadCodec.decodeReactionsSet(data)
+            })
+    }
+
     public func requestChatSessionAction(_ request: OpenClawChatGatewayRequest) async throws -> Data {
         try await self.requestChatGateway(request)
     }

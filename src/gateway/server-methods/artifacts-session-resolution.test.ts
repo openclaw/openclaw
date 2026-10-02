@@ -11,6 +11,7 @@ import {
 } from "../session-sharing.test-utils.js";
 import {
   ArtifactSessionResolutionError,
+  createArtifactSessionAccess,
   prepareArtifactSessionResolution,
   type ArtifactQuery,
 } from "./artifacts-session-resolution.js";
@@ -29,8 +30,13 @@ async function resolveSession(
   getRuntimeConfig: () => OpenClawConfig | undefined,
   client: GatewayClient | null,
 ) {
+  using access = createArtifactSessionAccess({
+    getRuntimeConfig: () => getRuntimeConfig() ?? {},
+    client,
+  });
   const resolve = await prepareArtifactSessionResolution(query);
-  return resolve(getRuntimeConfig(), client);
+  const selected = await resolve(access);
+  return selected ? { sessionKey: selected.sessionKey, agentId: selected.agentId } : undefined;
 }
 
 function identifiedClient(scopes: string[], profileId = "viewer@example.com"): GatewayClient {

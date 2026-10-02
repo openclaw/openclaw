@@ -146,16 +146,15 @@ export function buildCustomToolCallEventsWithInput(
 }
 
 export function extractRememberedFact(userTexts: string[]) {
-  for (const text of userTexts) {
-    const qaCanaryMatch = /\bqa canary code is\s+([A-Za-z0-9-]+)/i.exec(text);
-    if (qaCanaryMatch?.[1]) {
-      return qaCanaryMatch[1];
-    }
-  }
-  for (const text of userTexts) {
-    const match = /remember(?: this fact for later)?:\s*([A-Za-z0-9-]+)/i.exec(text);
-    if (match?.[1]) {
-      return match[1];
+  for (const pattern of [
+    /\bqa canary code is\s+([A-Za-z0-9-]+)/i,
+    /remember(?: this fact for later)?:\s*([A-Za-z0-9-]+)/i,
+  ]) {
+    for (const text of userTexts) {
+      const fact = pattern.exec(text)?.[1];
+      if (fact) {
+        return fact;
+      }
     }
   }
   return null;

@@ -236,7 +236,7 @@ extension OpenClawChatViewModel {
 
     func composerSkillEnabled(_ skill: OpenClawChatComposerSkill) -> Bool {
         guard skill.baseEnabled, !skill.missingDependencies, !skill.blocked else { return false }
-        return self.composerToolOverrides.skills[skill.key] ?? (skill.baseEnabled && !skill.agentFiltered)
+        return self.composerToolOverrides.skills[skill.key] ?? !skill.agentFiltered
     }
 
     func composerConnectorEnabled(_ connector: OpenClawChatComposerConnector) -> Bool {

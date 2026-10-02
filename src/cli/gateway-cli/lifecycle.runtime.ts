@@ -64,13 +64,4 @@ export {
 export { markGatewayDraining, resetAllLanes } from "../../process/command-queue.js";
 export { abortPendingChannelReloads } from "../../gateway/server-reload-generation.js";
 
-export async function stopGatewayManagedProviderLocalServices(): Promise<void> {
-  const { hasManagedProviderLocalServices } =
-    await import("../../agents/provider-runtime-lifecycle.js");
-  if (!hasManagedProviderLocalServices()) {
-    return;
-  }
-  const { stopManagedProviderLocalServices } =
-    await import("../../agents/provider-local-service.js");
-  await stopManagedProviderLocalServices();
-}
+export { stopActiveManagedProviderLocalServices } from "../../agents/provider-runtime-lifecycle.js";

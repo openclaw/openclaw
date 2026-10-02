@@ -67,24 +67,8 @@ type WatchMainParams = {
   lockDisabled?: boolean;
 };
 
-type WatchDeps = Required<
-  Pick<
-    WatchMainParams,
-    | "spawn"
-    | "loadWatcher"
-    | "watchPaths"
-    | "pathClassifier"
-    | "process"
-    | "cwd"
-    | "args"
-    | "env"
-    | "fs"
-    | "now"
-    | "sleep"
-    | "signalProcess"
-    | "lockDisabled"
-  >
-> & { createWatcher?: WatcherFactory };
+type WatchDeps = Required<Omit<WatchMainParams, "createWatcher">> &
+  Pick<WatchMainParams, "createWatcher">;
 
 type WatchLock = {
   pid: number;
@@ -93,9 +77,6 @@ type WatchLock = {
   cwd: string;
   watchSession: string;
 };
-
-const buildRunnerArgs = (args: string[]) => [WATCH_NODE_RUNNER, ...args];
-const buildDoctorRunnerArgs = () => [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"];
 
 const resolveRepoPath = (filePath: unknown, cwd: string) => {
   const rawPath = typeof filePath === "string" ? filePath : "";
@@ -154,11 +135,9 @@ const shouldRestartAfterChildExit = (
   (typeof exitCode === "number" && WATCH_RESTARTABLE_CHILD_EXIT_CODES.has(exitCode)) ||
   (platform === "win32" && exitSignal === "SIGTERM");
 
-const isGatewayWatchCommand = (args: string[]) => args[0] === "gateway";
-
 const shouldRunAutoDoctor = (deps: WatchDeps, autoDoctorAttempted: boolean) =>
   !autoDoctorAttempted &&
-  isGatewayWatchCommand(deps.args) &&
+  deps.args[0] === "gateway" &&
   !AUTO_DOCTOR_DISABLE_VALUES.has(
     (deps.env.OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR ?? "").toLowerCase(),
   );
@@ -529,7 +508,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         return;
       }
       startChild(
-        buildRunnerArgs(deps.args),
+        [WATCH_NODE_RUNNER, ...deps.args],
         "watcher child",
         childEnv,
         (exitedProcess, exitCode, exitSignal) => {
@@ -604,7 +583,7 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
         deps,
       );
       startChild(
-        buildDoctorRunnerArgs(),
+        [WATCH_NODE_RUNNER, "doctor", "--fix", "--non-interactive"],
         "doctor repair",
         { ...childEnv },
         (_exitedProcess, exitCode, exitSignal) => {
@@ -637,22 +616,14 @@ export async function runWatchMain(params: WatchMainParams = {}): Promise<WatchE
     }) => {
       void (async () => {
         const deadline = deps.now() + WATCH_DIST_ENTRY_TIMEOUT_MS;
-        while (true) {
-          if (
-            generation !== deferredRestartGeneration ||
-            settled ||
-            shuttingDown ||
-            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
-          ) {
-            return;
-          }
+        const isCurrent = () =>
+          generation === deferredRestartGeneration &&
+          !settled &&
+          !shuttingDown &&
+          (!targetProcess || (restartRequested && watchProcess === targetProcess));
+        while (isCurrent()) {
           await deps.sleep(WATCH_DIST_ENTRY_POLL_MS);
-          if (
-            generation !== deferredRestartGeneration ||
-            settled ||
-            shuttingDown ||
-            (targetProcess && (!restartRequested || watchProcess !== targetProcess))
-          ) {
+          if (!isCurrent()) {
             return;
           }
           if (hasDistEntry()) {

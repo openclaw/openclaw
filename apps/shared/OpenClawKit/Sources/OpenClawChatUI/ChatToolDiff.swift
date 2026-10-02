@@ -81,11 +81,12 @@ enum ChatToolDiff {
     private static func parseDetailsDiffResult(_ diff: String) -> ParsedDetailsDiff? {
         guard !diff.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
+        let rawLines = diff.components(separatedBy: "\n")
         var lines: [ChatToolDiffLine] = []
-        var truncated = diff.components(separatedBy: "\n").contains { raw in
+        var truncated = rawLines.contains { raw in
             raw.trimmingCharacters(in: .whitespacesAndNewlines) == "...(truncated)..."
         }
-        for raw in diff.components(separatedBy: "\n") {
+        for raw in rawLines {
             guard !raw.isEmpty else { continue }
             let marker = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             let line: ChatToolDiffLine
@@ -681,10 +682,6 @@ enum ChatToolDiff {
 
     private static func string(in record: [String: AnyCodable]?, keys: [String]) -> String? {
         guard let record else { return nil }
-        return self.firstValue(in: record, keys: keys)?.stringValue
-    }
-
-    private static func firstValue(in record: [String: AnyCodable], keys: [String]) -> AnyCodable? {
-        keys.lazy.compactMap { record[$0] }.first
+        return keys.lazy.compactMap { record[$0] }.first?.stringValue
     }
 }

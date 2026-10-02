@@ -20,6 +20,7 @@ import {
 } from "./subagent-registry-queries.js";
 import type { PreparedSubagentRunsRead } from "./subagent-registry-read-snapshot.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
+import { markSubagentMessageWaitInRuns } from "./subagent-registry-run-pause.js";
 import {
   getSubagentRunsSnapshotForRead,
   prepareSubagentRunsSnapshotForRunIds,
@@ -30,6 +31,7 @@ export function createSubagentRegistryPublicApi(config: {
   runs: Map<string, SubagentRunRecord>;
   persist: (...runIds: string[]) => void;
   persistOrThrow: (...runIds: string[]) => void;
+  persistAsyncOrThrow: Parameters<typeof markSubagentMessageWaitInRuns>[0]["persist"];
   restoreOnce: (context?: OpenClawStateWorkerContext) => Promise<void>;
   startAnnounceCleanup: (runId: string, entry: SubagentRunRecord) => boolean;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
@@ -270,6 +272,27 @@ export function createSubagentRegistryPublicApi(config: {
   }
 
   return {
+    markSubagentMessageWait: async (params: {
+      runId: string;
+      sessionKey: string;
+      acknowledgment?: string;
+    }) => {
+      const stateContext = captureOpenClawStateWorkerContext();
+      const assertCallerCurrent = captureGatewayToolCallerAssertion();
+      const assertCurrent = () => {
+        assertSubagentRegistryWriteSourceCurrent(stateContext);
+        assertCallerCurrent?.();
+      };
+      assertCurrent();
+      await restoreOnce(stateContext);
+      return await markSubagentMessageWaitInRuns({
+        ...params,
+        runs,
+        context: stateContext,
+        assertCurrent,
+        persist: config.persistAsyncOrThrow,
+      });
+    },
     leasePendingAgentSteeringItems,
     ackPendingAgentSteeringItems,
     releasePendingAgentSteeringItems,

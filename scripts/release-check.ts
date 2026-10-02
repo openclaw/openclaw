@@ -39,6 +39,7 @@ import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolvePublishedInstallSourceVerification,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { assertPreparedOpenClawAiDependency } from "./openclaw-npm-prepublish-verify.ts";
 import { parseNpmPackJsonOutput, type NpmPackResult } from "./openclaw-npm-release-check.ts";
@@ -671,12 +672,6 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
   return errors;
 }
 
-export function allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot: string): boolean {
-  return !existsSync(
-    resolve(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
-  );
-}
-
 function verifyPackedInstalledPackage(params: {
   expectedVersion: string;
   packageRoot: string;
@@ -690,10 +685,7 @@ function verifyPackedInstalledPackage(params: {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
-    // The selected source checkout is immutable release input. Its companion
-    // manifests are the exact inputs packed by the following plugin preflight.
-    additionalCompanionManifestRoots: [resolve("extensions")],
-    allowLegacyGeneratedOwnership: allowsLegacyGeneratedOwnershipForSourceRoot(resolve()),
+    ...resolvePublishedInstallSourceVerification(resolve(), params.expectedVersion),
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,

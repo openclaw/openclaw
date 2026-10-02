@@ -15,7 +15,7 @@ import {
 } from "../../infra/legacy-acp-migration-source.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import type { AcpSessionControlBinding } from "./session-control-owner.js";
+import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
 import { selectAcpSessionRowForStoreEntry } from "./session-meta-keys.js";
 import { clearLegacyEmbeddedAcpMetadata } from "./session-meta-legacy-cleanup.js";
@@ -53,9 +53,6 @@ function consumeLegacyAcpMigrationSources(params: {
     params.expectedControlBinding,
     "legacy source consumption",
   );
-  if (current.sources.length === 0) {
-    return;
-  }
   for (const source of current.sources) {
     if (legacyAcpMigrationBindingMatches(source, current.entry)) {
       recordLegacyAcpMigrationCompletion(params.database, source, params.now);

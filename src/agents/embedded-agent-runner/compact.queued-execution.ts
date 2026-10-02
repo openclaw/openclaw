@@ -133,7 +133,7 @@ function mergeSecondaryNativeHarnessCompactionDetails(params: {
 function enqueueCompactionInLanes<T>(
   params: Pick<
     CompactEmbeddedAgentSessionParams,
-    "sessionKey" | "sessionId" | "spawnedBy" | "lane" | "enqueue" | "abortSignal"
+    "agentId" | "sessionKey" | "sessionId" | "spawnedBy" | "lane" | "enqueue" | "abortSignal"
   >,
   run: () => Promise<T>,
 ): Promise<T> {
@@ -141,7 +141,14 @@ function enqueueCompactionInLanes<T>(
   const globalLane = resolveGlobalLane(params.lane, params);
   const enqueueGlobal =
     params.enqueue ?? ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
-  const options = { abortSignal: params.abortSignal };
+  const options = {
+    abortSignal: params.abortSignal,
+    sessionTarget: {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+    },
+  };
   return enqueueCommandInLane(sessionLane, () => enqueueGlobal(run, options), options);
 }
 

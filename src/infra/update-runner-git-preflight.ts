@@ -15,7 +15,7 @@ import {
   resolveUpdateBuildManager,
 } from "./update-package-manager.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { cleanupGitPreflight } from "./update-runner-git-cleanup.js";
 import {
   buildDevTargetRefResolutionCandidates,
@@ -98,7 +98,7 @@ async function resolveExplicitTarget(params: {
         if (warnings.length > 0) {
           fetchStep.warnings = [...warnings];
         }
-        options.progress?.onStepComplete?.({
+        await reportUpdateStepCompletion(options.progress, {
           ...fetchStep,
           index: options.stepIndex,
           total: options.totalSteps,
@@ -486,6 +486,7 @@ export async function runGitCandidatePreflight(params: {
   validateCandidate: UpdateRunnerOptions["validateCandidate"];
   prepareGitExposure?: UpdateRunnerOptions["prepareGitExposure"];
   prepareCandidate?: (root: string, cleanupRoot: string) => Promise<void>;
+  retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   needsCheckoutMain: boolean;
   runCommand: CommandRunner;
   timeoutMs: number;
@@ -669,7 +670,10 @@ export async function runGitCandidatePreflight(params: {
     throw error;
   } finally {
     if (!cleanupUncertain) {
-      await cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      const cleanup = () => cleanupGitPreflight(params, worktreeDir, preflightRoot);
+      if (tested?.status !== "ok" || !params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
     }
   }
   if (tested?.status !== "ok") {

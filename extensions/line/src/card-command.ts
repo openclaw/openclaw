@@ -159,7 +159,6 @@ function parseCardArgs(argsStrInput: string): {
     flags: {},
   };
 
-  // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
     result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);

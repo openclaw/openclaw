@@ -101,7 +101,7 @@ export function syncExecutionAttemptMetadata(
   }
   const previousFailed =
     existingAttempt?.status === "blocked" || existingAttempt?.status === "failed";
-  const attemptFailed = attemptStatus === "blocked" || attemptStatus === "failed";
+  const attemptFailed = attemptStatus === "blocked";
   const failureCount = attemptFailed
     ? previousFailed
       ? metadata.failureCount
@@ -639,18 +639,19 @@ export function buildWorkerContext(
   return lines.join("\n");
 }
 
-export function cardParentIds(card: WorkboardCard): string[] {
+function cardDependencyIds(card: WorkboardCard, type: "parent" | "child"): string[] {
   return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "parent" && link.targetCardId)
+    .filter((link) => link.type === type && link.targetCardId)
     .map((link) => link.targetCardId!)
     .filter((id, index, ids) => ids.indexOf(id) === index);
 }
 
+export function cardParentIds(card: WorkboardCard): string[] {
+  return cardDependencyIds(card, "parent");
+}
+
 export function cardChildIds(card: WorkboardCard): string[] {
-  return (card.metadata?.links ?? [])
-    .filter((link) => link.type === "child" && link.targetCardId)
-    .map((link) => link.targetCardId!)
-    .filter((id, index, ids) => ids.indexOf(id) === index);
+  return cardDependencyIds(card, "child");
 }
 
 export function latestRunningAttempt(card: WorkboardCard): WorkboardRunAttempt | undefined {

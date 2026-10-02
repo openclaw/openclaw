@@ -1,4 +1,3 @@
-/** Doctor cleanup for rebuildable legacy usage-cost cache sidecars. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

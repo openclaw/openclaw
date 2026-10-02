@@ -192,6 +192,9 @@ function parseArgs(argv) {
       throw new Error("Use --scenario instead of --text/--photo for the driven turn.");
     }
     args.scenario = readScenarioFile(resolve(args.scenarioPath));
+    if (!args.dm && args.scenario.actions.some((action) => action.type === "forwardBurst")) {
+      throw new Error("Scenario forwardBurst actions require --dm.");
+    }
   }
   if (!args.expectPassed) args.expect.push("OPENCLAW_E2E_OK");
   return args;
@@ -225,6 +228,7 @@ Chat selection:
   --dm                direct chat with the leased SUT
   --chat TARGET       TDLib id, username, or supported Telegram link
   Scenario send actions accept forumTopicId for a specific forum topic.
+  Scenario forwardBurst actions require --dm and forward bot-authored text and photo in one TDLib call.
 
 Backends:
   --backend mock          (default) basic deterministic mock-openai
@@ -1063,7 +1067,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
   };
   const assertScenarioActionsActive = () => {
     if (readActionFailure()) {
-      throw new Error(`Scenario actions stopped after uncertain send: ${actionFailure.error}`);
+      throw new Error(`Scenario actions stopped after recorder failure: ${actionFailure.error}`);
     }
   };
 
@@ -1357,6 +1361,16 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
           ) {
             break;
           }
+          // The recorder owns native reply attribution. Timed controls must not
+          // overtake a send whose visible reply has not crossed that boundary.
+          const replyBarriers = args.scenario.actions
+            .slice(0, index)
+            .flatMap((prior, priorIndex) =>
+              prior.awaitReply ? [path.join(scenarioBarrierDir, String(priorIndex))] : [],
+            );
+          while (!scenarioActionsStopped() && replyBarriers.some((file) => !fs.existsSync(file))) {
+            await currentTelegramRun().sleep(50);
+          }
           const beganAt = Date.now();
           leaseHealth.assertHealthy();
           if (scenarioActionsStopped()) break;
@@ -1547,7 +1561,15 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
         scratchRemovedAfterExit: true,
         mockRequests: requestRows,
         ...(actionFailure
-          ? { actionFailure: { ...actionFailure, error: redactRunnerText(actionFailure.error) } }
+          ? {
+              actionFailure: {
+                actionType: actionFailure.actionType,
+                actionIndex: actionFailure.actionIndex,
+                status: actionFailure.status,
+                ...(actionFailure.sendOutcome ? { sendOutcome: actionFailure.sendOutcome } : {}),
+                error: redactRunnerText(actionFailure.error),
+              },
+            }
           : {}),
         gatewayActions: gatewayActions.map((action) => ({
           type: action.type,

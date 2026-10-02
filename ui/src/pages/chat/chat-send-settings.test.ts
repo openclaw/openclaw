@@ -71,6 +71,7 @@ it("dispatches a fresh-pane send without waiting for background roster loading",
       expect.objectContaining({
         message: "send without changing a picker",
       }),
+      { timeoutMs: 30_000 },
     );
   } finally {
     roster.resolve(createSessionsListResult());

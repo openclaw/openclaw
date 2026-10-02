@@ -21,6 +21,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
+import { formatFastModeConfirmation } from "../../shared/fast-mode.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -297,7 +298,7 @@ export async function handleDirectiveOnly(
     }
     return acknowledgeIgnoredDirective(
       {
-        text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, auto, default, status.`,
+        text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, ultrafast, auto, default, status.`,
       },
       "hasFastDirective",
     );
@@ -603,13 +604,7 @@ export async function handleDirectiveOnly(
   if (directives.clearFastMode) {
     parts.push(prefixSystemMessage("Fast mode reset to default."));
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
-    parts.push(
-      directives.fastMode === "auto"
-        ? prefixSystemMessage("Fast mode set to auto.")
-        : directives.fastMode
-          ? prefixSystemMessage("Fast mode enabled.")
-          : prefixSystemMessage("Fast mode disabled."),
-    );
+    parts.push(prefixSystemMessage(formatFastModeConfirmation(directives.fastMode)));
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     const message = allowPrivilegedPersistence
@@ -703,11 +698,7 @@ export async function handleDirectiveOnly(
   }
   if (fastModeChanged && !params.persistenceState) {
     const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
-    const nextFastModeText =
-      nextFastMode === "auto"
-        ? "Fast mode set to auto."
-        : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
-    enqueueSystemEvent(nextFastModeText, {
+    enqueueSystemEvent(formatFastModeConfirmation(nextFastMode), {
       sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
       contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });

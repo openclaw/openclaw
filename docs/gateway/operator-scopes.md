@@ -49,6 +49,16 @@ reconnect, or disconnect only their own account. These methods do not expose
 team secrets, mutate shared configuration, or grant OpenClaw write/admin scopes. System
 and per-agent GitHub changes remain `operator.admin`.
 
+Session-scoped readers can read shared GitHub publication options and receipts
+for sessions they can view through `sessions.github.options` and
+`sessions.github.status`. For these narrow callers, the shared publication option
+is available only when the session has a current managed worktree or repository
+workspace with a supported GitHub remote. Unavailable targets do not hide existing
+shared receipts. Reopen the chat or reconnect after the managed workspace changes
+to refresh its options. Personal account discovery and personal receipts still
+require `operator.read` and the authenticated owner. Identity, role, access grant,
+connection, and session visibility are rechecked before returning awaited reads.
+
 With `operator.sessions.write`, a requester can publish ordinary changes from
 sessions they created through the shared GitHub account. Workflow definition
 changes require the original requester's current full `operator.write`
@@ -62,7 +72,8 @@ already holds `operator.admin`.
 `operator.sessions.write` includes `operator.sessions.read`. Broad
 `operator.read` also includes session reads, and `operator.write` includes both
 session scopes. The session scopes do not grant general diagnostics,
-configuration changes, Gateway-wide tool invocation, or publication.
+configuration changes, Gateway-wide tool invocation, or publication outside
+the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
 The Control UI can copy visible history as Markdown. Session writers can rename,
@@ -196,6 +207,13 @@ holding `operator.admin` retain their administrative session access.
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.
 The allowlist also applies when a run targets an already-existing session.
+Agent discovery and the Control UI agent picker show only agents allowed by the
+caller's role. An empty allowlist returns an empty agent roster; the Gateway's
+session-routing ownership remains unchanged.
+Discovery does not grant or revoke access to existing sessions: the role's
+separate session-read policy still governs which sessions the caller can read.
+The Control UI waits for a live agent roster after loading or reconnecting, so
+an older browser roster cannot restore agents excluded by the current role.
 
 Set a role's optional `modelPolicy` to limit the models used by its requests:
 
@@ -447,6 +465,10 @@ dispatch so authorization failures have one canonical structured response:
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.
+- `session.reactions.list` accepts `operator.sessions.read` or broader read
+  access and requires current session visibility. `session.reactions.set` requires `operator.write`, an identified
+  author, and permission to send to or suggest in the session. A view-only
+  operator role cannot react.
 
 Project RPCs use these scopes:
 

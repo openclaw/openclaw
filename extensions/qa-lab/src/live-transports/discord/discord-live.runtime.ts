@@ -34,14 +34,7 @@ import {
 } from "./discord-live.evidence.js";
 import type { DiscordTranscriptsVoiceAuthorizationRun } from "./discord-transcripts-authorization.types.js";
 
-export type DiscordQaRuntimeEnv = {
-  guildId: string;
-  channelId: string;
-  driverBotToken: string;
-  sutBotToken: string;
-  sutApplicationId: string;
-  voiceChannelId?: string;
-};
+export type DiscordQaRuntimeEnv = z.infer<typeof discordQaCredentialPayloadSchema>;
 
 export type DiscordQaScenarioRun =
   | {
@@ -684,12 +677,7 @@ export async function writeDiscordStatusReactionEvidence(params: {
 }) {
   const htmlPath = path.join(params.outputDir, `${params.timeline.scenarioId}-timeline.html`);
   const screenshotPath = path.join(params.outputDir, `${params.timeline.scenarioId}-timeline.png`);
-  const html = renderDiscordStatusReactionHtml({
-    expectedSequence: params.timeline.expectedSequence,
-    scenarioTitle: params.timeline.scenarioTitle,
-    seenSequence: params.timeline.seenSequence,
-    snapshots: params.timeline.snapshots,
-  });
+  const html = renderDiscordStatusReactionHtml(params.timeline);
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
   const screenshot = await writeHtmlScreenshot({ htmlPath, screenshotPath });
   return { htmlPath, ...screenshot };
@@ -736,14 +724,7 @@ async function writeDiscordThreadReplyAttachmentEvidence(params: {
     params.outputDir,
     `${params.evidence.scenarioId}-attachment.png`,
   );
-  const html = renderDiscordThreadReplyAttachmentHtml({
-    attachmentFilenames: params.evidence.attachmentFilenames,
-    expectedAttachmentFilename: params.evidence.expectedAttachmentFilename,
-    messageContent: params.evidence.messageContent,
-    scenarioTitle: params.evidence.scenarioTitle,
-    status: params.evidence.status,
-    threadName: params.evidence.threadName,
-  });
+  const html = renderDiscordThreadReplyAttachmentHtml(params.evidence);
   await fs.writeFile(htmlPath, html, { encoding: "utf8", mode: 0o600 });
   if (uiPath) {
     await fs.writeFile(
@@ -788,11 +769,7 @@ export async function observeStatusReactionTimeline(params: {
   let seenSequence: string[] = [];
   while (Date.now() - startedAtMs < params.timeoutMs) {
     const observedAt = new Date();
-    const message = await getChannelMessage({
-      token: params.token,
-      channelId: params.channelId,
-      messageId: params.messageId,
-    });
+    const message = await getChannelMessage(params);
     snapshots.push(
       normalizeDiscordReactionSnapshot({
         message,

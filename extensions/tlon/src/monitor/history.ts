@@ -8,16 +8,10 @@ import { extractMessageText } from "./utils.js";
  * e.g., 170141184507799509469114119040828178432 -> 170.141.184.507.799.509.469.114.119.040.828.178.432
  */
 function formatUd(id: string | number): string {
-  const str = String(id).replace(/\./g, ""); // Remove any existing dots
-  const reversed = str.split("").toReversed();
+  const str = String(id).replace(/\./g, "");
   const chunks: string[] = [];
-  for (let i = 0; i < reversed.length; i += 3) {
-    chunks.push(
-      reversed
-        .slice(i, i + 3)
-        .toReversed()
-        .join(""),
-    );
+  for (let end = str.length; end > 0; end -= 3) {
+    chunks.push(str.slice(Math.max(0, end - 3), end));
   }
   return chunks.toReversed().join(".");
 }

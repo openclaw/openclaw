@@ -10,7 +10,7 @@ import {
   type MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
 import { getMemoryRuntime } from "../plugins/memory-state.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 
 const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
 const PROJECT_MEMORY_ENTRY_MAX_CHARS = 600;

@@ -12,14 +12,11 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
-import {
-  classifyFailoverReason,
-  isFailoverErrorMessage,
-  type FailoverReason,
-} from "../../embedded-agent-helpers.js";
+import { classifyFailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
 import {
@@ -656,9 +653,6 @@ export function createEmbeddedRunAuthController(params: {
     retried: boolean,
   ): Promise<boolean> => {
     if (!state.runtimeAuthState || retried) {
-      return false;
-    }
-    if (!isFailoverErrorMessage(errorText, { provider: params.provider })) {
       return false;
     }
     if (classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {

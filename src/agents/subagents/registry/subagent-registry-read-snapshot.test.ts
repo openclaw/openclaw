@@ -23,11 +23,11 @@ import {
   prepareSubagentRunsSnapshotForSessions,
 } from "./subagent-registry-state.js";
 import {
-  saveSubagentRegistryToSqlite,
   loadSubagentRunsForSessionsInDatabase,
   subagentRunsDurableBasisMatches,
 } from "./subagent-registry.store.sqlite.js";
 import * as registryStore from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 
 function retainedRun() {
   return createSubagentRunRecord({
@@ -70,7 +70,7 @@ it.each(["reopening", "replacing"] as const)(
   async (change) => {
     await withPersistedReads(async () => {
       const entry = retainedRun();
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]));
+      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]), [entry.runId]);
       const context = captureOpenClawStateWorkerContext();
       const original = await prepareSubagentRunsSnapshotForRunIds(new Map(), ["collector"]);
       const release = createDeferredCore();
@@ -116,7 +116,7 @@ it.each(["reopening", "replacing"] as const)(
   },
 );
 
-it.each(["delete", "replace", "move alias", "full publication"] as const)(
+it.each(["delete", "replace", "move alias", "update"] as const)(
   "applies a %s in the prepared read's consuming frame",
   async (publication) => {
     await withPersistedReads(async () => {
@@ -131,10 +131,7 @@ it.each(["delete", "replace", "move alias", "full publication"] as const)(
         completion: { required: false, resultText: "current result" },
       };
       const current = new Map(publication === "delete" ? [] : [[replacement.runId, replacement]]);
-      persistSubagentRunsToDiskOrThrow(
-        current,
-        publication === "full publication" ? undefined : [entry.runId, replacement.runId],
-      );
+      persistSubagentRunsToDiskOrThrow(current, [entry.runId, replacement.runId]);
       expect(prepared.consume((runs) => [...runs.values()])).toEqual({
         ready: true,
         value: publication === "delete" || publication === "move alias" ? [] : [replacement],
@@ -286,7 +283,7 @@ it.each(["update", "delete"] as const)(
   async (kind) => {
     await withPersistedReads(async () => {
       const entry = retainedRun();
-      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]));
+      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]), [entry.runId]);
       // A foreign committed value must beat the old resident committed snapshot.
       const foreign = { ...entry, task: "foreign committed task" };
       saveSubagentRegistryToSqlite(new Map([[foreign.runId, foreign]]));
@@ -392,30 +389,27 @@ it.each(["malformed payload", "duplicate identity", "topology", "unrelated row"]
   },
 );
 
-it.each(["named", "full"] as const)(
-  "keeps prepared maintenance facts across payload-only %s publication and refuses changed protection",
-  async (publication) => {
-    await withPersistedReads(async () => {
-      const entry = retainedRun();
-      saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
-      const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
-      try {
-        const original = prepared.capture();
-        const payloadOnly = {
-          ...entry,
-          task: "new retained prompt",
-          completion: { required: false, resultText: "new retained result" },
-        };
-        const changedRunIds = publication === "named" ? [entry.runId] : undefined;
-        persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, payloadOnly]]), changedRunIds);
-        expect(prepared.capture()).toEqual(original);
+it("keeps prepared maintenance facts across payload-only publication and refuses changed protection", async () => {
+  await withPersistedReads(async () => {
+    const entry = retainedRun();
+    saveSubagentRegistryToSqlite(new Map([[entry.runId, entry]]));
+    const prepared = await prepareSubagentMaintenanceRunsSnapshotForRead(new Map());
+    try {
+      const original = prepared.capture();
+      const payloadOnly = {
+        ...entry,
+        task: "new retained prompt",
+        completion: { required: false, resultText: "new retained result" },
+      };
+      const changedRunIds = [entry.runId];
+      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, payloadOnly]]), changedRunIds);
+      expect(prepared.capture()).toEqual(original);
 
-        const completed = { ...payloadOnly, cleanupCompletedAt: Date.now() };
-        persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, completed]]), changedRunIds);
-        expect(() => prepared.capture()).toThrow("maintenance facts changed");
-      } finally {
-        prepared.dispose();
-      }
-    });
-  },
-);
+      const completed = { ...payloadOnly, cleanupCompletedAt: Date.now() };
+      persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, completed]]), changedRunIds);
+      expect(() => prepared.capture()).toThrow("maintenance facts changed");
+    } finally {
+      prepared.dispose();
+    }
+  });
+});

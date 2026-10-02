@@ -70,6 +70,7 @@ function request(
 }
 
 beforeEach(() => {
+  vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: undefined } });
   stateDir = tempDirs.make("openclaw-heap-snapshot-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setActivePluginRegistry(createEmptyPluginRegistry());
@@ -87,10 +88,27 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
 describe("diagnostics.heapSnapshot", () => {
+  it("refuses Bun snapshots before filesystem preparation or native capture", async () => {
+    vi.stubGlobal("process", { ...process, versions: { ...process.versions, bun: "1.4.2" } });
+    const call = request();
+    await call.pending;
+    expect(call.respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "UNAVAILABLE",
+        details: { reason: "unsupported", cleanupFailed: false },
+      }),
+    );
+    expect(native.write).not.toHaveBeenCalled();
+    expect(await fs.readdir(stateDir)).toEqual([]);
+  });
+
   it.each([
     { scopes: [] },
     { scopes: ["operator.read"] },

@@ -788,7 +788,7 @@ describe("worker turn launcher local placement", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected a local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,

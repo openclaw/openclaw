@@ -181,12 +181,9 @@ export async function resolvePairingApprovalPlan(
     clientMode: connectParams.client.mode,
   });
   const allowBoundBootstrapProfileLookup =
-    (reason === "not-paired" &&
-      !existingPairedDevice &&
-      (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
-    (reason === "scope-upgrade" &&
-      Boolean(existingPairedDevice) &&
-      (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator")));
+    ((reason === "not-paired" && !existingPairedDevice) ||
+      (reason === "scope-upgrade" && Boolean(existingPairedDevice))) &&
+    (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"));
   const boundBootstrapProfile =
     authMethod === "bootstrap-token" && bootstrapTokenCandidate && allowBoundBootstrapProfileLookup
       ? await getBoundDeviceBootstrapProfile({

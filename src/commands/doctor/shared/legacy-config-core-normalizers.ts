@@ -1,5 +1,6 @@
 // Core legacy config normalizers for shipped keys retired outside the rule table.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -872,7 +873,7 @@ export function normalizeLegacyNanoBananaSkill(
   }
 
   const rawEntries = skills.entries;
-  if (!isRecord(rawEntries)) {
+  if (!isRecord(rawEntries) || !isRecord(rawEntries[NANO_BANANA_SKILL_KEY])) {
     if (!skillsChanged) {
       return cfg;
     }
@@ -881,17 +882,7 @@ export function normalizeLegacyNanoBananaSkill(
       skills,
     };
   }
-
   const rawLegacyEntry = rawEntries[NANO_BANANA_SKILL_KEY];
-  if (!isRecord(rawLegacyEntry)) {
-    if (!skillsChanged) {
-      return cfg;
-    }
-    return {
-      ...cfg,
-      skills,
-    };
-  }
 
   const existingImageGenerationModel = next.agents?.defaults?.mediaModels?.image;
   if (existingImageGenerationModel === undefined) {
@@ -1002,15 +993,6 @@ function resolveConfiguredOllamaModelNumCtxBudget(params: {
   );
 }
 
-function resolveConfiguredOllamaProviderNumCtxBudget(
-  provider: Record<string, unknown>,
-): number | undefined {
-  return (
-    normalizeConfiguredPositiveInteger(provider.contextWindow) ??
-    normalizeConfiguredPositiveInteger(provider.maxTokens)
-  );
-}
-
 function isNativeOllamaProviderConfig(provider: Record<string, unknown>): boolean {
   return normalizeOptionalLowercaseString(provider.api) === "ollama";
 }
@@ -1033,33 +1015,32 @@ function applyLegacyOllamaProviderNumCtxParams(params: {
   providerId: string;
   provider: Record<string, unknown>;
   changes: string[];
-}): { provider: Record<string, unknown>; changed: boolean } {
+}): Record<string, unknown> {
   if (!isNativeOllamaProviderConfig(params.provider)) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
 
   const rawParams = params.provider.params;
   if (rawParams !== undefined && !isRecord(rawParams)) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
   if (rawParams && Object.hasOwn(rawParams, "num_ctx")) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
 
-  const numCtx = resolveConfiguredOllamaProviderNumCtxBudget(params.provider);
+  const numCtx =
+    normalizeConfiguredPositiveInteger(params.provider.contextWindow) ??
+    normalizeConfiguredPositiveInteger(params.provider.maxTokens);
   if (numCtx === undefined) {
-    return { provider: params.provider, changed: false };
+    return params.provider;
   }
 
   params.changes.push(
     `Set models.providers.${sanitizeForLog(params.providerId)}.params.num_ctx to ${numCtx} for native Ollama compatibility.`,
   );
   return {
-    provider: {
-      ...params.provider,
-      params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
-    },
-    changed: true,
+    ...params.provider,
+    params: rawParams ? { ...rawParams, num_ctx: numCtx } : { num_ctx: numCtx },
   };
 }
 
@@ -1079,14 +1060,13 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       (model) =>
         isRecord(model) && normalizeConfiguredPositiveInteger(model.contextTokens) !== undefined,
     );
-    const providerParams = hasRuntimeCaps
-      ? { provider: rawProvider, changed: false }
+    const provider = hasRuntimeCaps
+      ? rawProvider
       : applyLegacyOllamaProviderNumCtxParams({ providerId, provider: rawProvider, changes });
     const providerNumCtxApplies =
-      isNativeOllamaProviderConfig(providerParams.provider) &&
-      hasConfiguredOllamaProviderNumCtx(providerParams.provider);
+      isNativeOllamaProviderConfig(provider) && hasConfiguredOllamaProviderNumCtx(provider);
     if (rawModels.length === 0) {
-      return providerParams.provider;
+      return provider;
     }
 
     let modelsChanged = false;
@@ -1094,7 +1074,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       if (!isRecord(model)) {
         return model;
       }
-      if (!isNativeOllamaModelConfig(providerParams.provider, model)) {
+      if (!isNativeOllamaModelConfig(provider, model)) {
         return model;
       }
 
@@ -1108,7 +1088,7 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
 
       const numCtx = resolveConfiguredOllamaModelNumCtxBudget({
         model,
-        provider: providerParams.provider,
+        provider,
         providerNumCtxApplies,
       });
       if (numCtx === undefined) {
@@ -1124,8 +1104,8 @@ export function normalizeLegacyOllamaNativeNumCtxParams(
       });
     });
 
-    return modelsChanged || providerParams.changed
-      ? { ...providerParams.provider, models: nextModels }
+    return modelsChanged || provider !== rawProvider
+      ? { ...provider, models: nextModels }
       : rawProvider;
   });
 }
@@ -1147,26 +1127,23 @@ function normalizeLegacyMistralModelCost<T extends Record<string, unknown>>(para
   modelId: string;
   index: number;
   changes: string[];
-}): { model: T; changed: boolean } {
+}): T {
   const cost = params.model.cost;
   if (!isRecord(cost) || cost.cacheRead !== 0) {
-    return { model: params.model, changed: false };
+    return params.model;
   }
 
   const normalizedCacheRead = MISTRAL_MODEL_CACHE_READ_COST_BY_ID[params.modelId.toLowerCase()];
   if (normalizedCacheRead === undefined) {
-    return { model: params.model, changed: false };
+    return params.model;
   }
 
   params.changes.push(
     `Normalized models.providers.${sanitizeForLog(params.providerId)}.models[${params.index}].cost.cacheRead (0 → ${normalizedCacheRead}) for Mistral prompt-cache billing.`,
   );
   return {
-    model: {
-      ...params.model,
-      cost: { ...cost, cacheRead: normalizedCacheRead },
-    },
-    changed: true,
+    ...params.model,
+    cost: { ...cost, cacheRead: normalizedCacheRead },
   };
 }
 
@@ -1195,15 +1172,8 @@ export function normalizeLegacyMistralModelDefaults(
       }
 
       let nextModel = model;
-      let modelChanged = false;
-      const contextWindow =
-        typeof model.contextWindow === "number" && Number.isFinite(model.contextWindow)
-          ? model.contextWindow
-          : null;
-      const maxTokens =
-        typeof model.maxTokens === "number" && Number.isFinite(model.maxTokens)
-          ? model.maxTokens
-          : null;
+      const contextWindow = asFiniteNumber(model.contextWindow) ?? null;
+      const maxTokens = asFiniteNumber(model.maxTokens) ?? null;
 
       if (contextWindow !== null && maxTokens !== null) {
         const normalizedMaxTokens = resolveNormalizedProviderModelMaxTokens({
@@ -1214,29 +1184,21 @@ export function normalizeLegacyMistralModelDefaults(
         });
         if (normalizedMaxTokens !== maxTokens) {
           nextModel = Object.assign({}, nextModel, { maxTokens: normalizedMaxTokens });
-          modelChanged = true;
           changes.push(
             `Normalized models.providers.${providerId}.models[${index}].maxTokens (${maxTokens} → ${normalizedMaxTokens}) to avoid Mistral context-window rejects.`,
           );
         }
       }
 
-      const costNormalization = normalizeLegacyMistralModelCost({
+      nextModel = normalizeLegacyMistralModelCost({
         providerId,
         model: nextModel,
         modelId,
         index,
         changes,
       });
-      if (costNormalization.changed) {
-        nextModel = costNormalization.model;
-        modelChanged = true;
-      }
-
-      if (modelChanged) {
-        modelsChanged = true;
-      }
-      return modelChanged ? nextModel : model;
+      modelsChanged ||= nextModel !== model;
+      return nextModel;
     });
 
     return modelsChanged ? { ...rawProvider, models: nextModels } : rawProvider;

@@ -252,11 +252,13 @@ export async function recoverPendingWorkspaceResults(
               }))
             ) {
               recovery.assertCurrent();
-              placements.recordStagedWorkspaceResult(
+              await placements.recordStagedWorkspaceResult(
                 turnClaim,
                 canonicalStagedResultRef,
                 workspace.kind === "repository" ? workspace.repository.workspaceId : undefined,
+                recovery.assertCurrent,
               );
+              recovery.assertCurrent();
               stagedResultRef = canonicalStagedResultRef;
               stagedResultOwners.add(pending.sessionId);
             }
@@ -418,18 +420,26 @@ export async function recoverPendingWorkspaceResults(
               placementGeneration: pending.placementGeneration,
             };
             const journal = {
-              load: () => placements.loadWorkspaceReconciliation(owner),
+              load: () =>
+                placements.loadWorkspaceReconciliation(owner, undefined, recovery.assertCurrent),
               begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) => {
                 recovery.assertCurrent();
-                return placements.beginWorkspaceReconciliation(owner, next);
+                return placements.beginWorkspaceReconciliation(owner, next, recovery.assertCurrent);
               },
-              commit: (manifestRef: string) => {
+              commit: async (manifestRef: string) => {
                 assertPreservedEnvironment();
-                return placements.updateWorkspaceBaseManifest({ claim: turnClaim, manifestRef });
+                await placements.updateWorkspaceBaseManifest(
+                  { claim: turnClaim, manifestRef },
+                  assertPreservedEnvironment,
+                );
               },
               abort: () => {
                 recovery.assertCurrent();
-                return placements.abortWorkspaceReconciliation(owner);
+                return placements.abortWorkspaceReconciliation(
+                  owner,
+                  undefined,
+                  recovery.assertCurrent,
+                );
               },
             };
             if (stagedResultRef) {
@@ -455,7 +465,7 @@ export async function recoverPendingWorkspaceResults(
                     onAccepted: journal.commit,
                   });
                 } else {
-                  const interrupted = journal.load();
+                  const interrupted = await journal.load();
                   const alreadyApplied = interrupted?.appliedManifestRef !== undefined;
                   if (interrupted && !alreadyApplied) {
                     await recoverWorkerWorkspaceReconciliation({
@@ -463,7 +473,7 @@ export async function recoverPendingWorkspaceResults(
                       journal: interrupted,
                       assertCurrent: recovery.assertCurrent,
                     });
-                    journal.abort();
+                    await journal.abort();
                   }
                   const reconciliation = await applyStagedWorkerWorkspaceResult({
                     root,
@@ -562,12 +572,13 @@ export async function recoverPendingWorkspaceResults(
                       ref: canonicalStagedResultRef,
                       record: (ref) => {
                         recovery.assertCurrent();
-                        placements.recordStagedWorkspaceResult(
+                        return placements.recordStagedWorkspaceResult(
                           turnClaim,
                           ref,
                           workspace.kind === "repository"
                             ? workspace.repository.workspaceId
                             : undefined,
+                          recovery.assertCurrent,
                         );
                       },
                     },

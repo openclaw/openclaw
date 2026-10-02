@@ -124,9 +124,7 @@ export class OpenAIQuicksilverSocketRuntime {
     if (this.media.paced) {
       this.clock.start();
     } else if (this.pending.length) {
-      const pcm = Buffer.alloc(this.pending.length);
-      this.pending.readInto(pcm);
-      this.sendPcm(pcm);
+      this.sendPcm(this.pending.take());
     }
   }
 

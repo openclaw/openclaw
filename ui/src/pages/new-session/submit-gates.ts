@@ -119,7 +119,7 @@ export function requiresNewSessionModelSetup(options: {
       place.remotePlacement ||
       Boolean(pendingPlacement.sessionKey),
     connected: gateway.connected,
-    agentsLoaded: Boolean(agents?.agentsList && !agents.agentsListCached),
+    agentsLoaded: Boolean(agents?.agentsList),
     selectedAgentFound: selectedAgent !== undefined,
     agentModel: selectedAgent?.model?.primary,
   });
@@ -244,11 +244,11 @@ export function resolveNewSessionSubmitBlock(
       ? emptyDraftBlock(draft, kind, pendingPlacementActive)
       : { gate: "placement-recovery", reason: t("newSession.placementNotReady") };
   }
-  if (snapshot.context?.agents.state.agentsListCached) {
+  if (!snapshot.context?.agents.state.agentsList) {
     return {
       gate: "agents",
       reason: t(
-        snapshot.context.agents.state.agentsError
+        snapshot.context?.agents.state.agentsError
           ? "newSession.agentDefaultsUnavailable"
           : "newSession.loadingAgentDefaults",
       ),
@@ -265,10 +265,11 @@ export function resolveNewSessionSubmitBlock(
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {
     return { gate: "agent-not-allowed", reason: t("newSession.catalogUnavailable") };
   }
-  if (kind === "session" && !place.devicePlacementReady()) {
+  const devicePlacement = kind === "session" ? place.devicePlacement() : undefined;
+  if (devicePlacement && !devicePlacement.ready) {
     return {
       gate: "device",
-      reason: place.devicePlacementDisabledReason() ?? t("newSession.nodeUnavailable"),
+      reason: devicePlacement.disabledReason ?? t("newSession.nodeUnavailable"),
     };
   }
   const deviceRuntimeUnsupportedReason = place.modelControl.devicePlacementUnsupportedReason();
@@ -304,7 +305,7 @@ export function resolveNewSessionSubmitBlock(
           ? t("newSession.checkingGit")
           : place.remotePlacement
             ? t("newSession.remoteSourceUnavailable")
-            : t("newSession.worktreeUnavailable"),
+            : t("newSession.gitCheckUnavailable"),
     };
   }
   if (place.worktree && !place.freshWorkspace && !isWorktreeNameValid(place.worktreeName)) {

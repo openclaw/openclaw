@@ -55,12 +55,8 @@ function resolveTerminalShell(params: {
   if (platform === "win32") {
     return { shell: env.ComSpec?.trim() || "cmd.exe", args: [] };
   }
-  const loginShell = env.SHELL?.trim();
-  if (loginShell) {
-    // Load the operator's login profile, including its PATH and prompt.
-    return { shell: loginShell, args: ["-l"] };
-  }
-  return { shell: "/bin/bash", args: ["-l"] };
+  // Load the operator's login profile, including its PATH and prompt.
+  return { shell: env.SHELL?.trim() || "/bin/bash", args: ["-l"] };
 }
 
 function resolveTerminalLaunch(params: {

@@ -1,4 +1,3 @@
-// Implements model listing and provider catalog commands.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -175,16 +174,6 @@ function buildModelsMenuText(params: {
   ].join("\n");
 }
 
-function buildProviderInfos(params: {
-  providers: string[];
-  byProvider: ReadonlyMap<string, ReadonlySet<string>>;
-}): Array<{ id: string; count: number }> {
-  return params.providers.map((provider) => ({
-    id: provider,
-    count: params.byProvider.get(provider)?.size ?? 0,
-  }));
-}
-
 type ModelsCommandReplyParams = {
   cfg: OpenClawConfig;
   commandBodyNormalized: string;
@@ -260,7 +249,10 @@ function buildModelsCommandReply(
     .join("\n");
   const withAvailability = (text: string) => [text, notice, checking].filter(Boolean).join("\n\n");
   const commandPlugin = params.surface ? getChannelPlugin(params.surface) : null;
-  const providerInfos = buildProviderInfos({ providers, byProvider });
+  const providerInfos = providers.map((provider) => ({
+    id: provider,
+    count: byProvider.get(provider)?.size ?? 0,
+  }));
 
   const providerMenuReply = (preferMenu: boolean): ReplyPayload & { text: string } => {
     const channelData =

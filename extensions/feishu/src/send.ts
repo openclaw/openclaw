@@ -94,7 +94,6 @@ type FeishuGetMessageResponse = {
   };
 };
 
-/** Send a direct message as a fallback when a reply target is unavailable. */
 async function sendFallbackDirect(
   client: ReturnType<typeof createFeishuClient>,
   params: {
@@ -270,10 +269,6 @@ function parseFeishuMessageItem(
   };
 }
 
-/**
- * Get a message by its ID.
- * Useful for fetching quoted/replied message content.
- */
 export async function getMessageFeishu(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -433,7 +428,6 @@ type SendFeishuMessageParams = {
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
   allowTopLevelReplyFallback?: boolean;
-  /** Mention target users */
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
   accountId?: string;
@@ -538,17 +532,12 @@ export async function editMessageFeishu(params: {
   return { messageId, contentType: "post" };
 }
 
-/** Header configuration for structured Feishu cards. */
 export type CardHeaderConfig = {
-  /** Header title text, e.g. "💻 Coder" */
   title: string;
   /** Feishu header color template (blue, green, red, orange, purple, grey, etc.). Defaults to "blue". */
   template?: string;
 };
 
-/**
- * Build a Feishu interactive card with optional header and note footer.
- */
 function buildStructuredCard(
   text: string,
   options?: {
@@ -604,9 +593,6 @@ export function chunkFeishuCardMarkdown(
   });
 }
 
-/**
- * Send a message as a structured card with optional header and note.
- */
 export async function sendStructuredCardFeishu(
   params: Omit<SendFeishuMessageParams, "preparedPostText"> & {
     header?: CardHeaderConfig;

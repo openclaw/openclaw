@@ -7,13 +7,6 @@ import { jsonResult, ToolInputError } from "./common.js";
 
 const states = new Map<string, SwarmStructuredOutputState>();
 
-function formatSchemaError(errors: Array<{ text: string }>): string {
-  return errors
-    .slice(0, 3)
-    .map((error) => error.text)
-    .join("; ");
-}
-
 export function peekSwarmStructuredOutput(runId: string): SwarmStructuredOutputState | undefined {
   const state = states.get(runId);
   return state ? structuredClone(state) : undefined;
@@ -97,7 +90,10 @@ export function createStructuredOutputTool(params: {
         return jsonResult({ status: "recorded" });
       }
       const invalidAttempts = (prior?.invalidAttempts ?? 0) + 1;
-      const schemaError = formatSchemaError(validation.errors);
+      const schemaError = validation.errors
+        .slice(0, 3)
+        .map((error) => error.text)
+        .join("; ");
       commitState({ structured: undefined, invalidAttempts, schemaError });
       if (invalidAttempts === 1) {
         throw new ToolInputError(

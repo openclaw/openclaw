@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -27,19 +27,12 @@ import {
   type GatewayInflightResult,
 } from "./inflight.js";
 import type {
-  GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
   RespondFn,
 } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
-
-function isAuthenticatedOwner(client: GatewayClient | null): boolean {
-  // These RPCs require operator.admin. Derive owner status from the admitted
-  // socket anyway so no future schema field can self-assert channel authority.
-  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
-}
 
 function validateConversationSourceSession(params: {
   config: ReturnType<GatewayRequestContext["getRuntimeConfig"]>;
@@ -99,17 +92,15 @@ function bindConversationOperationIdentity(
     timeoutMs?: number;
   },
 ): string | null {
-  const identity = createHash("sha256")
-    .update(
-      JSON.stringify([
-        request.agentId,
-        request.sourceSessionKey ?? null,
-        request.conversationRef,
-        request.message,
-        request.timeoutMs ?? null,
-      ]),
-    )
-    .digest("hex");
+  const identity = sha256Hex(
+    JSON.stringify([
+      request.agentId,
+      request.sourceSessionKey ?? null,
+      request.conversationRef,
+      request.message,
+      request.timeoutMs ?? null,
+    ]),
+  );
   const operationKey = conversationOperationKey(request);
   const identityKey = `${operationKey}:identity`;
   const completed = context.dedupe.get(operationKey);
@@ -252,7 +243,7 @@ async function handleConversationWrite(
         config,
         readCurrentConfig,
         agentId: request.agentId,
-        senderIsOwner: isAuthenticatedOwner(client),
+        senderIsOwner: client?.connect?.scopes?.includes(ADMIN_SCOPE) === true,
         ...(request.sourceSessionKey ? { sourceSessionKey: request.sourceSessionKey } : {}),
         conversationRef: request.conversationRef,
         message: request.message,

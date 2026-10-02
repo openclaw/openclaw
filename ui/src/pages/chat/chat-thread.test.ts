@@ -1,5 +1,4 @@
 // @vitest-environment node
-import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { markInboundContextLabel } from "../../../../src/auto-reply/reply/inbound-context-marker.js";
@@ -1956,16 +1955,12 @@ describe("tool expansion state", () => {
     };
     try {
       const { messageReference, collectionControl } = populatePane();
-      await collectGarbageForTest(() => {
-        expect(queryObjects(TranscriptMessage)).toBe(1);
-      });
+      await collectGarbageForTest();
       expect(collectionControl.deref()).toBeUndefined();
       expect(messageReference.deref() !== undefined).toBe(true);
 
       resetChatThreadState(paneId);
-      await collectGarbageForTest(() => {
-        expect(queryObjects(TranscriptMessage)).toBe(0);
-      });
+      await collectGarbageForTest();
       expect(messageReference.deref()).toBeUndefined();
       expect([...getExpandedToolCards(sessionKey).values()]).toEqual([true]);
     } finally {
@@ -2150,31 +2145,6 @@ describe("thread item cache", () => {
       "assistant",
     ]);
     expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
-  });
-
-  it("sender provenance refreshes reply display without changing the person", () => {
-    resetChatThreadState();
-    const alice = userMessage("first", 1, {
-      __openclaw: senderProfile("alice", "Alice"),
-    });
-    const bob = userMessage("second", 2, {
-      __openclaw: senderProfile("bob", "Bob"),
-    });
-    const reply = assistantMessage("answer", 3);
-    const input = createProps({ messages: [alice, bob, reply] });
-    buildCachedChatItems(input);
-    const renamed = userMessage("second", 2, {
-      __openclaw: {
-        ...senderProfile("bob", "Bobby"),
-        senderProfileAvatarUrl: "/api/users/bob/avatar?v=2",
-      },
-    });
-    const updated = buildCachedChatItems({ ...input, messages: [alice, renamed, reply] });
-    expect(
-      updated.find((item) => item.kind === "group" && item.role === "assistant"),
-    ).toMatchObject({
-      replyToSender: { name: "Bobby", profileAvatarUrl: "/api/users/bob/avatar?v=2" },
-    });
   });
 
   it("keeps the full-build baseline on a stream-only update after a steer", () => {

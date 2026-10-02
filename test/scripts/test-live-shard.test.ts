@@ -28,28 +28,14 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
-  withoutReleaseWaivedLiveFiles,
 } from "../../scripts/test-live-shard.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
-import { waitForPidFile } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
-
-  it("drops release-waived single-case live files only for the waived candidate version", () => {
-    const files = [
-      "src/gateway/gateway-progress-refresh.live.test.ts",
-      "src/gateway/gateway-codex-harness.live.test.ts",
-      "test/gateway-subagent-restart.live.test.ts",
-    ];
-    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.7")).toEqual([
-      "src/gateway/gateway-codex-harness.live.test.ts",
-    ]);
-    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.8")).toEqual(files);
-    expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
-  });
 
   it("discovers live tests without scanning source roots in-process", () => {
     expectNoReaddirSyncDuring(() => {
@@ -651,7 +637,7 @@ describe("scripts/test-live-shard", () => {
 
   it.skipIf(process.platform === "win32")(
     "cleans live shard descendants before forwarding parent SIGTERM",
-    async () => {
+    async ({ signal }) => {
       const root = mkdtempSync(path.join(tmpdir(), "openclaw-live-shard-signal-"));
       const fakePnpmPath = path.join(root, "pnpm");
       const argsPath = path.join(root, "args.json");
@@ -690,17 +676,35 @@ describe("scripts/test-live-shard", () => {
                 npm_execpath: fakePnpmPath,
               },
             ),
-            stdio: "ignore",
+            stdio: ["ignore", "pipe", "ignore"],
           },
         );
 
         runner = startedRunner;
-        runnerClosed = new Promise((resolve) => {
-          startedRunner.once("close", (code, signal) => resolve({ code, signal }));
+        runnerClosed = new Promise((resolve, reject) => {
+          startedRunner.once("error", reject);
+          startedRunner.once("close", (code, childSignal) =>
+            resolve({ code, signal: childSignal }),
+          );
         });
-
-        childPid = await waitForPidFile(childPidPath, 5_000);
-        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
+        const ready = createDeferred();
+        let output = "";
+        startedRunner.stdout.on("data", (chunk) => {
+          output += String(chunk);
+          if (output.includes("fixture pnpm tree ready\n")) {
+            ready.resolve();
+          }
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            runnerClosed,
+            `timeout waiting for pid in ${descendantPidPath}`,
+          ),
+          signal,
+        );
+        childPid = Number.parseInt(readFileSync(childPidPath, "utf8"), 10);
+        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
         expect(JSON.parse(readFileSync(argsPath, "utf8")).slice(0, 3)).toEqual([
           "test:live",
           "--",
@@ -709,17 +713,14 @@ describe("scripts/test-live-shard", () => {
 
         runner.kill("SIGTERM");
 
-        await expect(waitForClose(runnerClosed)).resolves.toEqual({
+        await expect(withinTest(runnerClosed, signal)).resolves.toEqual({
           code: null,
           signal: "SIGTERM",
         });
-        // Creation precedes the synchronous write; wait for the signal receipt itself.
-        await waitFor(
-          () => existsSync(signaledPath) && readFileSync(signaledPath, "utf8") === "SIGTERM",
-          5_000,
-        );
-        await waitFor(() => !isProcessAlive(childPid), 5_000);
-        await waitFor(() => !isProcessAlive(descendantPid), 5_000);
+        // The fixture writes before exit; the runner joins its child before re-raising.
+        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        await waitForProcessExit(childPid, signal);
+        await waitForProcessExit(descendantPid, signal);
       } finally {
         try {
           if (runner?.pid && isProcessAlive(runner.pid)) {
@@ -728,9 +729,14 @@ describe("scripts/test-live-shard", () => {
           // Join the shim so it can forward cancellation to its detached child group
           // before the fixture directory (and its process receipts) disappears.
           if (runnerClosed) {
-            await waitForClose(runnerClosed);
+            await runnerClosed;
           }
         } finally {
+          // Read durable ownership even when test cancellation interrupted readiness.
+          childPid ||= existsSync(childPidPath) ? Number(readFileSync(childPidPath, "utf8")) : 0;
+          descendantPid ||= existsSync(descendantPidPath)
+            ? Number(readFileSync(descendantPidPath, "utf8"))
+            : 0;
           // A failed shim join must not skip cleanup of already observed descendants.
           for (const pid of [childPid, descendantPid]) {
             if (pid && isProcessAlive(pid)) {
@@ -741,7 +747,7 @@ describe("scripts/test-live-shard", () => {
             await Promise.all(
               [childPid, descendantPid]
                 .filter((pid) => pid > 0)
-                .map((pid) => waitFor(() => !isProcessAlive(pid), 5_000)),
+                .map((pid) => waitForProcessExit(pid, signal)),
             );
           } finally {
             rmSync(root, { force: true, recursive: true });
@@ -763,14 +769,15 @@ function writeFakePnpm(filePath: string): void {
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_ARGS_PATH, JSON.stringify(process.argv.slice(2)));",
       "const child = spawn(process.execPath, [",
       '  "-e",',
-      "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);\",",
-      "], { stdio: 'ignore' });",
+      "  \"process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.send('ready');\",",
+      "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
       'process.on("SIGTERM", () => {',
       '  fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_SIGNALED_PATH, "SIGTERM");',
       "  process.exit(0);",
       "});",
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH, String(child.pid));",
       "fs.writeFileSync(process.env.OPENCLAW_FAKE_PNPM_PID_PATH, String(process.pid));",
+      'child.once("message", () => process.stdout.write("fixture pnpm tree ready\\n"));',
       "setInterval(() => {}, 1000);",
       "",
     ].join("\n"),
@@ -778,26 +785,18 @@ function writeFakePnpm(filePath: string): void {
   chmodSync(filePath, 0o755);
 }
 
-async function waitFor(condition: () => boolean, timeoutMs: number): Promise<void> {
-  const startedAt = Date.now();
-  while (!condition()) {
-    if (Date.now() - startedAt > timeoutMs) {
-      throw new Error("timed out waiting for condition");
+// The product joins terminal process groups, but does not own the reaping of foreign PIDs.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (isProcessAlive(pid)) {
+      await delay(5, undefined, { signal });
     }
-    await delay(5);
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`timed out waiting for process ${pid} to exit`, { cause: error });
+    }
+    throw error;
   }
-}
-
-async function waitForClose(
-  completion: Promise<{ code: number | null; signal: NodeJS.Signals | null }>,
-  timeoutMs = 5_000,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await Promise.race([
-    completion,
-    delay(timeoutMs, undefined, { ref: false }).then(() => {
-      throw new Error("timed out waiting for child close");
-    }),
-  ]);
 }
 
 function isProcessAlive(pid: number): boolean {

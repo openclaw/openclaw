@@ -40,6 +40,9 @@ afterEach(async () => {
     for (const capture of logCaptures) {
       await capture.flush();
     }
+    if (vi.isFakeTimers()) {
+      expect(vi.getTimerCount()).toBe(0);
+    }
   } finally {
     for (const capture of logCaptures.splice(0)) {
       capture.cleanup();
@@ -121,6 +124,7 @@ async function createProxyHarness(
     httpServer.once("error", reject);
     httpServer.listen(0, "127.0.0.1", resolve);
   });
+  const serverTimers = vi.isFakeTimers() ? vi.getTimerCount() : undefined;
   const address = httpServer.address();
   if (!address || typeof address === "string") {
     throw new Error("expected TCP test server address");
@@ -148,6 +152,7 @@ async function createProxyHarness(
     desktopPeer: params.stream ?? (await peerConnected.promise),
     observerUrl: ws.url,
     release,
+    serverTimers,
     ws,
   };
 }
@@ -241,6 +246,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     logCaptures.push(logCapture);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const harness = await createProxyHarness({ control: true });
+    expect(vi.getTimerCount()).toBe(harness.serverTimers! + 1);
     const pings: Buffer[] = [];
     const onDesktopData = vi.fn();
     harness.ws.on("ping", (data) => pings.push(data));
@@ -274,7 +280,7 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
     expect(harness.release).toHaveBeenCalledOnce();
     vi.advanceTimersByTime(25_000);
     expect(pings).toHaveLength(2);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(harness.serverTimers);
   });
 
   it("clears the credential-bearing token timer when the token is consumed", async () => {

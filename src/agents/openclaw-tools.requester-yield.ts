@@ -55,6 +55,20 @@ export function createRequesterYieldCallback(params: {
     agentId: params.requesterAgentId,
   });
   return async (intent) => {
+    const acceptYield = async () => {
+      if (canWaitForMessage && intent?.waitFor === "message" && params.requesterTurnRunId) {
+        const { markSubagentMessageWait } =
+          await import("./subagents/registry/subagent-registry.js");
+        return {
+          messageWaitRegistered: await markSubagentMessageWait({
+            runId: params.requesterTurnRunId,
+            sessionKey: requesterSessionKey!,
+            acknowledgment: intent.acknowledgment,
+          }),
+        };
+      }
+      return true;
+    };
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
     const runtimeClaimed = (await params.claimYieldCompletion?.()) ?? false;
@@ -72,7 +86,7 @@ export function createRequesterYieldCallback(params: {
         (await (withCronAuthority ? withCronAuthority(markYielded) : markYielded())) > 0;
     }
     if (runtimeClaimed || registryClaimed) {
-      return true;
+      return acceptYield();
     }
     if (canWaitForMessage) {
       // Self-yield can await a user follow-up, but exec completion does not wake
@@ -90,7 +104,7 @@ export function createRequesterYieldCallback(params: {
         };
       }
       if (intent?.waitFor === "message") {
-        return true;
+        return acceptYield();
       }
     }
     // This turn owns no claim, but an earlier turn of the same session may still

@@ -87,7 +87,7 @@ describe("original caller through Cron creator transports", () => {
               ownerSessionKey: SESSION,
               ownerAccountId: "default",
             },
-            payload: { toolsAllow: [AUTOMATIONS_TOOL_NAME], timeoutSeconds: 0 },
+            payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
           },
         ]);
       } finally {
@@ -212,8 +212,7 @@ describe("original caller through Cron creator transports", () => {
               payload: {
                 kind: "agentTurn",
                 timeoutSeconds: 0,
-                toolsAllow: [AUTOMATIONS_TOOL_NAME],
-                toolsAllowIsDefault: true,
+                toolsAllow: ["*"],
               },
               owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
               scheduledToolPolicy: {

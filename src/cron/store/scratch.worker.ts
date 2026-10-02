@@ -18,8 +18,10 @@ export function writeCronScratchInWorker(
 ): CronRuntimeWorkerOperations["cron.writeScratch"]["output"] {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const job = loadedCronStoreFromRows(loadCronRows(db, input.storeKey, new Set([input.jobId])))
-        .store.jobs[0];
+      const job = loadedCronStoreFromRows(
+        loadCronRows(db, input.storeKey, new Set([input.jobId])),
+        input.createdAtMsFallback,
+      ).store.jobs[0];
       prepareCronRuntimeMutation("cron.writeScratch", input.nonce, {
         configRevision: job ? resolveCronJobConfigRevision(job) : undefined,
       });

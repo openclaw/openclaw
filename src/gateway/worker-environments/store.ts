@@ -20,15 +20,15 @@ import {
 import type { WorkerEnvironmentSessionIdentity } from "./session-attachment.js";
 import { workerEnvironmentProjections } from "./store-projection.js";
 import { normalizeCredentialHash, requireWorkerEnvironmentString } from "./store-validation.js";
+import type { WorkerEnvironmentWorkerOperations } from "./store-worker-contract.js";
+import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
 import type {
-  WorkerEnvironmentWorkerOperations,
   WorkerEnvironmentFacts,
   WorkerEnvironmentCommitAdmission,
   WorkerEnvironmentMutationMethods,
   WorkerEnvironmentPruneCursor,
   WorkerEnvironmentPrunePage,
-} from "./store-worker-contract.js";
-import type { WorkerEnvironmentPruneInput } from "./store-write-types.js";
+} from "./store.types.js";
 
 export type {
   PreparedEnvironmentPlacementBinding,
@@ -61,7 +61,8 @@ function isCommitAdmission(value: unknown): value is WorkerEnvironmentCommitAdmi
       (fact) =>
         isRecord(fact) &&
         typeof fact.environmentId === "string" &&
-        typeof fact.recordAuthority === "string" &&
+        typeof fact.environmentAuthority === "string" &&
+        typeof fact.credentialAuthority === "string" &&
         typeof fact.transferAuthority === "string" &&
         typeof fact.attachmentAuthority === "string",
     )

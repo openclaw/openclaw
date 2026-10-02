@@ -1,4 +1,3 @@
-// CLI adapter for invoking native provider hooks through direct relay or gateway fallback.
 import {
   invokeNativeHookRelayBridge,
   isNativeHookRelayBridgeStaleRegistrationError,

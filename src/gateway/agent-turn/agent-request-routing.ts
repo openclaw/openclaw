@@ -61,6 +61,10 @@ export async function prepareAgentRequestRouting(params: {
   }) => void;
   clearDedupe: () => void;
 }): Promise<AgentRequestRouting | undefined> {
+  const rejectInvalidRequest = (message: string): undefined => {
+    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+    return undefined;
+  };
   const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
     params.request.attachments,
   );
@@ -72,15 +76,9 @@ export async function prepareAgentRequestRouting(params: {
   const agentIdRaw = normalizeOptionalString(params.request.agentId) ?? "";
   let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
   if (agentId && !knownAgents.includes(agentId)) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `invalid agent params: unknown agent id "${params.request.agentId}"`,
-      ),
+    return rejectInvalidRequest(
+      `invalid agent params: unknown agent id "${params.request.agentId}"`,
     );
-    return undefined;
   }
   const requestedSessionKeyParam = normalizeOptionalString(params.request.sessionKey);
   const requestedSessionId = normalizeOptionalString(params.request.sessionId);
@@ -114,8 +112,7 @@ export async function prepareAgentRequestRouting(params: {
       });
       agentId = sessionIdTarget.agentId ?? agentId;
     } catch (error) {
-      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
-      return undefined;
+      return rejectInvalidRequest(formatForLog(error));
     }
   }
   if (!requestedSessionKeyRaw && !requestedSessionId && !agentId) {
@@ -151,18 +148,12 @@ export async function prepareAgentRequestRouting(params: {
       });
     } catch (error) {
       params.clearDedupe();
-      params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(error)));
-      return undefined;
+      return rejectInvalidRequest(formatForLog(error));
     }
   }
   if (explicitRecipientSession?.error) {
     params.clearDedupe();
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, explicitRecipientSession.error.message),
-    );
-    return undefined;
+    return rejectInvalidRequest(explicitRecipientSession.error.message);
   }
   const requestedSessionKey =
     requestedSessionKeyRaw ??
@@ -181,12 +172,7 @@ export async function prepareAgentRequestRouting(params: {
     requestedSessionKey,
   });
   if (expectedSessionTargetError) {
-    params.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, expectedSessionTargetError),
-    );
-    return undefined;
+    return rejectInvalidRequest(expectedSessionTargetError);
   }
   if (
     requestedSessionKey &&

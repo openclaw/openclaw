@@ -442,6 +442,7 @@ describe("cron service cross-tick admission", () => {
       blocked.release(directA);
       // The capacity wake still observes active receipts before admitting pending work.
       await pendingStarted.promise;
+      await blocked.started(pending);
       expect(blocked.run.mock.calls.filter(([{ job }]) => job.id === pending.id)).toHaveLength(1);
       await directRunA;
 

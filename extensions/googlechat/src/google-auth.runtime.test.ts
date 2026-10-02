@@ -2,7 +2,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  getGoogleAuthTransport,
+  resolveValidatedGoogleChatCredentials,
+} from "./google-auth.runtime.js";
 
 const mocks = vi.hoisted(() => ({
   buildHostnameAllowlistPolicyFromSuffixAllowlist: vi.fn((hosts: string[]) => ({
@@ -36,14 +40,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("google-auth-library", () => ({
   gaxios: { Gaxios: mocks.gaxiosCtor },
 }));
-
-let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
-let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
-
-beforeAll(async () => {
-  ({ getGoogleAuthTransport, resolveValidatedGoogleChatCredentials } =
-    await import("./google-auth.runtime.js"));
-});
 
 beforeEach(() => {
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();

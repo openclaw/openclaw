@@ -14,6 +14,20 @@ export type CronJobScratchState = {
   scratch?: CronJobScratch;
 };
 
+export type CronScratchReadCommand = {
+  type: "cron.scratch";
+  storeKey: string;
+  selector:
+    | { kind: "job"; jobId: string; createdAtMsFallback: number }
+    | { kind: "heartbeat"; agentId: string };
+};
+
+export type CronScratchSnapshot = {
+  jobId: string;
+  state: CronJobScratchState;
+  configRevision?: string;
+};
+
 export type CronJobScratchWriteResult =
   | { ok: true; currentRevision: number; scratch?: CronJobScratch }
   | { ok: false; reason: "revision-conflict"; currentRevision: number };

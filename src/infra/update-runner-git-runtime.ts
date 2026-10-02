@@ -305,7 +305,8 @@ export async function prepareGitRuntimePromotion(
         recursive: true,
         preserveTimestamps: true,
         verbatimSymlinks: true,
-        filter: (source) => !disposableCaches.has(source),
+        // An unused filter prevents Node from using its native directory-copy path.
+        filter: disposableCaches.size > 0 ? (source) => !disposableCaches.has(source) : undefined,
       });
       assertDestination?.(destination);
       await relocateRuntimeTree(candidate, sourceRoot, destination, relocations);
@@ -473,7 +474,9 @@ export function createGitRuntimeTransaction({
   restoreRuntime,
 }: {
   root: string;
-  promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot" | "cleanup">;
+  promotion: Pick<Awaited<ReturnType<typeof prepareGitRuntimePromotion>>, "backupRoot"> & {
+    cleanup: (assertCurrent?: () => void) => Promise<UpdateStepResult | void>;
+  };
   assertRollbackSafe: () => Promise<void>;
   restoreRuntime: PackageUpdateTransaction["rollback"];
 }): PackageUpdateTransaction {
@@ -511,7 +514,7 @@ export function createGitRuntimeTransaction({
           );
         }
         try {
-          await promotion.cleanup(assertCurrent);
+          return await promotion.cleanup(assertCurrent);
         } catch (error) {
           assertCurrent();
           if (
@@ -525,7 +528,6 @@ export function createGitRuntimeTransaction({
             true,
           );
         }
-        return undefined;
       })());
     },
   };

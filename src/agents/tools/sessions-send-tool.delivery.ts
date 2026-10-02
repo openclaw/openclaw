@@ -1,5 +1,5 @@
-/** Delivers notifications, new turns, and active-run steering for sessions_send. */
 import crypto from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
@@ -7,6 +7,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEventEntry } from "../../infra/system-events.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import {
+  buildAgentMainSessionKey,
+  isUnscopedSessionKeySentinel,
+  normalizeAgentId,
+} from "../../routing/session-key.js";
 import {
   annotateInterSessionPromptText,
   type InputProvenance,
@@ -16,17 +21,21 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { listAgentIds } from "../agent-scope.js";
 import { resolveActiveEmbeddedRunSessionId } from "../embedded-agent-runner/active-run-projections.js";
 import {
   type EmbeddedAgentQueueMessageOptions,
-  type EmbeddedAgentQueueMessageOutcome,
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
   queueGuardedEmbeddedAgentMessageWithOutcomeAsync,
 } from "../embedded-agent-runner/runs.js";
 import { jsonResult } from "./common.js";
-import { resolveGatewayToolOperatorSelection } from "./gateway-caller-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  resolveGatewayToolOperatorSelection,
+} from "./gateway-caller-context.js";
 import {
   callInProcessGatewayToolWithCreation,
   hasInProcessGatewayToolContext,
@@ -59,6 +68,7 @@ export async function notifySessionsSendSession(params: {
   };
   const event = selection.operatorAuthority
     ? await runWithInProcessGatewaySessionMutation(
+        "sessions.send",
         { sessionKey: params.sessionKey, agentId: params.targetAgentId },
         (assertCurrent) => {
           assertCurrent();
@@ -97,17 +107,6 @@ function resolveCronRunScopedFallbackSessionKey(sessionKey: string): string | un
   return parsed && fallbackRest ? `agent:${parsed.agentId}:${fallbackRest}` : undefined;
 }
 
-function shouldFallbackCronRunScopedActiveDelivery(
-  outcome: EmbeddedAgentQueueMessageOutcome,
-): boolean {
-  return (
-    !outcome.queued &&
-    (outcome.reason === "not_streaming" ||
-      outcome.reason === "no_active_run" ||
-      outcome.reason === "stale_run")
-  );
-}
-
 type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
@@ -123,6 +122,8 @@ type SessionsSendDeliveryParams = {
   deliveryTimeoutMs?: number;
   allowActiveRunQueueDelivery?: boolean;
   expectedSessionId?: string;
+  retainAcceptance?: boolean;
+  assertDispatchCurrent?: () => void;
   sourceOrigin?: DeliveryContext;
   mode?: "steer" | "followup";
 };
@@ -132,6 +133,7 @@ type SessionsSendStart =
       ok: true;
       runId: string;
       targetDisposition: "queued" | "steered";
+      steeredRunId?: string;
       a2aSessionKey?: string;
     }
   | { ok: false; result: ReturnType<typeof jsonResult> };
@@ -141,6 +143,7 @@ export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
+  const assertCaller = captureGatewayToolCallerAssertion();
   try {
     const selection = resolveGatewayToolOperatorSelection();
     selection.assertCurrent();
@@ -203,13 +206,16 @@ export async function trySessionsSendActiveRunDelivery(
           }),
         };
         const dispatchQueue = (options: EmbeddedAgentQueueMessageOptions) =>
-          selection.operatorAuthority
+          selection.operatorAuthority || assertCaller
             ? queueGuardedEmbeddedAgentMessageWithOutcomeAsync(
                 activeRunSessionId,
                 messageText,
                 options,
                 () => {
                   assertCurrent();
+                  if (!selection.operatorAuthority) {
+                    assertCaller?.("agent");
+                  }
                   return true;
                 },
               )
@@ -231,7 +237,12 @@ export async function trySessionsSendActiveRunDelivery(
           )
         : await queue(selection.assertCurrent);
       if (queueOutcome.queued) {
-        return { ok: true, runId: params.runId, targetDisposition: "steered" };
+        return {
+          ok: true,
+          runId: params.runId,
+          targetDisposition: "steered",
+          steeredRunId: queueOutcome.runId,
+        };
       }
       fallbackSessionKey = ownChild
         ? undefined
@@ -239,7 +250,10 @@ export async function trySessionsSendActiveRunDelivery(
       if (
         params.mode === "steer" ||
         (!ownChild && (params.expectedSessionId || !fallbackSessionKey)) ||
-        (!ownChild && !shouldFallbackCronRunScopedActiveDelivery(queueOutcome))
+        (!ownChild &&
+          queueOutcome.reason !== "not_streaming" &&
+          queueOutcome.reason !== "no_active_run" &&
+          queueOutcome.reason !== "stale_run")
       ) {
         throw new Error(
           formatEmbeddedAgentQueueFailureSummary(queueOutcome) ?? "active run queue rejected",
@@ -268,7 +282,10 @@ export async function startSessionsSendAgentRun(
           threadId: stringifyRouteThreadId(sourceOrigin.threadId),
         }
       : params.sendParams;
-    const response = await params.callGateway<{ runId: string; admissionPending?: boolean }>({
+    const accepted = params.retainAcceptance
+      ? createDeferredCore<{ runId: string; admissionPending?: boolean }>()
+      : undefined;
+    const responsePromise = params.callGateway<{ runId: string; admissionPending?: boolean }>({
       method: "agent",
       params: fallbackSessionKey
         ? {
@@ -278,7 +295,27 @@ export async function startSessionsSendAgentRun(
           }
         : sendParams,
       timeoutMs: 10_000,
+      assertDispatchCurrent: params.assertDispatchCurrent,
+      ...(accepted
+        ? {
+            expectFinal: true,
+            onAccepted: (payload: unknown) => {
+              const receipt = asOptionalRecord(payload);
+              if (
+                receipt?.status === "accepted" &&
+                typeof receipt.runId === "string" &&
+                receipt.admissionPending !== true
+              ) {
+                accepted.resolve({ runId: receipt.runId });
+              }
+            },
+          }
+        : {}),
     });
+    // The admission receipt survives a later final-response failure; the registry owns the result.
+    const response = await (accepted
+      ? Promise.race([accepted.promise, responsePromise])
+      : responsePromise);
     const responseRunId =
       typeof response?.runId === "string" && response.runId ? response.runId : params.runId;
     if (response?.admissionPending === true) {
@@ -314,6 +351,40 @@ function deliveryFailure(params: SessionsSendDeliveryParams, error: unknown) {
       sessionKey: params.sessionKey,
     }),
   };
+}
+
+export function resolveConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  mainKey: string;
+}): string | undefined {
+  const agentId = normalizeAgentId(params.agentId);
+  if (!listAgentIds(params.cfg).includes(agentId)) {
+    return undefined;
+  }
+  return buildAgentMainSessionKey({ agentId, mainKey: params.mainKey });
+}
+
+export function isConfiguredAgentMainSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  mainKey: string;
+}): boolean {
+  if (isUnscopedSessionKeySentinel(params.sessionKey)) {
+    return false;
+  }
+  if (params.sessionKey === params.mainKey) {
+    return true;
+  }
+  const agentId = parseAgentSessionKey(params.sessionKey)?.agentId;
+  return agentId
+    ? params.sessionKey ===
+        resolveConfiguredAgentMainSessionKey({
+          cfg: params.cfg,
+          agentId,
+          mainKey: params.mainKey,
+        })
+    : false;
 }
 
 export async function createConfiguredAgentMainSession(params: {

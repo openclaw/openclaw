@@ -137,10 +137,7 @@ const palette = lightMode ? lightPalette : darkPalette;
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-/**
- * Render code blocks with the theme code color without pulling a parser into the base TUI path.
- * Returns an array of lines with ANSI escape codes.
- */
+// Keep code blocks parser-free on the base TUI path.
 function highlightCode(code: string): string[] {
   return code.split("\n").map((line) => fg(palette.code)(line));
 }

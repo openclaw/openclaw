@@ -145,10 +145,8 @@ class OpenClawBrowserPanel
       } else if (
         this.refreshOnPresentation &&
         !followedPreferred &&
-        (contextChanged || presentationChanged || gatewayAvailabilityChanged)
+        (contextChanged || presentationChanged || gatewayAvailabilityChanged || sessionTabsChanged)
       ) {
-        void this.browserPanelController.refreshAll();
-      } else if (this.refreshOnPresentation && !followedPreferred && sessionTabsChanged) {
         void this.browserPanelController.refreshAll();
       }
     } else if (gatewayAvailabilityChanged) {

@@ -344,48 +344,40 @@ export const pluginsHandlers: GatewayRequestHandlers = {
     try {
       const local = await listManagedPlugins({ config: context.getRuntimeConfig() });
       const localPlugin = findLocalPluginByIdentity(local, identity.identity, identity.origin);
-      if (identity.origin === "local") {
-        if (!localPlugin) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "Unknown local plugin discovery identity."),
-          );
+      if (identity.origin !== "local") {
+        try {
+          const remote = await fetchClawHubPluginDetail({
+            packageName: identity.identity,
+            ...(params.version ? { version: params.version } : {}),
+          });
+          registerClawHubCatalogIconUrls([remote.iconUrl, remote.owner?.imageUrl]);
+          respond(true, joinClawHubPluginDetail({ remote, local }), undefined);
           return;
+        } catch (error) {
+          if (!localPlugin) {
+            throw error;
+          }
         }
-        const inspectionPluginId = localPlugin.installed
-          ? localPlugin.id
-          : localPlugin.install?.source === "official"
-            ? localPlugin.install.pluginId
-            : undefined;
-        const inspection = inspectionPluginId
-          ? await inspectManagedPlugin({
-              config: context.getRuntimeConfig(),
-              pluginId: inspectionPluginId,
-            })
-          : undefined;
-        respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
+      } else if (!localPlugin) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Unknown local plugin discovery identity."),
+        );
         return;
       }
-      try {
-        const remote = await fetchClawHubPluginDetail({
-          packageName: identity.identity,
-          ...(params.version ? { version: params.version } : {}),
-        });
-        registerClawHubCatalogIconUrls([remote.iconUrl, remote.owner?.imageUrl]);
-        respond(true, joinClawHubPluginDetail({ remote, local }), undefined);
-      } catch (error) {
-        if (!localPlugin) {
-          throw error;
-        }
-        const inspection = localPlugin.installed
-          ? await inspectManagedPlugin({
-              config: context.getRuntimeConfig(),
-              pluginId: localPlugin.id,
-            })
+      const inspectionPluginId = localPlugin.installed
+        ? localPlugin.id
+        : identity.origin === "local" && localPlugin.install?.source === "official"
+          ? localPlugin.install.pluginId
           : undefined;
-        respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
-      }
+      const inspection = inspectionPluginId
+        ? await inspectManagedPlugin({
+            config: context.getRuntimeConfig(),
+            pluginId: inspectionPluginId,
+          })
+        : undefined;
+      respond(true, joinLocalPluginDetail({ plugin: localPlugin, local, inspection }), undefined);
     } catch (error) {
       respond(
         false,

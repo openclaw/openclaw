@@ -3,6 +3,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -17,14 +18,14 @@ vi.mock("./session-utils.js", () => ({
 }));
 const { resolveSessionForRun } = await import("./server-session-key.js");
 
-function indexedProjection(store: Record<string, SessionEntry>) {
+function indexedProjection(store: Record<string, SessionEntry>, agentId = "main") {
   const index = new Map<string, ReturnType<SessionRowProjection["findBySessionId"]>>();
   for (const [key, entry] of Object.entries(store)) {
     const rows = index.get(entry.sessionId) ?? [];
     rows.push({
       ...createSessionRow({
         key,
-        agentId: "main",
+        agentId: parseAgentSessionKey(key)?.agentId ?? agentId,
         storeTarget: { agentId: "main", storePath: "fixture" },
       }),
       entry,
@@ -71,7 +72,7 @@ describe("resolveSessionForRun", () => {
 
   it("defaults an unscoped persisted lookup to the configured default agent", () => {
     hoisted.loadConfigMock.mockReturnValue({ agents: { list: [{ id: "work", default: true }] } });
-    const projection = indexedProjection({ main: { sessionId: "run-1", updatedAt: 1 } });
+    const projection = indexedProjection({ main: { sessionId: "run-1", updatedAt: 1 } }, "work");
     expect(resolveSessionForRun("run-1", { projection })).toEqual({
       sessionKey: "main",
       agentId: "work",
@@ -88,7 +89,10 @@ describe("resolveSessionForRun", () => {
       session: { scope: "global" },
       agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     });
-    const projection = indexedProjection({ global: { sessionId: "global-run", updatedAt: 1 } });
+    const projection = indexedProjection(
+      { global: { sessionId: "global-run", updatedAt: 1 } },
+      "research",
+    );
     expect(resolveSessionForRun("global-run", { agentId: "research", projection })).toEqual({
       sessionKey: "global",
       agentId: "research",
@@ -102,13 +106,33 @@ describe("resolveSessionForRun", () => {
   });
 
   it.each([
-    { sessionKey: "main", agentId: undefined },
+    { sessionKey: "global", agentId: "research" },
     { sessionKey: "agent:work:main", agentId: "work" },
   ])("uses active context $sessionKey without any persisted lookup", ({ sessionKey, agentId }) => {
-    registerAgentRunContext("live", { sessionKey });
+    registerAgentRunContext("live", { sessionKey, agentId });
     const projection = indexedProjection({});
     expect(resolveSessionForRun("live", { projection })).toEqual({ sessionKey, agentId });
     expect(projection.findBySessionId).not.toHaveBeenCalled();
+  });
+
+  it("waits for a cached raw-key owner instead of assigning a current default", () => {
+    const projection = indexedProjection({ global: { sessionId: "pending", updatedAt: 1 } });
+    registerAgentRunContext("pending", { sessionKey: "global" });
+    hoisted.loadConfigMock.mockReturnValue({
+      session: { scope: "global" },
+      agents: { entries: { main: { default: true }, research: {} } },
+    });
+    expect.soft(resolveSessionForRun("pending", { projection })).toBeUndefined();
+    expect.soft(resolveSessionForRun("pending", { agentId: "main", projection })).toBeUndefined();
+    registerAgentRunContext("pending", { agentId: "research" });
+    hoisted.loadConfigMock.mockReturnValue({
+      session: { scope: "global" },
+      agents: { entries: { work: { default: true }, research: {} } },
+    });
+    expect(resolveSessionForRun("pending", { projection })).toEqual({
+      sessionKey: "global",
+      agentId: "research",
+    });
   });
 
   it("does not infer a stored parent for intentionally keyless internal runs", () => {

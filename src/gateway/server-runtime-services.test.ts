@@ -442,50 +442,58 @@ describe("server-runtime-services", () => {
     },
   );
 
-  it("joins a pending session import without installing a runtime after shutdown", async () => {
-    vi.useFakeTimers();
-    const importStarted = createDeferredCore();
-    const releaseImport = createDeferredCore();
-    const exports = {
-      deliverQueuedSessionDelivery: hoisted.deliverQueuedSessionDelivery,
-      recoverPendingRestartContinuationDeliveries:
-        hoisted.recoverPendingRestartContinuationDeliveries,
-      settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
-    };
-    vi.doMock("./server-restart-sentinel.js", async () => {
-      importStarted.resolve();
-      await releaseImport.promise;
-      return exports;
-    });
-    const { services, log } = activateScheduledServicesForTest();
-    let stopPromise: Promise<void> | undefined;
-    try {
-      vi.advanceTimersByTime(1_250);
-      await importStarted.promise;
-      let stopped = false;
-      services.heartbeatRunner.stop();
-      stopPromise = services.stopDeliveryRecovery().then(() => {
-        stopped = true;
+  it.each(["service", "scheduler"] as const)(
+    "joins a pending session import without installing a runtime after %s shutdown",
+    async (owner) => {
+      const clock = createGatewaySchedulerClock();
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const importStarted = createDeferredCore();
+      const releaseImport = createDeferredCore();
+      const exports = {
+        deliverQueuedSessionDelivery: hoisted.deliverQueuedSessionDelivery,
+        recoverPendingRestartContinuationDeliveries:
+          hoisted.recoverPendingRestartContinuationDeliveries,
+        settleQueuedSessionDelivery: hoisted.settleQueuedSessionDelivery,
+      };
+      vi.doMock("./server-restart-sentinel.js", async () => {
+        importStarted.resolve();
+        await releaseImport.promise;
+        return exports;
       });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
+      const { services, log } = activateScheduledServicesForTest({ scheduler });
+      let stopPromise: Promise<void> | undefined;
+      let waking: void | Promise<void> = undefined;
+      try {
+        waking = clock.advanceBy(1_250);
+        await importStarted.promise;
+        let stopped = false;
+        stopPromise = (
+          owner === "service" ? services.stopDeliveryRecovery() : scheduler.stop()
+        ).then(() => {
+          stopped = true;
+        });
+        await Promise.resolve();
+        expect(stopped).toBe(false);
 
-      releaseImport.resolve();
-      await stopPromise;
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
-      expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
-      expect(log.error).not.toHaveBeenCalled();
-    } finally {
-      releaseImport.resolve();
-      await vi.dynamicImportSettled();
-      services.heartbeatRunner.stop();
-      await services.stopDeliveryRecovery();
-      await stopPromise;
-      await vi.advanceTimersByTimeAsync(0);
-      vi.doMock("./server-restart-sentinel.js", () => exports);
-    }
-  });
+        releaseImport.resolve();
+        await stopPromise;
+        await services.stopDeliveryRecovery();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
+        expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
+        expect(log.error).not.toHaveBeenCalled();
+      } finally {
+        releaseImport.resolve();
+        await vi.dynamicImportSettled();
+        services.heartbeatRunner.stop();
+        await services.stopDeliveryRecovery();
+        await stopPromise;
+        await waking;
+        await scheduler.stop();
+        vi.doMock("./server-restart-sentinel.js", () => exports);
+      }
+    },
+  );
 
   it("schedules pending session deliveries when startup recovery fails", async () => {
     vi.useFakeTimers();

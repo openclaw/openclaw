@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
@@ -10,14 +9,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import type { ContextEngine } from "../../context-engine/types.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWorkerWrite,
   SQLITE_SESSION_WRITER_QUEUES,
 } from "../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
   drainPendingContextEngineTurnsBeforeRun,
@@ -29,11 +26,7 @@ import {
   enqueueContextEngineTurnIntent,
 } from "./context-engine-turn-outbox.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-turn-range-");
 
 // Keep durable-engine setup identical across range and recovery cases so each
 // test varies only the transcript state that owns the behavior under test.
@@ -80,7 +73,7 @@ async function createAcceptedTurnFixture(params: {
   prefix: string[];
   sessionId: string;
 }) {
-  const tempDir = tempDirs.make("openclaw-context-turn-range-");
+  const tempDir = sessionDirs.make();
   const target = {
     agentId: "main",
     sessionId: params.sessionId,
@@ -381,7 +374,7 @@ describe("accepted context-engine turn finalization", () => {
   });
 
   it("advances only the admitted durable range and rejects stale admission facts", async () => {
-    const tempDir = tempDirs.make("openclaw-context-turn-attempt-");
+    const tempDir = sessionDirs.make();
     const target = {
       agentId: "main",
       sessionId: "accepted-turn",

@@ -2,7 +2,11 @@ import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
-import { registerSessionResourceCleanup } from "../session-resources.js";
+import {
+  getSessionResourceOwnerId,
+  registerSessionResourceCleanup,
+  type SessionResourceOwner,
+} from "../session-resources.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import {
   canReferenceResponsesReasoningHistory,
@@ -487,10 +491,11 @@ type HttpContinuationEntry =
   | {
       kind: "ready";
       sessionId: string;
+      owner: SessionResourceOwner;
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
     }
-  | { kind: "claimed"; sessionId: string };
+  | { kind: "claimed"; sessionId: string; owner: SessionResourceOwner };
 
 const httpContinuationEntries = new Map<string, HttpContinuationEntry>();
 
@@ -527,7 +532,8 @@ export function claimOpenAIResponsesHttpContinuation(
     restoreRequest?: () => ResponsesContinuationRequest;
   },
 ) {
-  const key = `${params.sessionId}\0${connectionIdentity(params)}`;
+  const owner = getAiTransportHost();
+  const key = `${getSessionResourceOwnerId(owner)}\0${params.sessionId}\0${connectionIdentity(params)}`;
   const previous = httpContinuationEntries.get(key);
   if (previous?.kind === "claimed") {
     return undefined;
@@ -535,7 +541,7 @@ export function claimOpenAIResponsesHttpContinuation(
   if (previous?.kind === "ready") {
     clearTimeout(previous.idleTimer);
   }
-  const claimed = { kind: "claimed", sessionId: params.sessionId } as const;
+  const claimed = { kind: "claimed", sessionId: params.sessionId, owner } as const;
   httpContinuationEntries.set(key, claimed);
   try {
     const request =
@@ -584,9 +590,9 @@ export function claimOpenAIResponsesHttpContinuation(
   }
 }
 
-registerSessionResourceCleanup((sessionId) => {
+registerSessionResourceCleanup((sessionId, owner) => {
   for (const [key, entry] of httpContinuationEntries) {
-    if (!sessionId || entry.sessionId === sessionId) {
+    if ((!owner || entry.owner === owner) && (!sessionId || entry.sessionId === sessionId)) {
       if (entry.kind === "ready") {
         clearTimeout(entry.idleTimer);
       }

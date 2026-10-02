@@ -22,7 +22,7 @@ import { compareSemverStrings } from "./update-check.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { runStep } from "./update-runner-command.js";
+import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
 import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -112,7 +112,8 @@ export async function withGitTargetInspectionRoot<T>(
     runCommand: CommandRunner;
     timeoutMs: number;
     work?: { timeoutMs?: number };
-    onWarning: (step: UpdateStepResult) => void;
+    onWarning: (step: UpdateStepResult) => void | Promise<void>;
+    retainCleanup?: (cleanup: () => Promise<boolean>) => boolean;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
@@ -274,12 +275,22 @@ export async function withGitTargetInspectionRoot<T>(
   } finally {
     // Only this invocation's private inspection repository, never the installed checkout.
     if (!cleanupUncertain) {
-      await cleanupUpdateTemporaryDirectory({
-        directory: temporaryRoot,
-        root: params.root,
-        name: "git-target-inspection-cleanup",
-        onWarning: params.onWarning,
-      });
+      const cleanup = async () => {
+        let removed = true;
+        await cleanupUpdateTemporaryDirectory({
+          directory: temporaryRoot,
+          root: params.root,
+          name: "git-target-inspection-cleanup",
+          onWarning: (warning) => {
+            removed = false;
+            return params.onWarning(warning);
+          },
+        });
+        return removed;
+      };
+      if (!params.retainCleanup?.(cleanup)) {
+        await cleanup();
+      }
     }
   }
 }
@@ -505,7 +516,7 @@ export async function fetchGitUpdateTarget(params: {
         message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
       };
     }
-    options.progress?.onStepComplete?.({
+    await reportUpdateStepCompletion(options.progress, {
       ...fetch,
       index: options.stepIndex,
       total: options.totalSteps,

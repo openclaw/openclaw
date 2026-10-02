@@ -49,22 +49,10 @@ function commentaryBody(payload: ClickClackItemEventPayload): string {
 }
 
 function activityBody(payload: ClickClackItemEventPayload): string {
-  // Reuse the shared channel progress-line renderer so ClickClack rows show
-  // the same tool name + command/argument detail as Discord/Slack/Telegram
-  // progress lines instead of a bespoke format.
   const line = formatChannelProgressDraftLineForEntry(undefined, {
+    ...payload,
     event: "item",
-    itemId: payload.itemId,
-    toolCallId: payload.toolCallId,
     itemKind: payload.kind,
-    title: payload.title,
-    name: payload.name,
-    phase: payload.phase,
-    status: payload.status,
-    summary: payload.summary,
-    progressText: payload.progressText,
-    meta: payload.meta,
-    commandBearing: payload.commandBearing,
   })?.trim();
   if (line) {
     return line;

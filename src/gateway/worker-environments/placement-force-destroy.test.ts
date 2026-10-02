@@ -71,7 +71,7 @@ describe("forced worker environment destruction", () => {
       placementGeneration: active.generation,
     };
     const appliedManifestRef = harness.reconciledManifestRef;
-    placementStore.beginWorkspaceReconciliation(owner, {
+    await placementStore.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "a".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -82,8 +82,8 @@ describe("forced worker environment destruction", () => {
       basePackSha256: createHash("sha256").update("").digest("hex"),
       basePack: Buffer.alloc(0),
     });
-    placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
-    expect(placementStore.loadWorkspaceReconciliation(owner)?.appliedManifestRef).toBe(
+    await placementStore.updateWorkspaceBaseManifest({ claim, manifestRef: appliedManifestRef });
+    expect((await placementStore.loadWorkspaceReconciliation(owner))?.appliedManifestRef).toBe(
       appliedManifestRef,
     );
 
@@ -106,7 +106,7 @@ describe("forced worker environment destruction", () => {
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
   });
 
   it.each([
@@ -150,7 +150,7 @@ describe("forced worker environment destruction", () => {
       ownerEpoch: active.activeOwnerEpoch,
       placementGeneration: active.generation,
     };
-    placementStore.beginWorkspaceReconciliation(owner, {
+    await placementStore.beginWorkspaceReconciliation(owner, {
       version: 1,
       temporaryNonce: "e".repeat(32),
       baseManifestRef: active.workspaceBaseManifestRef,
@@ -165,7 +165,7 @@ describe("forced worker environment destruction", () => {
     await expect(
       harness.service.forceDestroyEnvironment(active.environmentId),
     ).resolves.toMatchObject({ state: "destroying" });
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([owner]);
     vi.mocked(harness.environments.destroy).mockClear();
 
     await harness.service.reconcileActive(active.environmentId);

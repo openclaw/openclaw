@@ -1068,17 +1068,7 @@ export async function modelsStatusCommand(
         ...configuredAllowRefs,
       ].filter(Boolean);
       const resolvedCandidates = rawCandidates
-        .map(
-          (raw) =>
-            resolveModelRefFromString({
-              cfg,
-              agentId,
-              raw: raw ?? "",
-              defaultProvider: DEFAULT_PROVIDER,
-              aliasIndex,
-              ...DISPLAY_MODEL_PARSE_OPTIONS,
-            })?.ref,
-        )
+        .map(resolveStatusModelRef)
         .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
       const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
 

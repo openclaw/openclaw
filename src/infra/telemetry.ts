@@ -18,6 +18,7 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
+import { pruneMapToMaxSize } from "./map-size.js";
 import type { SuccessfulTelemetryState, TelemetryState } from "./telemetry-worker-contract.js";
 
 const DEFAULT_TELEMETRY_ENDPOINT = "https://telemetry.openclaw.ai/api/latest-version";
@@ -185,12 +186,7 @@ async function persistTelemetrySuccess(
   // A failed local write must not discard an accepted response or trigger another daily report.
   pendingSuccesses.delete(key);
   pendingSuccesses.set(key, state);
-  if (pendingSuccesses.size > TELEMETRY_PENDING_SUCCESS_LIMIT) {
-    const oldestKey = pendingSuccesses.keys().next().value;
-    if (oldestKey !== undefined) {
-      pendingSuccesses.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(pendingSuccesses, TELEMETRY_PENDING_SUCCESS_LIMIT);
   return state;
 }
 

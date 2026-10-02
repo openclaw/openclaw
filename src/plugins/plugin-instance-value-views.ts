@@ -108,6 +108,16 @@ function hasProxyPrototype(object: object): boolean {
   return false;
 }
 
+function isNativePluginData(value: object): boolean {
+  return (
+    types.isAnyArrayBuffer(value) ||
+    types.isArrayBufferView(value) ||
+    types.isDate(value) ||
+    types.isRegExp(value) ||
+    types.isNativeError(value)
+  );
+}
+
 function isPluginData(
   value: unknown,
   seen?: Set<object>,
@@ -120,13 +130,7 @@ function isPluginData(
   if (types.isProxy(value)) {
     return false;
   }
-  if (
-    types.isAnyArrayBuffer(value) ||
-    types.isArrayBufferView(value) ||
-    types.isDate(value) ||
-    types.isRegExp(value) ||
-    types.isNativeError(value)
-  ) {
+  if (isNativePluginData(value)) {
     return true;
   }
   if (seen?.has(value)) {
@@ -293,14 +297,10 @@ export function createPluginValueView(
     wrap: (value) => wrap(value),
     invoke: admitCallback,
   });
-  const wrapResult = <T>(
-    result: T,
-    callerData?: unknown[],
-    project: <V>(value: V) => V = wrap,
-  ): T => {
+  const wrapResult = <T>(result: T, callerData?: unknown[]): T => {
     const completion = resolvePluginReturnPromise(result);
     if (completion) {
-      const pending = mapPluginReturnPromise(completion, (resolved) => project(resolved));
+      const pending = mapPluginReturnPromise(completion, (resolved) => wrap(resolved));
       if (pending.host) {
         valueInstances.setHost(pending.value, bindings.instance);
       } else {
@@ -309,7 +309,7 @@ export function createPluginValueView(
       // SAFETY: Promise-like results retain their resolved type while callable values stay owned.
       return pending.value as T;
     }
-    return callerData?.includes(result) ? result : project(result);
+    return callerData?.includes(result) ? result : wrap(result);
   };
 
   /** Callables retain their instance; schemas remain data for host validators. */
@@ -571,14 +571,28 @@ export function createPluginValueView(
   };
 
   // Host readers retain their lease; the outer iterator can project their payload lazily.
-  const wrapIteratorResult = <T>(value: T): T =>
-    value !== null &&
-    typeof value === "object" &&
-    IteratorResultReader.get(value) &&
-    !pluginMemberNeedsAdmission(value, "then") &&
-    typeof Reflect.get(value, "then") !== "function"
-      ? value
-      : wrap(value);
+  const wrapIteratorResult = (value: object, dataRead?: IteratorDataRead): object => {
+    const result =
+      IteratorResultReader.get(value) &&
+      !pluginMemberNeedsAdmission(value, "then") &&
+      typeof Reflect.get(value, "then") !== "function"
+        ? value
+        : wrap(value);
+    if (
+      dataRead &&
+      result === value &&
+      !types.isProxy(value) &&
+      !IteratorResultReader.get(value) &&
+      !isNativePluginData(value)
+    ) {
+      // Only a complete graph inspection admits the payload for this synchronous read.
+      const payload: unknown = Object.getOwnPropertyDescriptor(value, "value")?.value;
+      if (payload !== null && typeof payload === "object") {
+        dataRead.data = payload;
+      }
+    }
+    return result;
+  };
 
   const admitIterator = (iterator: object): PluginIteratorAdmission => {
     const current = iterators.get(iterator);
@@ -690,22 +704,44 @@ export function createPluginValueView(
               }
               throw new TypeError("Plugin iterator method must be callable");
             }
-            const next: unknown = await wrapResult(
-              Reflect.apply(method, iterator, args),
-              undefined,
-              wrapIteratorResult,
-            );
+            const next: unknown = await Reflect.apply(method, iterator, args);
             if (next === null || (typeof next !== "object" && typeof next !== "function")) {
               throw new TypeError("Plugin async iterator result must be an object");
             }
-            const complete = Boolean(readResultMember(next, "done"));
+            const doneDescriptor =
+              typeof next === "object" &&
+              !hasProxyPrototype(next) &&
+              Object.getOwnPropertyDescriptor(next, "done");
+            // Executable reflection and non-Boolean completion values keep their original projection.
+            let projected =
+              doneDescriptor &&
+              "value" in doneDescriptor &&
+              typeof doneDescriptor.value === "boolean" &&
+              !IteratorResultReader.get(next)
+                ? undefined
+                : wrapIteratorResult(next);
+            const complete = Boolean(readResultMember(projected ?? next, "done"));
             // IteratorClose ends this admission even when a generator yields in finally.
             // A later explicit next can acquire a new lease only while the instance is live.
             state = complete ? "done" : key === "return" ? "returned" : state;
-            const readWithData = (dataRead: IteratorDataRead) =>
-              active
-                ? readResultMember(next, "value", dataRead)
-                : Reflect.get(IteratorResultReader.get(next) ? wrap(next) : next, "value");
+            const readWithData = (dataRead: IteratorDataRead) => {
+              if (!projected) {
+                const prepare = () => {
+                  projected = wrapIteratorResult(next, dataRead);
+                };
+                // Result projection belongs to its first payload read, not next()'s completion.
+                // Terminal data stays readable after the iterator's admission has finished.
+                if (active) {
+                  invoke(prepare);
+                } else {
+                  prepare();
+                }
+              }
+              const result = projected!;
+              return active
+                ? readResultMember(result, "value", dataRead)
+                : Reflect.get(IteratorResultReader.get(result) ? wrap(result) : result, "value");
+            };
             const readValue = () => readWithData({});
             // Completion may join disposal; value stays lazy and checks the exact inner lease.
             const result = Object.defineProperty({ done: complete }, "value", {

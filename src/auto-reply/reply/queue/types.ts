@@ -3,7 +3,7 @@ import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema
 import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import type { AutoFallbackPrimaryProbe } from "../../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../../agents/bash-tools.js";
-import type { CliSessionBindingFacts } from "../../../agents/cli-runner/types.js";
+import type { CliSessionBindingFacts } from "../../../agents/cli-runner/session-binding.types.js";
 import type {
   CurrentInboundPromptContext,
   RunEmbeddedAgentParams,
@@ -106,10 +106,6 @@ export class FollowupRunDeferredError extends Error {
   }
 }
 
-export function isFollowupRunDeferredError(error: unknown): error is FollowupRunDeferredError {
-  return error instanceof FollowupRunDeferredError;
-}
-
 export type FollowupRun = {
   /** External-turn eligibility; queued execution refreshes the session-selected profile. */
   personalBootstrapEligible?: boolean;
@@ -164,6 +160,8 @@ export type FollowupRun = {
   };
   /** Internal marker for the one-shot stranded final recovery retry. */
   strandedReplyRetry?: boolean;
+  /** This continuation owes last-resort feedback if it also stalls, including claimed input. */
+  stalledTurnRecovery?: boolean;
   /** Preserve priority runs when old-item queue overflow eviction runs before drain. */
   protectFromQueueOverflow?: boolean;
   enqueuedAt: number;

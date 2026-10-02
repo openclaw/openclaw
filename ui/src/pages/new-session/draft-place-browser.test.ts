@@ -29,6 +29,8 @@ function createBrowser(
     request,
     recoveryScope: recoveryReady ? "principal-a" : "",
     recoveryScopeReady: recoveryReady,
+    // The real client retains hello identity before browser recovery migration settles.
+    offlineRecoveryScope: "principal-a",
   };
   const onInvalidate = vi.fn((reset: boolean) => {
     browser?.resetProjects(reset);
@@ -721,7 +723,6 @@ describe("DraftGatewayState", () => {
       groupWorktree: false,
       groupCatalogGeneration: 1,
       groupDefaultsStatus: "ready",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     });

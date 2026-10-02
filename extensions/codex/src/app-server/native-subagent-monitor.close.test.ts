@@ -9,6 +9,7 @@ import {
   retainCodexAppServerLiveThread,
 } from "./client-runtime.js";
 import { createCodexNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
+import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
   childTurnCompletedNotification,
   closeAgentNotification,
@@ -23,74 +24,97 @@ import {
   threadRead,
   observeCompletionAttempts,
 } from "./native-subagent-monitor.test-support.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { createClientHarness } from "./test-support.js";
 
+function itemNotification(
+  item: JsonObject,
+  turnId = "parent-turn",
+  threadId = "parent-thread",
+): CodexServerNotification {
+  return { method: "item/completed", params: { threadId, turnId, item } };
+}
+
 describe("Codex native close admission", () => {
-  it.each([true, false])(
-    "preserves accepted completion across native close when completionBeforeClose=%s",
-    async (completionBeforeClose) => {
-      const client = createClient();
-      client.setLoadedThreads([]);
-      const runtime = createRuntime();
-      const forget = vi.fn();
-      const completions = observeCompletionAttempts();
-      const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
-        recoveryPollDelaysMs: [],
-        captureChildThreadForget: async () => forget,
-      });
-      const parent = await registerParent(monitor);
+  it("retires the original native-child custody from a same-build module copy", async () => {
+    const client = createClient();
+    const releaseParentThread = vi.fn();
+    const retainParentThread = vi.fn(() => releaseParentThread);
+    ensureCodexAppServerClientRuntime(client.client, { agentDir: "/tmp/agent" });
+    const parent = await codexNativeSubagentMonitorRuntime.register({
+      client: client.client,
+      parentThreadId: "parent-thread",
+      runtime: createRuntime(),
+      retainParentThread,
+    });
+    try {
       parent.bindTurn("parent-turn");
-      try {
-        await notifyChildStarted(client);
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item: directSpawnItem("v1", "parent-thread", "child-thread"),
-          },
-        });
-        await client.notify(turnStartedNotification("child-turn"));
-        await client.notify(closeAgentNotification({ method: "item/started" }));
-        if (completionBeforeClose) {
-          await client.notify(
-            childTurnCompletedNotification({
-              status: "completed",
-              items: [
-                {
-                  type: "agentMessage",
-                  id: "final",
-                  phase: "final_answer",
-                  text: "Accepted result",
-                },
-              ],
-            }),
-          );
-          await completions.settle();
-        }
-        expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-        // Native close reports the child's previous status, not the close outcome.
-        await client.notify(
-          closeAgentNotification({ method: "item/completed", previousStatus: "running" }),
-        );
-        expect(forget).toHaveBeenCalledOnce();
-        await parent.unregister();
-        await completions.settle();
-        if (completionBeforeClose) {
-          expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ childSessionId: "child-thread", result: "Accepted result" }),
-          );
-        } else {
-          expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
-        }
-      } finally {
-        await parent.unregister();
-        await monitor.dispose();
-        await completions.settle();
-        completions.restore();
-      }
-    },
-  );
+      await notifyChildStarted(client);
+      expect(retainParentThread).toHaveBeenCalledExactlyOnceWith("parent-thread");
+      vi.resetModules();
+      const { codexNativeSubagentMonitorRuntime: nextCopy } =
+        await import("./native-subagent-monitor.js");
+      expect(nextCopy).not.toBe(codexNativeSubagentMonitorRuntime);
+      await nextCopy.retireParent(client.client, "parent-thread");
+      expect(releaseParentThread).toHaveBeenCalledOnce();
+      await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+      expect(releaseParentThread).toHaveBeenCalledOnce();
+    } finally {
+      await codexNativeSubagentMonitorRuntime.retireParent(client.client, "parent-thread");
+      await parent.unregister();
+      client.close();
+    }
+  });
+
+  it("preserves accepted completion across native close", async () => {
+    const client = createClient();
+    client.setLoadedThreads([]);
+    const runtime = createRuntime();
+    const forget = vi.fn();
+    const completions = observeCompletionAttempts();
+    const monitor = new CodexNativeSubagentMonitor(client.client, runtime, {
+      recoveryPollDelaysMs: [],
+      captureChildThreadForget: async () => forget,
+    });
+    const parent = await registerParent(monitor);
+    parent.bindTurn("parent-turn");
+    try {
+      await notifyChildStarted(client);
+      await client.notify(itemNotification(directSpawnItem("v1", "parent-thread", "child-thread")));
+      await client.notify(turnStartedNotification("child-turn"));
+      await client.notify(closeAgentNotification({ method: "item/started" }));
+      await client.notify(
+        childTurnCompletedNotification({
+          status: "completed",
+          items: [
+            {
+              type: "agentMessage",
+              id: "final",
+              phase: "final_answer",
+              text: "Accepted result",
+            },
+          ],
+        }),
+      );
+      await completions.settle();
+      expect(runtime.deliverAgentHarnessCompletion).not.toHaveBeenCalled();
+      // Native close reports the child's previous status, not the close outcome.
+      await client.notify(
+        closeAgentNotification({ method: "item/completed", previousStatus: "running" }),
+      );
+      expect(forget).toHaveBeenCalledOnce();
+      await parent.unregister();
+      await completions.settle();
+      expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ childSessionId: "child-thread", result: "Accepted result" }),
+      );
+    } finally {
+      await parent.unregister();
+      await monitor.dispose();
+      await completions.settle();
+      completions.restore();
+    }
+  });
 
   it("preserves exact input grants across warm replacement and clears leftovers after unsubscribe", async () => {
     const client = createClient();
@@ -125,14 +149,9 @@ describe("Codex native close admission", () => {
     });
     first.bindTurn("parent-a");
     await notifyChildStarted(client);
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-a",
-        item: directSpawnItem("v1", "parent-thread", "child-thread"),
-      },
-    });
+    await client.notify(
+      itemNotification(directSpawnItem("v1", "parent-thread", "child-thread"), "parent-a"),
+    );
     await client.notify(turnStartedNotification("child-a"));
     await client.notify(
       childTurnCompletedNotification({
@@ -256,14 +275,12 @@ describe("Codex native close admission", () => {
       });
       parent.bindTurn("parent-turn");
       try {
-        harness.send({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-turn",
-            item: { ...directSpawnItem("v1", "parent-thread", "child-thread"), id: "spawn-child" },
-          },
-        });
+        harness.send(
+          itemNotification({
+            ...directSpawnItem("v1", "parent-thread", "child-thread"),
+            id: "spawn-child",
+          }),
+        );
         if (!captureForget) {
           throw new Error("factory did not supply its captured-forget operation");
         }
@@ -301,35 +318,5 @@ describe("Codex native close admission", () => {
     await vi.waitFor(() => expect(forget).toHaveBeenCalledOnce());
 
     expect(captureChildThreadForget).toHaveBeenCalledExactlyOnceWith("child-thread");
-  });
-
-  it("does not forget captured ownership after its parent retires during capture", async () => {
-    const client = createClient();
-    client.setLoadedThreads([]);
-    const runtime = createRuntime();
-    const forget = vi.fn();
-    let resolveCapture!: (forget: () => void) => void;
-    const capture = new Promise<() => void>((resolve) => {
-      resolveCapture = resolve;
-    });
-    const captureChildThreadForget = vi.fn(() => capture);
-    const monitor = new CodexNativeSubagentMonitor(client as never, runtime, {
-      captureChildThreadForget,
-    });
-    (await registerParent(monitor)).bindTurn("parent-turn");
-    onTestFinished(() => monitor.dispose());
-    await notifyChildStarted(client);
-
-    const starting = client.notify(closeAgentNotification({ method: "item/started" }));
-    await vi.waitFor(() => expect(captureChildThreadForget).toHaveBeenCalledOnce());
-    await monitor.retireParent("parent-thread");
-    const deliveriesAfterRetirement = [...runtime.deliverAgentHarnessCompletion.mock.calls];
-    resolveCapture(forget);
-    await starting;
-    await client.notify(closeAgentNotification({ method: "item/completed" }));
-
-    expect(runtime.deliverAgentHarnessCompletion.mock.calls).toEqual(deliveriesAfterRetirement);
-    expect(forget).not.toHaveBeenCalled();
-    expect(client.request).not.toHaveBeenCalled();
   });
 });

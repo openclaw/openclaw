@@ -6,6 +6,7 @@ import { noteStaleUpdateRuns } from "../commands/doctor-update-run.js";
 import { createGatewayUpdateLifecycle } from "../infra/update-check-lifecycle.js";
 import type { InterruptedUpdateSettlement } from "../infra/update-run-interruption-contract.js";
 import { persistInterruptedUpdateObservation } from "../infra/update-run-interruption-store.js";
+import { readInterruptedUpdateCandidateAsync } from "../infra/update-run-interruption-worker.js";
 import { reconcileInterruptedUpdateRuns } from "../infra/update-run-interruption.js";
 import {
   createUpdateRun,
@@ -50,13 +51,13 @@ vi.mock("../infra/update-run-interruption-worker.js", async () => {
   const { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } =
     await import("../state/openclaw-state-db-readonly.js");
   return {
-    readInterruptedUpdateCandidateAsync: async (
-      options: import("../infra/update-run-codec.js").UpdateRunLedgerOptions,
-    ) =>
-      withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-        ({ db }) => readInterruptedUpdateCandidate(db),
-        options,
-      ),
+    readInterruptedUpdateCandidateAsync: vi.fn(
+      async (options: import("../infra/update-run-codec.js").UpdateRunLedgerOptions) =>
+        withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+          ({ db }) => readInterruptedUpdateCandidate(db),
+          options,
+        ),
+    ),
     persistInterruptedUpdateObservationAsync: async (
       context: OpenClawStateWorkerContext,
       input: InterruptedUpdateSettlement,
@@ -275,10 +276,23 @@ it.each([
   expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
 });
 
+it("honors pre-read absence without looking up a later interrupted candidate", async () => {
+  const runId = interruptedRun();
+  vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
+
+  expect(await reconcileInterruptedUpdateRuns({ candidate: undefined })).toEqual([]);
+
+  expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
+  expect(observation.settle).not.toHaveBeenCalled();
+  expect(getUpdateRun(runId)?.status).toBe("running");
+});
+
 it.each(["driver-revived", "newer-completed-run"])(
   "rechecks %s after awaited health probes",
   async (race) => {
     const runId = interruptedRun();
+    const candidate = getUpdateRun(runId);
+    vi.mocked(readInterruptedUpdateCandidateAsync).mockClear();
     observation.inspect.mockImplementationOnce(async () => {
       if (race === "driver-revived") {
         observation.driver = "alive";
@@ -288,7 +302,8 @@ it.each(["driver-revived", "newer-completed-run"])(
       }
       return health();
     });
-    await reconcileInterruptedUpdateRuns();
+    await reconcileInterruptedUpdateRuns({ candidate });
+    expect(readInterruptedUpdateCandidateAsync).not.toHaveBeenCalled();
     expect(getUpdateRun(runId)?.status).not.toBe("succeeded");
     expect(getUpdateRun(runId)?.steps.some((step) => step.step === "reconcile:settle")).toBe(false);
     expect(console.warn).not.toHaveBeenCalled();

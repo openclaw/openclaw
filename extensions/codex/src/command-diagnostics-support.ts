@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -382,13 +383,7 @@ function recordBoundedCodexDiagnosticsCooldown(
   now: number,
 ): void {
   if (!map.has(key)) {
-    while (map.size >= maxSize) {
-      const oldestKey = map.keys().next().value;
-      if (typeof oldestKey !== "string") {
-        break;
-      }
-      map.delete(oldestKey);
-    }
+    pruneMapToMaxSize(map, maxSize - 1);
   }
   map.set(key, now);
 }

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loseFirstCronMutationReply } from "../../test/helpers/cron/runtime-mutation.js";
@@ -21,6 +22,7 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
+import { readCronScratchSnapshot } from "./scratch-read.js";
 import {
   deleteCronJobScratch,
   hashCronScratchSource,
@@ -29,6 +31,7 @@ import {
 import { writeCronJobScratchForMaintenance } from "./scratch-write.kernel.js";
 import { CronService } from "./service.js";
 import * as runtimeMutation from "./service/runtime-mutation.js";
+import * as cronStore from "./store.js";
 import { loadCronJobsStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { replaceCronRows, upsertCronJobRow } from "./store/row-codec.js";
@@ -85,6 +88,134 @@ async function withScratchService(
 }
 
 describe("cron scratch worker service", () => {
+  it("initializes missing shared state for a heartbeat scratch read off the caller thread", async () => {
+    await withOpenClawTestState({ label: "heartbeat-scratch-cold-read" }, async (fixture) => {
+      const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
+      await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+      const sql = observeMainThreadSql();
+      let observed: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
+      let callerSql = 0;
+      try {
+        sql.calibrate();
+        observed = await readCronScratchSnapshot(
+          fixture.statePath("cron", "jobs.json"),
+          { kind: "heartbeat", agentId: "alpha" },
+          {
+            path: databasePath,
+            env: fixture.env,
+          },
+        );
+        callerSql = sql.count();
+      } finally {
+        sql.restore();
+      }
+      expect(observed).toBeUndefined();
+      expect((await fs.stat(databasePath)).isFile()).toBe(true);
+      const verification = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(
+          verification
+            .prepare(
+              "SELECT (SELECT COUNT(*) FROM cron_jobs) AS jobs, (SELECT COUNT(*) FROM cron_job_scratch) AS scratch",
+            )
+            .get(),
+        ).toEqual({ jobs: 0, scratch: 0 });
+      } finally {
+        verification.close();
+      }
+      expect(callerSql).toBe(0);
+    });
+  });
+
+  it("reads scratch off the caller thread through the actual service", async () => {
+    await withScratchService(async ({ service, job }) => {
+      await service.writeScratch(job.id, { content: "private read content", expectedRevision: 0 });
+      const sql = observeMainThreadSql();
+      try {
+        sql.calibrate();
+        expect(await service.readScratch(job.id)).toMatchObject({
+          currentRevision: 1,
+          scratch: { content: "private read content", revision: 1 },
+        });
+        sql.expectIdle();
+      } finally {
+        sql.restore();
+      }
+    });
+  });
+
+  it("reads a legacy creation fallback without ignoring a persisted definition change", async () => {
+    await withScratchService(async ({ service, job, storePath, databasePath }) => {
+      await service.writeScratch(job.id, {
+        content: "legacy private content",
+        expectedRevision: 0,
+      });
+      const peer = new DatabaseSync(databasePath);
+      const reader = new CronService(
+        createCronRegressionState({
+          storePath,
+          defaultAgentId: "alpha",
+          runIsolatedAgentJob: async () => ({ status: "skipped" }),
+        }).deps,
+      );
+      try {
+        const row = executeSqliteQuerySync(
+          peer,
+          getCronStoreKysely(peer)
+            .selectFrom("cron_jobs")
+            .select("job_json")
+            .where("store_key", "=", cronStoreKey(storePath))
+            .where("job_id", "=", job.id),
+        ).rows[0];
+        const { createdAtMs: _createdAtMs, ...legacy } = expectDefined(
+          safeParseJsonRecord(expectDefined(row, "stored scratch job").job_json),
+          "stored scratch job definition",
+        );
+        const writeDefinition = (definition: unknown) =>
+          executeSqliteQuerySync(
+            peer,
+            getCronStoreKysely(peer)
+              .updateTable("cron_jobs")
+              .set({ job_json: JSON.stringify(definition) })
+              .where("store_key", "=", cronStoreKey(storePath))
+              .where("job_id", "=", job.id),
+          );
+        writeDefinition(legacy);
+        const loadStore = cronStore.loadCronJobsStoreWithConfigJobs;
+        const load = vi
+          .spyOn(cronStore, "loadCronJobsStoreWithConfigJobs")
+          .mockImplementationOnce(async (requestedPath) => {
+            const loaded = await loadStore(requestedPath);
+            // Only pin the clock-derived display fallback; persisted config and worker reads stay real.
+            expectDefined(loaded.store.jobs[0], "loaded legacy row").createdAtMs = 1_000;
+            return loaded;
+          });
+        let loaded: CronJob;
+        try {
+          loaded = expectDefined(await reader.readJob(job.id), "loaded legacy scratch job");
+          expect(loaded.createdAtMs).toBe(1_000);
+        } finally {
+          load.mockRestore();
+        }
+        expect(await reader.readScratch(job.id)).toMatchObject({
+          currentRevision: 1,
+          scratch: { content: "legacy private content" },
+        });
+        expect(
+          await reader.writeScratch(job.id, {
+            content: "updated legacy private content",
+            expectedRevision: 1,
+          }),
+        ).toMatchObject({ ok: true, currentRevision: 2 });
+        writeDefinition({ ...legacy, createdAtMs: loaded.createdAtMs + 1_000 });
+        await expect(reader.readScratch(job.id)).rejects.toThrow("changed after it was read");
+      } finally {
+        reader.stop();
+        peer.close();
+      }
+    });
+  });
+
   it("writes off the caller thread while preserving CAS, tombstones, and actual-write receipts", async () => {
     await withScratchService(async ({ service, job }) => {
       const steps = [

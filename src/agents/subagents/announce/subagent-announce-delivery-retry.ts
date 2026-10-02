@@ -1,7 +1,7 @@
-/**
- * Retry and error policy for subagent announcement delivery.
- */
+import { collectErrorGraphCandidates } from "@openclaw/normalization-core/error-coercion";
 import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveDeliveryNotSentRetryability } from "../../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
@@ -80,44 +80,16 @@ function isWriterClaimReboundAnnounceError(error: unknown): boolean {
   );
 }
 
-const ANNOUNCE_ERROR_CHAIN_KEYS = ["cause", "error", "reason"] as const;
-type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
-type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
-  sentBeforeError?: unknown;
-  visibleReplySent?: unknown;
-};
-
-function isAnnounceErrorRecord(error: unknown): error is AnnounceErrorRecord {
-  return Boolean(error && typeof error === "object");
-}
-
-function hasAnnounceErrorMatch(
-  error: unknown,
-  matches: (candidate: unknown) => boolean,
-  seen: Set<object> = new Set(),
-): boolean {
-  if (matches(error)) {
-    return true;
-  }
-  if (!isAnnounceErrorRecord(error)) {
-    return false;
-  }
-  if (seen.has(error)) {
-    return false;
-  }
-  seen.add(error);
-
-  return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
+function hasAnnounceErrorMatch(error: unknown, matches: (candidate: unknown) => boolean): boolean {
+  return collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+    candidate.reason,
+  ]).some(matches);
 }
 
 function hasWriterClaimReboundAnnounceError(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, isWriterClaimReboundAnnounceError);
-}
-
-function isTransientFailoverAnnounceError(error: unknown): boolean {
-  return (
-    isFailoverError(error) && (error.reason === "overloaded" || (error.attempts?.length ?? 0) > 0)
-  );
 }
 
 function isPermanentNonWriterAnnounceError(error: unknown): boolean {
@@ -154,7 +126,10 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
   }
 
   return hasAnnounceErrorMatch(error, (candidate) => {
-    if (isTransientFailoverAnnounceError(candidate)) {
+    if (
+      isFailoverError(candidate) &&
+      (candidate.reason === "overloaded" || (candidate.attempts?.length ?? 0) > 0)
+    ) {
       return true;
     }
     const message = summarizeDeliveryError(candidate);
@@ -187,10 +162,8 @@ function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   if (isOutboundDeliveryError(error) && error.sentBeforeError) {
     return true;
   }
-  if (!isAnnounceErrorRecord(error)) {
-    return false;
-  }
-  return error.sentBeforeError === true || error.visibleReplySent === true;
+  const record = asOptionalObjectRecord(error);
+  return record?.sentBeforeError === true || record?.visibleReplySent === true;
 }
 
 export function hasAnnounceSendEvidence(error: unknown): boolean {
@@ -198,34 +171,14 @@ export function hasAnnounceSendEvidence(error: unknown): boolean {
 }
 
 export async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (ms <= 0) {
-    return;
+  try {
+    await sleepWithAbort(ms, signal);
+  } catch (error) {
+    // Cancellation settles the backoff; its caller owns the aborted-delivery outcome.
+    if (!signal?.aborted) {
+      throw error;
+    }
   }
-  if (!signal) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
-    return;
-  }
-  if (signal.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-function resolveDirectAnnounceTransientRetryDelaysMs() {
-  return isFastTestRuntimeEnv() ? ([8, 16, 32] as const) : ([5_000, 10_000, 20_000] as const);
 }
 
 export async function runAnnounceDeliveryWithRetry<T>(params: {
@@ -235,7 +188,9 @@ export async function runAnnounceDeliveryWithRetry<T>(params: {
   isAttemptAllowed?: () => boolean;
   run: () => Promise<T>;
 }): Promise<T> {
-  const retryDelaysMs = resolveDirectAnnounceTransientRetryDelaysMs();
+  const retryDelaysMs = isFastTestRuntimeEnv()
+    ? ([8, 16, 32] as const)
+    : ([5_000, 10_000, 20_000] as const);
   for (const [retryIndex, delayMs] of retryDelaysMs.entries()) {
     if (params.prepareAttempt && !(await params.prepareAttempt())) {
       throw new SourceOwnerChangedError();

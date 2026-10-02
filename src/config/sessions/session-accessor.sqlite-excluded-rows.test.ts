@@ -9,8 +9,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
+import { iterateSessionEntryKeys } from "./session-accessor.sqlite-entry-inventory.js";
 import {
-  iterateSessionEntryKeys,
   readExactSessionEntryRow,
   readSessionEntryCount,
   readSessionEntryStore,

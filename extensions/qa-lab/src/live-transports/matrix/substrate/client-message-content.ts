@@ -53,12 +53,6 @@ export function buildMatrixReactionRelation(messageId: string, emoji: string) {
   };
 }
 
-function buildMatrixMentionLink(userId: string) {
-  const href = `https://matrix.to/#/${encodeURIComponent(userId)}`;
-  const label = escapeHtml(userId);
-  return `<a href="${href}">${label}</a>`;
-}
-
 export function buildMatrixQaMessageContent(params: {
   body: string;
   mentionUserIds?: string[];
@@ -74,7 +68,9 @@ export function buildMatrixQaMessageContent(params: {
   while (cursor < body.length) {
     const matchedUserId = uniqueMentionUserIds.find((userId) => body.startsWith(userId, cursor));
     if (matchedUserId) {
-      formattedParts.push(buildMatrixMentionLink(matchedUserId));
+      formattedParts.push(
+        `<a href="https://matrix.to/#/${encodeURIComponent(matchedUserId)}">${escapeHtml(matchedUserId)}</a>`,
+      );
       cursor += matchedUserId.length;
       usedFormattedMention = true;
       continue;

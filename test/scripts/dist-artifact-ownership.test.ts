@@ -18,7 +18,7 @@ import { TSGO_CORE_TEST_SHARDS } from "../../scripts/lib/tsgo-core-test-shards.m
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { waitForDead } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { installDistArtifactScripts as installScripts } from "./dist-artifact-fixture.js";
 import {
   materializeNativeCompiler,
@@ -33,6 +33,35 @@ const sourceRoot = process.cwd();
 const declarationPath = "dist/plugin-sdk/src/plugin-sdk/qa-channel-protocol.d.ts";
 const tsgoArgs = ["-p", "tsconfig.plugin-sdk.dts.json", "--declaration", "true"];
 const buildArgs = ["--config", "fixture.tsdown.config.ts", "--out-dir", "dist"];
+
+function waitForForeignProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  // Crash cases deliberately remove the compiler's owner. Its checkpoint socket
+  // closes before death, so only a PID observation can certify the orphan's exit.
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error) => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const abort = () => finish(new Error(`process still alive: ${pid}`, { cause: signal.reason }));
+    const check = () => {
+      if (!isProcessAlive(pid)) {
+        finish();
+      } else if (signal.aborted) {
+        abort();
+      } else {
+        timer = setTimeout(check, 5);
+      }
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    check();
+  });
+}
 
 function write(root: string, relative: string, content: string) {
   const target = path.join(root, relative);
@@ -164,7 +193,7 @@ async function runWithProcesses(
       // Crash cases deliberately orphan a compiler; its barrier closes before
       // process exit. Join that process too before deleting the fixture.
       const orphans = await Promise.allSettled(
-        [...checkpointPids].map((pid) => waitForDead(pid, 2_000)),
+        [...checkpointPids].map((pid) => waitForForeignProcessExit(pid, signal)),
       );
       for (const socket of sockets) {
         socket.destroy();
@@ -974,7 +1003,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
       );
       expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       compilerGate.write("continue");
-      await waitForDead(compilerPid, 2_000);
+      await waitForForeignProcessExit(compilerPid, signal);
     }, signal);
   }, 30_000);
 
@@ -1018,7 +1047,7 @@ describe.skipIf(process.platform === "win32")("dist artifact ownership", () => {
         expect(() => resourceOwner.assertReleased()).toThrow("Unreleased Vitest resource claim");
       } finally {
         compilerGate.write("continue");
-        await waitForDead(compiler.pid, 2_000);
+        await waitForForeignProcessExit(compiler.pid, signal);
       }
     }, signal);
   }, 30_000);
