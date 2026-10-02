@@ -25,6 +25,7 @@ import {
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../talk/describe-view-tool.js";
 import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/provider-types.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createChatRunState } from "../../server-chat-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import type {
   GatewayClient,
@@ -353,7 +354,7 @@ async function callTalkHandler(
     client: client as never,
     isWebchatConnect: () => false,
     respond,
-    context: context as never,
+    context: { chatRunState: createChatRunState(), ...(context as object) } as never,
     // Row creation is mocked here; talk-target.test covers the real post-ensure fence.
     ...(admission?.authorization
       ? {
@@ -3001,6 +3002,150 @@ describe("talk.client.toolCall handler", () => {
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
   });
+
+  it("records a chat-backed CLI veto for the server-owned voice result", async () => {
+    const chatRunState = createChatRunState();
+    let blocked: ReturnType<typeof checkClientVoiceToolConfirmationPolicy> | undefined;
+    mocks.chatSend.mockImplementationOnce(async (request: GatewayRequestHandlerOptions) => {
+      request.respond(true, { runId: "run-cli-veto" }, undefined);
+      blocked = checkClientVoiceToolConfirmationPolicy({
+        agentId: "main",
+        voiceSessionId: "voice-test",
+        runId: "run-cli-veto",
+        toolName: "exec",
+        toolCallId: "blocked-cli-tool",
+        toolParams: { command: "/opt/example/bin/temperature area office" },
+      });
+    });
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        callId: "call-cli-veto",
+        name: "openclaw_agent_consult",
+        args: { question: "Which room is coolest?" },
+      },
+      respond: vi.fn(),
+      context: { getRuntimeConfig: () => ({}), chatRunState },
+    });
+    if (!blocked || blocked.allowed) {
+      throw new Error("Expected a voice confirmation challenge");
+    }
+    const confirmationId = blocked.reason.match(/VOICE_CONFIRMATION_REQUIRED:(\S+)/)![1]!;
+    expect(chatRunState.runs.get("run-cli-veto")?.readVoiceConfirmationReply?.()).toContain(
+      `VOICE_CONFIRMATION_REQUIRED:${confirmationId}`,
+    );
+    expect(chatRunState.runs.get("unrelated-run")?.readVoiceConfirmationReply).toBeUndefined();
+    chatRunState.clear();
+  });
+
+  it("resumes one exact CLI action after persisted spoken confirmation without a model-supplied id", async () => {
+    const command = "/opt/example/bin/temperature area office";
+    const now = Date.now();
+    const challenge = checkClientVoiceToolConfirmationPolicy({
+      agentId: "main",
+      voiceSessionId: "voice-test",
+      runId: "run-original",
+      toolCallId: "blocked-cli-tool",
+      toolName: "exec",
+      toolParams: { command },
+      now,
+    });
+    expect(challenge.allowed).toBe(false);
+    noteClientVoiceConfirmationUtterance({
+      agentId: "main",
+      voiceSessionId: "voice-test",
+      text: "Confirm.",
+      timestamp: now + 1,
+    });
+    let policy: unknown;
+    mocks.chatSend.mockImplementationOnce(async (request: GatewayRequestHandlerOptions) => {
+      request.respond(true, { runId: "run-confirmed" }, undefined);
+      policy = checkClientVoiceToolConfirmationPolicy({
+        agentId: "main",
+        voiceSessionId: "voice-test",
+        runId: "run-confirmed",
+        toolName: "exec",
+        toolParams: { command },
+      });
+    });
+    const respond = vi.fn();
+    await callTalkHandler("talk.client.toolCall", {
+      params: {
+        sessionKey: "main",
+        voiceSessionId: "voice-test",
+        callId: "call-confirmed",
+        name: "openclaw_agent_consult",
+        args: { question: "Confirm." },
+      },
+      respond,
+    });
+    expectRespondOk(respond, { runId: "run-confirmed" });
+    expect(policy).toEqual({ allowed: true });
+    const message = mocks.chatSend.mock.calls[0]?.[0].params.message;
+    expect(message).toContain("blocked-cli-tool");
+    expect(message).toContain("Retry only that call with its unchanged arguments");
+    expect(
+      checkClientVoiceToolConfirmationPolicy({
+        agentId: "main",
+        voiceSessionId: "voice-test",
+        runId: "run-confirmed",
+        toolName: "exec",
+        toolParams: { command: "different action" },
+      }).allowed,
+    ).toBe(false);
+  });
+
+  it.each([undefined, "no", "which room is coolest?"])(
+    "does not trust a model's confirm question without persisted approval (%s)",
+    async (utterance) => {
+      const now = Date.now();
+      const command = "/opt/example/bin/temperature area office";
+      checkClientVoiceToolConfirmationPolicy({
+        agentId: "main",
+        voiceSessionId: "voice-test",
+        runId: "run-original",
+        toolName: "exec",
+        toolParams: { command },
+        now,
+      });
+      if (utterance) {
+        noteClientVoiceConfirmationUtterance({
+          agentId: "main",
+          voiceSessionId: "voice-test",
+          text: utterance,
+          timestamp: now + 1,
+        });
+      }
+      let policy: unknown;
+      mocks.chatSend.mockImplementationOnce(async (request: GatewayRequestHandlerOptions) => {
+        request.respond(true, { runId: "run-unconfirmed" }, undefined);
+        policy = checkClientVoiceToolConfirmationPolicy({
+          agentId: "main",
+          voiceSessionId: "voice-test",
+          runId: "run-unconfirmed",
+          toolName: "exec",
+          toolParams: { command },
+        });
+      });
+      const respond = vi.fn();
+      await callTalkHandler("talk.client.toolCall", {
+        params: {
+          sessionKey: "main",
+          voiceSessionId: "voice-test",
+          callId: "call-unconfirmed",
+          name: "openclaw_agent_consult",
+          args: { question: "Confirm." },
+        },
+        respond,
+      });
+      expectRespondOk(respond, { runId: "run-unconfirmed" });
+      expect(policy).toMatchObject({ allowed: false });
+      expect(mocks.chatSend.mock.calls[0]?.[0].params.message).not.toContain(
+        "persisted spoken confirmation is bound",
+      );
+    },
+  );
 
   it("returns the tool-call acknowledgement while the agent run continues", async () => {
     let finishRun: (() => void) | undefined;

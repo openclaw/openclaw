@@ -37,6 +37,12 @@ import {
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import { subscribePluginSessionsChanged } from "../plugins/services.test-support.js";
+import {
+  checkClientVoiceToolConfirmationPolicy,
+  observeClientVoiceConfirmationRun,
+  releaseClientVoiceConfirmationRun,
+} from "../talk/client-voice-confirmation.js";
+import { resetClientVoiceConfirmationStateForTest } from "../talk/client-voice-confirmation.test-support.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
@@ -108,6 +114,7 @@ function waitForFast<T>(
 describe("agent event handler", () => {
   let lineageProjection: ReturnType<typeof createSessionRowProjectionFixture> | undefined;
   beforeEach(() => {
+    resetClientVoiceConfirmationStateForTest();
     lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
@@ -1186,6 +1193,60 @@ describe("agent event handler", () => {
     expect(h.nodeChat()).toHaveLength(payloads.length);
     h.handler.dispose();
     h.chatRunState.clear();
+  });
+
+  it("projects the current voice challenge into Claude CLI's final chat result", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const h = createHarness();
+    h.register("run-voice-consult", "session-voice", "run-voice-consult");
+    const observation = observeClientVoiceConfirmationRun({
+      agentId: "main",
+      voiceSessionId: "voice-session",
+      runId: "run-voice-consult",
+    });
+    h.chatRunState.getOrCreate("run-voice-consult").readVoiceConfirmationReply = () =>
+      observation.readReply({ includeConfirmationId: true });
+    let confirmationId = "";
+    for (const command of ["old command", "/opt/example/bin/temperature area office"]) {
+      const blocked = checkClientVoiceToolConfirmationPolicy({
+        agentId: "main",
+        voiceSessionId: "voice-session",
+        runId: "run-voice-consult",
+        toolName: "exec",
+        toolCallId: "blocked-cli-tool",
+        toolParams: { command },
+      });
+      if (blocked.allowed) {
+        throw new Error("Expected a voice confirmation challenge");
+      }
+      confirmationId = blocked.reason.match(/VOICE_CONFIRMATION_REQUIRED:(\S+)/)![1]!;
+    }
+    h.emit("run-voice-consult", "assistant", {
+      text: "VOICE_CONFIRMATION_REQUIRED:stale-model-id Please confirm.",
+    });
+    // Real Claude CLI run.completed diagnostics precede the outer final lifecycle.
+    releaseClientVoiceConfirmationRun("main", "voice-session", "run-voice-consult");
+    h.end("run-voice-consult", 2);
+    const final = h.chat().at(-1)?.[1];
+    expect(final).toMatchObject({
+      state: "final",
+      message: {
+        content: [
+          { text: expect.stringContaining(`VOICE_CONFIRMATION_REQUIRED:${confirmationId}`) },
+        ],
+      },
+    });
+    expect(final.message.content[0].text).toContain(
+      "call openclaw_agent_consult with this confirmationId",
+    );
+    expect(final.message.content[0].text).not.toContain("stale-model-id");
+    expect(
+      h.chatRunState.runs.get("run-voice-consult")?.readVoiceConfirmationReply,
+    ).toBeUndefined();
+    h.handler.dispose();
+    h.chatRunState.clear();
+    resetClientVoiceConfirmationStateForTest();
   });
 
   it("releases a held control-token prefix as a final short reply", () => {

@@ -955,11 +955,20 @@ export function createAgentEventHandler({
       isHeartbeat?: boolean;
     },
   ) => {
-    const { text, shouldSuppressSilent } = resolveBufferedChatTextState(clientRunId, sourceRunId, {
+    const buffered = resolveBufferedChatTextState(clientRunId, sourceRunId, {
       final: true,
       suppressLeadFragments: false,
       isHeartbeat: opts?.isHeartbeat,
     });
+    const confirmationReply =
+      jobState === "done"
+        ? chatRunState.runs.get(clientRunId)?.readVoiceConfirmationReply?.()
+        : undefined;
+    // Claude CLI publishes its final via agent events, not the native consult runner.
+    // A tool veto must reach the voice model even when the agent paraphrases or loses its id.
+    const { text, shouldSuppressSilent } = confirmationReply
+      ? { text: confirmationReply, shouldSuppressSilent: false }
+      : buffered;
     // Flush any paced delta so streaming clients receive the complete text
     // before the final event.
     // Only flush if the buffered text differs from the last broadcast to avoid duplicates.
