@@ -19,6 +19,7 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
@@ -70,14 +71,23 @@ export async function readPendingRepositoryGitHubPublication(
 }
 
 /** A pushed branch outlives its publisher and the request's PR outcome. */
-export function readRepositoryGitHubPublicationBranch(input: {
-  workspaceId: string;
-  branch: string;
-  pushRepository: string;
-}) {
-  const rows = listRepositoryGitHubPublications({ workspaceId: input.workspaceId }).filter(
-    (row) => row.branch === input.branch && row.push_repository === input.pushRepository,
-  );
+export function readRepositoryGitHubPublicationBranch(
+  input: Parameters<typeof readRepositoryGitHubPublicationBranchInDatabase>[1],
+) {
+  return readRepositoryGitHubPublicationBranchInDatabase(openOpenClawStateDatabase().db, input);
+}
+
+export function readRepositoryGitHubPublicationBranchInDatabase(
+  db: OpenClawStateDatabase["db"],
+  input: {
+    workspaceId: string;
+    branch: string;
+    pushRepository: string;
+  },
+) {
+  const rows = listRepositoryGitHubPublicationsInDatabase(db, {
+    workspaceId: input.workspaceId,
+  }).filter((row) => row.branch === input.branch && row.push_repository === input.pushRepository);
   const pushed = rows.filter((row) => row.pushed_head_commit !== null);
   // Retried ancestors may have newer timestamps; follow recorded parent links instead.
   const ancestors = new Set(pushed.map((row) => row.previous_head_commit));
@@ -150,6 +160,18 @@ export function insertRepositoryGitHubPublication(
   row: RepositoryGitHubPublicationRow,
   assertCurrent: () => void,
 ) {
+  return insertRepositoryGitHubPublicationInDatabase(
+    openOpenClawStateDatabase(),
+    row,
+    assertCurrent,
+  );
+}
+
+export function insertRepositoryGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: RepositoryGitHubPublicationRow,
+  assertCurrent: () => void,
+) {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       assertCurrent();
@@ -215,7 +237,7 @@ export function insertRepositoryGitHubPublication(
       }
       return stored;
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.request" },
   );
 }
@@ -225,10 +247,24 @@ export function bindRepositoryGitHubPublicationCheckpoint(
   checkpoint: Pick<RepositoryGitHubPublicationRow, (typeof checkpointColumns)[number]>,
   assertCurrent: () => void,
 ) {
+  return bindRepositoryGitHubPublicationCheckpointInDatabase(
+    openOpenClawStateDatabase(),
+    row,
+    checkpoint,
+    assertCurrent,
+  );
+}
+
+export function bindRepositoryGitHubPublicationCheckpointInDatabase(
+  database: OpenClawStateDatabase,
+  row: RepositoryGitHubPublicationRow,
+  checkpoint: Pick<RepositoryGitHubPublicationRow, (typeof checkpointColumns)[number]>,
+  assertCurrent: () => void,
+) {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       assertCurrent();
-      const current = readRepositoryGitHubPublication(row.request_id);
+      const current = readRepositoryGitHubPublicationInDatabase(db, row.request_id);
       if (
         !current ||
         current.request_digest !== row.request_digest ||
@@ -260,12 +296,26 @@ export function bindRepositoryGitHubPublicationCheckpoint(
       assertCurrent();
       return changed(db, updated);
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.checkpoint" },
   );
 }
 
 export function failRepositoryGitHubPublicationPreparation(
+  row: RepositoryGitHubPublicationRow,
+  nextAction: string,
+  assertCurrent: () => void,
+) {
+  return failRepositoryGitHubPublicationPreparationInDatabase(
+    openOpenClawStateDatabase(),
+    row,
+    nextAction,
+    assertCurrent,
+  );
+}
+
+export function failRepositoryGitHubPublicationPreparationInDatabase(
+  database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   nextAction: string,
   assertCurrent: () => void,
@@ -296,21 +346,80 @@ export function failRepositoryGitHubPublicationPreparation(
       assertCurrent();
       return changed(db, updated);
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.unavailable" },
   );
 }
 
-export function claimRepositoryGitHubPublication(
+export function writeRepositoryGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
   row: RepositoryGitHubPublicationRow,
   instanceId: string,
+  executionId: string,
+  values: Partial<RepositoryGitHubPublicationRow>,
+  requireAction: boolean,
   authority: { assertCustody: () => void; assertCurrent: () => void },
 ) {
-  const executionId = randomUUID();
-  const claimed = runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      // The execution CAS retains result custody after workspace admission ends.
+      if (requireAction) {
+        authority.assertCustody();
+        authority.assertCurrent();
+        if (!row.checkpoint_ref || !row.checkpoint_digest || !row.workspace_tree) {
+          throw new Error("GitHub publication requires its accepted checkpoint.");
+        }
+      }
+      const current = readRepositoryGitHubPublicationInDatabase(db, row.request_id);
+      if (!current || current.request_digest !== row.request_digest) {
+        throw new Error("GitHub publication receipt changed.");
+      }
+      // A resumed ref observation cannot erase an earlier PR dispatch or receipt.
+      const retainPullRequest =
+        values.last_effect === "push" && current.last_effect === "pull_request";
+      const updated = executeSqliteQueryTakeFirstSync(
+        db,
+        query(db)
+          .updateTable(table)
+          .set({
+            ...values,
+            ...(retainPullRequest
+              ? { last_effect: current.last_effect, effect_state: current.effect_state }
+              : {}),
+            updated_at_ms: Date.now(),
+          })
+          .where("request_id", "=", row.request_id)
+          .where("request_digest", "=", row.request_digest)
+          .where("status", "=", "publishing")
+          .where("gateway_instance_id", "=", instanceId)
+          .where("execution_id", "=", executionId)
+          .returningAll(),
+      );
+      if (!updated) {
+        throw new Error("GitHub publication execution is no longer current.");
+      }
+      if (requireAction) {
+        authority.assertCustody();
+        authority.assertCurrent();
+      }
+      return changed(db, updated);
+    },
+    { database },
+    { operationLabel: "github-repository-publication.record" },
+  );
+}
+
+export function claimRepositoryGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: RepositoryGitHubPublicationRow,
+  instanceId: string,
+  executionId: string,
+  authority: { assertCustody: () => void; assertCurrent: () => void },
+) {
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       authority.assertCustody();
-      const current = readRepositoryGitHubPublication(row.request_id);
+      const current = readRepositoryGitHubPublicationInDatabase(db, row.request_id);
       if (
         !current ||
         current.request_digest !== row.request_digest ||
@@ -340,8 +449,23 @@ export function claimRepositoryGitHubPublication(
       authority.assertCustody();
       return changed(db, updated);
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.claim" },
+  );
+}
+
+export function claimRepositoryGitHubPublication(
+  row: RepositoryGitHubPublicationRow,
+  instanceId: string,
+  authority: { assertCustody: () => void; assertCurrent: () => void },
+) {
+  const executionId = randomUUID();
+  const claimed = claimRepositoryGitHubPublicationInDatabase(
+    openOpenClawStateDatabase(),
+    row,
+    instanceId,
+    executionId,
+    authority,
   );
   const ownsExecution = () => {
     const current = readRepositoryGitHubPublication(row.request_id);
@@ -353,52 +477,14 @@ export function claimRepositoryGitHubPublication(
     );
   };
   const write = (values: Partial<RepositoryGitHubPublicationRow>, requireAction: boolean) =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        // The execution CAS retains result custody after workspace admission ends.
-        if (requireAction) {
-          authority.assertCustody();
-          authority.assertCurrent();
-          if (!row.checkpoint_ref || !row.checkpoint_digest || !row.workspace_tree) {
-            throw new Error("GitHub publication requires its accepted checkpoint.");
-          }
-        }
-        const current = readRepositoryGitHubPublication(row.request_id);
-        if (!current || current.request_digest !== row.request_digest) {
-          throw new Error("GitHub publication receipt changed.");
-        }
-        // A resumed ref observation cannot erase an earlier PR dispatch or receipt.
-        const retainPullRequest =
-          values.last_effect === "push" && current.last_effect === "pull_request";
-        const updated = executeSqliteQueryTakeFirstSync(
-          db,
-          query(db)
-            .updateTable(table)
-            .set({
-              ...values,
-              ...(retainPullRequest
-                ? { last_effect: current.last_effect, effect_state: current.effect_state }
-                : {}),
-              updated_at_ms: Date.now(),
-            })
-            .where("request_id", "=", row.request_id)
-            .where("request_digest", "=", row.request_digest)
-            .where("status", "=", "publishing")
-            .where("gateway_instance_id", "=", instanceId)
-            .where("execution_id", "=", executionId)
-            .returningAll(),
-        );
-        if (!updated) {
-          throw new Error("GitHub publication execution is no longer current.");
-        }
-        if (requireAction) {
-          authority.assertCustody();
-          authority.assertCurrent();
-        }
-        return changed(db, updated);
-      },
-      undefined,
-      { operationLabel: "github-repository-publication.record" },
+    writeRepositoryGitHubPublicationInDatabase(
+      openOpenClawStateDatabase(),
+      row,
+      instanceId,
+      executionId,
+      values,
+      requireAction,
+      authority,
     );
   const effects = createGitHubPublicationExecutionEffects({
     write,
@@ -427,22 +513,29 @@ export function claimRepositoryGitHubPublication(
 }
 
 export function markRepositoryGitHubPublicationReported(requestId: string): void {
-  const database = openOpenClawStateDatabase().db;
-  if (!tableExists(database, table)) {
-    return;
+  markRepositoryGitHubPublicationReportedInDatabase(openOpenClawStateDatabase(), requestId);
+}
+
+export function markRepositoryGitHubPublicationReportedInDatabase(
+  database: OpenClawStateDatabase,
+  requestId: string,
+): RepositoryGitHubPublicationRow | undefined {
+  if (!tableExists(database.db, table)) {
+    return undefined;
   }
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      executeSqliteQuerySync(
+      return executeSqliteQueryTakeFirstSync(
         db,
         query(db)
           .updateTable(table)
           .set({ reported_at_ms: Date.now() })
           .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"]),
+          .where("status", "in", ["published", "failed"])
+          .returningAll(),
       );
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.report" },
   );
 }
@@ -451,16 +544,28 @@ export function failStaleRepositoryGitHubPublication(
   row: RepositoryGitHubPublicationRow,
   sessionIsCurrent: () => boolean,
 ): void {
-  runOpenClawStateWriteTransaction(
+  failStaleRepositoryGitHubPublicationInDatabase(
+    openOpenClawStateDatabase(),
+    row,
+    sessionIsCurrent,
+  );
+}
+
+export function failStaleRepositoryGitHubPublicationInDatabase(
+  database: OpenClawStateDatabase,
+  row: RepositoryGitHubPublicationRow,
+  sessionIsCurrent: () => boolean,
+): RepositoryGitHubPublicationRow | undefined {
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const current = readRepositoryGitHubPublication(row.request_id);
+      const current = readRepositoryGitHubPublicationInDatabase(db, row.request_id);
       if (
         !current ||
         terminalRepositoryGitHubPublication(current) ||
         current.request_digest !== row.request_digest ||
         sessionIsCurrent()
       ) {
-        return;
+        return undefined;
       }
       // Retention preserves the original effects, not authority to publish after
       // archive/reset. Clearing the execution also fences awaited response writers.
@@ -482,19 +587,29 @@ export function failStaleRepositoryGitHubPublication(
           .returningAll(),
       );
       if (updated) {
-        changed(db, updated);
+        return changed(db, updated);
       }
+      return undefined;
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.retire" },
   );
 }
 
 export function deferRepositoryGitHubPublicationClaims(requestIds: readonly string[]): void {
-  if (requestIds.length === 0) {
-    return;
+  if (requestIds.length) {
+    deferRepositoryGitHubPublicationClaimsInDatabase(openOpenClawStateDatabase(), requestIds);
   }
-  runOpenClawStateWriteTransaction(
+}
+
+export function deferRepositoryGitHubPublicationClaimsInDatabase(
+  database: OpenClawStateDatabase,
+  requestIds: readonly string[],
+): RepositoryGitHubPublicationRow[] {
+  if (requestIds.length === 0) {
+    return [];
+  }
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const updated = executeSqliteQuerySync(
         db,
@@ -516,8 +631,9 @@ export function deferRepositoryGitHubPublicationClaims(requestIds: readonly stri
       for (const row of updated) {
         changed(db, row);
       }
+      return updated;
     },
-    undefined,
+    { database },
     { operationLabel: "github-repository-publication.defer" },
   );
 }

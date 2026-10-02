@@ -9,10 +9,12 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import type {
   GitHubSessionReceiptGeneration,
   GitHubSessionReceiptIdentities,
+  GitHubPublicationDeletedReceipt,
 } from "./github-publication-read.types.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -109,17 +111,18 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
     receipts: GitHubSessionReceiptIdentities;
     sessionEntryCurrentSource?: SessionEntryCurrentSource;
   },
-): void {
+): GitHubPublicationDeletedReceipt[] {
   const tables = [
     "github_personal_publication_requests",
     "github_repository_publication_requests",
   ] as const;
   const existing = tables.filter((table) => tableExists(database.db, table));
   if (existing.length === 0 || params.sessionKeys.length === 0) {
-    return;
+    return [];
   }
-  runOpenClawStateWriteTransaction(
+  return runOpenClawStateWriteTransaction(
     ({ db }) => {
+      const deleted: GitHubPublicationDeletedReceipt[] = [];
       requestSessionEntryCurrentAdmission(
         params.sessionEntryCurrentSource,
         { stage: "transaction", facts: undefined },
@@ -196,14 +199,34 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
           }
         }
         for (const requestId of selected) {
-          executeSqliteQuerySync(db, query.deleteFrom(table).where("request_id", "=", requestId));
+          const receipt = executeSqliteQueryTakeFirstSync(
+            db,
+            query.deleteFrom(table).where("request_id", "=", requestId).returningAll(),
+          );
+          if (receipt) {
+            deleted.push({
+              kind: table === "github_personal_publication_requests" ? "personal" : "repository",
+              requestId: receipt.request_id,
+              requestDigest: receipt.request_digest,
+              ownerProfileId: receipt.owner_profile_id,
+              sessionId: receipt.session_id,
+              sessionKey: receipt.session_key,
+              agentId: receipt.agent_id,
+              idempotencyKey: receipt.idempotency_key,
+              workspaceId: "workspace_id" in receipt ? receipt.workspace_id : null,
+              branch: receipt.branch,
+              pushRepository: receipt.push_repository,
+            });
+          }
         }
       }
       requestSessionEntryCurrentAdmission(
         params.sessionEntryCurrentSource,
-        { stage: "commit", facts: undefined },
+        { stage: "commit", facts: deleted },
         { lookup: "logical" },
       );
+      deferSqliteWorkerCommitReceipt(db, deleted);
+      return deleted;
     },
     { database },
     { operationLabel: "github-personal-publication.session-delete" },

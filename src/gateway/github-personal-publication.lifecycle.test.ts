@@ -221,12 +221,14 @@ describe("personal publication session lifecycle", () => {
             !injected &&
             receiptAdmitted &&
             nativeRequest.stage === "commit" &&
-            (facts === undefined ||
-              (isRecord(facts) &&
-                facts.kind === "session-entry-current" &&
-                facts.domainFacts === undefined &&
-                isRecord(facts.source) &&
-                facts.source.sessionKey === SESSION_KEY))
+            isRecord(facts) &&
+            facts.kind === "session-entry-current" &&
+            Array.isArray(facts.domainFacts) &&
+            facts.domainFacts.some(
+              (deleted) => isRecord(deleted) && deleted.requestId === published.requestId,
+            ) &&
+            isRecord(facts.source) &&
+            facts.source.sessionKey === SESSION_KEY
           ) {
             nativeAbsent = isRecord(facts) && facts.entry === undefined;
             admit(nativeRequest, () => {

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { SessionGitHubPublicationResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubPublicationIdentity } from "../agents/github-publication-identity.types.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -29,7 +29,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { deferSharedGitHubPublicationChanged } from "./github-publication-events.js";
-import type { WorkerSessionTurnClaim } from "./worker-environments/placement-store.js";
+import type { WorkerSessionTurnClaim } from "./worker-environments/placement-record.js";
 
 type GitHubPublicationDatabase = Pick<
   StateDatabase,

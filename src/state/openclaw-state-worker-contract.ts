@@ -58,6 +58,7 @@ import type { PreparedBackupRunRecord } from "./backup-run-records.kernel.js";
 import type {
   GitHubSessionReceiptGeneration,
   GitHubSessionReceiptIdentities,
+  GitHubPublicationDeletedReceipt,
 } from "./github-publication-read.types.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
@@ -104,7 +105,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         receipts: GitHubSessionReceiptIdentities;
         sessionEntryCurrentSource?: SessionEntryCurrentSource;
       };
-      output: void;
+      output: GitHubPublicationDeletedReceipt[];
     };
     "githubRepository.personalPending": {
       input: RepositoryGitHubPublicationPendingQuery;

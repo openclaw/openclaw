@@ -20,6 +20,7 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { verifyGitHubCredential } from "./github-oauth-client.js";
 import { inspectGitHubOAuthRecord } from "./github-oauth-records.js";
+import type { PreparedGitHubPublicationIdentity } from "./github-publication-identity.types.js";
 import {
   clearNativeGitHubTokenCache,
   createGitHubReadIdentity,
@@ -37,6 +38,7 @@ import {
   type PreparedGitHubSourceReadIdentity,
 } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
+export type { PreparedGitHubPublicationIdentity } from "./github-publication-identity.types.js";
 
 export { GitHubIdentityError } from "./github-read-identity.js";
 
@@ -434,13 +436,6 @@ async function resolveGitHubIdentityFacts(
     repositoryGrants: "unknown",
   };
 }
-
-export type PreparedGitHubPublicationIdentity = Readonly<{
-  source: "system-detected" | "system-configured" | "agent-override" | "personal";
-  profileId?: string;
-  account: GitHubToolAccount;
-  env: NodeJS.ProcessEnv;
-}>;
 
 /** Only the personal publication broker receives this environment; never agent execution. */
 export async function preparePersonalGitHubPublicationIdentity(params: {

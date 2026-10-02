@@ -6,6 +6,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type.startsWith("githubPublications.")) {
+    return structuredClone(command);
+  }
   if (isWorkspaceJournalReadCommand(command)) {
     return command.type === "placementJournals.owners"
       ? { ...command }
@@ -202,6 +205,9 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
 }
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
+  if (command.type.startsWith("githubPublications.")) {
+    return Buffer.byteLength(JSON.stringify(command), "utf8");
+  }
   if (isWorkspaceJournalReadCommand(command)) {
     return Buffer.byteLength(JSON.stringify(command), "utf8");
   }

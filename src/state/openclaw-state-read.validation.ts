@@ -34,6 +34,13 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         Number.isSafeInteger(input.command.input.limit) &&
         (input.command.input.beforeSequence === undefined ||
           Number.isSafeInteger(input.command.input.beforeSequence))) ||
+      ((input.command.type === "githubPublications.personalRead" ||
+        input.command.type === "githubPublications.repositoryList" ||
+        input.command.type === "githubPublications.branch" ||
+        input.command.type === "githubPublications.pending") &&
+        isRecord(input.command.input)) ||
+      (input.command.type === "githubPublications.unreported" &&
+        input.command.input === undefined) ||
       input.command.type === "acpSessions.list" ||
       input.command.type === "backup.runs" ||
       ((input.command.type === "restartSentinel.current" ||

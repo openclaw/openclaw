@@ -49,6 +49,20 @@ export type GitHubSessionReceiptIdentities = Record<
   }[]
 >;
 
+export type GitHubPublicationDeletedReceipt = {
+  kind: "personal" | "repository";
+  requestId: string;
+  requestDigest: string;
+  ownerProfileId: string | null;
+  sessionId: string;
+  sessionKey: string;
+  agentId: string;
+  idempotencyKey: string;
+  workspaceId: string | null;
+  branch: string;
+  pushRepository: RepositoryGitHubPublicationRow["push_repository"];
+};
+
 export type SharedGitHubPublicationReadInput = {
   kind: "repository" | "worktree";
   session: {

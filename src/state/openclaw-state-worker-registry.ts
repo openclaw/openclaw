@@ -40,12 +40,14 @@ import type {
   SkillCuratorOperations,
 } from "../skills/workshop/store.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
+import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
+  PublicationWorkerOperations &
   ConfigSnapshotWorkerOperations &
   DiagnosticWorkerOperations &
   RestartSentinelWorkerOperations &
@@ -90,6 +92,8 @@ export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  githubPublications: () =>
+    import("./github-publication.worker.js").then((m) => m.publicationOperations),
   config: () =>
     import("../config/config-journal-snapshot.worker.js").then((m) => m.configSnapshotOperations),
   diagnostic: () =>
