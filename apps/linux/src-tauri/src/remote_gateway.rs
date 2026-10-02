@@ -291,24 +291,28 @@ pub(crate) fn desktop_node_identity_scope(
     ))
 }
 
-fn is_private_host(host: &str) -> bool {
+pub(crate) fn is_private_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".local") || host.ends_with(".ts.net") {
         return true;
     }
-    match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(address)) => {
+    host.parse::<IpAddr>()
+        .is_ok_and(|address| is_private_address(&address))
+}
+
+pub(crate) fn is_private_address(address: &IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
             let [first, second, _, _] = address.octets();
             address.is_loopback()
                 || address.is_private()
                 || address.is_link_local()
                 || (first == 100 && (64..=127).contains(&second))
         }
-        Ok(IpAddr::V6(address)) => {
+        IpAddr::V6(address) => {
             let first = address.segments()[0];
             address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
         }
-        Err(_) => false,
     }
 }
 

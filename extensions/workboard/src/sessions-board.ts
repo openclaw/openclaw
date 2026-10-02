@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   WorkboardSessionFacts,
-  WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardView,
@@ -12,6 +11,7 @@ import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
+import type { WorkboardSessionPlacementWrite } from "./persistence-types.js";
 import {
   parseSessionPlacements,
   sessionFactsHash,
@@ -253,7 +253,7 @@ function createOwner(
     );
     const columns = new Set(board.sessions.columns.map((column) => column.id));
     const fallback = sessionsBoardFallback(board);
-    const writes: Array<WorkboardSessionPlacement & { expectedUpdatedAt?: number }> = [];
+    const writes: WorkboardSessionPlacementWrite[] = [];
     const needsModel: WorkboardSessionFacts[] = [];
     for (const session of facts) {
       const old = cached.get(session.key);
@@ -356,19 +356,17 @@ function createOwner(
         batch,
       );
       assertCurrent();
-      const modelWrites = batch.map(
-        (session): WorkboardSessionPlacement & { expectedUpdatedAt?: number } => {
-          const result = output.get(session.key) ?? { columnId: fallback.id, reason: "unresolved" };
-          return {
-            sessionKey: session.key,
-            ...result,
-            source: "model",
-            factsHash: `${state.specHash}:${sessionFactsHash(session)}`,
-            updatedAt: now(),
-            expectedUpdatedAt: cached.get(session.key)?.updatedAt,
-          };
-        },
-      );
+      const modelWrites = batch.map((session): WorkboardSessionPlacementWrite => {
+        const result = output.get(session.key) ?? { columnId: fallback.id, reason: "unresolved" };
+        return {
+          sessionKey: session.key,
+          ...result,
+          source: "model",
+          factsHash: `${state.specHash}:${sessionFactsHash(session)}`,
+          updatedAt: now(),
+          expectedUpdatedAt: cached.get(session.key)?.updatedAt,
+        };
+      });
       if (
         !(await params.store.writeSessionPlacements(id, modelWrites, {
           expectedSpec: board.sessions,

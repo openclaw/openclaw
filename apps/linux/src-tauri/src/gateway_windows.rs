@@ -739,7 +739,7 @@ impl Routing {
             .and_then(|route| route.document.as_ref())
             .map(|doc| doc.url.clone());
         let mut destination = source_url.clone();
-        let document_completion = self
+        let mut completion = self
             .windows
             .get(label)
             .and_then(|route| route.document.as_ref())
@@ -752,24 +752,10 @@ impl Routing {
                 .and_then(|(intent, _)| intent.source.clone()),
         );
         next.source_url = source_url;
-        if let Some((previous, completion)) = inherited {
+        if let Some((previous, inherited_completion)) = inherited {
             next.source_url = previous.source_url;
             destination = previous.navigation_url.or(destination);
-            if let Some(pending) = self
-                .windows
-                .get_mut(label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = completion;
-            }
-        } else if let Some(completion) = document_completion {
-            if let Some(pending) = self
-                .windows
-                .get_mut(label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = completion;
-            }
+            completion = Some(inherited_completion);
         }
         next.navigation_url =
             previous_base
@@ -786,6 +772,9 @@ impl Routing {
             .and_then(|route| route.pending.as_mut())
         {
             pending.intent = next.clone();
+            if let Some(completion) = completion {
+                pending.completion = completion;
+            }
         }
         next
     }
@@ -1146,13 +1135,7 @@ impl DocumentRegistration {
                 })
                 .unwrap_or((false, None));
             if let Some(intent) = replacement {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let label = intent.label.clone();
-                    if let Err(error) = select_intent(app.clone(), intent).await {
-                        show_error(&app, &label, &error);
-                    }
-                });
+                schedule_selection(app, intent);
             }
             allowed
         });
@@ -1388,13 +1371,7 @@ impl GatewayWindows {
             state.select_primary(url, auth_script, accepted, ownership)
         };
         for intent in reconnects {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let label = intent.label.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    show_error(&app, &label, &error);
-                }
-            });
+            schedule_selection(app, intent);
         }
         self.publish(app);
         Ok(selection)
@@ -1434,13 +1411,7 @@ impl GatewayWindows {
             })?
         };
         for intent in reconnects {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let label = intent.label.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    show_error(&app, &label, &error);
-                }
-            });
+            schedule_selection(app, intent);
         }
         self.publish(app);
         Ok(())
@@ -2092,6 +2063,16 @@ async fn select(
     }
 }
 
+fn schedule_selection(app: &AppHandle, intent: Intent) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let label = intent.label.clone();
+        if let Err(error) = select_intent(app.clone(), intent).await {
+            show_error(&app, &label, &error);
+        }
+    });
+}
+
 async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     let preparing_app = app.clone();
     let preparing_intent = intent.clone();
@@ -2166,10 +2147,8 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     .await;
     let leftover = pending.lock().map_err(|_| STALE)?.take();
     retire_tunnel(&app, leftover);
-    if result.is_err() {
-        if let Err(error) = &result {
-            report_selection_failure(&app, &cleanup, error).await;
-        }
+    if let Err(error) = &result {
+        report_selection_failure(&app, &cleanup, error).await;
         cancel_intent(&app, &cleanup);
     }
     result
@@ -3254,13 +3233,7 @@ pub(crate) async fn gateway_profile_request(
     })
     .await?;
     for intent in reconnects {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let label = intent.label.clone();
-            if let Err(error) = select_intent(app.clone(), intent).await {
-                show_error(&app, &label, &error);
-            }
-        });
+        schedule_selection(&app, intent);
     }
     Ok(result)
 }

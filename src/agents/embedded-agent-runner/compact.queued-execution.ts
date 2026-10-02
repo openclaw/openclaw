@@ -10,10 +10,6 @@ import {
   type OwnedSessionTranscriptWriteContext,
 } from "../../config/sessions/transcript-write-context.js";
 import {
-  bindContextEngineCompaction,
-  inheritRuntimeCompactionDelegate,
-} from "../../context-engine/compaction-watchdog.js";
-import {
   resolveCompactionSuccessorTranscript,
   type ContextEngine,
   type ContextEngineRuntimeContext,
@@ -324,16 +320,15 @@ export async function executeQueuedContextEngineCompaction(input: {
         return createQueuedCompactionAbortedResult();
       }
       await assertActive();
-      // Preserve the delegate's progress-aware watchdog and bound other engines.
+      // Every engine gets one host window; the runtime delegate refreshes it per stage.
       // Queued callers keep result-based failures; recovery rejects cancellation.
       let result: Awaited<ReturnType<typeof contextEngine.compact>>;
       let committedCompaction: CompactionAccountingReceipt | undefined;
       try {
         const compactionSessionTarget = projectQueuedCompactionSessionTarget(params);
-        const compact = bindContextEngineCompaction(contextEngine);
         const ownedCompactor: Pick<ContextEngine, "compact" | "info"> = {
           info: contextEngine.info,
-          compact: inheritRuntimeCompactionDelegate(compact, async (backendParams) => {
+          compact: async (backendParams) => {
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: host.requestBudget,
@@ -358,9 +353,9 @@ export async function executeQueuedContextEngineCompaction(input: {
               host.withCompactionPersistenceAsync,
             );
             return withOwnedSessionTranscriptWrites(writeContext, () =>
-              compact(backendParams),
+              contextEngine.compact(backendParams),
             ).finally(clearClaim);
-          }),
+          },
         };
         result = await compactContextEngineWithSafetyTimeout(
           ownedCompactor,

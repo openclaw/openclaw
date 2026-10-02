@@ -661,6 +661,47 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
   );
 });
 
+describe("generateSummary progress updates", () => {
+  it("asks to keep completed checks distinct from unresolved blockers", async () => {
+    const completeSimple = vi.fn(async () => createAssistant("summary", createUsage(1), 4));
+    const result = await generateSummary(
+      [
+        { role: "user", content: "Check whether the release is approved.", timestamp: 1 },
+        {
+          ...createAssistant("", createUsage(0), 2),
+          content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "check",
+          toolName: "verify",
+          content: [{ type: "text", text: "Verification FAILED: missing release approval." }],
+          isError: true,
+          timestamp: 3,
+        },
+      ],
+      createSummaryModel(),
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Release approval check: pending.",
+      undefined,
+      undefined,
+      { completeSimple },
+    );
+
+    expect(result.ok).toBe(true);
+    const request = JSON.stringify(completeSimple.mock.calls);
+    expect(request).toContain("Release approval check: pending.");
+    expect(request).toContain("Verification FAILED: missing release approval.");
+    expect(request).toContain("Record checks that ran and their results as completed");
+    expect(request).toContain("keep unresolved blockers separate");
+  });
+});
+
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
     const model = createSummaryModel();

@@ -210,8 +210,11 @@ private struct AgentScopedNavigationTransport: OpenClawChatTransport {
     {
         await self.base.recordSend(.init(sessionKey: sessionKey, agentID: self.agentID))
         return try await self.base.sendMessage(
-            sessionKey: sessionKey, message: message, thinking: thinking,
-            idempotencyKey: idempotencyKey, attachments: attachments)
+            sessionKey: sessionKey,
+            message: message,
+            thinking: thinking,
+            idempotencyKey: idempotencyKey,
+            attachments: attachments)
     }
 
     func requestHealth(timeoutMs _: Int) async throws -> Bool {
@@ -251,6 +254,52 @@ private final class AgentNavigationFixture {
 
 @MainActor
 struct ChatViewModelAgentNavigationTests {
+    @Test(arguments: [ChatSessionBatchAction.archive, .delete])
+    func `cross-agent batches protect the owning Home and mutate ordinary threads`(
+        action: ChatSessionBatchAction) async throws
+    {
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[
+          {"key":"agent:research:inbox","agentId":"research","sessionId":"home"},
+          {"key":"agent:research:plan","agentId":"research","sessionId":"plan"}
+        ]}
+        """#.utf8)).sessions
+        let transport = AgentNavigationTransport(catalogs: [.success(self.catalog())])
+        let fixture = AgentNavigationFixture(
+            transport: transport, sessionKey: "agent:main:current", routingContract: "per-agent|inbox|main")
+        defer { fixture.close() }
+        let model = fixture.viewModel
+
+        let result = await model.performSessionBatch(sessions: rows, action: action)
+
+        #expect(result.succeededKeys == ["agent:research:plan"])
+        #expect(Set(result.errorsByKey.keys) == ["agent:research:inbox"])
+        #expect(await transport.mutationRequests.map { $0.params["key"]?.value as? String } == [
+            "agent:research:plan",
+        ])
+        #expect(model.sessionKey == "agent:main:current")
+    }
+
+    @Test func `agent management lists another owner without navigating or replacing the draft`() async throws {
+        let rows = try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
+        {"sessions":[{"key":"agent:research:plan","agentId":"research","sessionId":"plan"}]}
+        """#.utf8)).sessions
+        let transport = AgentNavigationTransport(
+            catalogs: [.success(self.catalog())],
+            sessionsByAgentID: ["research": rows])
+        let fixture = AgentNavigationFixture(transport: transport, sessionKey: "agent:main:current")
+        defer { fixture.close() }
+        let model = fixture.viewModel
+        model.input = "Keep this draft"
+        let result = await model.fetchSessionList(search: nil, archived: false, agentID: "research")
+        #expect(result.map(\.key) == ["agent:research:plan"])
+        #expect(await transport.listedAgentIDs.last == "research")
+        #expect(model.sessionKey == "agent:main:current")
+        #expect(model.input == "Keep this draft")
+        _ = await model.fetchSessionList(search: nil, archived: false)
+        #expect(await transport.listedAgentIDs.last == "main")
+    }
+
     private func globalSession(owner: String) -> OpenClawChatSessionEntry {
         var entry = OpenClawChatSessionEntry(key: "global")
         entry.agentId = owner
@@ -268,7 +317,8 @@ struct ChatViewModelAgentNavigationTests {
             sessionRoutingContract: contract)
     }
 
-    @Test func `sequential global activations acknowledge their owners and preserve manual unread marks`() async throws {
+    @Test
+    func `sequential global activations acknowledge their owners and preserve manual unread marks`() async throws {
         let contract = "global|inbox|main"
         let transport = AgentNavigationTransport(
             catalogs: [.success(self.catalog(contract: contract))],
@@ -314,9 +364,13 @@ struct ChatViewModelAgentNavigationTests {
         vm.load()
         try await waitUntil("canonical global row loaded") { await MainActor.run { !vm.isLoading } }
         let sections = ChatSessionSidebarModel.sections(
-            sessions: vm.sessions, currentSessionKey: vm.sessionKey,
-            mainSessionKey: vm.selectedAgentMainSessionKey, activeAgentID: vm.selectedAgentID,
-            excludesMainSession: hasHomeRow, query: "", sessionRoutingContract: contract)
+            sessions: vm.sessions,
+            currentSessionKey: vm.sessionKey,
+            mainSessionKey: vm.selectedAgentMainSessionKey,
+            activeAgentID: vm.selectedAgentID,
+            excludesMainSession: hasHomeRow,
+            query: "",
+            sessionRoutingContract: contract)
         let rows = sections.flatMap(\.nodes).map(\.session)
         #expect(rows.map(\.key) == (hasHomeRow ? [] : ["global"]))
         if !hasHomeRow {
@@ -324,8 +378,10 @@ struct ChatViewModelAgentNavigationTests {
             #expect(sections.first?.id == "pinned")
         }
         #expect(ChatSessionSidebarModel.selectedSessionKey(
-            sessions: vm.sessions, currentSessionKey: vm.sessionKey,
-            mainSessionKey: vm.selectedAgentMainSessionKey, activeAgentID: vm.selectedAgentID,
+            sessions: vm.sessions,
+            currentSessionKey: vm.sessionKey,
+            mainSessionKey: vm.selectedAgentMainSessionKey,
+            activeAgentID: vm.selectedAgentID,
             sessionRoutingContract: contract) == "global")
     }
 

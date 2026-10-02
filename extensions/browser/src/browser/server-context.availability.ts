@@ -1,7 +1,3 @@
-/**
- * Browser profile availability operations: reachability probes, managed Chrome
- * launch/restart, Chrome MCP attach, and profile stop handling.
- */
 import fs from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import {
@@ -135,7 +131,6 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
   );
 }
 
-/** Builds reachability, ensure, and stop operations for one resolved browser profile. */
 export function createProfileAvailability({
   opts,
   profile,
@@ -555,7 +550,6 @@ export function createProfileAvailability({
       return;
     }
 
-    // Port is reachable - check if we own it.
     if (await isReachable(undefined, { signal })) {
       runtime.managedLaunchFailure = undefined;
       return;

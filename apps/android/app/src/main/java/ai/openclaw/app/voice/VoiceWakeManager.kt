@@ -1,19 +1,18 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.hasPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeText
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -243,7 +242,7 @@ internal class VoiceWakeManager(
   private val onCommand: suspend (VoiceWakeMatch) -> Boolean,
   private val restartDelayMs: Long = 350L,
   private val hasRecordAudioPermission: () -> Boolean = {
-    ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    context.hasPermission(Manifest.permission.RECORD_AUDIO)
   },
 ) {
   private sealed interface RecognizerAction {

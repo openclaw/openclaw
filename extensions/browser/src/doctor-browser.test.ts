@@ -1,9 +1,6 @@
 // Browser tests cover doctor browser plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import {
-  maybeArchiveLegacyClawdBrowserProfileResidue,
-  noteChromeMcpBrowserReadiness,
-} from "./doctor-browser.js";
+import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
 
 const managedBrowserConfig = {
   browser: {
@@ -117,49 +114,6 @@ describe("browser doctor readiness", () => {
       ].join("\n"),
       "Browser",
     );
-  });
-
-  it("warns about legacy clawd managed browser profile residue", async () => {
-    const noteFn = vi.fn();
-    const configDir = "/tmp/openclaw-home";
-
-    await noteChromeMcpBrowserReadiness(managedBrowserConfig, {
-      noteFn,
-      ...managedHost,
-      configDir,
-      pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
-    });
-
-    expect(noteFn).toHaveBeenCalledTimes(1);
-    const note = requireFirstNoteText(noteFn);
-    expect(note).toContain("Legacy managed browser profile residue");
-    expect(note).toContain("/tmp/openclaw-home/browser/clawd");
-    expect(note).toContain("/tmp/openclaw-home/browser/openclaw/user-data");
-    expect(note).toContain("openclaw doctor --fix");
-  });
-
-  it("does not warn when clawd is still configured as a browser profile", async () => {
-    const noteFn = vi.fn();
-
-    await noteChromeMcpBrowserReadiness(
-      {
-        browser: {
-          extensionRelay: { allowLegacyAuth: false },
-          profiles: {
-            clawd: { cdpPort: 18801 },
-            openclaw: { cdpPort: 18800 },
-          },
-        },
-      },
-      {
-        noteFn,
-        ...managedHost,
-        configDir: "/tmp/openclaw-home",
-        pathExists: () => true,
-      },
-    );
-
-    expect(noteFn).not.toHaveBeenCalled();
   });
 
   it("warns when Chrome MCP is configured but Chrome is missing", async () => {
@@ -470,56 +424,5 @@ describe("browser doctor readiness", () => {
     expect(noteFn).toHaveBeenCalled();
     const note = requireNoteTextContaining(noteFn, "explicit Chromium user data directory");
     expect(note).toContain("brave://inspect/#remote-debugging");
-  });
-});
-
-describe("legacy clawd browser profile cleanup", () => {
-  it("archives stale clawd residue with the safe trash mover", async () => {
-    const movePathToTrash = vi.fn(async () => "/tmp/openclaw-home/browser/.trash/clawd");
-
-    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
-      {
-        browser: {
-          profiles: {
-            openclaw: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        configDir: "/tmp/openclaw-home",
-        pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
-        movePathToTrash,
-      },
-    );
-
-    expect(movePathToTrash).toHaveBeenCalledWith("/tmp/openclaw-home/browser/clawd");
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes.join("\n")).toContain(
-      "Archived legacy clawd managed browser profile residue.",
-    );
-    expect(result.changes.join("\n")).toContain("/tmp/openclaw-home/browser/openclaw/user-data");
-  });
-
-  it("does not archive a configured clawd browser profile", async () => {
-    const movePathToTrash = vi.fn(async () => "/tmp/unused");
-
-    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
-      {
-        browser: {
-          defaultProfile: "clawd",
-          profiles: {
-            clawd: { color: "#FF4500" },
-          },
-        },
-      },
-      {
-        configDir: "/tmp/openclaw-home",
-        pathExists: () => true,
-        movePathToTrash,
-      },
-    );
-
-    expect(movePathToTrash).not.toHaveBeenCalled();
-    expect(result).toStrictEqual({ changes: [], warnings: [] });
   });
 });
