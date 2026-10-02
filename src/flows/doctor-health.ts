@@ -348,6 +348,9 @@ async function runDoctorHealthFlowWithResult(
         for (const change of backups.changes) {
           effectiveRuntime.log(change);
         }
+        for (const warning of backups.warnings) {
+          effectiveRuntime.log(warning);
+        }
       }
 
       const { repairDoctorAgentDeletionJournal } =
@@ -460,7 +463,12 @@ async function runDoctorHealthFlowWithResult(
         const { assertDoctorMaintenanceReady } =
           await import("../commands/doctor-maintenance-inspection.js");
         const readiness = await measureGatewayBootstrapStep("doctor.maintenance-ready", () =>
-          assertDoctorMaintenanceReady(ctx.cfg, process.env, effectiveRuntime.log),
+          assertDoctorMaintenanceReady(
+            ctx.cfg,
+            process.env,
+            effectiveRuntime.log,
+            admissionSchemas.agentDatabaseMigrationDiscovery?.discovery.targets ?? [],
+          ),
         );
         if (!readiness.schemaPublicationDeferred) {
           resumeCapture?.();

@@ -18,7 +18,8 @@ import {
 } from "./auth.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { warnLegacyOpenClawEnvVars } from "./env-deprecation.js";
-import { commitHooksConfigReload, resolveHooksConfig } from "./hooks.js";
+import { commitHookTransformMappingReload } from "./hooks-mapping.js";
+import { resolveHooksConfig } from "./hooks.js";
 import {
   defaultGatewayBindMode,
   isLoopbackHost,
@@ -209,7 +210,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   };
   assertGatewayRuntimeSecurityConfig({ ...runtimeConfig, cfg: params.cfg, port: params.port });
   if (hooksConfig) {
-    commitHooksConfigReload();
+    commitHookTransformMappingReload();
   }
   return runtimeConfig;
 }

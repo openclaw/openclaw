@@ -235,6 +235,10 @@ to start a replacement session.
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
+Archive discovery uses the selected store, recorded transcript paths, and agent
+directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
+implicit fallback; explicitly configured paths still work.
+
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:
 

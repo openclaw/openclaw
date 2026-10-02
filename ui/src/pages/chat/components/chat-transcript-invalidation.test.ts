@@ -9,6 +9,7 @@ import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -279,17 +280,33 @@ describe("chat transcript invalidation", () => {
       },
     );
 
-    it("retains visible inactive video previews, releases hidden rows and restores them on return", async () => {
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-      props.transcriptVisible = false;
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeNull();
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
-      props.transcriptVisible = true;
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-    });
+    it.each(["rendered", "parked"] as const)(
+      "retains inactive previews and releases hidden rows with a %s parent",
+      async (parent) => {
+        const owner = new EventTarget();
+        let visible = true;
+        if (parent === "parked") {
+          props.transcriptPresentation = { owner, isPresented: () => visible };
+        }
+        await renderPreview();
+        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+        if (parent === "parked") {
+          visible = false;
+          owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+          resetTranscriptSession(props.paneId, container);
+        } else {
+          props.transcriptVisible = false;
+          await renderPreview();
+        }
+        expect(container.querySelector(".chat-video-preview img")).toBeNull();
+        expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
+        visible = true;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        props.transcriptVisible = true;
+        await renderPreview();
+        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      },
+    );
   });
 
   it("updates persisted named references when the connection catalog changes without transcript edits", () => {

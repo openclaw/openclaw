@@ -5,8 +5,11 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { ensureSessionGroupCatalog } from "../../gateway/session-group-catalog.js";
-import { ensureSessionGroupRegistered, listSessionGroups } from "../../gateway/session-groups.js";
+import {
+  ensureSessionGroupCatalog,
+  readSessionGroupCatalog,
+} from "../../gateway/session-group-catalog.js";
+import { ensureSessionGroupRegistered } from "../../gateway/session-groups.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
 import { acquireStateDatabaseSchemaLease } from "../../infra/gateway-state-owner.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -188,7 +191,7 @@ it("creates with prepared label facts, header and atomic owner without host data
     });
     expect(readTranscriptStorageRows(database, "created")).toHaveLength(1);
     await ensureSessionGroupCatalog();
-    expect(listSessionGroups().map(({ name }) => name)).toContain("Created");
+    expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toContain("Created");
   });
 });
 

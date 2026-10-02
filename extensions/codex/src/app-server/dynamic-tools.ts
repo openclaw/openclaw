@@ -99,7 +99,10 @@ type CodexDynamicToolHookContext = CodexDynamicToolHookContextBase & {
   sourceReplyDeliveryMode?: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
 };
 
-type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
+type CodexToolResultHookContext = Pick<
+  CodexDynamicToolHookContext,
+  "agentId" | "sessionId" | "sessionKey" | "runId" | "channelId"
+>;
 
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERRORS = 4;
 const MAX_CODEX_DYNAMIC_TOOL_VALIDATION_ERROR_CHARS = 160;
@@ -597,11 +600,7 @@ export function createCodexDynamicToolBridge(params: {
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
-            runId: toolResultHookContext.runId,
-            agentId: toolResultHookContext.agentId,
-            sessionId: toolResultHookContext.sessionId,
-            sessionKey: toolResultHookContext.sessionKey,
-            channelId: toolResultHookContext.channelId,
+            ...toolResultHookContext,
             startArgs: executedArgs,
             result,
             startedAt,
@@ -727,11 +726,7 @@ export function createCodexDynamicToolBridge(params: {
           void runAgentHarnessAfterToolCallHook({
             toolName,
             toolCallId: call.callId,
-            runId: toolResultHookContext.runId,
-            agentId: toolResultHookContext.agentId,
-            sessionId: toolResultHookContext.sessionId,
-            sessionKey: toolResultHookContext.sessionKey,
-            channelId: toolResultHookContext.channelId,
+            ...toolResultHookContext,
             startArgs: executedArgs,
             error: errorMessage,
             startedAt,

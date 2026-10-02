@@ -15,11 +15,9 @@ import {
   type WorkerPlacementRunnerAvailabilityReader,
   type WorkerPlacementRuntimeInstallReader,
 } from "../worker-environments/placement-projector.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerEnvironmentServiceContract } from "../worker-environments/service-contract.js";
-import {
-  canRedispatchFailedWorkerPlacement,
-  isFailedWorkerPlacementEnvironmentGone,
-} from "../worker-environments/session-placement-lifecycle.js";
+import { canRedispatchFailedWorkerPlacement } from "../worker-environments/session-placement-lifecycle.js";
 
 type PlacementReadContext = {
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;

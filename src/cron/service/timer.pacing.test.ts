@@ -157,7 +157,7 @@ describe("cron dynamic cadence", () => {
     applyOutcomeToAuthoritativeJob(
       state,
       job,
-      authorCronRunCompletion(state, admittedJob, {
+      authorCronRunCompletion(admittedJob, {
         jobId: job.id,
         job: admittedJob,
         status: "ok",

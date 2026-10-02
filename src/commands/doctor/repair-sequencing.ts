@@ -19,7 +19,10 @@ import {
 } from "../../plugins/plugin-metadata-snapshot.js";
 import { repairMergedGatewayOwnerProfile } from "../../state/user-profiles-owner-migration.js";
 import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profiles-tailscale-migration.js";
-import { collectOpenAICodexAuthProfileStoreIdMap } from "../doctor-auth-flat-profiles.js";
+import {
+  collectOpenAICodexAuthProfileStoreIdMap,
+  maybeRepairLegacyAuthProfileStores,
+} from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
 import { maybeRepairPluginOpenClawHostLinks } from "../doctor-plugin-host-links.js";
 import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
@@ -177,6 +180,13 @@ export async function runDoctorRepairSequence(params: {
     env,
     prompter: { shouldRepair: true },
   });
+  // Later auth diagnostics and session repairs consume only canonical credentials.
+  const authFieldRepair = await maybeRepairLegacyAuthProfileStores({
+    cfg: state.candidate,
+    env,
+    profileIdMap: new Map(),
+  });
+  appendRepairNotes(authFieldRepair);
   const codexRouteRepair = runWithCurrentPluginMetadata(() =>
     maybeRepairCodexRoutes({
       cfg: state.candidate,
@@ -380,6 +390,7 @@ export async function runDoctorRepairSequence(params: {
     warningNotes.push("Model retirement deferred until configured plugin installation converges.");
   }
   const authProfilesRepaired =
+    authFieldRepair.changes.length > 0 ||
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
     authRepair.storeChanges.length > 0;

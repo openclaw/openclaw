@@ -16,8 +16,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyNativeCompilerPackage } from "./native-boundary-fixture.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
@@ -818,11 +818,11 @@ describe("frozen bundle committed contract", () => {
               : path.join(tooling, "node_modules/typescript");
     if (shape !== "missing" && shape !== "authorization off" && !unpinned) {
       const installedParser = createRequire(import.meta.url).resolve("typescript/package.json");
-      copyNativeCompilerPackage(path.dirname(installedParser), parser);
+      copyTreeCloseOnExec(path.dirname(installedParser), parser, { dereference: true });
       const executableParser =
         shape === "nested parser" ? path.join(lib, "node_modules/typescript") : parser;
       if (shape === "nested parser") {
-        copyNativeCompilerPackage(parser, executableParser);
+        copyTreeCloseOnExec(parser, executableParser, { dereference: true });
       }
       if (shape !== "owned pnpm") {
         for (const entry of ["dist/api/sync/api.js", "dist/api/fs.js", "dist/ast/index.js"]) {
@@ -858,7 +858,7 @@ describe("frozen bundle committed contract", () => {
         const installedNative = createRequire(installedParser).resolve(
           `${nativeName}/package.json`,
         );
-        copyNativeCompilerPackage(path.dirname(installedNative), nativePackage);
+        copyTreeCloseOnExec(path.dirname(installedNative), nativePackage, { dereference: true });
         if (shape === "owned pnpm" || shape === "native donor link") {
           const nativeLink = path.join(
             shape === "owned pnpm" ? path.dirname(parser) : path.join(tooling, "node_modules"),

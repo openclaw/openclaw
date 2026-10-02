@@ -1327,7 +1327,7 @@ console.log("relocated Bash parser works without native grammar package");
         throw new Error("worker deploy config must define dependency bundling");
       }
       expect(alwaysBundle("json5", undefined)).toBe(true);
-      expect(alwaysBundle("node:fs", undefined)).toBe(false);
+      expect(config?.platform).toBe("node");
       expect(config?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
     }
   });

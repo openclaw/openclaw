@@ -17,8 +17,8 @@ import { ActiveTurnClaimError, type createPlacementTurnClaimOps } from "./placem
 import type {
   PlacementTurnClaimCurrentCheck,
   PlacementTurnClaimReceipt,
-  PlacementTurnClaimWorkerOperations,
-} from "./placement-turn-claims.worker-contract.js";
+} from "./placement-turn-claims.types.js";
+import type { PlacementTurnClaimWorkerOperations } from "./placement-turn-claims.worker-contract.js";
 import { createPlacementWorkerMutation } from "./placement-worker-mutation.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 

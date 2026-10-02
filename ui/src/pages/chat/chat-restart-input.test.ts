@@ -305,6 +305,7 @@ describe("accepted input restart handoff", () => {
     expect(host.request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ pendingBefore: 21 }),
+      { timeoutMs: 30_000 },
     );
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });

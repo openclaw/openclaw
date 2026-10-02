@@ -298,6 +298,69 @@ describe("pairing setup code", () => {
     });
   });
 
+  it.each([undefined, "", "/", "/gateway", " gateway/ "])(
+    "uses the Control UI base path %j for local setup URLs",
+    async (basePath) => {
+      const resolved = await resolvePairingSetupFromConfig(
+        gatewayConfig({
+          bind: "custom",
+          customBindHost: "127.0.0.1",
+          controlUi: { basePath },
+        }),
+        { env: {} },
+      );
+      expect(resolved.ok && resolved.payload.url).toBe(
+        `ws://127.0.0.1:18789${basePath?.includes("gateway") ? "/gateway" : ""}`,
+      );
+    },
+  );
+
+  it.each(["https://gateway.example:8444", "https://gateway.example:8444/proxy"])(
+    "uses the configured public URL %s without losing or duplicating its path",
+    async (publicUrl) => {
+      const resolved = await resolvePairingSetupFromConfig({
+        ...gatewayConfig({ bind: "loopback", controlUi: { basePath: "/gateway" } }),
+        plugins: { entries: { "device-pair": { config: { publicUrl } } } },
+      });
+      expect(resolved.ok && resolved.payload.url).toBe(
+        `wss://gateway.example:8444${publicUrl.endsWith("/proxy") ? "/proxy" : "/gateway"}`,
+      );
+    },
+  );
+
+  it.each(["wss://override.example", "wss://override.example/proxy"])(
+    "leaves the explicit setup URL %s authoritative over the local base path",
+    async (publicUrl) => {
+      const resolved = await resolvePairingSetupFromConfig(
+        gatewayConfig({ controlUi: { basePath: "/gateway" } }),
+        { publicUrl },
+      );
+      expect(resolved.ok && resolved.payload.url).toBe(publicUrl);
+    },
+  );
+
+  it.each([
+    [{ tailscale: { mode: "serve" as const } }, "wss://mb-server.tailnet.ts.net/gateway"],
+    [{ publicOrigin: "https://gateway.example" }, "wss://gateway.example/gateway"],
+  ])("includes the Control UI path in discovered setup URLs %j", async (gateway, url) => {
+    const resolved = await resolvePairingSetupFromConfig(
+      gatewayConfig({ bind: "loopback", controlUi: { basePath: "/gateway" }, ...gateway }),
+      { runCommandWithTimeout: createTailnetDnsRunner() },
+    );
+    expect(resolved.ok && resolved.payload.url).toBe(url);
+  });
+
+  it("does not apply the local Control UI path to a remote gateway", async () => {
+    const resolved = await resolvePairingSetupFromConfig(
+      gatewayConfig({
+        controlUi: { basePath: "/gateway" },
+        remote: { url: "wss://remote.example" },
+      }),
+      { preferRemoteUrl: true },
+    );
+    expect(resolved.ok && resolved.payload.url).toBe("wss://remote.example");
+  });
+
   it("issues a node-only bootstrap profile for companion setup", async () => {
     await expectResolvedSetupSuccessCase({
       config: createCustomGatewayConfig({ mode: "token", token: "tok_123" }),

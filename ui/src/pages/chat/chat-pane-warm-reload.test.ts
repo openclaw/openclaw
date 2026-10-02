@@ -3,6 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { IDBFactory } from "fake-indexeddb";
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadSettings } from "../../app/settings.ts";
 import { transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createGatewayRequestMock } from "../../test-helpers/gateway-client.ts";
@@ -26,6 +27,7 @@ import {
   openSessionSnapshotDatabase,
 } from "./session-snapshot-database.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.ts";
 
@@ -61,7 +63,13 @@ describe("chat pane warm reload", () => {
         pagination: { hasMore: false, completeSnapshot: true } as const,
         sessionId: "warm-reload-session",
       };
-      writer.write(sessionKey, snapshot);
+      writer.write(
+        resolveChatSnapshotKey(
+          { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+          { sessionKey },
+        ),
+        snapshot,
+      );
       await writer.flush();
       if (legacy) {
         const database = await openSessionSnapshotDatabase();
@@ -73,7 +81,10 @@ describe("chat pane warm reload", () => {
         transaction.objectStore(CHAT_SNAPSHOT_STORE_NAME).put({
           savedAt: Date.now(),
           sessionId: snapshot.sessionId,
-          sessionKey,
+          sessionKey: resolveChatSnapshotKey(
+            { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
+            { sessionKey },
+          ),
           snapshot,
         });
         await completed;
@@ -87,7 +98,12 @@ describe("chat pane warm reload", () => {
       const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
       vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
       vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
-      const context = createInitializationContext();
+      const context = createInitializationContext(
+        createGatewayBrowserClientFixture({
+          offlineRecoveryScope: "test-recovery-scope",
+          recoveryScopeReady: false,
+        }),
+      );
       context.gateway.snapshot.phase = "connecting";
       pane.context = { ...context, sessions: createTestSessionCapability(context.gateway) };
       pane.sessionKey = sessionKey;
@@ -138,7 +154,11 @@ describe("chat pane warm reload", () => {
           expect(container.textContent).toContain("The browser remembers this conversation.");
         }
         await store.flush();
-        const rewritten = legacy ? await new SessionSnapshotStore().read(sessionKey) : null;
+        const rewritten = legacy
+          ? await new SessionSnapshotStore().read(
+              resolveChatSnapshotKey(pane.state, { sessionKey }),
+            )
+          : null;
 
         pane.state.client = client;
         pane.state.connected = true;
@@ -162,7 +182,7 @@ describe("chat pane warm reload", () => {
           legacy
             ? expect.not.objectContaining({ cursor: expect.anything() })
             : expect.objectContaining({ sessionKey, cursor: "warm-reload-cursor" }),
-          { signal: expect.any(AbortSignal) },
+          { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         );
         if (legacy) {
           expect(rewritten).toEqual({
@@ -175,7 +195,7 @@ describe("chat pane warm reload", () => {
         expect(request).toHaveBeenLastCalledWith(
           "chat.startup",
           expect.objectContaining({ sessionKey, cursor: "warm-reload-next-cursor" }),
-          { signal: expect.any(AbortSignal) },
+          { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
         );
         expect(pane.state.chatMessages).toEqual(legacy ? currentMessages : messages);
       } finally {
