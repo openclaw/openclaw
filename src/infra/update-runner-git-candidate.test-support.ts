@@ -512,3 +512,38 @@ export async function expectNoGitRuntimeStagingPaths(root: string, inspectionRoo
     ),
   ).toEqual([]);
 }
+
+export async function assertCandidateCommandEnvironment(params: {
+  root: string;
+  directory: string;
+  advanceRemote: () => Promise<string>;
+  runCommand: CommandRunner;
+  setRunCommand: (command: CommandRunner) => void;
+  update: (options: Partial<UpdateRunnerOptions>) => Promise<UpdateRunResult>;
+}) {
+  vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", params.root);
+  const inheritedPath = `${path.join(params.directory, "other-tools")}${path.delimiter}${process.env.PATH ?? ""}`;
+  vi.stubEnv("PATH", inheritedPath);
+  const nodeRuntime = await resolveCandidateNodeRuntimeForTest();
+  await params.advanceRemote();
+  let built = false;
+  let exposed = false;
+  params.setRunCommand(async (argv, options) => {
+    if (argv[0] === "pnpm" && argv[1] === "build") {
+      built = true;
+      expect(options.env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(options.cwd);
+      expect(options.env?.PATH?.split(path.delimiter)[0]).toBe(path.dirname(nodeRuntime.path));
+    }
+    return params.runCommand(argv, options);
+  });
+  const result = await params.update({
+    prepareGitExposure: async (candidateRoot, _sha, env) => {
+      exposed = true;
+      expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+    },
+  });
+  expect(result.status).toBe("ok");
+  expect(built && exposed).toBe(true);
+  expect(process.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(params.root);
+  expect(process.env.PATH).toBe(inheritedPath);
+}

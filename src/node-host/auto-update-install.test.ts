@@ -36,7 +36,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   runCommandWithTimeout: mocks.command,
 }));
 vi.mock("../infra/update-runner-git-node-preflight.js", () => ({
-  checkGitCandidateNodeRuntime: async () => null,
+  prepareGitCandidateNodeRuntime: async () => ({}),
 }));
 vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: async () => ({ incompatible: [], indeterminate: [] }),
