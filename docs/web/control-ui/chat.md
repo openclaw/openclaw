@@ -278,8 +278,10 @@ unchanged; click a title to rename it.
 Worktree creation waits up to 30 seconds for a title, then proceeds while naming
 finishes in the background. A late title still updates the session without
 renaming its existing Git branch. Concurrent naming requests share the same work;
-if that request fails, a waiting dashboard request retries once. If both model
-routes fail, the session uses a two-word crustacean-themed name.
+if that request fails, a waiting dashboard request retries once. Naming starts
+when the first reply begins; if it fails while that reply is still running, as on
+a model server that handles one request at a time, it retries once after the turn
+ends. If both model routes fail, the session uses a two-word crustacean-themed name.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers stay visible outside collapsed work, including when a later Gateway notice arrives. The completed response footer keeps the final answer's timestamp when earlier tool activity is restored after a reload. Expand a tool row to inspect its command, path, or query. Inspect subagent status from the parent conversation with `/subagents list` and `/subagents info <id|#>`, or read recent child messages with `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 

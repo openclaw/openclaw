@@ -108,6 +108,8 @@ type SessionTitleParams = {
   withSource?: WorktreeSourceStage;
   retryFailedJoin?: boolean;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Settles with the turn this title overlapped; a failed label retries once after it. */
+  retryAfter?: Promise<void>;
 };
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
@@ -170,6 +172,7 @@ async function generateDashboardSessionTitle(params: {
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  retryAfter?: Promise<void>;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
@@ -198,33 +201,48 @@ async function generateDashboardSessionTitle(params: {
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
   });
-  try {
-    const { generateConversationLabelWithFallback } =
-      await import("../auto-reply/reply/conversation-label-generator.js");
-    params.assertCurrent?.();
-    params.abortSignal?.throwIfAborted();
-    const generated = await generateConversationLabelWithFallback({
-      userMessage: sourceText,
-      prompt: DASHBOARD_SESSION_TITLE_PROMPT,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
-      ...(utilityModelRef ? { utilityModelRef } : {}),
-      regularModelRef,
-      ...(preferredProfile ? { preferredProfile } : {}),
-      normalizeLabel: normalizeDashboardSessionTitle,
-      maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
-      abortSignal: params.abortSignal,
-      assertCurrent: params.assertCurrent,
-      operatorAuthority: params.operatorAuthority,
-      ...(params.utilityOnly ? { utilityOnly: true } : {}),
-    });
-    if (generated) {
-      return normalizeDashboardSessionTitle(generated);
+  const generateLabel = async (): Promise<string | null> => {
+    try {
+      const { generateConversationLabelWithFallback } =
+        await import("../auto-reply/reply/conversation-label-generator.js");
+      params.assertCurrent?.();
+      params.abortSignal?.throwIfAborted();
+      const generated = await generateConversationLabelWithFallback({
+        userMessage: sourceText,
+        prompt: DASHBOARD_SESSION_TITLE_PROMPT,
+        cfg: params.cfg,
+        agentId: params.agentId,
+        ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+        ...(utilityModelRef ? { utilityModelRef } : {}),
+        regularModelRef,
+        ...(preferredProfile ? { preferredProfile } : {}),
+        normalizeLabel: normalizeDashboardSessionTitle,
+        maxLength: DASHBOARD_SESSION_TITLE_MAX_CHARS,
+        abortSignal: params.abortSignal,
+        assertCurrent: params.assertCurrent,
+        operatorAuthority: params.operatorAuthority,
+        ...(params.utilityOnly ? { utilityOnly: true } : {}),
+      });
+      if (generated) {
+        return normalizeDashboardSessionTitle(generated);
+      }
+    } catch {
+      params.assertCurrent?.();
+      params.abortSignal?.throwIfAborted();
     }
-  } catch {
+    return null;
+  };
+  let title = await generateLabel();
+  // A model that serves one request at a time queues this label behind the reply it
+  // overlapped, so the label can time out before that slot frees. Retry once after it.
+  if (!title && params.retryAfter) {
+    await params.retryAfter;
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
+    title = await generateLabel();
+  }
+  if (title) {
+    return title;
   }
   // Speculative utility-only naming must not persist a provisional title that
   // would skip the healthy primary-model pass after send.
@@ -387,6 +405,7 @@ export async function maybeGenerateSessionTitle(params: SessionTitleParams): Pro
           userMessage: sourceText,
           operatorAuthority: params.operatorAuthority,
           ...(abortSignal ? { abortSignal } : {}),
+          ...(params.retryAfter ? { retryAfter: params.retryAfter } : {}),
         });
       const withSource = params.withSource;
       if (!withSource) {
