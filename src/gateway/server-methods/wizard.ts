@@ -33,6 +33,8 @@ export type SetupWizardRunner = (
   opts: OnboardOptions,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
+  /** Session cancellation; provider authentication must honor it. */
+  signal?: AbortSignal,
 ) => Promise<void>;
 
 export type ChannelSetupWizardRunner = (
@@ -133,7 +135,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
               ),
             ),
           )
-        : new WizardSession((prompter) =>
+        : new WizardSession((prompter, signal) =>
             runHostedWizard((runtime) =>
               context.wizardRunner(
                 {
@@ -143,6 +145,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 },
                 runtime,
                 prompter,
+                signal,
               ),
             ),
           );

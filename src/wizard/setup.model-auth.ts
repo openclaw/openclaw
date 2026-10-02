@@ -128,6 +128,8 @@ export async function runSetupModelAuthStep(params: {
   stateDir?: string;
   pendingAgent?: { name: string; workspaceDir: string };
   preserveExistingModelSelection?: boolean;
+  /** Session cancellation, forwarded to the provider auth owner. */
+  signal?: AbortSignal;
 }): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime } = params;
   const env = params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined;
@@ -279,6 +281,7 @@ export async function runSetupModelAuthStep(params: {
         setDefaultModel: true,
         preserveExistingDefaultModel: true,
         env,
+        ...(params.signal ? { signal: params.signal } : {}),
         opts: {
           ...opts,
           token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,

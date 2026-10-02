@@ -16,6 +16,8 @@ export type ApplyAuthChoiceParams = {
   setDefaultModel: boolean;
   preserveExistingDefaultModel?: boolean;
   agentId?: string;
+  /** Cancels provider authentication that is still polling or exchanging tokens. */
+  signal?: AbortSignal;
   opts?: Partial<OnboardOptions>;
 };
 
