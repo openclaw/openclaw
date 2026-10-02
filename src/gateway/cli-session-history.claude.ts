@@ -14,6 +14,7 @@ import {
   stripCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
 import { hashCliReseedPrompt, parseCliReseedPrompt } from "../agents/cli-runner/reseed-envelope.js";
+import { stripCliSessionDriftNote } from "../agents/cli-session.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../agents/transcript-redact.js";
 import { isToolCallBlock, isToolResultBlock, resolveToolUseId } from "../chat/tool-content.js";
@@ -22,6 +23,10 @@ import {
   getCliSessionBinding,
   normalizeCliSessionReseedReceipt,
 } from "../config/sessions/cli-session-binding.js";
+import {
+  type InputProvenance,
+  readInterSessionPromptEnvelope,
+} from "../sessions/input-provenance.js";
 import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
@@ -251,6 +256,34 @@ function isClaudeCliTaskNotification(
   );
 }
 
+// The native row keeps the routed prompt OpenClaw sent, envelope first. Its
+// provenance is the same fact the local transcript row stores structurally.
+function readClaudeCliInterSessionPrompt(
+  content: string | unknown[],
+): { provenance: InputProvenance; content: string | unknown[] } | undefined {
+  const blockIndex =
+    typeof content === "string"
+      ? -1
+      : content.findIndex((item) => isRecord(item) && item.type === "text");
+  const candidate = blockIndex === -1 ? undefined : content[blockIndex];
+  const block = isRecord(candidate) ? candidate : undefined;
+  const text = typeof content === "string" ? content : block?.text;
+  if (typeof text !== "string") {
+    return undefined;
+  }
+  const envelope = readInterSessionPromptEnvelope(text);
+  if (!envelope) {
+    return undefined;
+  }
+  const visibleText = stripCliSessionDriftNote(text);
+  if (typeof content === "string") {
+    return { provenance: envelope.provenance, content: visibleText };
+  }
+  const nextContent = [...content];
+  nextContent[blockIndex] = { ...block, text: visibleText };
+  return { provenance: envelope.provenance, content: nextContent };
+}
+
 export function resolveClaudeCliPromptTextCandidates(
   entry: ClaudeCliProjectEntry,
   content: string | unknown[],
@@ -388,11 +421,18 @@ export function parseClaudeCliHistoryEntry(
       : isClaudeCliVisibleHarnessContext(entry)
         ? "cli_harness_context"
         : undefined;
+    const interSession = sourceTool ? undefined : readClaudeCliInterSessionPrompt(content);
+    if (interSession) {
+      content = interSession.content;
+    }
+    const provenance = sourceTool
+      ? { kind: "internal_system", sourceTool }
+      : interSession?.provenance;
     return attachOpenClawTranscriptMeta(
       {
         role: "user",
         content,
-        ...(sourceTool ? { provenance: { kind: "internal_system", sourceTool } } : {}),
+        ...(provenance ? { provenance } : {}),
         ...(timestamp !== undefined ? { timestamp } : {}),
       },
       { ...baseMeta, ...(cliImageTurnKey ? { cliImageTurnKey } : {}) },
