@@ -54,7 +54,6 @@ function stubFetch(body = "%PDF-1.4") {
 function stubShare(share: (data: ShareData) => Promise<void>) {
   const shareMock = vi.fn(share);
   vi.stubGlobal("navigator", {
-    ...navigator,
     canShare: (data: ShareData) => Boolean(data.files?.length),
     share: shareMock,
   });
@@ -108,7 +107,7 @@ describe("startStandaloneDownloadRouting", () => {
   it("downloads through a blob URL when the app cannot share files", async () => {
     setStandalone(true);
     stubFetch();
-    vi.stubGlobal("navigator", { ...navigator, canShare: undefined, share: undefined });
+    vi.stubGlobal("navigator", { canShare: undefined, share: undefined });
     const createObjectURL = vi.fn(() => "blob:http://localhost/1");
     stubObjectUrls(createObjectURL);
     const clicked: Array<{ href: string; download: string }> = [];
@@ -163,6 +162,23 @@ describe("startStandaloneDownloadRouting", () => {
     expect(toastMock.showToast).not.toHaveBeenCalled();
   });
 
+  it("reports a share sheet that fails to take the file", async () => {
+    setStandalone(true);
+    stubFetch();
+    stubShare(async () => {
+      throw new DOMException("transfer failed", "DataError");
+    });
+    routing = startStandaloneDownloadRouting();
+
+    click(appendLink(MEDIA_HREF, { download: "brochure.pdf" }));
+    await settle();
+
+    expect(toastMock.showToast).toHaveBeenCalledTimes(1);
+    expect(toastMock.showToast).toHaveBeenCalledWith({
+      message: expect.stringContaining("brochure.pdf"),
+    });
+  });
+
   it("reports a failed fetch without leaving the app", async () => {
     setStandalone(true);
     vi.stubGlobal(
@@ -200,7 +216,7 @@ describe("startStandaloneDownloadRouting", () => {
     expect(open).toHaveBeenCalledWith(
       `${window.location.origin}${MEDIA_HREF}`,
       "_blank",
-      "noopener",
+      "noopener,noreferrer",
     );
   });
 

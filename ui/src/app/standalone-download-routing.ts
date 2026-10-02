@@ -1,5 +1,6 @@
 import { isStandaloneDisplay, saveStandaloneUrl } from "../lib/download.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { openExternalUrlSafe, resolveSafeExternalUrl } from "../lib/open-external-url.ts";
 
 const GATEWAY_FILE_ROUTE = "/__openclaw__/";
 
@@ -54,9 +55,15 @@ export function startStandaloneDownloadRouting(options: { signal?: AbortSignal }
       url.protocol === "blob:" ||
       url.protocol === "data:" ||
       url.pathname.includes(GATEWAY_FILE_ROUTE);
-    if (rawFile && opensInPlace(anchor) && !anchor.hasAttribute("data-file-path")) {
+    if (!rawFile || !opensInPlace(anchor) || anchor.hasAttribute("data-file-path")) {
+      return;
+    }
+    const safeUrl = resolveSafeExternalUrl(url.href, window.location.href, {
+      allowDataImage: true,
+    });
+    if (safeUrl) {
       event.preventDefault();
-      window.open(url.href, "_blank", "noopener");
+      openExternalUrlSafe(safeUrl, { allowDataImage: true });
     }
   };
   // Run after target handlers so links the app already handled stay untouched.

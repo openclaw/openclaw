@@ -31,10 +31,13 @@ export function isStandaloneDisplay(): boolean {
   if (typeof window === "undefined") {
     return false;
   }
-  return (
-    (navigator as Navigator & { standalone?: boolean }).standalone === true ||
-    window.matchMedia?.("(display-mode: standalone)").matches === true
-  );
+  // iOS Safari reports home screen apps through the non-standard navigator.standalone.
+  if (Reflect.get(navigator, "standalone") === true) {
+    return true;
+  }
+  return typeof window.matchMedia === "function"
+    ? window.matchMedia("(display-mode: standalone)").matches
+    : false;
 }
 
 function shareableFile(filename: string, content: Blob): File | null {
@@ -60,18 +63,24 @@ function errorName(error: unknown): string | undefined {
  * Saves a file from a standalone app through the system share sheet (Save to
  * Files, AirDrop, ...). Falls back to a blob download when files cannot be shared.
  */
-export async function saveStandaloneFile(filename: string, content: Blob): Promise<void> {
+async function saveStandaloneFile(filename: string, content: Blob): Promise<void> {
   const file = shareableFile(filename, content);
   if (!file) {
     clickBlobDownload(filename, content);
     return;
   }
   const share = () => navigator.share({ files: [file] });
+  const reportFailure = (error: unknown) => {
+    // AbortError is the user closing the share sheet.
+    if (errorName(error) !== "AbortError") {
+      showToast({ message: t("common.downloadFailed", { filename }) });
+    }
+  };
   try {
     await share();
   } catch (error) {
     if (errorName(error) !== "NotAllowedError") {
-      // AbortError is the user closing the share sheet.
+      reportFailure(error);
       return;
     }
     // The click activation expired while the bytes were loading. A second tap
@@ -79,7 +88,7 @@ export async function saveStandaloneFile(filename: string, content: Blob): Promi
     showToast({
       message: t("common.downloadReady", { filename }),
       actionLabel: t("common.save"),
-      onAction: () => void share().catch(() => undefined),
+      onAction: () => void share().catch(reportFailure),
       durationMs: 15_000,
     });
   }

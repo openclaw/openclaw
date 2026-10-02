@@ -362,7 +362,7 @@ describe("workspace file tabs", () => {
       expect(original.content).toMatchObject(
         previewKind === "image"
           ? { src: "data:image/png;base64,TkVX" }
-          : { rawText: expect.stringContaining("1,024 bytes") },
+          : { kind: "attachment", sizeBytes: 1024 },
       );
       expect(getSessionWorkspace(state).previews).toEqual([original]);
     },

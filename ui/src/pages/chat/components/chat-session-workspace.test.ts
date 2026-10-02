@@ -1083,7 +1083,7 @@ describe("openSessionWorkspaceFile", () => {
         size: 2048,
       },
     });
-    const fetchMock = vi.fn(() => new Promise<Response>(() => {}));
+    const fetchMock = vi.fn((_input: string) => new Promise<Response>(() => {}));
     vi.stubGlobal("fetch", fetchMock);
     const state = {
       client: {},
@@ -1118,7 +1118,7 @@ describe("openSessionWorkspaceFile", () => {
           : undefined;
       expect(resolution).toEqual({ status: "pending" });
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
-      const metaUrl = new URL(String(fetchMock.mock.calls[0]?.[0]), "http://localhost");
+      const metaUrl = new URL(fetchMock.mock.calls[0]?.[0] ?? "", "http://localhost");
       expect(metaUrl.pathname).toBe("/__openclaw__/assistant-media");
       expect(metaUrl.searchParams.get("source")).toBe("/agents/content/tmp/amendment.pdf");
       expect(metaUrl.searchParams.get("sessionKey")).toBe("agent:content:main");
