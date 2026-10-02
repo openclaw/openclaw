@@ -5,24 +5,58 @@ import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { useConfigCliIntegrationHarness } from "./config-cli.integration.test-harness.js";
 
-const { registeredRuntimeLogs, runRegisteredConfigCommand, withConfigFileHarness } =
-  useConfigCliIntegrationHarness();
+const {
+  registeredRuntimeErrors,
+  registeredRuntimeLogs,
+  runRegisteredConfigCommand,
+  withConfigFileHarness,
+} = useConfigCliIntegrationHarness();
 
 describe("config cli roster preview integration", () => {
   it("rejects emptying the roster in preview just like the commit (#133895)", async () => {
     const raw = JSON.stringify({ agents: { entries: { main: { default: true } } } });
+    const retentionDiagnostic =
+      "Config write would drop agent roster entries without an explicit deletion: main.";
     await withConfigFileHarness(
       "openclaw-config-cli-roster-empty-",
       raw,
       async ({ configPath }) => {
         const args = ["config", "set", "agents.entries", "{}", "--replace", "--strict-json"];
         // The commit rejects dropping the last roster entry; preview must match.
-        for (const preview of [true, false]) {
-          await expect(
-            runRegisteredConfigCommand([...args, ...(preview ? ["--dry-run", "--json"] : [])]),
-          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
-          expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
-        }
+        // The non-JSON preview surfaces the guard's own diagnostic unchanged.
+        await expect(runRegisteredConfigCommand([...args, "--dry-run"])).rejects.toMatchObject({
+          name: "ExitError",
+          code: 1,
+        });
+        expect(registeredRuntimeErrors.join("\n")).toContain(retentionDiagnostic);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        registeredRuntimeLogs.length = 0;
+        registeredRuntimeErrors.length = 0;
+        // The JSON preview preserves the completed validation summary and
+        // appends the retention refusal instead of reporting an unevaluated
+        // all-false result.
+        await expect(
+          runRegisteredConfigCommand([...args, "--dry-run", "--json"]),
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+        const jsonSummary = registeredRuntimeLogs
+          .filter((line) => line.startsWith("{"))
+          .map((line) => JSON.parse(line) as Record<string, unknown>)
+          .find((value) => typeof value.operations === "number");
+        expect(jsonSummary).toMatchObject({
+          ok: false,
+          operations: 1,
+          inputModes: ["json"],
+          checks: { schema: true },
+        });
+        expect(JSON.stringify(jsonSummary)).toContain(retentionDiagnostic);
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
+        registeredRuntimeLogs.length = 0;
+        registeredRuntimeErrors.length = 0;
+        await expect(runRegisteredConfigCommand(args)).rejects.toMatchObject({
+          name: "ExitError",
+          code: 1,
+        });
+        expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
         expect(registeredRuntimeLogs.join("\n")).not.toContain("Updated");
       },
     );
