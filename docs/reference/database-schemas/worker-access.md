@@ -464,6 +464,10 @@ and exact expired-state deletion use the shared-state writer. Read-only snapshot
 retain the existing reader. The host captures the physical database and filesystem
 evidence before waiting, rechecks current authority and workspace identity at
 transaction and commit admission, and validates the evidence after delivery.
+Workspace guards separate SQL-free host authority from a serialized recovery-hold
+predicate. The shared recovery reader evaluates that predicate on the worker's
+transaction connection before commit; refusal preserves the caller's duplicate-agent
+error. Creation guards never recursively read that database from a host grant.
 Expiry rereads current setup and attestation rows, preserving the 24-hour and
 future-timestamp protections. Native commit receipts retire the stored workspace's
 file cache even if ordinary result delivery fails; uncertain writes are never

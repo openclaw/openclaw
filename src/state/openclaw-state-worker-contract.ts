@@ -10,7 +10,10 @@ import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
 } from "../agents/workspace-state-store.kernel.js";
-import type { WorkspaceStateWorkerOperations } from "../agents/workspace-state-store.worker-contract.js";
+import type {
+  WorkspaceStateGuard,
+  WorkspaceStateWorkerOperations,
+} from "../agents/workspace-state-store.worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
@@ -87,7 +90,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
     "workspace.replaceAttestation": {
-      input: WorkspaceAttestationInput;
+      input: WorkspaceAttestationInput & Pick<WorkspaceStateGuard, "recoveryHoldPredicate">;
       output: WorkspaceAttestation;
     };
     "updateRuns.reconcileInterrupted": {

@@ -32,6 +32,7 @@ import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-u
 import { executeSessionUpstreamCommand } from "../sessions/session-upstream-links.worker.js";
 import { executeTranscriptRead } from "../transcripts/store-worker-read.js";
 import { clearRetiredTuiPointers } from "../tui/tui-last-session.kernel.js";
+import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journal-recovery.kernel.js";
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
@@ -205,6 +206,7 @@ export function executeSharedStateCommand(
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
       const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
       return result;
     }, writeOptions);
   }

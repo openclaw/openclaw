@@ -1,22 +1,33 @@
+import type { AgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import type {
   WorkspaceSetupState,
   WorkspaceStateSnapshot,
 } from "./workspace-state-store.kernel.js";
 
+export type WorkspaceStateGuard = {
+  /** Host lifecycle and filesystem authority only; never reads SQLite. */
+  assertHost?: () => void;
+  recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
+};
+
+type WorkspaceStateInput = {
+  workspaceDir: string;
+  recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
+};
+
 export type WorkspaceStateWorkerOperations = {
   "workspace.snapshotAndRegister": {
-    input: { workspaceDir: string };
+    input: WorkspaceStateInput;
     output: WorkspaceStateSnapshot;
   };
   "workspace.mergeSetup": {
-    input: {
-      workspaceDir: string;
+    input: WorkspaceStateInput & {
       next: Partial<Omit<WorkspaceSetupState, "version">>;
       nowMs: number;
     };
     output: WorkspaceSetupState;
   };
-  "workspace.expire": { input: { workspaceDir: string; nowMs: number }; output: string | false };
+  "workspace.expire": { input: WorkspaceStateInput & { nowMs: number }; output: string | false };
 };
 
 export type WorkspaceStateWorkerCommand = {

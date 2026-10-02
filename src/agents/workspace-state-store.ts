@@ -40,7 +40,10 @@ import {
   type WorkspaceStateDatabaseHandle,
   type WorkspaceStateSnapshot,
 } from "./workspace-state-store.kernel.js";
-import type { WorkspaceStateWorkerOperations } from "./workspace-state-store.worker-contract.js";
+import type {
+  WorkspaceStateGuard,
+  WorkspaceStateWorkerOperations,
+} from "./workspace-state-store.worker-contract.js";
 
 export {
   hasRecentWorkspaceSetupState,
@@ -59,7 +62,10 @@ export {
   type WorkspaceStateSnapshot,
 } from "./workspace-state-store.kernel.js";
 
-type WorkspaceStateOperationOptions = { assertCurrent?: () => void };
+type WorkspaceStateOperationOptions = { assertCurrent?: () => void } & Pick<
+  WorkspaceStateGuard,
+  "recoveryHoldPredicate"
+>;
 
 type WorkspaceStateDeletionPlan = {
   cacheRoot: string;
@@ -72,6 +78,13 @@ async function runWorkspaceStateOperation<K extends keyof WorkspaceStateWorkerOp
   command: { type: K; input: WorkspaceStateWorkerOperations[K]["input"] },
   options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions,
 ): Promise<WorkspaceStateWorkerOperations[K]["output"]> {
+  const capturedCommand = {
+    ...command,
+    input: {
+      ...command.input,
+      recoveryHoldPredicate: structuredClone(options.recoveryHoldPredicate),
+    },
+  };
   const context = captureOpenClawStateWorkerContext({
     ...options,
     path: options.database?.path ?? options.path,
@@ -92,7 +105,7 @@ async function runWorkspaceStateOperation<K extends keyof WorkspaceStateWorkerOp
       context,
       async (scope) => {
         try {
-          return await scope.execute(command);
+          return await scope.execute(capturedCommand);
         } finally {
           // Native settlement and cache retirement stay inside the writer's FIFO interval.
           await publication;
@@ -192,11 +205,12 @@ export async function replaceWorkspaceAttestation(
 ): Promise<WorkspaceAttestation> {
   const context = captureOpenClawStateWorkerContext();
   const { assertCurrent } = params;
-  const input: WorkspaceAttestationInput = {
+  const input = {
     workspaceDir: path.resolve(resolveUserPath(params.workspaceDir)),
     attestedAtMs: params.attestedAtMs,
     generatedHashes: new Map(params.generatedHashes),
     nowMs: params.nowMs,
+    recoveryHoldPredicate: structuredClone(params.recoveryHoldPredicate),
   };
   return runOpenClawStateWorkerOperation(
     context,

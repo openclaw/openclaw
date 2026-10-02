@@ -4,6 +4,7 @@ import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -114,6 +115,7 @@ export function executeWorkspaceStateCommand(
 ) {
   if (command.type === "workspace.snapshotAndRegister") {
     const initial = runSqliteDeferredTransactionSync(database.db, () => {
+      assertAgentDeletionRecoveryHoldPredicate(database, command.input.recoveryHoldPredicate);
       const resolution = resolveWorkspaceIdentityFromDatabase({
         workspaceDir: command.input.workspaceDir,
         database,
@@ -154,6 +156,7 @@ export function executeWorkspaceStateCommand(
         });
       }
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
       return snapshot;
     }, options);
   }
@@ -167,6 +170,7 @@ export function executeWorkspaceStateCommand(
       stage: "commit",
       facts: command.type === "workspace.expire" ? result : undefined,
     });
+    assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
     if (command.type === "workspace.expire") {
       deferSqliteWorkerCommitReceipt(writer.db, result);
     }

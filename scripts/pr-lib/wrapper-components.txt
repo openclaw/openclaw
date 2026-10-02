@@ -195,6 +195,7 @@ scripts/watch-pr-ci.mts
 scripts/windows-cmd-helpers.mjs
 src/acp/event-ledger-bytes.ts
 src/agents/agent-bundle-mcp-names.ts
+src/agents/agent-create-error.ts
 src/agents/agent-dir-registry.ts
 src/agents/agent-roster.ts
 src/agents/agent-run-terminal-receipt.ts
@@ -1395,6 +1396,7 @@ src/state/agent-database-startup.ts
 src/state/agent-deletion-cleanup.ts
 src/state/agent-deletion-discovery.ts
 src/state/agent-deletion-journal-history.ts
+src/state/agent-deletion-journal-recovery.kernel.ts
 src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts

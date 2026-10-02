@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -9,6 +10,7 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
@@ -17,6 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { DuplicateAgentError } from "./agent-create-error.js";
 import { resolveBootstrapFilesForPreparation } from "./bootstrap-files.js";
 import { readWorkspaceFileCache, writeWorkspaceFileCache } from "./workspace-file-cache.js";
 import { assertConfiguredWorkspaceStateReady } from "./workspace-state-dirs.js";
@@ -92,6 +95,31 @@ it("snapshots, registers aliases, merges setup, and expires exact state without 
       ),
     ).toBe(true);
     expect((await readWorkspaceStateSnapshot(state.workspaceDir)).setupExists).toBe(false);
+  });
+});
+
+it("rolls back setup when a recovery hold arrives after caller preparation", async () => {
+  const before = await seed();
+  const recoveryHoldPredicate = { agentId: "new", held: [], applies: true };
+  runOpenClawStateWriteTransaction((database) => {
+    database.db.exec("DROP TABLE agent_deletion_journal");
+    reconstructAgentDeletionJournal(database, [
+      { agentId: "new", path: state.path("held.sqlite") },
+    ]);
+  });
+  await withoutMainThreadSql(async () => {
+    const refusal = await mergeWorkspaceSetupState(
+      state.workspaceDir,
+      { setupCompletedAt: "2026-07-16T02:00:00.000Z" },
+      2_000,
+      { recoveryHoldPredicate },
+    ).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(DuplicateAgentError);
+    expect(refusal).toMatchObject({
+      message:
+        "Agent new has held databases. Restore its original agentDir and session.store configuration, then run agents add explicitly to restore the preserved store.",
+    });
+    expect(await readWorkspaceStateSnapshot(state.workspaceDir)).toEqual(before);
   });
 });
 
