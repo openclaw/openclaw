@@ -8,6 +8,8 @@ export type ApplyAuthChoiceParams = Omit<
   "authChoice" | "opts" | "signal" | "isRemote" | "beforePersistentEffect"
 > & {
   authChoice: AuthChoice;
+  /** Cancels provider authentication that is still polling or exchanging tokens. */
+  signal?: AbortSignal;
   opts?: Partial<OnboardOptions>;
 };
 
