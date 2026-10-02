@@ -38,6 +38,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { createAgentPluginRuntimeRefresh } from "../agents/plugin-runtime-refresh.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../agents/runtime-plugins.js";
 import { resolveSandboxContext } from "../agents/sandbox.js";
 import {
@@ -548,7 +549,19 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
 }
 
 export function createCronScriptRuntime(deps: CronTriggerEvaluatorDeps) {
-  const run = createCronCodeModeRunner(deps);
+  const runScript = createCronCodeModeRunner(deps);
+  const run = (params: Parameters<typeof runScript>[0]) => {
+    // Scheduler callbacks can inherit the foreground turn that armed their timer.
+    // Each invocation owns its refresh scope; a closed parent must not fence its tools.
+    const refresh = createAgentPluginRuntimeRefresh();
+    return refresh.run(async () => {
+      try {
+        return await runScript(params);
+      } finally {
+        refresh.close();
+      }
+    });
+  };
   return {
     evaluateTrigger: async (params: CronScriptInvocation): Promise<CronTriggerEvaluationResult> => {
       if (activeTriggerEvaluations >= MAX_CONCURRENT_TRIGGER_EVALS) {

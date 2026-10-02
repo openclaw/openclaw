@@ -7,6 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { getBeforeToolCallHookContext } from "../agents/before-tool-call-metadata.js";
 import { runCodeModeScriptHeadless, type CodeModeHeadlessResult } from "../agents/code-mode.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../agents/plugin-runtime-refresh.js";
 import { clearToolSearchCatalog } from "../agents/tool-search.js";
 import { jsonResult, type AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -69,6 +73,59 @@ function createCronTriggerEvaluator(deps: EvaluatorDeps) {
 }
 
 describe("cron trigger script evaluator", () => {
+  it.each(["trigger", "payload"] as const)(
+    "runs scheduled %s tools after the scheduling foreground refresh scope has closed",
+    async (mode) => {
+      const foreground = createAgentPluginRuntimeRefresh();
+      const config: OpenClawConfig = {};
+      const prepared = createPreparedRuntime(config);
+      const [preparedTool] = prepared.createTools();
+      if (!preparedTool) {
+        throw new Error("Expected the prepared probe tool");
+      }
+      const tool = { ...preparedTool, execute: vi.fn(async () => jsonResult(true)) };
+      let invocationRefresh: ReturnType<typeof captureAgentPluginRuntimeRefresh> | undefined;
+      const prepareRuntime = vi.fn(async () => ({
+        ...prepared,
+        createTools: () => {
+          invocationRefresh = captureAgentPluginRuntimeRefresh();
+          return [tool];
+        },
+      }));
+      const runtime = createCronScriptRuntime({
+        config,
+        prepareRuntime,
+        runHeadless: runCodeModeScriptHeadless,
+      });
+      await foreground.run(async () => {
+        foreground.close();
+        for (let invocation = 0; invocation < 2; invocation += 1) {
+          const params = {
+            jobId: "foreground-closed",
+            script:
+              mode === "trigger"
+                ? "await probe({}); return { fire: true };"
+                : "await probe({}); return { notify: 'done' };",
+            state: null,
+          };
+          const result =
+            mode === "trigger"
+              ? await runtime.evaluateTrigger(params)
+              : await runtime.executePayload(params);
+          expect(result, JSON.stringify(result)).toMatchObject(
+            mode === "trigger"
+              ? { kind: "evaluated", fire: true }
+              : { kind: "completed", notify: "done" },
+          );
+          expect(invocationRefresh).toBeDefined();
+          expect(() => invocationRefresh!.assertCurrent()).toThrow("Plugin runtime changed");
+        }
+      });
+      expect(prepareRuntime).toHaveBeenCalledTimes(1);
+      expect(tool.execute).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("cancels the real headless worker and bridge when its evaluation catalog closes", async () => {
     const entered = createDeferred();
     const release = createDeferred();
