@@ -4,5 +4,6 @@
 # The internal Node-version check no longer contributes a false OPENCLAW_* name.
 # The next-turn runtime-context preface constant no longer exists as an OPENCLAW_* name.
 # OPENCLAW_PACKAGE_BUN_LAUNCHER (#159431) is the updater-to-preinstall handoff for Bun-only installs.
-# Claws no longer requires an OPENCLAW_EXPERIMENTAL_CLAWS process opt-in.
-470
+# Claws no longer requires an OPENCLAW_EXPERIMENTAL_CLAWS process opt-in;
+# its internal Remove CLI bridge marker keeps the total unchanged.
+471

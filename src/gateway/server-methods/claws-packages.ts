@@ -141,7 +141,7 @@ export const clawsPackageHandlers = {
           // oxlint-disable-next-line unicorn/prefer-structured-clone
           const currentPackageActions = JSON.parse(
             JSON.stringify(projection.actions),
-          ) as ClawRemovePlanAction[];
+          ) as ClawRemovePlanAction[]; // SAFETY: JSON round-trip preserves typed action fields.
           if (
             reviewedPackageActions &&
             !isDeepStrictEqual(currentPackageActions, reviewedPackageActions)

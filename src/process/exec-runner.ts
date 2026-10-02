@@ -256,6 +256,7 @@ async function runCommandWithOutputEncoding(
           "pipe",
         ]
       : [
+          // SAFETY: Execa forwards arbitrary numeric descriptors to Node; its stdin type narrows them to fd 0.
           (options.stdinFileDescriptor as 0 | undefined) ?? (hasInput ? "pipe" : "inherit"),
           "pipe",
           "pipe",

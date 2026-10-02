@@ -7,7 +7,6 @@ import { transformConfigFileWithRetry } from "../config/config.js";
 import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { updateClawInstallRecordStatusForAdd } from "./add-state-write.js";
@@ -51,6 +50,7 @@ import {
   type ClawOpenClawProfile,
   type ClawSourceIdentity,
 } from "./types.js";
+import { updatePackagePreflight } from "./update-apply-preflight.js";
 import { buildClawUpdatePlan, type ClawUpdateAction, type ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
 import {
@@ -256,47 +256,7 @@ export async function applyClawUpdatePlan(
       config: options.config,
       agentId: fresh.agentId,
       workspace: currentInstall.workspace,
-      packagePreflight: async (pkg, workspace) => {
-        const preflight = options.packagePreflight
-          ? await options.packagePreflight(pkg, workspace)
-          : {
-              ok: false,
-              code: "package_install_unavailable",
-              message: "Package preflight is unavailable.",
-            };
-        const action = fresh.actions.find(
-          (candidate) => candidate.kind === "package" && candidate.id === `${pkg.kind}:${pkg.ref}`,
-        );
-        return !preflight.ok &&
-          action?.action === "change" &&
-          ((pkg.kind === "plugin" && preflight.code === "plugin_version_conflict") ||
-            (pkg.kind === "skill" &&
-              preflight.code === "skill_version_conflict" &&
-              preflight.integrity &&
-              normalizeClawHubSha256Integrity(preflight.integrity)))
-          ? {
-              ok: true,
-              action: "install" as const,
-              ...(preflight.integrity ? { integrity: preflight.integrity } : {}),
-              ...(preflight.installId ? { installId: preflight.installId } : {}),
-              ...(preflight.warning ? { warning: preflight.warning } : {}),
-              ...(preflight.declaredCapabilities
-                ? { declaredCapabilities: preflight.declaredCapabilities }
-                : {}),
-              ...(preflight.capabilityGrants
-                ? { capabilityGrants: preflight.capabilityGrants }
-                : {}),
-              ...(preflight.capabilityGrantsByPluginId
-                ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
-                : {}),
-              ...(preflight.requirements ? { requirements: preflight.requirements } : {}),
-              ...(preflight.detectedFormat ? { detectedFormat: preflight.detectedFormat } : {}),
-              ...(preflight.mapped ? { mapped: preflight.mapped } : {}),
-              ...(preflight.unavailable ? { unavailable: preflight.unavailable } : {}),
-              ...(preflight.adapterIdentity ? { adapterIdentity: preflight.adapterIdentity } : {}),
-            }
-          : preflight;
-      },
+      packagePreflight: updatePackagePreflight(fresh, options.packagePreflight),
     },
   });
   options.assertCurrent?.();

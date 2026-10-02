@@ -17,6 +17,7 @@ export type PlannedClawPackage = ResolvedClawPackage & {
 };
 
 export function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
+  // SAFETY: Package actions are built from resolved package plans; required identity fields are checked below.
   const details = action.details as
     | (Partial<ResolvedClawPackage> & {
         ownerAction?: "install" | "reuse";

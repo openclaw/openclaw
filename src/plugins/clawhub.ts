@@ -48,6 +48,10 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import {
+  isDefaultOfficialClawHubPackage,
+  isTrustedSourceLinkedOfficialPackage,
+} from "./clawhub-official-source.js";
+import {
   formatClawHubReleaseLabel,
   formatClawHubSpecifier,
   logClawHubPackageSummary,
@@ -184,28 +188,6 @@ function normalizeClawHubClawPackInstallFields(
     ...(clawpackManifestSha256 ? { clawpackManifestSha256 } : {}),
     ...(clawpackSize !== undefined ? { clawpackSize } : {}),
   };
-}
-
-function isTrustedSourceLinkedOfficialPackage(pkg: NonNullable<ClawHubPackageDetail["package"]>) {
-  const sourceRepo = normalizeOptionalString(pkg.verification?.sourceRepo);
-  return (
-    pkg.channel === "official" &&
-    pkg.isOfficial &&
-    pkg.verification?.tier === "source-linked" &&
-    (sourceRepo === "openclaw/openclaw" ||
-      sourceRepo === "github.com/openclaw/openclaw" ||
-      sourceRepo === "https://github.com/openclaw/openclaw")
-  );
-}
-
-function isDefaultOfficialClawHubPackage(params: {
-  baseUrl?: string;
-  pkg: NonNullable<ClawHubPackageDetail["package"]>;
-}): boolean {
-  return (
-    isDefaultClawHubBaseUrl(params.baseUrl) &&
-    (params.pkg.channel === "official" || params.pkg.isOfficial)
-  );
 }
 
 function resolveClawHubClawPackArtifactSha256(

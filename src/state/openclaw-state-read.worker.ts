@@ -22,8 +22,7 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import { readClawInventoryInDatabase } from "../claws/inventory-read.kernel.js";
-import { readClawRemoveFactsInDatabase } from "../claws/remove-facts.kernel.js";
+import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import {
   isCronStateReadCommand,
   readCronStateCommandInDatabase,
@@ -517,18 +516,8 @@ serveOwnedWorkerTasks(
                 }),
               };
             }
-            if (command.type === "claws.inventory") {
-              return { type: command.type, inventory: readClawInventoryInDatabase(db) };
-            }
-            if (command.type === "claws.removeFacts") {
-              return {
-                type: command.type,
-                facts: readClawRemoveFactsInDatabase(
-                  db,
-                  command.agentId,
-                  command.sessionStorePaths,
-                ),
-              };
+            if (command.type === "claws.inventory" || command.type === "claws.removeFacts") {
+              return readClawStateCommandInDatabase(db, command);
             }
             if (command.type === "githubPublication.lifecycle") {
               return {

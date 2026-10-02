@@ -14,11 +14,6 @@ import {
   findClawExtensionPackageCollisions,
   planClawExtensions,
 } from "../claws/application-plan.js";
-import {
-  CLAW_EXPORT_RESULT_SCHEMA_VERSION,
-  ClawExportError,
-  exportClawAgent,
-} from "../claws/export.js";
 import { readClawInventory } from "../claws/inventory-read.js";
 import {
   assertClawsLabsEnabled,
@@ -76,7 +71,6 @@ import {
 import { waitUntilGatewayAgentAvailable } from "./claws-cli.gateway-readiness.js";
 import type {
   ClawsAddOptions,
-  ClawsExportOptions,
   ClawsInspectOptions,
   ClawsRemoveOptions,
   ClawsStatusOptions,
@@ -93,6 +87,8 @@ import {
 import { listCronJobsFromGateway } from "./cron-cli/list-jobs.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { resolvePluginBatchReload } from "./plugins-lifecycle-client.js";
+
+export { runClawsExportCommand } from "./claws-cli.export.js";
 
 function logClawAddPlanSummary(plan: ClawAddPlan, runtime: RuntimeEnv): void {
   runtime.log(`Agent: ${plan.agent.finalId}`);
@@ -687,44 +683,5 @@ export async function runClawsRemoveCommand(
   } finally {
     gatewayBridge?.close();
     process.removeListener("SIGTERM", onTerminate);
-  }
-}
-
-export async function runClawsExportCommand(
-  agentId: string,
-  opts: ClawsExportOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
-  try {
-    const listedMcpServers = await listConfiguredMcpServers();
-    if (!listedMcpServers.ok) {
-      throw new ClawExportError("mcp_config_unavailable", listedMcpServers.error);
-    }
-    const result = await exportClawAgent(agentId, opts.out, {
-      config: getRuntimeConfig(),
-      sourceMcpServers: listedMcpServers.mcpServers,
-      ...(opts.bootstrap ? { bootstrapPath: opts.bootstrap } : {}),
-    });
-    if (opts.json) {
-      writeRuntimeJson(runtime, result);
-      return;
-    }
-    logClawExperimentalWarning(runtime);
-    runtime.log(`Exported agent: ${result.agentId}`);
-    runtime.log(`Package directory: ${result.outputDirectory}`);
-    runtime.log(
-      `Workspace files: ${result.manifest.workspace.files.length + Object.keys(result.manifest.workspace.bootstrapFiles).length}`,
-    );
-    runtime.log(`Packages: ${result.manifest.packages.length}`);
-    runtime.log(`Bootstrap: ${result.filesWritten.includes("BOOTSTRAP.md") ? "included" : "none"}`);
-  } catch (error) {
-    const code = error instanceof ClawExportError ? error.code : "export_failed";
-    const message = error instanceof Error ? error.message : String(error);
-    emitClawFailure(runtime, opts.json, message, {
-      schemaVersion: CLAW_EXPORT_RESULT_SCHEMA_VERSION,
-      stability: CLAW_OUTPUT_STABILITY,
-      status: "failed",
-      error: { code, message },
-    });
   }
 }
