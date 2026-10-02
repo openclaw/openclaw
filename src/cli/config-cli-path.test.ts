@@ -419,3 +419,41 @@ describe("local refs below a nested $defs block", () => {
     expect(root).toEqual({ block: { values: ["first"] } });
   });
 });
+
+// `$id` opens a new resource, so the inner `List` owns `block.values` even though the root defines
+// the same name. src/plugins/schema-validator.test.ts:673 pins that contract for validation.
+const idScopedRefSchema = {
+  $defs: {
+    List: {
+      type: "object",
+      additionalProperties: false,
+      properties: { note: { type: "string" } },
+    },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    block: {
+      $id: "block",
+      $defs: { List: { type: "array", items: { type: "string" } } },
+      type: "object",
+      additionalProperties: false,
+      properties: { values: { $ref: "#/$defs/List" } },
+    },
+  },
+};
+
+describe("local refs across a nested $id resource boundary", () => {
+  it("resolves #/$defs/List against the inner $id resource", () => {
+    expect(isConfigSchemaPath(idScopedRefSchema, parseConfigSetPath("block.values[0]"))).toBe(true);
+    expect(isConfigSchemaPath(idScopedRefSchema, parseConfigSetPath("block.values.note"))).toBe(
+      false,
+    );
+  });
+
+  it.each(["block.values[0]", "block.values.0"])("builds an array for the %s write", (rawPath) => {
+    const root: Record<string, unknown> = {};
+    setAtPath(root, parseConfigSetPath(rawPath), "first", { schema: idScopedRefSchema });
+    expect(root).toEqual({ block: { values: ["first"] } });
+  });
+});

@@ -33,6 +33,7 @@ export type JsonSchemaRecord = {
   anyOf?: unknown;
   oneOf?: unknown;
   allOf?: unknown;
+  $id?: unknown;
   $ref?: unknown;
   $defs?: unknown;
   definitions?: unknown;
@@ -137,7 +138,7 @@ const LOCAL_REF_PATTERN = /^#\/(\$defs|definitions)\/([A-Za-z0-9_.-]+)$/;
 
 type ScopedSchema = {
   schema: JsonSchemaRecord;
-  /** Outermost `$defs`/`definitions` owner on this branch: what a local `$ref` resolves against. */
+  /** What a local `$ref` resolves against: innermost `$id` resource, else first defs owner. */
   refOwner?: JsonSchemaRecord;
 };
 
@@ -145,9 +146,13 @@ function refOwnerFor(
   schema: JsonSchemaRecord,
   inherited: JsonSchemaRecord | undefined,
 ): JsonSchemaRecord | undefined {
-  // A nested `$defs` starts no new resource, so the first owner the walk met keeps resolving every
-  // ref below it. That is also what makes a mounted plugin fragment its own ref root, the way the
-  // plugin validator reads it, while a same-named definition deeper down stays invisible.
+  // `$id` opens a new resource, so refs below it name that resource's own definitions, the way the
+  // shared resolver and the plugin validator's nested-resource regression read it. An ordinary
+  // nested `$defs` starts no resource, so the first owner the walk met keeps resolving every ref
+  // below it - that is what makes a mounted plugin fragment its own ref root.
+  if (typeof schema.$id === "string") {
+    return schema;
+  }
   if (inherited) {
     return inherited;
   }
