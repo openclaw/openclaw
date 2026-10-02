@@ -35,6 +35,29 @@ installGatewayTestHooks();
 registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
+type FixtureClient = Awaited<ReturnType<typeof createBrowserFollowupFixture>>["client"];
+
+function setClientProfile(
+  client: FixtureClient,
+  profile: ReturnType<typeof ensureProfileForEmail>,
+) {
+  client.authenticatedUserProfile = {
+    profileId: profile.id,
+    displayName: null,
+    hasAvatar: false,
+    updatedAt: profile.updatedAt,
+  };
+}
+
+function setNativeIosClient(client: FixtureClient) {
+  client.connect.client = {
+    id: "openclaw-ios",
+    version: "test",
+    platform: "ios",
+    mode: "ui",
+  };
+}
+
 describe("native profile-bound input admission", () => {
   it.each(["reservation", "writer", "approval"] as const)(
     "rejects a native account merge at %s without accepting or terminalizing input",
@@ -43,18 +66,8 @@ describe("native profile-bound input admission", () => {
       const email = "native-source@example.test";
       const source = ensureProfileForEmail(email);
       const target = ensureProfileForEmail("native-target@example.test");
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      fixture.client.authenticatedUserProfile = {
-        profileId: source.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: source.updatedAt,
-      };
+      setNativeIosClient(fixture.client);
+      setClientProfile(fixture.client, source);
       const before = loadSessionEntry(fixture.scope);
       const release = createDeferred();
       let writer: Promise<void> | undefined;
@@ -151,18 +164,8 @@ describe("native profile-bound input admission", () => {
     const email = "native-approval@example.test";
     const source = ensureProfileForEmail(email);
     const target = ensureProfileForEmail("native-approval-target@example.test");
-    fixture.client.connect.client = {
-      id: "openclaw-ios",
-      version: "test",
-      platform: "ios",
-      mode: "ui",
-    };
-    fixture.client.authenticatedUserProfile = {
-      profileId: source.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: source.updatedAt,
-    };
+    setNativeIosClient(fixture.client);
+    setClientProfile(fixture.client, source);
     try {
       const ack = await fixture.send(undefined, { expectedProfileId: source.id });
       expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
@@ -229,12 +232,7 @@ describe("native profile-bound input admission", () => {
         platform: "darwin",
         mode: "ui",
       };
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
+      setClientProfile(fixture.client, profile);
       const requestAbort = new AbortController();
       try {
         const ack = await fixture.send(undefined, {
@@ -307,18 +305,8 @@ describe("native profile-bound input admission", () => {
       const email = "native-steering@example.test";
       const profile = ensureProfileForEmail(email);
       const target = ensureProfileForEmail("native-steering-target@example.test");
-      fixture.client.connect.client = {
-        id: "openclaw-ios",
-        version: "test",
-        platform: "ios",
-        mode: "ui",
-      };
-      fixture.client.authenticatedUserProfile = {
-        profileId: profile.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: profile.updatedAt,
-      };
+      setNativeIosClient(fixture.client);
+      setClientProfile(fixture.client, profile);
       const fingerprint = "native-steering-tools";
       operation.bindToolAuthoritySnapshot({
         fingerprint: () => fingerprint,
@@ -396,29 +384,15 @@ describe("native profile-bound input admission", () => {
     },
   );
 
-  it.each(
-    (["backend", "question dispatcher"] as const).flatMap((sink) =>
-      [false, true].map((bound) => ({ sink, bound })),
-    ),
-  )(
-    "queues original operator input when the $sink is V1 (bound: $bound)",
-    async ({ sink, bound }) => {
+  it.each(["backend", "question dispatcher"] as const)(
+    "queues original operator input without an explicit profile binding when the %s is V1",
+    async (sink) => {
       const fixture = await createBrowserFollowupFixture({ preserveContent: true });
       try {
         fixture.params.queueMode = "steer";
-        fixture.client.connect.client = {
-          id: "openclaw-ios",
-          version: "test",
-          platform: "ios",
-          mode: "ui",
-        };
+        setNativeIosClient(fixture.client);
         const profile = ensureProfileForEmail("v1-steering@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         const operation = fixture.activeRun!;
         const fingerprint = "v1-steering-tools";
         let originalOperatorAuthority: AdmittedRunOperatorAuthority | undefined;
@@ -467,9 +441,7 @@ describe("native profile-bound input admission", () => {
                 },
               }),
         });
-        const respond = await fixture.send(undefined, {
-          expectedProfileId: bound ? profile.id : undefined,
-        });
+        const respond = await fixture.send(undefined, {});
         expect(operation.result).toBeNull();
         expect(write).not.toHaveBeenCalled();
         expect(respond).toHaveBeenCalledOnce();
@@ -517,12 +489,7 @@ describe("native profile-bound input admission", () => {
         const email = "deferred-source@example.test";
         const profile = ensureProfileForEmail(email);
         const successor = ensureProfileForEmail("deferred-successor@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         const binding = (await createExpectedProfileBinding(profile.id, fixture.client))!;
         const write = vi.fn();
         const questionCall = resolveAgentQuestionGatewayCall({
@@ -625,12 +592,7 @@ describe("native profile-bound input admission", () => {
         const email = "retained-authority@example.test";
         const profile = ensureProfileForEmail(email);
         const target = ensureProfileForEmail("retained-authority-target@example.test");
-        fixture.client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        setClientProfile(fixture.client, profile);
         if (boundary === "session ACL") {
           fixture.client.connect.scopes = ["operator.read", "operator.write"];
         }
