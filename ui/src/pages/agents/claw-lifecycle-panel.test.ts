@@ -103,7 +103,7 @@ const updatePlan: ClawUpdatePlan = {
   configuredAccess: {
     coverage: "configuration-only",
     current: {
-      tools: { allowed: ["read"], excluded: ["exec"] },
+      tools: { allowed: ["read"], excluded: ["exec"], explicitAllow: ["read"], explicitDeny: [] },
       sandbox: { mode: "non-main", scope: "agent", workspaceAccess: "ro", backend: "docker" },
       filesystem: { workspaceOnly: true },
       heartbeat: { enabled: false, intervalMs: null },
@@ -116,7 +116,12 @@ const updatePlan: ClawUpdatePlan = {
       },
     },
     desired: {
-      tools: { allowed: ["read", "workflow.start"], excluded: ["exec"] },
+      tools: {
+        allowed: ["read", "workflow.start"],
+        excluded: ["exec"],
+        explicitAllow: ["read", "workflow.start"],
+        explicitDeny: [],
+      },
       sandbox: { mode: "non-main", scope: "agent", workspaceAccess: "ro", backend: "docker" },
       filesystem: { workspaceOnly: true },
       heartbeat: { enabled: false, intervalMs: null },
@@ -153,6 +158,7 @@ const removePlan: ClawLifecyclePlan = {
   pluginReviews: [],
   skillReviews: [],
   riskAcknowledgementRequired: false,
+  scheduledJobs: { coverage: "package-declarations", jobs: [] },
 };
 
 function mount(
@@ -350,7 +356,47 @@ afterEach(() => {
 
 describe("Agent Claw lifecycle", () => {
   it("shows installed status and allows reviewed removal while Labs is off", async () => {
-    const { panel, request, navigate } = mount();
+    const { panel, request, navigate } = mount({
+      plan: {
+        ...removePlan,
+        actions: [
+          ...removePlan.actions,
+          {
+            kind: "mcpServer",
+            id: "shared-search",
+            action: "release",
+            blocked: false,
+            effect: {
+              type: "mcp-server",
+              currentDigest: "sha256:installed-search",
+              ownership: {
+                relationship: "referenced",
+                origin: "pre-existing",
+                independentOwner: true,
+                affectedClawCount: 2,
+              },
+            },
+          },
+          { kind: "cronJob", id: "daily", action: "remove", blocked: false },
+        ],
+        scheduledJobs: {
+          coverage: "package-declarations",
+          jobs: [
+            {
+              id: "daily",
+              action: "remove",
+              blocked: false,
+              current: {
+                schedule: { cron: "0 8 * * *", timezone: "UTC" },
+                session: "isolated",
+                delivery: "none",
+                messageDigest: "sha256:current-private-task",
+              },
+            },
+          ],
+        },
+      },
+    });
     await vi.waitFor(() => expect(panel.textContent).toContain("@openclaw/workflow-operator"));
     expect(request).toHaveBeenCalledWith("claws.status", { target: "workflow" });
     expect(panel.textContent).toContain("workflow-tools");
@@ -363,6 +409,9 @@ describe("Agent Claw lifecycle", () => {
       expect(panel.querySelector("[data-claw-remove-confirm]")).not.toBeNull(),
     );
     expect(panel.textContent).toContain("Kept");
+    expect(panel.textContent).toContain("shared-search");
+    expect(panel.textContent).toMatch(/Other Claws\s+2/u);
+    expect(panel.textContent).toContain("sha256:current-private-task");
     expect(request).not.toHaveBeenCalledWith("claws.remove.apply", expect.anything());
 
     panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.click();
@@ -388,6 +437,32 @@ describe("Agent Claw lifecycle", () => {
       true,
     );
     expect(request.mock.calls.some(([method]) => method === "claws.remove.apply")).toBe(false);
+  });
+
+  it("refuses Remove when an unblocked resource has no exact effect review", async () => {
+    const { panel, request } = mount({
+      plan: {
+        ...removePlan,
+        actions: [
+          ...removePlan.actions,
+          {
+            kind: "packageRef",
+            id: "plugin:@openclaw/search@1.0.0",
+            action: "release",
+            blocked: false,
+          },
+        ],
+      },
+    });
+    await vi.waitFor(() => expect(panel.textContent).toContain(installed.name));
+    panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-remove-confirm]")?.disabled).toBe(
+        true,
+      ),
+    );
+    expect(panel.textContent).toContain("Effect review is incomplete");
+    expect(request).not.toHaveBeenCalledWith("claws.remove.apply", expect.anything());
   });
 
   it("keeps an ambiguous removal pending and never sends a second apply", async () => {
@@ -486,13 +561,40 @@ describe("Agent Claw lifecycle", () => {
   });
 
   it("reviews an exact official update and passes plugin grants to one apply call", async () => {
-    const { panel, request } = mount({ clawsEnabled: true });
+    const { panel, request } = mount({
+      clawsEnabled: true,
+      updatePlan: {
+        ...updatePlan,
+        actions: [
+          ...updatePlan.actions,
+          {
+            kind: "mcpServer",
+            id: "research",
+            action: "add",
+            blocked: false,
+            effect: {
+              type: "mcp-server",
+              desiredDigest: "sha256:research-declaration",
+              proposed: {
+                transport: "stdio",
+                command: "node",
+                arguments: ["research-server.js", "--safe"],
+                authentication: "none",
+                environment: [{ name: "RESEARCH_TOKEN", sourceName: "RESEARCH_API_KEY" }],
+              },
+            },
+          },
+        ],
+      },
+    });
     await vi.waitFor(() =>
       expect(panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.disabled).toBe(false),
     );
     panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.click();
     await vi.waitFor(() => expect(panel.textContent).toContain("workflow.start"));
     expect(panel.textContent).toContain(updatePluginReview.integrity);
+    expect(panel.textContent).toContain("research-server.js");
+    expect(panel.textContent).toContain("RESEARCH_TOKEN <- RESEARCH_API_KEY");
     expect(request).toHaveBeenCalledWith("claws.catalog.search", {
       query: "@openclaw/workflow-operator",
       limit: 100,
@@ -549,6 +651,30 @@ describe("Agent Claw lifecycle", () => {
       true,
     );
     expect(request.mock.calls.some(([method]) => method === "claws.update.apply")).toBe(false);
+  });
+
+  it("refuses Update when an unblocked MCP change lacks its effect review", async () => {
+    const { panel, request } = mount({
+      clawsEnabled: true,
+      updatePlan: {
+        ...updatePlan,
+        actions: [
+          ...updatePlan.actions,
+          { kind: "mcpServer", id: "research", action: "add", blocked: false },
+        ],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.disabled).toBe(false),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+        true,
+      ),
+    );
+    expect(panel.textContent).toContain("Effect review is incomplete");
+    expect(request).not.toHaveBeenCalledWith("claws.update.apply", expect.anything());
   });
 
   it("requires separate ClawHub and plugin-risk acknowledgments on Update", async () => {

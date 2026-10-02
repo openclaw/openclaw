@@ -90,7 +90,12 @@ const workflowPluginReview: ClawPluginReview = {
 const reviewedAccess = {
   coverage: "configuration-only",
   desired: {
-    tools: { allowed: ["read", "sessions_spawn"], excluded: ["exec"] },
+    tools: {
+      allowed: ["read", "sessions_spawn"],
+      excluded: ["exec"],
+      explicitAllow: ["read", "sessions_spawn"],
+      explicitDeny: [],
+    },
     sandbox: { mode: "all", scope: "agent", workspaceAccess: "ro", backend: "docker" },
     filesystem: { workspaceOnly: true },
     heartbeat: { enabled: false, intervalMs: null },
@@ -430,10 +435,12 @@ describe("AgentsHomePage", () => {
     const { page, request, setClawsEnabled } = createPage();
     await vi.waitFor(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
     expect(page.querySelector("[data-claws-explore]")).toBeNull();
+    expect(page.querySelector("[data-claws-open-catalog]")).toBeNull();
     expect(request.mock.calls.some(([method]) => method === "claws.catalog.search")).toBe(false);
 
     setClawsEnabled(true);
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+    expect(page.querySelector("[data-claws-open-catalog]")).not.toBeNull();
     expect(page.querySelector("openclaw-claws-catalog-dialog")).toBeNull();
     expect(page.querySelector("[data-claws-explore]")?.textContent).toContain("Explore Claws");
     expect(page.querySelector("[data-claws-entry]")?.textContent).toContain("Workflow Operator");
@@ -462,11 +469,36 @@ describe("AgentsHomePage", () => {
     expect(page.querySelector(".claws-catalog__list")).toBeNull();
     setClawsEnabled(false);
     await vi.waitFor(() => expect(page.querySelector("[data-claws-explore]")).toBeNull());
+    expect(page.querySelector("[data-claws-open-catalog]")).toBeNull();
     expect(page.querySelector("[data-claws-confirm]")).toBeNull();
     expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2);
     setClawsEnabled(true);
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
     expect(page.querySelector("openclaw-claws-catalog-dialog")).toBeNull();
+  });
+
+  it("opens the searchable catalog from the header and keeps the installed roster", async () => {
+    const { page, request } = createPage({ clawsEnabled: true });
+    await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
+    const trigger = page.querySelector<HTMLButtonElement>("[data-claws-open-catalog]");
+    expect(trigger?.getAttribute("aria-label")).toBe("Search Claws");
+    expect(trigger?.getAttribute("aria-haspopup")).toBe("dialog");
+    trigger?.click();
+
+    await vi.waitFor(() => expect(page.querySelector(".claws-catalog__list")).not.toBeNull());
+    expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2);
+    const search = page.querySelector<HTMLInputElement>(
+      "openclaw-claws-catalog-dialog [data-claws-search]",
+    );
+    expect(search?.hasAttribute("autofocus")).toBe(true);
+    search!.value = "workflow";
+    search!.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("claws.catalog.search", { query: "workflow" }),
+    );
+    page.querySelector<HTMLElement>(".claws-catalog__close")?.click();
+    await vi.waitFor(() => expect(page.querySelector("openclaw-claws-catalog-dialog")).toBeNull());
+    expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1);
   });
 
   it("returns from a selected review to the inline Explore cards", async () => {

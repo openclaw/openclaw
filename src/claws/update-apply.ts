@@ -4,6 +4,7 @@ import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-cor
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listAgentEntries } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
@@ -65,7 +66,10 @@ import {
 
 export const CLAW_UPDATE_RESULT_SCHEMA_VERSION = "openclaw.clawUpdateResult.v1" as const;
 
-type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
+type ConfigCommit = (
+  transform: (config: OpenClawConfig, runtimeConfig: OpenClawConfig) => OpenClawConfig,
+  beforeCommit?: () => void,
+) => Promise<void>;
 
 export class ClawUpdateMutationError extends Error {
   constructor(
@@ -129,6 +133,12 @@ export async function applyClawUpdatePlan(
   },
   options: ClawUpdateStateOptions & {
     config: OpenClawConfig;
+    getCurrentConfig?: () => OpenClawConfig;
+    assertReviewedConfig?: (
+      config: OpenClawConfig,
+      desiredAgent: AgentConfig,
+      phase?: "after-agent-commit",
+    ) => void;
     sourceMcpServers: Record<string, Record<string, unknown>>;
     planPackageDeps?: PackageRemovalDeps;
     consentPlanIntegrity: string | undefined;
@@ -347,6 +357,28 @@ export async function applyClawUpdatePlan(
     }
   }
 
+  const assertReviewedCurrent = (phase?: "after-agent-commit") => {
+    if (!options.getCurrentConfig || !options.assertReviewedConfig) {
+      return;
+    }
+    options.assertCurrent?.();
+    const config = options.getCurrentConfig();
+    if (phase) {
+      options.assertReviewedConfig(config, targetAddPlan.agent.config, phase);
+    } else {
+      options.assertReviewedConfig(config, targetAddPlan.agent.config);
+    }
+    options.assertCurrent?.();
+  };
+  const assertForwardCurrent = (phase?: "after-agent-commit") => {
+    options.assertForwardCurrent?.();
+    assertReviewedCurrent(phase);
+  };
+  const preCommitOptions = {
+    ...options,
+    assertForwardCurrent: () => assertForwardCurrent(),
+  };
+
   const applyPackage = options.applyPackage ?? applyClawPackageUpdate;
   const requirementActions = fresh.actions.filter(
     (action) =>
@@ -369,9 +401,10 @@ export async function applyClawUpdatePlan(
     if (actions.length === 0) {
       return { appliedIds: [], rollback: async () => undefined };
     }
+    assertReviewedCurrent();
     options.assertCurrent?.();
     return await applyPackage({ ...fresh, actions }, targetAddPlan, {
-      ...options,
+      ...preCommitOptions,
       runtimeBatch,
     });
   };
@@ -399,10 +432,11 @@ export async function applyClawUpdatePlan(
 
   let requirementExecution: ClawPackageUpdateExecution;
   try {
+    assertReviewedCurrent();
     requirementExecution =
       requirementActions.length || resumedRequirements.length
         ? await runClawPluginBatch(
-            options,
+            preCommitOptions,
             requirementActions.length + resumedRequirements.length,
             (batch) => {
               for (const id of resumedRequirements) {
@@ -427,6 +461,9 @@ export async function applyClawUpdatePlan(
     if (error instanceof ClawPackageUpdateError && error.partial) {
       throw await partialMutation(error.message, { cause: error });
     }
+    if (error instanceof ClawUpdateMutationError) {
+      throw error;
+    }
     throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error), {
       cause: error,
     });
@@ -449,19 +486,24 @@ export async function applyClawUpdatePlan(
   const applyWorkspace = options.applyWorkspace ?? applyClawWorkspaceUpdate;
   let workspaceExecution: ClawWorkspaceUpdateExecution;
   try {
-    workspaceExecution = await applyWorkspace(fresh, targetAddPlan, options);
+    assertReviewedCurrent();
+    workspaceExecution = await applyWorkspace(fresh, targetAddPlan, preCommitOptions);
   } catch (error) {
     if (error instanceof ClawWorkspaceUpdateError && error.partial) {
       throw await partialMutation(error.message);
     }
     await throwIfUpdatePartial(error);
+    if (error instanceof ClawUpdateMutationError) {
+      throw error;
+    }
     throw new ClawUpdateMutationError("workspace_update_failed", coerceErrorMessage(error));
   }
 
   const applyMcp = options.applyMcp ?? applyClawMcpUpdate;
   let mcpExecution: ClawMcpUpdateExecution;
   try {
-    mcpExecution = await applyMcp(fresh, params.targetManifest, options);
+    assertReviewedCurrent();
+    mcpExecution = await applyMcp(fresh, params.targetManifest, preCommitOptions);
   } catch (error) {
     const partial = error instanceof ClawMcpUpdateError && error.partial;
     try {
@@ -475,6 +517,9 @@ export async function applyClawUpdatePlan(
       throw await partialMutation(`${error.message}; MCP config write outcome is uncertain`);
     }
     await throwIfUpdatePartial(error);
+    if (error instanceof ClawUpdateMutationError) {
+      throw error;
+    }
     throw new ClawUpdateMutationError("mcp_update_failed", coerceErrorMessage(error));
   }
 
@@ -491,17 +536,22 @@ export async function applyClawUpdatePlan(
       rollbackFailures.unshift("package artifact rollback is unavailable");
     }
     await throwIfUpdatePartial(error, rollbackFailures);
+    if (error instanceof ClawUpdateMutationError) {
+      throw error;
+    }
     throw new ClawUpdateMutationError("package_update_failed", coerceErrorMessage(error));
   }
 
   const agentAction = fresh.actions.find((action) => action.kind === "agent");
   const commit: ConfigCommit =
     options.commitConfig ??
-    (async (transform) => {
+    (async (transform, beforeCommit) => {
       await transformConfigFileWithRetry({
         afterWrite: { mode: "auto" },
-        writeOptions: { assertCurrent: options.assertCurrent },
-        transform: (config) => ({ nextConfig: transform(config) }),
+        writeOptions: { assertCurrent: options.assertCurrent, beforeCommit },
+        transform: (config, context) => ({
+          nextConfig: transform(config, context.snapshot.runtimeConfig),
+        }),
       });
     });
   let previousAgent: AgentConfig | undefined;
@@ -563,33 +613,48 @@ export async function applyClawUpdatePlan(
   if (agentAction?.action === "change") {
     try {
       options.assertCurrent?.();
-      await commit((config) => {
-        options.assertCurrent?.();
-        const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
-        previousAgent = current;
-        if (agentAction.currentDigest !== undefined) {
-          if (!current) {
-            throw new ClawUpdateMutationError(
-              "agent_changed",
-              "The owned agent entry disappeared during update.",
-            );
+      await commit(
+        (config, runtimeConfig) => {
+          options.assertCurrent?.();
+          options.assertReviewedConfig?.(
+            applyConfigOverrides(runtimeConfig),
+            targetAddPlan.agent.config,
+          );
+          const current = listAgentEntries(config).find((agent) => agent.id === fresh.agentId);
+          previousAgent = current;
+          if (agentAction.currentDigest !== undefined) {
+            if (!current) {
+              throw new ClawUpdateMutationError(
+                "agent_changed",
+                "The owned agent entry disappeared during update.",
+              );
+            }
+            if (!liveAgentMatchesDigest(config, current, agentAction.currentDigest)) {
+              throw new ClawUpdateMutationError(
+                "agent_changed",
+                "The owned agent entry changed during update.",
+              );
+            }
           }
-          if (!liveAgentMatchesDigest(config, current, agentAction.currentDigest)) {
-            throw new ClawUpdateMutationError(
-              "agent_changed",
-              "The owned agent entry changed during update.",
-            );
+          const nextEntries = { ...config.agents?.entries };
+          const { id: _id, ...targetEntry } = preserveOperatorAgentSettings(
+            targetAddPlan.agent.config,
+            current,
+          );
+          nextEntries[fresh.agentId] = targetEntry;
+          agentChanged = true;
+          return { ...config, agents: { ...config.agents, entries: nextEntries } };
+        },
+        () => {
+          try {
+            assertForwardCurrent();
+          } catch (error) {
+            // A rejected pre-rename check has not changed the agent entry.
+            agentChanged = false;
+            throw error;
           }
-        }
-        const nextEntries = { ...config.agents?.entries };
-        const { id: _id, ...targetEntry } = preserveOperatorAgentSettings(
-          targetAddPlan.agent.config,
-          current,
-        );
-        nextEntries[fresh.agentId] = targetEntry;
-        agentChanged = true;
-        return { ...config, agents: { ...config.agents, entries: nextEntries } };
-      });
+        },
+      );
     } catch (error) {
       const rollbackFailures = await collectClawRollbackFailures([
         ["agent rollback failed", () => rollbackAgent()],
@@ -607,9 +672,14 @@ export async function applyClawUpdatePlan(
 
   const persistInstall = options.persistInstall ?? persistClawInstallRecordForUpdate;
   const applyCron = options.applyCron ?? applyClawCronUpdate;
+  const postCommitPhase = agentAction?.action === "change" ? "after-agent-commit" : undefined;
   let cronExecution: ClawCronUpdateExecution;
   try {
-    cronExecution = await applyCron(fresh, params.targetManifest, options);
+    assertReviewedCurrent(postCommitPhase);
+    cronExecution = await applyCron(fresh, params.targetManifest, {
+      ...options,
+      assertForwardCurrent: () => assertForwardCurrent(postCommitPhase),
+    });
   } catch (error) {
     if (error instanceof ClawCronUpdateError && error.partial) {
       try {
@@ -632,13 +702,18 @@ export async function applyClawUpdatePlan(
       ["workspace rollback failed", () => workspaceExecution.rollback()],
     ]);
     await throwIfUpdatePartial(error, rollbackFailures);
+    if (error instanceof ClawUpdateMutationError) {
+      throw error;
+    }
     throw new ClawUpdateMutationError("cron_update_failed", coerceErrorMessage(error));
   }
 
   let installRecord: PersistedClawInstall;
   try {
+    assertReviewedCurrent(postCommitPhase);
     installRecord = await persistInstall(targetAddPlan, {
       ...installPersistenceOptions,
+      assertCurrent: () => assertForwardCurrent(postCommitPhase),
       expectedClaw: fresh.currentClaw,
     });
   } catch (error) {
@@ -650,6 +725,9 @@ export async function applyClawUpdatePlan(
       ["workspace rollback failed", () => workspaceExecution.rollback()],
     ]);
     await throwIfUpdatePartial(error, rollbackFailures);
+    if (error instanceof ClawUpdateMutationError) {
+      throw error;
+    }
     throw new ClawUpdateMutationError("provenance_update_failed", coerceErrorMessage(error));
   }
   try {

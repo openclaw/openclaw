@@ -10,6 +10,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js
 
 export type ClawPluginRuntimeOptions = OpenClawStateDatabaseOptions & {
   reloadPlugins?: PluginInstallBatchReload;
+  assertForwardCurrent?: () => void;
   /** The enclosing requirement phase owns nested package installs and compensation. */
   runtimeBatch?: PluginInstallRuntimeBatch;
   runtime?: RuntimeEnv;
@@ -29,7 +30,13 @@ export async function runClawPluginBatch<T>(
       `A live Claw requirement batch supports at most ${MAX_PLUGIN_RELOAD_TARGETS} plugin packages. Split the requirement batch before installing.`,
     );
   }
-  const batch = new PluginInstallRuntimeBatch(options, options.reloadPlugins);
+  const batch = new PluginInstallRuntimeBatch(options, async (targets) => {
+    options.assertForwardCurrent?.();
+    return await options.reloadPlugins!(
+      targets,
+      options.assertForwardCurrent ? { commitGuard: options.assertForwardCurrent } : undefined,
+    );
+  });
   let completed: Result<T, unknown> | undefined;
   const operation = await withPluginLifecycleLease(options, async (lease) => {
     let result: Result<T, unknown>;
@@ -41,6 +48,7 @@ export async function runClawPluginBatch<T>(
     completed = result;
     // The callback has already completed its compensation. Capture final retained owners
     // before releasing the lease; the Gateway validates those facts again after the gap.
+    options.assertForwardCurrent?.();
     await batch.prepare(lease);
     return result;
   }).catch((error: unknown) => {
@@ -53,6 +61,7 @@ export async function runClawPluginBatch<T>(
   });
   try {
     const runtime = options.runtime ?? defaultRuntime;
+    options.assertForwardCurrent?.();
     const application = await batch.finish((message) => runtime.log(message));
     if (application) {
       runtime.log(`Plugin requirements applied in Gateway generation ${application.generation}.`);

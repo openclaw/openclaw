@@ -163,6 +163,7 @@ describe("Claws Gateway contract", () => {
       actions: [],
       capabilities: [],
       pluginReviews: [pluginReview],
+      skillReviews: [],
       blockers: [],
       riskAcknowledgementRequired: false,
     };
@@ -195,7 +196,12 @@ describe("Claws Gateway contract", () => {
       configuredAccess: {
         coverage: "configuration-only",
         desired: {
-          tools: { allowed: ["read"], excluded: ["exec"] },
+          tools: {
+            allowed: ["read"],
+            excluded: ["exec"],
+            explicitAllow: ["read"],
+            explicitDeny: [],
+          },
           sandbox: {
             mode: "all",
             scope: "agent",
@@ -225,6 +231,8 @@ describe("Claws Gateway contract", () => {
               schedule: { cron: "0 9 * * *", timezone: "UTC" },
               session: "isolated",
               delivery: "last-channel",
+              message: "Prepare the daily brief",
+              messageDigest: "sha256:proposed-task",
             },
           },
         ],
@@ -269,10 +277,20 @@ describe("Claws Gateway contract", () => {
               ...scheduledJob,
               proposed: {
                 ...scheduledJob.proposed,
-                message: "private scheduler prompt",
+                message: "Updated scheduled task",
               },
             },
           ],
+        },
+      }),
+    ).toBe(true);
+
+    expect(
+      validateClawLifecyclePlanResult({
+        ...plan,
+        scheduledJobs: {
+          ...plan.scheduledJobs,
+          jobs: [{ ...scheduledJob, proposed: { ...scheduledJob.proposed, message: undefined } }],
         },
       }),
     ).toBe(false);
@@ -295,6 +313,7 @@ describe("Claws Gateway contract", () => {
               schedule: { cron: "0 8 * * *", timezone: "UTC" },
               session: "main",
               delivery: "none",
+              messageDigest: "sha256:current-task",
             },
             proposed: plan.scheduledJobs.jobs[0]?.proposed,
           },

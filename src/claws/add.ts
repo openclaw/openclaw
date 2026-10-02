@@ -5,6 +5,7 @@ import { coerceErrorMessage } from "@openclaw/normalization-core";
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope.js";
 import { transformConfigFileWithRetry } from "../config/config.js";
+import { applyConfigOverrides } from "../config/runtime-overrides.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
@@ -57,10 +58,14 @@ import {
 
 export const CLAW_ADD_RESULT_SCHEMA_VERSION = "openclaw.clawAddResult.v1" as const;
 
-type ConfigCommit = (transform: (config: OpenClawConfig) => OpenClawConfig) => Promise<void>;
+type ConfigCommit = (
+  transform: (config: OpenClawConfig, runtimeConfig?: OpenClawConfig) => OpenClawConfig,
+) => Promise<void>;
 type ClawAddApplyOptions = ClawAddStateOptions & {
   config?: OpenClawConfig;
-  assertReviewedConfig?: (config: OpenClawConfig) => void;
+  getCurrentConfig?: () => OpenClawConfig;
+  assertReviewedConfig?: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
+  assertForwardCurrent?: () => void;
   pluginConsent?: ClawPluginInstallConsent;
   skillConsent?: ClawSkillInstallConsent;
   reloadPlugins?: PluginInstallBatchReload;
@@ -174,25 +179,61 @@ export async function applyClawAddPlan(
     );
   }
 
+  const assertReviewedCurrent = (phase?: "after-agent-commit") => {
+    if (!options.getCurrentConfig || !options.assertReviewedConfig) {
+      return;
+    }
+    options.assertCurrent?.();
+    options.assertReviewedConfig(options.getCurrentConfig(), phase);
+    options.assertCurrent?.();
+  };
+  const assertForwardCurrent = (phase?: "after-agent-commit") => {
+    options.assertCurrent?.();
+    options.assertForwardCurrent?.();
+    assertReviewedCurrent(phase);
+  };
+  const stageOptions = (phase?: "after-agent-commit"): ClawAddApplyOptions => ({
+    ...options,
+    assertForwardCurrent: () => assertForwardCurrent(phase),
+  });
+  const forwardStateOptions = (phase?: "after-agent-commit"): ClawAddApplyOptions => ({
+    ...stageOptions(phase),
+    assertCurrent: () => assertForwardCurrent(phase),
+  });
+  const initialPhase =
+    options.resumeRecord && statusAtLeast(options.resumeRecord.status, "config_committed")
+      ? "after-agent-commit"
+      : undefined;
+
   const persistRecord = options.persistRecord ?? persistClawInstallRecordForAdd;
   let installRecord: PersistedClawInstall;
   try {
+    assertForwardCurrent(initialPhase);
     installRecord = await persistRecord(plan, {
-      ...options,
+      ...forwardStateOptions(initialPhase),
       status: "pending",
       expectedExistingRecord: options.resumeRecord,
       expectedExistingPlan: options.resumePlan,
       deferLegacyPlanUpgrade: options.resumePlan !== undefined,
     });
   } catch (error) {
+    if (error instanceof ClawAddMutationError) {
+      throw error;
+    }
     throw new ClawAddMutationError("provenance_failed", (error as Error).message);
   }
 
   const markRecordedStatus = async (
     status: ClawInstallStatus,
     expectedStatuses: ClawInstallStatus[],
+    phase?: "before-agent-commit" | "after-agent-commit",
   ): Promise<void> => {
-    await markInstallStatus(plan.agent.finalId, status, expectedStatuses, options);
+    await markInstallStatus(
+      plan.agent.finalId,
+      status,
+      expectedStatuses,
+      phase ? forwardStateOptions(phase === "after-agent-commit" ? phase : undefined) : options,
+    );
     installRecord = {
       ...installRecord,
       status,
@@ -313,7 +354,8 @@ export async function applyClawAddPlan(
   );
   if (hostRequirementActions.length > 0) {
     try {
-      packages = await installPackages(hostRequirementPlan, options);
+      assertForwardCurrent(initialPhase);
+      packages = await installPackages(hostRequirementPlan, stageOptions(initialPhase));
     } catch (error) {
       const packageError = error instanceof ClawPackageInstallError ? error : undefined;
       await preserveRecordedPhaseOrMarkPartial();
@@ -329,10 +371,10 @@ export async function applyClawAddPlan(
 
   try {
     assertWorkspacePathUnchanged(workspace);
-    options.assertCurrent?.();
+    assertForwardCurrent(initialPhase);
     await mkdir(dirname(workspace), { recursive: true });
     assertWorkspacePathUnchanged(workspace);
-    options.assertCurrent?.();
+    assertForwardCurrent(initialPhase);
   } catch (error) {
     if (packages.length > 0) {
       await preserveRecordedPhaseOrMarkPartial();
@@ -358,7 +400,7 @@ export async function applyClawAddPlan(
 
   if (!workspaceCreated) {
     try {
-      options.assertCurrent?.();
+      assertForwardCurrent(initialPhase);
       await mkdir(workspace);
       workspaceCreated = true;
     } catch (error) {
@@ -375,7 +417,11 @@ export async function applyClawAddPlan(
 
     try {
       if (!workspacePhaseRecorded) {
-        await markRecordedStatus("workspace_ready", ["pending", "partial", "workspace_ready"]);
+        await markRecordedStatus(
+          "workspace_ready",
+          ["pending", "partial", "workspace_ready"],
+          "before-agent-commit",
+        );
       }
     } catch (error) {
       const removedWorkspace = await removeEmptyWorkspaceIfAuthorized();
@@ -395,9 +441,9 @@ export async function applyClawAddPlan(
   // concurrent `sessions.create` can stock-seed BOOTSTRAP.md and strand the add at
   // `config_committed` with a seed conflict that no retry can clear.
   try {
-    options.assertCurrent?.();
+    assertForwardCurrent(initialPhase);
     await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
-      ...options,
+      ...stageOptions(initialPhase),
       ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
     });
   } catch (error) {
@@ -422,14 +468,20 @@ export async function applyClawAddPlan(
       (async (transform) => {
         await transformConfigFileWithRetry({
           afterWrite: { mode: "auto" },
-          writeOptions: { assertCurrent: options.assertCurrent },
-          transform: (config) => ({ nextConfig: transform(config) }),
+          writeOptions: {
+            assertCurrent: options.assertCurrent,
+            beforeCommit: () => assertForwardCurrent(initialPhase),
+          },
+          transform: (config, context) => ({
+            nextConfig: transform(config, context.snapshot.runtimeConfig),
+          }),
         });
       });
-    options.assertCurrent?.();
-    await commit((config) => {
+    assertForwardCurrent(initialPhase);
+    await commit((config, runtimeConfig) => {
       options.assertCurrent?.();
-      options.assertReviewedConfig?.(config);
+      options.assertForwardCurrent?.();
+      options.assertReviewedConfig?.(applyConfigOverrides(runtimeConfig ?? config), initialPhase);
       const existingAgents = listAgentEntries(config);
       const agentsToPreserve: AgentConfig[] =
         existingAgents.length > 0 ? existingAgents : [{ id: DEFAULT_AGENT_ID, default: true }];
@@ -487,21 +539,39 @@ export async function applyClawAddPlan(
     // Moving this into the callback retains the workspace and reports a write that never landed.
     configCommitted = true;
     try {
-      await recordAgentProvenanceForAdd(plan.agent.finalId, { createdVia: "claw" }, options);
+      assertForwardCurrent("after-agent-commit");
+      await recordAgentProvenanceForAdd(
+        plan.agent.finalId,
+        { createdVia: "claw" },
+        forwardStateOptions("after-agent-commit"),
+      );
     } catch (error) {
+      if (error instanceof ClawAddMutationError) {
+        throw error;
+      }
       throw new ClawAddMutationError("provenance_failed", coerceErrorMessage(error));
     }
     if (options.resumePlan && installRecord.schemaVersion === "openclaw.clawInstallRecord.v1") {
       installRecord = await persistRecord(plan, {
-        ...options,
+        ...forwardStateOptions("after-agent-commit"),
         status: "pending",
         expectedExistingRecord: options.resumeRecord,
         expectedExistingPlan: options.resumePlan,
       });
     }
-    await markRecordedStatus("config_committed", ["workspace_ready", "config_committed"]);
+    await markRecordedStatus(
+      "config_committed",
+      ["workspace_ready", "config_committed"],
+      "after-agent-commit",
+    );
   } catch (error) {
-    if (!configCommitted) {
+    if (configCommitted && !options.resumePlan) {
+      try {
+        await markRecordedStatus("config_committed", ["workspace_ready", "config_committed"]);
+      } catch {
+        // Keep the original failure; status repair remains available on retry.
+      }
+    } else if (!configCommitted) {
       const removedWorkspace = await removeEmptyWorkspaceIfAuthorized();
       if (removedWorkspace) {
         workspaceCreated = false;
@@ -518,8 +588,8 @@ export async function applyClawAddPlan(
 
   const createFiles = options.createWorkspaceFiles ?? createClawWorkspaceFiles;
   try {
-    options.assertCurrent?.();
-    workspaceFiles = await createFiles(plan, options);
+    assertForwardCurrent("after-agent-commit");
+    workspaceFiles = await createFiles(plan, stageOptions("after-agent-commit"));
   } catch (error) {
     const workspaceError =
       error instanceof ClawWorkspaceWriteError
@@ -540,7 +610,7 @@ export async function applyClawAddPlan(
     return partialResult({
       workspaceFiles: workspaceError.createdFiles,
       error: {
-        code: "workspace_files_failed",
+        code: error instanceof ClawAddMutationError ? error.code : "workspace_files_failed",
         message: workspaceError.message,
         diagnostics: workspaceError.diagnostics,
       },
@@ -558,8 +628,11 @@ export async function applyClawAddPlan(
       (action) => action.kind === "package",
     );
     if (workspacePackageActions.length > 0) {
-      options.assertCurrent?.();
-      const workspacePackages = await installPackages(workspacePackagePlan, options);
+      assertForwardCurrent("after-agent-commit");
+      const workspacePackages = await installPackages(
+        workspacePackagePlan,
+        stageOptions("after-agent-commit"),
+      );
       packages = [...packages, ...workspacePackages];
     }
   } catch (error) {
@@ -575,8 +648,8 @@ export async function applyClawAddPlan(
 
   const installMcpServers = options.installMcpServers ?? installClawMcpServers;
   try {
-    options.assertCurrent?.();
-    mcpServers = await installMcpServers(plan, options);
+    assertForwardCurrent("after-agent-commit");
+    mcpServers = await installMcpServers(plan, stageOptions("after-agent-commit"));
   } catch (error) {
     const mcpError = error instanceof ClawMcpInstallError ? error : undefined;
     await markRecordedStatus("config_committed", ["config_committed"]);
@@ -591,8 +664,11 @@ export async function applyClawAddPlan(
 
   const installCronJobs = options.installCronJobs ?? installClawCronJobs;
   try {
-    options.assertCurrent?.();
-    cronJobs = await installCronJobs(plan, { ...options, gateway: options.cronGateway });
+    assertForwardCurrent("after-agent-commit");
+    cronJobs = await installCronJobs(plan, {
+      ...stageOptions("after-agent-commit"),
+      gateway: options.cronGateway,
+    });
   } catch (error) {
     const cronError = error instanceof ClawCronInstallError ? error : undefined;
     await markRecordedStatus("config_committed", ["config_committed"]);
@@ -606,7 +682,7 @@ export async function applyClawAddPlan(
   }
 
   try {
-    await markRecordedStatus("complete", ["config_committed", "complete"]);
+    await markRecordedStatus("complete", ["config_committed", "complete"], "after-agent-commit");
     return {
       schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,
       stability: CLAW_OUTPUT_STABILITY,

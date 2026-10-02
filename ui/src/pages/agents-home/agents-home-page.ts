@@ -12,6 +12,7 @@ import { renderAgentsHome } from "./view.ts";
 const clawsLab = LAB_FEATURES.find((feature) => feature.id === "claws");
 
 export class AgentsHomePage extends AgentRosterElement {
+  @state() private catalogOpen = false;
   @state() private selectedClaw: ClawCatalogEntry | null = null;
 
   constructor() {
@@ -22,6 +23,7 @@ export class AgentsHomePage extends AgentRosterElement {
         void runtimeConfig.ensureLoaded();
         return runtimeConfig.subscribe(() => {
           if (!this.clawsEnabled()) {
+            this.catalogOpen = false;
             this.selectedClaw = null;
           }
           this.requestUpdate();
@@ -63,13 +65,23 @@ export class AgentsHomePage extends AgentRosterElement {
           "operator.admin",
         ),
         showExplore: clawsEnabled,
-        onSelectClaw: (entry) => (this.selectedClaw = entry),
+        onOpenCatalog: () => {
+          this.selectedClaw = null;
+          this.catalogOpen = true;
+        },
+        onSelectClaw: (entry) => {
+          this.selectedClaw = entry;
+          this.catalogOpen = true;
+        },
       })}
       ${
-        clawsEnabled && this.selectedClaw
+        clawsEnabled && this.catalogOpen
           ? html`<openclaw-claws-catalog-dialog
               .initialEntry=${this.selectedClaw}
-              .onClose=${() => (this.selectedClaw = null)}
+              .onClose=${() => {
+                this.catalogOpen = false;
+                this.selectedClaw = null;
+              }}
               .onAdded=${() => {
                 void this.refresh();
               }}

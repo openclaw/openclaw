@@ -298,6 +298,43 @@ describe("applyClawPackageUpdate", () => {
     expect(await fs.readFile(indexFile, "utf8")).toBe(tracked.lock);
   });
 
+  it("rechecks reviewed access after package reads before changing an owned reference", async () => {
+    const previous = ref("skill", "triage", "1.0.0");
+    const replaceExpected = vi.fn();
+    let accessCurrent = true;
+
+    await expect(
+      applyClawPackageUpdate(
+        plan([
+          {
+            kind: "package",
+            id: "skill:triage",
+            action: "release",
+            target: "clawhub:triage@1.0.0",
+            blocked: false,
+            reason: "release ownership",
+            currentDigest: digestClawPackageRef(previous),
+          },
+        ]),
+        addPlan,
+        {
+          readRefs: async () => {
+            accessCurrent = false;
+            return [previous];
+          },
+          replaceExpected,
+          assertForwardCurrent: () => {
+            if (!accessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+        },
+      ),
+    ).rejects.toThrow("reviewed access changed");
+
+    expect(replaceExpected).not.toHaveBeenCalled();
+  });
+
   it("adds extension metadata to a reused v1 plugin edge without changing ownership", async () => {
     const previous = ref("plugin", "audit", "1.0.0");
     const extension = {

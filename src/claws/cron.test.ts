@@ -93,6 +93,64 @@ function listedCronJob(
 }
 
 describe("installClawCronJobs", () => {
+  it("stops scheduler activation after access drifts during agent readiness", async () => {
+    const current = await fixture();
+    let reviewed = true;
+    const add = vi.fn(async () => ({ id: "scheduler-123" }));
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        assertForwardCurrent: () => {
+          if (!reviewed) {
+            throw new Error("reviewed access changed");
+          }
+        },
+        gateway: {
+          add,
+          waitUntilAgentAvailable: async () => {
+            reviewed = false;
+          },
+        },
+      }),
+    ).rejects.toThrow("reviewed access changed");
+
+    expect(add).not.toHaveBeenCalled();
+    expect(readClawCronRefs(current.plan.agent.finalId, { env: current.env })).toMatchObject([
+      { status: "pending", error: "reviewed access changed" },
+    ]);
+  });
+
+  it("passes reviewed access to the scheduler's actual Add commit", async () => {
+    const current = await fixture();
+    let reviewed = true;
+    const persisted = vi.fn();
+    const add = vi.fn(async (_input, options?: { commitGuard?: () => void }) => {
+      reviewed = false;
+      options?.commitGuard?.();
+      persisted();
+      return { id: "scheduler-123" };
+    });
+
+    await expect(
+      installClawCronJobs(current.plan, {
+        env: current.env,
+        assertForwardCurrent: () => {
+          if (!reviewed) {
+            throw new Error("reviewed access changed");
+          }
+        },
+        gateway: { add },
+      }),
+    ).rejects.toThrow("reviewed access changed");
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(persisted).not.toHaveBeenCalled();
+    expect(readClawCronRefs(current.plan.agent.finalId, { env: current.env })).toMatchObject([
+      { status: "pending", error: "reviewed access changed" },
+    ]);
+  });
+
   it("pins declarations and execution to the final agent id", async () => {
     const current = await fixture();
     const calls: string[] = [];
@@ -112,19 +170,22 @@ describe("installClawCronJobs", () => {
 
     expect(waitUntilAgentAvailable).toHaveBeenCalledWith("worker-two");
     expect(calls).toEqual(["wait", "add"]);
-    expect(add).toHaveBeenCalledWith({
-      name: "Daily report",
-      declarationKey: "claw:worker-two:daily-report",
-      displayName: "Daily report",
-      owner: { agentId: "worker-two" },
-      enabled: true,
-      agentId: "worker-two",
-      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
-      sessionTarget: "session:agent:worker-two:main",
-      wakeMode: "now",
-      payload: { kind: "agentTurn", message: "Prepare the report" },
-      delivery: { mode: "announce", channel: "last" },
-    });
+    expect(add).toHaveBeenCalledWith(
+      {
+        name: "Daily report",
+        declarationKey: "claw:worker-two:daily-report",
+        displayName: "Daily report",
+        owner: { agentId: "worker-two" },
+        enabled: true,
+        agentId: "worker-two",
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "session:agent:worker-two:main",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: "Prepare the report" },
+        delivery: { mode: "announce", channel: "last" },
+      },
+      { commitGuard: expect.any(Function) },
+    );
     expect(validateCronAddParams(add.mock.calls[0]?.[0])).toBe(true);
     expect(refs).toMatchObject([
       {

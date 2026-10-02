@@ -142,6 +142,7 @@ export function updateClawMcpRef(
 export async function installClawMcpServers(
   plan: ClawAddPlan,
   options: ClawAddStateOptions & {
+    assertForwardCurrent?: () => void;
     setMcpServer?: (params: {
       name: string;
       server: ClawMcpServer;
@@ -160,7 +161,12 @@ export async function installClawMcpServers(
         assertOwned();
         options.assertCurrent?.();
       };
+      const assertForwardCurrent = () => {
+        assertCurrent();
+        options.assertForwardCurrent?.();
+      };
       const stateOptions = { ...options, assertCurrent };
+      const forwardStateOptions = { ...options, assertCurrent: assertForwardCurrent };
       const server = action.details ? mcpServerFromActionDetails(action.details) : undefined;
       if (!server) {
         throw new ClawMcpInstallError(
@@ -170,7 +176,7 @@ export async function installClawMcpServers(
         );
       }
       const listed = await listMcpServers();
-      assertCurrent();
+      assertForwardCurrent();
       if (!listed.ok) {
         throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
       }
@@ -205,7 +211,7 @@ export async function installClawMcpServers(
         action.id,
         server,
         ownership,
-        stateOptions,
+        forwardStateOptions,
       );
       refs.push(pending);
       if (pending.status === "complete") {
@@ -227,14 +233,14 @@ export async function installClawMcpServers(
             refs,
           );
         }
-        pending = await updateClawMcpRefForAdd(pending, { status: "pending" }, stateOptions);
+        pending = await updateClawMcpRefForAdd(pending, { status: "pending" }, forwardStateOptions);
         refs[refs.length - 1] = pending;
       }
       if (configured) {
         refs[refs.length - 1] = await updateClawMcpRefForAdd(
           pending,
           { status: "complete" },
-          stateOptions,
+          forwardStateOptions,
         );
         return;
       }
@@ -245,7 +251,7 @@ export async function installClawMcpServers(
           server,
           createOnly: true,
           recordIndependentOwner: false,
-          assertCurrent,
+          assertCurrent: assertForwardCurrent,
         });
       } catch (error) {
         const message = coerceErrorMessage(error);
@@ -263,7 +269,7 @@ export async function installClawMcpServers(
         refs[refs.length - 1] = await updateClawMcpRefForAdd(
           pending,
           { status: "complete" },
-          stateOptions,
+          forwardStateOptions,
         );
       } catch (error) {
         const message = coerceErrorMessage(error);

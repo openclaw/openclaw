@@ -101,6 +101,7 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
             pluginReviews: [],
             skillReviews: [],
             riskAcknowledgementRequired: false,
+            scheduledJobs: { coverage: "package-declarations", jobs: [] },
           },
         },
       });
@@ -296,7 +297,12 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
           configuredAccess: {
             coverage: "configuration-only",
             current: {
-              tools: { allowed: ["read"], excluded: ["exec"] },
+              tools: {
+                allowed: ["read"],
+                excluded: ["exec"],
+                explicitAllow: ["read"],
+                explicitDeny: [],
+              },
               sandbox: {
                 mode: "non-main",
                 scope: "agent",
@@ -314,7 +320,12 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
               },
             },
             desired: {
-              tools: { allowed: ["read", "workflow.start"], excluded: ["exec"] },
+              tools: {
+                allowed: ["read", "workflow.start"],
+                excluded: ["exec"],
+                explicitAllow: ["read", "workflow.start"],
+                explicitDeny: [],
+              },
               sandbox: {
                 mode: "non-main",
                 scope: "agent",

@@ -5,9 +5,15 @@ import { renderSettingsRow, renderSettingsSection } from "../../components/setti
 import { t } from "../../i18n/index.ts";
 import {
   hasCompleteClawDisclosures,
+  hasCompleteClawRemoveSchedules,
   renderClawAccessReview,
+  renderClawScheduledJobs,
 } from "../agents-home/claws-access-review.ts";
 import type { ClawCatalogDetail, ClawStatusRecord } from "../agents-home/claws-catalog-client.ts";
+import {
+  hasCompleteClawActionEffects,
+  renderClawActionEffect,
+} from "../agents-home/claws-effect-review.ts";
 import {
   pluginAcknowledgements,
   renderClawPluginReviews,
@@ -156,6 +162,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
   const detail = props.updateDetail;
   const record = props.record;
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
+  const effectsComplete = hasCompleteClawActionEffects(plan);
   const canConfirm =
     props.canUpdate &&
     Boolean(plan && detail && record) &&
@@ -169,6 +176,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
     plan?.target.currentVersion === record?.version &&
     plan?.target.targetVersion === detail?.version &&
     hasCompleteClawDisclosures(plan) &&
+    effectsComplete &&
     (!plan?.riskAcknowledgementRequired || props.updateClawHubRiskAccepted) &&
     pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null &&
     skillAcknowledgements(plan?.skillReviews, props.acceptedSkillWarnings) !== null;
@@ -246,10 +254,12 @@ function renderUpdateReview(props: AgentClawPanelProps) {
                         <strong>${labelAction(action.action)} ${labelState(action.kind)}</strong>
                         <span>${action.id}</span>
                         ${action.reason ? html`<span>${action.reason}</span>` : nothing}
+                        ${renderClawActionEffect(action.effect)}
                       </div>
                     </li>`,
                   )}
                 </ul>
+                ${!effectsComplete ? html`<div class="callout danger" role="alert">${t("clawsEffectReview.unavailable")}</div>` : nothing}
                 <h3>${t("clawsLifecycle.updateCapabilities")}</h3>
                 ${
                   plan.capabilities.length
@@ -378,6 +388,8 @@ function renderReview(props: AgentClawPanelProps) {
   }
   const plan = props.plan;
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
+  const effectsComplete = hasCompleteClawActionEffects(plan);
+  const schedulesComplete = hasCompleteClawRemoveSchedules(plan);
   const canConfirm =
     props.canRemove &&
     Boolean(plan) &&
@@ -387,7 +399,9 @@ function renderReview(props: AgentClawPanelProps) {
     !props.removing &&
     !props.removeUnknown &&
     !props.removeResult &&
-    !plan?.riskAcknowledgementRequired;
+    !plan?.riskAcknowledgementRequired &&
+    effectsComplete &&
+    schedulesComplete;
   return html`<openclaw-modal-dialog
     label=${t("clawsLifecycle.reviewRemove")}
     style="--openclaw-modal-width: min(680px, calc(100vw - 24px));"
@@ -443,6 +457,7 @@ function renderReview(props: AgentClawPanelProps) {
                         <strong>${labelAction(action.action)} ${labelState(action.kind)}</strong>
                         <span>${action.id}</span>
                         ${action.reason ? html`<span>${action.reason}</span>` : nothing}
+                        ${renderClawActionEffect(action.effect)}
                       </div>
                       ${
                         action.action === "retain"
@@ -454,6 +469,8 @@ function renderReview(props: AgentClawPanelProps) {
                     </li>`,
                   )}
                 </ul>
+                ${!effectsComplete || !schedulesComplete ? html`<div class="callout danger" role="alert">${t("clawsEffectReview.unavailable")}</div>` : nothing}
+                ${renderClawScheduledJobs(plan.scheduledJobs, "remove")}
                 ${
                   plan.blockers.length
                     ? html`<div class="callout danger" role="alert">

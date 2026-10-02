@@ -26,12 +26,14 @@ import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degra
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
 import { preserveOperatorAgentSettings } from "./agent-config-ownership.js";
 import { digestClawValue } from "./digest.js";
+import type { ClawRemovePlan } from "./lifecycle-remove-contract.js";
 import { cronJobSchema } from "./schema.js";
 import type { ClawAddPlan, ClawCronJob } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan-types.js";
 
 type AccessSnapshot = NonNullable<ClawConfiguredAccess["desired"]>;
-type ScheduledDeclaration = NonNullable<ClawScheduledJobs["jobs"][number]["proposed"]>;
+type ScheduledDeclaration = NonNullable<ClawScheduledJobs["jobs"][number]["current"]>;
+type ProposedScheduledDeclaration = NonNullable<ClawScheduledJobs["jobs"][number]["proposed"]>;
 
 function configuredMemorySearch(
   config: OpenClawConfig,
@@ -85,6 +87,7 @@ function configuredSubagentTargets(
 }
 
 function configuredSnapshot(config: OpenClawConfig, agentId: string): AccessSnapshot {
+  const agentTools = resolveAgentConfig(config, agentId)?.tools;
   const tools = resolveConfiguredToolAccess({
     config,
     agentId,
@@ -103,6 +106,8 @@ function configuredSnapshot(config: OpenClawConfig, agentId: string): AccessSnap
         .filter((tool) => tool.status === "excluded")
         .map((tool) => tool.id)
         .toSorted(),
+      explicitAllow: agentTools?.allow?.toSorted() ?? [],
+      explicitDeny: agentTools?.deny?.toSorted() ?? [],
     },
     sandbox: {
       mode: sandbox.mode,
@@ -176,7 +181,12 @@ function scheduledDeclaration(job: ClawCronJob): ScheduledDeclaration {
     schedule: { cron: job.schedule.cron, timezone: job.schedule.timezone },
     session: job.session,
     delivery: job.delivery?.mode === "announce" ? "last-channel" : "none",
+    messageDigest: digestClawValue(job.message),
   };
+}
+
+function proposedScheduledDeclaration(job: ClawCronJob): ProposedScheduledDeclaration {
+  return { ...scheduledDeclaration(job), message: job.message };
 }
 
 export function projectClawAddScheduledJobs(plan: ClawAddPlan): ClawScheduledJobs {
@@ -201,7 +211,7 @@ export function projectClawAddScheduledJobs(plan: ClawAddPlan): ClawScheduledJob
           id: action.id,
           action: action.action,
           blocked: action.blocked,
-          proposed: scheduledDeclaration(parsed.data),
+          proposed: proposedScheduledDeclaration(parsed.data),
         };
       }),
   };
@@ -240,9 +250,29 @@ export function projectClawUpdateScheduledJobs(
           projected.current = scheduledDeclaration(current);
         }
         if (target) {
-          projected.proposed = scheduledDeclaration(target);
+          projected.proposed = proposedScheduledDeclaration(target);
         }
         return projected;
+      }),
+  };
+}
+
+export function projectClawRemoveScheduledJobs(plan: ClawRemovePlan): ClawScheduledJobs {
+  return {
+    coverage: "package-declarations",
+    jobs: plan.actions
+      .filter((action) => action.kind === "cronJob")
+      .map((action) => {
+        const parsed = cronJobSchema.safeParse(action.details?.job);
+        if (!parsed.success || parsed.data.id !== action.id) {
+          throw new Error("Claw removal schedule cannot be disclosed.");
+        }
+        return {
+          id: action.id,
+          action: action.action,
+          blocked: action.blocked,
+          current: scheduledDeclaration(parsed.data),
+        };
       }),
   };
 }

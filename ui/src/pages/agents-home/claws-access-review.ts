@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { Value } from "typebox/value";
 import type {
   ClawConfiguredAccess,
+  ClawLifecyclePlanResult,
   ClawScheduledJobs,
 } from "../../../../packages/gateway-protocol/src/schema/claws.js";
 import {
@@ -51,9 +52,30 @@ export function hasCompleteClawDisclosures(
       job?.action === action.action &&
       job.blocked === action.blocked &&
       (action.blocked ||
-        ((!needsCurrent || Boolean(job.current)) && (!needsProposed || Boolean(job.proposed))))
+        ((!needsCurrent || Boolean(job.current)) &&
+          (!needsProposed || Boolean(job.proposed?.message))))
     );
   });
+}
+
+export function hasCompleteClawRemoveSchedules(
+  plan: Pick<ClawLifecyclePlanResult, "actions" | "scheduledJobs"> | null | undefined,
+): boolean {
+  if (!plan || !Value.Check(ClawScheduledJobsSchema, plan.scheduledJobs)) {
+    return false;
+  }
+  const actions = plan.actions.filter((action) => action.kind === "cronJob");
+  const jobs = plan.scheduledJobs.jobs;
+  return (
+    actions.length === jobs.length &&
+    new Set(jobs.map((job) => job.id)).size === jobs.length &&
+    actions.every((action) => {
+      const job = jobs.find((candidate) => candidate.id === action.id);
+      return (
+        job?.action === action.action && job.blocked === action.blocked && Boolean(job.current)
+      );
+    })
+  );
 }
 
 function renderValue(value: string | number | boolean | null | undefined) {
@@ -87,6 +109,8 @@ function renderSnapshot(snapshot: NonNullable<ClawConfiguredAccess["desired"]>, 
     <dl>
       ${renderFact(t("clawsAccessReview.allowedTools"), renderValue(snapshot.tools.allowed.join(", ")))}
       ${renderFact(t("clawsAccessReview.excludedTools"), renderValue(snapshot.tools.excluded.join(", ")))}
+      ${renderFact(t("clawsAccessReview.explicitAllow"), renderValue(snapshot.tools.explicitAllow.join(", ")))}
+      ${renderFact(t("clawsAccessReview.explicitDeny"), renderValue(snapshot.tools.explicitDeny.join(", ")))}
       ${renderFact(t("clawsAccessReview.spawnTargets"), renderValue(subagentTargets.allowedAgentIds.join(", ")))}
       ${renderFact(t("clawsAccessReview.anyConfiguredAgent"), renderValue(subagentTargets.allowAnyConfiguredAgent))}
       ${renderFact(t("clawsAccessReview.implicitSelfAllowed"), renderValue(subagentTargets.implicitSelfAllowed))}
@@ -107,13 +131,53 @@ function renderSnapshot(snapshot: NonNullable<ClawConfiguredAccess["desired"]>, 
 }
 
 function renderSchedule(
-  declaration: NonNullable<ClawScheduledJobs["jobs"][number]["proposed"]>,
+  declaration:
+    | NonNullable<ClawScheduledJobs["jobs"][number]["current"]>
+    | NonNullable<ClawScheduledJobs["jobs"][number]["proposed"]>,
   title: string,
 ) {
-  return html`<span
-    >${title}: <code>${declaration.schedule.cron}</code> ${declaration.schedule.timezone} ·
-    ${declaration.session} · ${declaration.delivery}</span
-  >`;
+  return html`<div class="claws-access-review__schedule">
+    <span
+      >${title}: <code>${declaration.schedule.cron}</code> ${declaration.schedule.timezone} ·
+      ${declaration.session} · ${declaration.delivery}</span
+    >
+    ${
+      "message" in declaration && declaration.message
+        ? html`<strong>${t("clawsAccessReview.task")}</strong>
+            <pre>${declaration.message}</pre>`
+        : html`<small
+            >${t("clawsAccessReview.currentTaskFingerprint")}:
+            <code>${declaration.messageDigest}</code></small
+          >`
+    }
+  </div>`;
+}
+
+export function renderClawScheduledJobs(
+  scheduledJobs: ClawScheduledJobs | undefined,
+  operation: "add" | "update" | "remove",
+) {
+  if (!scheduledJobs) {
+    return nothing;
+  }
+  const jobs = scheduledJobs.jobs;
+  return html`
+    <h4>${t("clawsAccessReview.schedules")}</h4>
+    ${
+      jobs.length
+        ? html`<ul class="claws-access-review__jobs">
+            ${jobs.map(
+              (job) => html`<li>
+                <strong>${job.id}</strong>
+                <span>${job.action}</span>
+                ${job.current ? renderSchedule(job.current, t("clawsAccessReview.current")) : nothing}
+                ${job.proposed ? renderSchedule(job.proposed, t(operation === "add" ? "clawsAccessReview.afterAdd" : "clawsAccessReview.afterUpdate")) : nothing}
+              </li>`,
+            )}
+          </ul>`
+        : html`<p class="claws-access-review__coverage">${t("clawsAccessReview.noSchedules")}</p>`
+    }
+  `;
 }
 
 export function renderClawAccessReview(plan: ReviewPlan | null | undefined) {
@@ -123,7 +187,6 @@ export function renderClawAccessReview(plan: ReviewPlan | null | undefined) {
     </div>`;
   }
   const access = plan.configuredAccess;
-  const jobs = plan.scheduledJobs.jobs;
   return html`<section class="claws-access-review" aria-label=${t("clawsAccessReview.title")}>
     <h4>${t("clawsAccessReview.title")}</h4>
     <p class="claws-access-review__coverage">${t("clawsAccessReview.coverage")}</p>
@@ -131,21 +194,6 @@ export function renderClawAccessReview(plan: ReviewPlan | null | undefined) {
       ${access.current ? renderSnapshot(access.current, t("clawsAccessReview.current")) : nothing}
       ${renderSnapshot(access.desired, t(plan.operation === "add" ? "clawsAccessReview.afterAdd" : "clawsAccessReview.afterUpdate"))}
     </div>
-    <h4>${t("clawsAccessReview.schedules")}</h4>
-    ${jobs.length ? html`<p class="claws-access-review__coverage">${t("clawsAccessReview.scheduleTaskWithheld")}</p>` : nothing}
-    ${
-      jobs.length
-        ? html`<ul class="claws-access-review__jobs">
-            ${jobs.map(
-              (job) => html`<li>
-                <strong>${job.id}</strong>
-                <span>${job.action}</span>
-                ${job.current ? renderSchedule(job.current, t("clawsAccessReview.current")) : nothing}
-                ${job.proposed ? renderSchedule(job.proposed, t(plan.operation === "add" ? "clawsAccessReview.afterAdd" : "clawsAccessReview.afterUpdate")) : nothing}
-              </li>`,
-            )}
-          </ul>`
-        : html`<p class="claws-access-review__coverage">${t("clawsAccessReview.noSchedules")}</p>`
-    }
+    ${renderClawScheduledJobs(plan.scheduledJobs, plan.operation)}
   </section>`;
 }

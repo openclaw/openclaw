@@ -94,12 +94,15 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
       assertCurrent();
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
-        ? async (plugins) => {
+        ? async (plugins, options) => {
             assertCurrent();
             const { application } = await reloadManagedPlugin({
               plugins: [...plugins],
               applyRuntime,
-              beforePersistentApply: assertCurrent,
+              beforePersistentApply: () => {
+                assertCurrent();
+                options?.commitGuard?.();
+              },
               ...(signal ? { signal } : {}),
             });
             if (!application) {
@@ -124,14 +127,17 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
         cronGateway: {
-          add: async (input) => {
+          add: async (input, options) => {
             assertCurrent();
             const normalized = normalizeCronJobCreate(input);
             if (!normalized || !validateCronAddParams(normalized)) {
               throw new Error("Claw schedule declaration is invalid.");
             }
             return await context.cron.add(normalized, {
-              commitGuard: assertCurrent,
+              commitGuard: () => {
+                assertCurrent();
+                options?.commitGuard?.();
+              },
               matchesExisting: (job) =>
                 job.declarationKey === normalized.declarationKey &&
                 job.agentId === normalized.agentId &&
@@ -149,9 +155,14 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
               (job) => job.agentId === agentId,
             ),
           }),
-          remove: async (schedulerJobId) => {
+          remove: async (schedulerJobId, options) => {
             assertCurrent();
-            return await context.cron.remove(schedulerJobId, { commitGuard: assertCurrent });
+            return await context.cron.remove(schedulerJobId, {
+              commitGuard: () => {
+                assertCurrent();
+                options?.commitGuard?.();
+              },
+            });
           },
         },
       });

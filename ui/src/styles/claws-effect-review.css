@@ -1,0 +1,24 @@
+.claws-effect-review {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.claws-effect-review__fact {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(0, 2fr);
+  gap: 8px;
+}
+
+.claws-effect-review__fact dt {
+  color: var(--muted);
+}
+
+.claws-effect-review__fact dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}

@@ -94,6 +94,26 @@ function removeBootstrap(
 }
 
 describe("package-root BOOTSTRAP.md", () => {
+  it("rechecks reviewed access at the native bootstrap write", async () => {
+    const { plan } = await bootstrapPlan();
+    let wroteBootstrap = false;
+
+    await expect(
+      seedClawPackageBootstrap(plan, {
+        assertForwardCurrent: () => {
+          throw new Error("reviewed access changed");
+        },
+        seedBootstrap: async (input) => {
+          input.beforePersistentApply?.();
+          wroteBootstrap = true;
+          return "seeded";
+        },
+      }),
+    ).rejects.toThrow("reviewed access changed");
+
+    expect(wroteBootstrap).toBe(false);
+  });
+
   it("integrity-binds bootstrap and plans a distinct native action", async () => {
     const root = await createPackage();
     const first = await readClawManifestFile(root);

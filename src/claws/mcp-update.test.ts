@@ -63,6 +63,98 @@ function manifest(): ClawManifest {
 }
 
 describe("applyClawMcpUpdate", () => {
+  it("does not add an MCP server when reviewed access changes during a refs read", async () => {
+    let reviewedAccessCurrent = true;
+    const upsertRef = vi.fn();
+    const setServer = vi.fn(async () => ({
+      ok: true as const,
+      path: "config",
+      config: {},
+      mcpServers: { remote },
+    }));
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "remote",
+            action: "add",
+            target: "mcp.servers.remote",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          config: {},
+          sourceMcpServers: {},
+          readRefs: async () => {
+            reviewedAccessCurrent = false;
+            return [];
+          },
+          assertForwardCurrent: () => {
+            if (!reviewedAccessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+          upsertRef,
+          setServer,
+        },
+      ),
+    ).rejects.toThrow("reviewed access changed");
+    expect(upsertRef).not.toHaveBeenCalled();
+    expect(setServer).not.toHaveBeenCalled();
+  });
+
+  it("rolls back an added MCP server after reviewed access changes", async () => {
+    const root = tempDirs.make("openclaw-mcp-reviewed-access-rollback-");
+    const stateOptions = { env: { OPENCLAW_STATE_DIR: join(root, "state") } };
+    let reviewedAccessCurrent = true;
+    const setServer = vi.fn(async () => {
+      reviewedAccessCurrent = false;
+      return { ok: true as const, path: "config", config: {}, mcpServers: { remote } };
+    });
+    const unsetServer = vi.fn(async () => ({
+      ok: true as const,
+      path: "config",
+      config: {},
+      mcpServers: {},
+      removed: true,
+    }));
+
+    await expect(
+      applyClawMcpUpdate(
+        plan([
+          {
+            kind: "mcpServer",
+            id: "remote",
+            action: "add",
+            target: "mcp.servers.remote",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          ...stateOptions,
+          config: {},
+          sourceMcpServers: {},
+          assertForwardCurrent: () => {
+            if (!reviewedAccessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+          setServer,
+          unsetServer,
+        },
+      ),
+    ).rejects.toThrow("reviewed access changed");
+    expect(setServer).toHaveBeenCalledTimes(1);
+    expect(unsetServer).toHaveBeenCalledTimes(1);
+    expect(readClawMcpServerRefs("worker", stateOptions)).toEqual([]);
+  });
+
   it("applies add, change, and remove with CAS writes and reversible ownership", async () => {
     const currentRefs = [ref("docs", oldDocs), ref("legacy", legacy)];
     const setServer = vi.fn(async () => ({

@@ -16,7 +16,7 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("applyClawWorkspaceUpdate", () => {
-  it("applies add/change/remove actions and can roll them back with provenance", async () => {
+  it("blocks forward writes after access changes but still rolls back prior writes", async () => {
     const root = tempDirs.make("openclaw-claw-workspace-update-");
     const currentRoot = join(root, "current");
     const targetRoot = join(root, "target");
@@ -103,9 +103,16 @@ describe("applyClawWorkspaceUpdate", () => {
     });
     expect(JSON.stringify(updatePlan)).not.toContain("target soul");
 
+    let reviewedAccessCurrent = true;
+    const assertForwardCurrent = () => {
+      if (!reviewedAccessCurrent) {
+        throw new Error("reviewed access changed");
+      }
+    };
     const execution = await applyClawWorkspaceUpdate(updatePlan, targetAddPlan, {
       env,
       nowMs: 20,
+      assertForwardCurrent,
     });
 
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("target soul\n");
@@ -116,8 +123,39 @@ describe("applyClawWorkspaceUpdate", () => {
       expect.objectContaining({ path: "SOUL.md", sourcePath: "CLAW.md" }),
     ]);
 
+    reviewedAccessCurrent = false;
     await execution.rollback();
 
+    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("current soul\n");
+    await expect(readFile(join(workspace, "OLD.md"), "utf8")).resolves.toBe("old\n");
+    await expect(access(join(workspace, "NEW.md"))).rejects.toThrow();
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual(originalFiles);
+
+    await expect(
+      applyClawWorkspaceUpdate(updatePlan, targetAddPlan, {
+        env,
+        nowMs: 25,
+        assertForwardCurrent,
+      }),
+    ).rejects.toThrow("reviewed access changed");
+    await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("current soul\n");
+    await expect(readFile(join(workspace, "OLD.md"), "utf8")).resolves.toBe("old\n");
+    await expect(access(join(workspace, "NEW.md"))).rejects.toThrow();
+    expect(readClawWorkspaceFiles("worker", { env })).toEqual(originalFiles);
+
+    let guardCalls = 0;
+    await expect(
+      applyClawWorkspaceUpdate(updatePlan, targetAddPlan, {
+        env,
+        nowMs: 26,
+        assertForwardCurrent: () => {
+          guardCalls += 1;
+          if (guardCalls === 2) {
+            throw new Error("reviewed access changed at file write");
+          }
+        },
+      }),
+    ).rejects.toThrow("reviewed access changed at file write");
     await expect(readFile(join(workspace, "SOUL.md"), "utf8")).resolves.toBe("current soul\n");
     await expect(readFile(join(workspace, "OLD.md"), "utf8")).resolves.toBe("old\n");
     await expect(access(join(workspace, "NEW.md"))).rejects.toThrow();

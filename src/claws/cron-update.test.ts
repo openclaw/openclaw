@@ -81,6 +81,189 @@ function manifest(): ClawManifest {
 }
 
 describe("applyClawCronUpdate", () => {
+  it("checks reviewed access at the pending cron-ref write", async () => {
+    let accessCurrent = true;
+    let persisted = false;
+    const add = vi.fn(async () => ({ id: "scheduler-daily" }));
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "daily",
+            action: "add",
+            target: "claw:worker:daily",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          readRefs: async () => [],
+          upsertRef: async (
+            _record: PersistedClawCronRef,
+            writeOptions?: { assertCurrent?: () => void },
+          ) => {
+            accessCurrent = false;
+            writeOptions?.assertCurrent?.();
+            persisted = true;
+          },
+          assertForwardCurrent: () => {
+            if (!accessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+          cronGateway: { add, remove: vi.fn(), get: vi.fn() },
+        },
+      ),
+    ).rejects.toMatchObject({ message: "reviewed access changed", partial: false });
+
+    expect(persisted).toBe(false);
+    expect(add).not.toHaveBeenCalled();
+  });
+
+  it("checks reviewed access at the scheduler's async add commit", async () => {
+    let accessCurrent = true;
+    let committed = false;
+    const add = vi.fn(
+      async (_input: Record<string, unknown>, options?: { commitGuard?: () => void }) => {
+        accessCurrent = false;
+        options?.commitGuard?.();
+        committed = true;
+        return { id: "scheduler-daily" };
+      },
+    );
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "daily",
+            action: "add",
+            target: "claw:worker:daily",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          readRefs: async () => [],
+          upsertRef: vi.fn(async () => undefined),
+          assertForwardCurrent: () => {
+            if (!accessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+          cronGateway: { add, remove: vi.fn(), get: vi.fn() },
+        },
+      ),
+    ).rejects.toMatchObject({ message: "reviewed access changed", partial: true });
+
+    expect(committed).toBe(false);
+  });
+
+  it("checks reviewed access at the scheduler's async remove commit", async () => {
+    let accessCurrent = true;
+    let removed = false;
+    const previous = ref(legacy, "scheduler-legacy");
+    const remove = vi.fn(async (_id: string, options?: { commitGuard?: () => void }) => {
+      accessCurrent = false;
+      options?.commitGuard?.();
+      removed = true;
+      return { removed: true };
+    });
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "legacy",
+            action: "remove",
+            target: "scheduler-legacy",
+            blocked: false,
+            reason: "removed",
+          },
+        ]),
+        manifest(),
+        {
+          readRefs: async () => [previous],
+          upsertRef: vi.fn(async () => undefined),
+          assertForwardCurrent: () => {
+            if (!accessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+          cronGateway: {
+            add: vi.fn(),
+            remove,
+            get: async () => cronReadView("worker", previous),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ message: "reviewed access changed", partial: true });
+
+    expect(removed).toBe(false);
+  });
+
+  it("keeps rollback authorized when reviewed access changes between forward jobs", async () => {
+    let accessCurrent = true;
+    const add = vi.fn(async () => ({ id: "scheduler-daily" }));
+    const remove = vi.fn(async (_id: string, options?: { commitGuard?: () => void }) => {
+      options?.commitGuard?.();
+      return { removed: true };
+    });
+    const deleteRef = vi.fn(async () => undefined);
+
+    await expect(
+      applyClawCronUpdate(
+        plan([
+          {
+            kind: "cronJob",
+            id: "daily",
+            action: "add",
+            target: "claw:worker:daily",
+            blocked: false,
+            reason: "added",
+          },
+          {
+            kind: "cronJob",
+            id: "weekly",
+            action: "add",
+            target: "claw:worker:weekly",
+            blocked: false,
+            reason: "added",
+          },
+        ]),
+        manifest(),
+        {
+          readRefs: async () => [],
+          upsertRef: async (record: PersistedClawCronRef) => {
+            if (record.manifestId === "daily" && record.status === "complete") {
+              accessCurrent = false;
+            }
+          },
+          deleteRef,
+          assertForwardCurrent: () => {
+            if (!accessCurrent) {
+              throw new Error("reviewed access changed");
+            }
+          },
+          assertCurrent: vi.fn(),
+          cronGateway: { add, remove, get: vi.fn(async () => undefined) },
+        },
+      ),
+    ).rejects.toMatchObject({ message: "reviewed access changed", partial: false });
+
+    expect(add).toHaveBeenCalledOnce();
+    expect(remove).toHaveBeenCalledExactlyOnceWith("scheduler-daily", {
+      commitGuard: expect.any(Function),
+    });
+    expect(deleteRef).toHaveBeenCalledExactlyOnceWith("worker", "daily", expect.any(Object));
+  });
+
   it.each(["add", "change"] as const)(
     "preserves ownership before a failed readiness wait and permits %s retry",
     async (action) => {

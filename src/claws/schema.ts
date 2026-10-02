@@ -443,7 +443,7 @@ const remoteMcpServerSchema = z
     }
   });
 
-const mcpServerSchema = z.union([stdioMcpServerSchema, remoteMcpServerSchema]);
+export const mcpServerSchema = z.union([stdioMcpServerSchema, remoteMcpServerSchema]);
 
 export const cronJobSchema = z
   .object({

@@ -5,10 +5,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { ClawConfiguredAccess } from "../../../../packages/gateway-protocol/src/schema/claws.js";
 import { i18n } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
-import { hasCompleteClawDisclosures, renderClawAccessReview } from "./claws-access-review.ts";
+import {
+  hasCompleteClawDisclosures,
+  hasCompleteClawRemoveSchedules,
+  renderClawAccessReview,
+} from "./claws-access-review.ts";
 
 const snapshot: NonNullable<ClawConfiguredAccess["desired"]> = {
-  tools: { allowed: ["read"], excluded: ["exec"] },
+  tools: { allowed: ["read"], excluded: ["exec"], explicitAllow: ["read"], explicitDeny: [] },
   sandbox: { mode: "non-main", scope: "agent", workspaceAccess: "ro", backend: "docker" },
   filesystem: { workspaceOnly: true },
   heartbeat: { enabled: false, intervalMs: null },
@@ -25,11 +29,14 @@ const current = {
   schedule: { cron: "0 8 * * *", timezone: "UTC" },
   session: "main" as const,
   delivery: "none" as const,
+  messageDigest: "sha256:current-task",
 };
 const proposed = {
   schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
   session: "isolated" as const,
   delivery: "last-channel" as const,
+  message: "Prepare the daily brief <without executing HTML>",
+  messageDigest: "sha256:proposed-task",
 };
 
 beforeEach(async () => {
@@ -38,6 +45,19 @@ beforeEach(async () => {
 });
 
 describe("Claw access review", () => {
+  it("requires exact current schedule coverage before Remove", () => {
+    const action = { kind: "cronJob", id: "daily-brief", action: "remove", blocked: false };
+    expect(hasCompleteClawRemoveSchedules({ actions: [action] })).toBe(false);
+    expect(
+      hasCompleteClawRemoveSchedules({
+        actions: [action],
+        scheduledJobs: {
+          coverage: "package-declarations",
+          jobs: [{ id: "daily-brief", action: "remove", blocked: false, current }],
+        },
+      }),
+    ).toBe(true);
+  });
   it("discloses configured spawn targets and unresolved memory without claiming it is on", () => {
     const plan = {
       operation: "add" as const,
@@ -68,13 +88,14 @@ describe("Claw access review", () => {
       ]),
     );
     expect(facts["Memory search"]).toBe("Unresolved");
+    expect(facts["Agent tool allowlist"]).toBe("read");
     expect(facts["Spawn targets"]).toBe("workflow, research");
     expect(facts["Any configured agent"]).toBe("Yes");
     expect(facts["Self when agent ID omitted"]).toBe("Yes");
     expect(facts["Agent ID required"]).toBe("No");
   });
 
-  it("shows Add schedule metadata while making withheld task text explicit", () => {
+  it("shows the exact package-authored Add task as escaped text", () => {
     const plan = {
       operation: "add" as const,
       actions: [{ kind: "cronJob", id: "daily-brief", action: "schedule", blocked: false }],
@@ -92,7 +113,8 @@ describe("Claw access review", () => {
     const container = document.createElement("div");
     render(renderClawAccessReview(plan), container);
     expect(container.textContent).toContain("After Add: 0 9 * * * America/Los_Angeles");
-    expect(container.textContent).toContain("Scheduled task text is not shown here");
+    expect(container.textContent).toContain("Prepare the daily brief <without executing HTML>");
+    expect(container.querySelector("without")).toBeNull();
   });
 
   it("shows before/after Update schedules and rejects a missing current declaration", () => {
@@ -122,7 +144,7 @@ describe("Claw access review", () => {
     expect(container.textContent).toContain("Current: 0 8 * * * UTC");
     expect(container.textContent).toContain("After Update: 0 9 * * * America/Los_Angeles");
     expect(container.querySelectorAll(".claws-access-review__jobs li")).toHaveLength(2);
-    expect(container.textContent).toContain("Scheduled task text is not shown here");
+    expect(container.textContent).toContain("Prepare the daily brief <without executing HTML>");
 
     const missingCurrent = {
       ...plan,

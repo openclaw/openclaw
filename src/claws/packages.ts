@@ -236,6 +236,11 @@ async function installClawPackagesUnlocked(
         packageLease?.assertCurrent();
         options.assertCurrent?.();
       };
+      const assertForwardCurrent = () => {
+        assertCurrent();
+        options.assertForwardCurrent?.();
+      };
+      const forwardOptions = { ...options, assertCurrent: assertForwardCurrent };
       if (pkg.kind === "skill") {
         const upgrade = options.skillUpgrade?.ref === pkg.ref ? options.skillUpgrade : undefined;
         if (upgrade) {
@@ -279,7 +284,7 @@ async function installClawPackagesUnlocked(
         if (preflight.action === "reuse") {
           installedPackages.push(
             await persistPackageRef(plan, pkg, {
-              ...options,
+              ...forwardOptions,
               status: "complete",
               relationship: "managed",
               origin: "pre-existing",
@@ -304,14 +309,14 @@ async function installClawPackagesUnlocked(
           });
         }
         let packageRef = await persistPackageRef(plan, pkg, {
-          ...options,
+          ...forwardOptions,
           status: "pending",
           relationship: "managed",
           origin: "claw-introduced",
           independentOwner: false,
         });
         installedPackages.push(packageRef);
-        assertCurrent();
+        assertForwardCurrent();
         if (upgrade) {
           await upgrade.assertCurrent();
         }
@@ -325,7 +330,7 @@ async function installClawPackagesUnlocked(
             ? { force: true, expectedClawHubState: upgrade.plan, deferCommit: true }
             : {}),
           beforePersistentApply: () => {
-            assertCurrent();
+            assertForwardCurrent();
             if (!upgrade) {
               options.onExternalMutation?.(pkg);
             }
@@ -352,7 +357,7 @@ async function installClawPackagesUnlocked(
         if (installed.version !== pkg.version) {
           throw new Error(`Skill ${pkg.ref}@${pkg.version} changed during installation.`);
         }
-        packageRef = await completePackageRef(packageRef, "complete", options);
+        packageRef = await completePackageRef(packageRef, "complete", forwardOptions);
         installedPackages[installedPackages.length - 1] = packageRef;
         continue;
       }
@@ -465,10 +470,11 @@ async function installClawPackagesUnlocked(
           );
         }
         if (resumableRequirement) {
+          assertForwardCurrent();
           options.runtimeBatch?.retain(probe.pluginId);
           installedPackages.push(
             await persistPackageRef(plan, pkg, {
-              ...options,
+              ...forwardOptions,
               status: "complete",
               relationship: resumableRequirement.relationship,
               origin: resumableRequirement.origin,
@@ -492,7 +498,7 @@ async function installClawPackagesUnlocked(
           !ownerInstallIsNewerThanRefs(preflight.installedAt, existingRefs);
         installedPackages.push(
           await persistPackageRef(plan, pkg, {
-            ...options,
+            ...forwardOptions,
             status: "complete",
             relationship: "referenced",
             origin: inheritsClawOrigin ? "claw-introduced" : "pre-existing",
@@ -512,7 +518,7 @@ async function installClawPackagesUnlocked(
       }
 
       let packageRef = await persistPackageRef(plan, pkg, {
-        ...options,
+        ...forwardOptions,
         status: "pending",
         relationship: "referenced",
         origin: "claw-introduced",
@@ -520,7 +526,7 @@ async function installClawPackagesUnlocked(
       });
       installedPackages.push(packageRef);
 
-      assertCurrent();
+      assertForwardCurrent();
       await installPlugin({
         request: {
           source: "clawhub",
@@ -531,9 +537,9 @@ async function installClawPackagesUnlocked(
           expectedPluginId: probe.pluginId,
         },
         env: options.env,
-        beforePersistentApply: assertCurrent,
+        beforePersistentApply: assertForwardCurrent,
         beforePersistentEffect: () => {
-          assertCurrent();
+          assertForwardCurrent();
           options.onExternalMutation?.(pkg);
         },
         logger: createPluginInstallLogger(runtime),
@@ -563,7 +569,7 @@ async function installClawPackagesUnlocked(
         });
       }
       assertCurrent();
-      packageRef = await completePackageRef(packageRef, "complete", options);
+      packageRef = await completePackageRef(packageRef, "complete", forwardOptions);
       installedPackages[installedPackages.length - 1] = packageRef;
     } catch (error) {
       try {

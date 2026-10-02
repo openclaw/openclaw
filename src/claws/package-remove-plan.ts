@@ -95,6 +95,14 @@ export function projectClawPackageRemovePlan(params: {
       target: `${pkg.source}:${pkg.ref}@${pkg.version}`,
       blocked: Boolean(decision.blocked),
       details: {
+        ...(pkg.kind === "skill"
+          ? {
+              source: pkg.source,
+              ref: pkg.ref,
+              version: pkg.version,
+              integrity: pkg.integrity,
+            }
+          : {}),
         expectedState: inspected?.state ?? "incomplete",
         status: pkg.status,
         relationship: pkg.relationship,

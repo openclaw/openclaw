@@ -9,10 +9,12 @@ import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import { withResolvedClawHubSource, type ClawHubCoordinate } from "./clawhub-source.js";
 import type { ClawCronGateway } from "./cron.js";
+import { digestClawValue } from "./digest.js";
 import {
   ClawGatewayPlanChangedError,
   type GatewayClawAddApplyResult,
 } from "./gateway-add-apply.js";
+import { projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import {
   buildGatewayClawUpdatePlan,
   prepareGatewayClawUpdatePlanning,
@@ -20,7 +22,7 @@ import {
 import { bindClawLifecycleTrust, plansMatchAcrossSourceRoots } from "./gateway-plan-projection.js";
 import { bindClawPluginInstallConsent } from "./gateway-plugin-consent.js";
 import { bindClawSkillWarningConsent } from "./gateway-skill-consent.js";
-import { applyClawUpdatePlan } from "./update-apply.js";
+import { applyClawUpdatePlan, ClawUpdateMutationError } from "./update-apply.js";
 
 const log = createSubsystemLogger("claws/gateway-update");
 
@@ -149,9 +151,11 @@ export async function applyClawUpdateForGateway(
             mayHaveChanged = true;
             const persisted = await persistSource();
             const persistedPlan = await planCurrent(persisted);
+            const reviewedAccess = persistedPlan.projection.configuredAccess;
             if (
               persistedPlan.projection.planIntegrity !== input.planIntegrity ||
               persistedPlan.projection.blockers.length > 0 ||
+              !reviewedAccess?.desired ||
               persistedPlan.plan.blockers.length > 0 ||
               persistedPlan.plan.actions.some((action) => action.blocked) ||
               !plansMatchAcrossSourceRoots({
@@ -163,6 +167,8 @@ export async function applyClawUpdateForGateway(
             ) {
               throw new ClawGatewayPlanChangedError();
             }
+            const reviewedAccessDigest = digestClawValue(reviewedAccess);
+            const reviewedDesiredDigest = digestClawValue(reviewedAccess.desired);
             assertCurrent();
             const result = await applyClawUpdatePlan(
               persistedPlan.plan,
@@ -176,6 +182,34 @@ export async function applyClawUpdateForGateway(
                 ...persistedPlan.stateOptions,
                 stateMode: "worker",
                 assertCurrent,
+                getCurrentConfig: input.getRuntimeConfig,
+                assertReviewedConfig: (config, desiredAgent, phase) => {
+                  let actualAccessMatchesReview: boolean;
+                  try {
+                    const actualAccess = projectClawConfiguredAccess({
+                      config,
+                      agentId: persistedPlan.plan.agentId,
+                      desiredAgent,
+                      operation: "update",
+                    });
+                    actualAccessMatchesReview =
+                      phase === "after-agent-commit"
+                        ? digestClawValue(actualAccess.current) === reviewedDesiredDigest &&
+                          digestClawValue(actualAccess.desired) === reviewedDesiredDigest
+                        : digestClawValue(actualAccess) === reviewedAccessDigest;
+                  } catch {
+                    throw new ClawUpdateMutationError(
+                      "reviewed_access_changed",
+                      "The effective Claw access changed since review. Preview it again.",
+                    );
+                  }
+                  if (!actualAccessMatchesReview) {
+                    throw new ClawUpdateMutationError(
+                      "reviewed_access_changed",
+                      "The effective Claw access changed since review. Preview it again.",
+                    );
+                  }
+                },
                 config: persistedPlan.config,
                 sourceMcpServers: persistedPlan.sourceMcpServers,
                 packagePreflight: persistedPlan.packagePreflight,

@@ -2,6 +2,7 @@ import type {
   ClawPluginAcknowledgement,
   ClawSkillAcknowledgement,
 } from "../../packages/gateway-protocol/src/schema/claws.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubFetchOptions } from "../infra/clawhub-client.js";
 import type { PluginInstallBatchReload } from "../plugins/install-runtime-batch.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -42,6 +43,7 @@ export async function applyClawAddForGateway(
     acknowledgeCapabilities?: readonly ClawPluginAcknowledgement[];
     acknowledgeSkillWarnings?: readonly ClawSkillAcknowledgement[];
     getPlanningContext: () => Promise<GatewayClawAddPlanningContext>;
+    getRuntimeConfig: () => OpenClawConfig;
     assertCurrent: () => void;
     signal?: AbortSignal;
     stateDir?: string;
@@ -110,6 +112,7 @@ export async function applyClawAddForGateway(
             );
             if (
               currentProjection.planIntegrity !== input.planIntegrity ||
+              currentProjection.blockers.length > 0 ||
               currentPlan.blockers.length > 0 ||
               currentPlan.actions.some((action) => action.blocked)
             ) {
@@ -154,7 +157,8 @@ export async function applyClawAddForGateway(
             );
             if (
               persistedProjection.planIntegrity !== input.planIntegrity ||
-              !persistedProjection.configuredAccess ||
+              !persistedProjection.configuredAccess?.desired ||
+              persistedProjection.blockers.length > 0 ||
               persistedPlan.blockers.length > 0 ||
               persistedPlan.actions.some((action) => action.blocked) ||
               !plansMatchAcrossSourceRoots({
@@ -167,28 +171,35 @@ export async function applyClawAddForGateway(
               throw new ClawGatewayPlanChangedError();
             }
             const reviewedAccessDigest = digestClawValue(persistedProjection.configuredAccess);
+            const reviewedDesiredDigest = digestClawValue(
+              persistedProjection.configuredAccess.desired,
+            );
             assertCurrent();
             const result = await applyClawAddPlan(persistedPlan, {
               stateMode: "worker",
               assertCurrent,
-              assertReviewedConfig: (config) => {
-                let actualAccessDigest: string;
+              getCurrentConfig: input.getRuntimeConfig,
+              assertReviewedConfig: (config, phase) => {
+                let accessMatchesReview: boolean;
                 try {
-                  actualAccessDigest = digestClawValue(
-                    projectClawConfiguredAccess({
-                      config,
-                      agentId: persistedPlan.agent.finalId,
-                      desiredAgent: persistedPlan.agent.config,
-                      operation: "add",
-                    }),
-                  );
+                  const actualAccess = projectClawConfiguredAccess({
+                    config,
+                    agentId: persistedPlan.agent.finalId,
+                    desiredAgent: persistedPlan.agent.config,
+                    operation: phase === "after-agent-commit" ? "update" : "add",
+                  });
+                  accessMatchesReview =
+                    phase === "after-agent-commit"
+                      ? digestClawValue(actualAccess.current) === reviewedDesiredDigest &&
+                        digestClawValue(actualAccess.desired) === reviewedDesiredDigest
+                      : digestClawValue(actualAccess) === reviewedAccessDigest;
                 } catch {
                   throw new ClawAddMutationError(
                     "reviewed_access_changed",
                     "The effective Claw access changed since review. Preview it again.",
                   );
                 }
-                if (actualAccessDigest !== reviewedAccessDigest) {
+                if (!accessMatchesReview) {
                   throw new ClawAddMutationError(
                     "reviewed_access_changed",
                     "The effective Claw access changed since review. Preview it again.",

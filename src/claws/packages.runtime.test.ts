@@ -77,6 +77,53 @@ function packageDeps(
 }
 
 describe("Claw committed plugin requirement handoff", () => {
+  it("rechecks reviewed access at a managed plugin's persistent install boundary", async () => {
+    const root = dirs.make("openclaw-claw-access-guard-");
+    const env = {
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}");
+    let accessCurrent = true;
+    const persistentMutation = vi.fn();
+    const installPlugin = vi.fn(async (params: { beforePersistentApply?: () => void }) => {
+      accessCurrent = false;
+      params.beforePersistentApply?.();
+      persistentMutation();
+    });
+
+    await withEnvAsync(env, async () => {
+      await expect(
+        installClawPackages(
+          packageInstallPlan([
+            { kind: "plugin", source: "clawhub", ref: "@owner/demo", version: "1.0.0", integrity },
+          ]),
+          {
+            env,
+            assertForwardCurrent: () => {
+              if (!accessCurrent) {
+                throw new Error("reviewed access changed");
+              }
+            },
+            pluginConsent: {
+              onCapabilityConsent: async (review) => ({ reviewToken: review.reviewToken }),
+              confirmInstall: async () => true,
+            },
+            deps: {
+              ...packageDeps(root, async () => ({})),
+              preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
+              installPlugin,
+              acquirePackageLease: vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() })),
+            },
+          },
+        ),
+      ).rejects.toThrow("reviewed access changed");
+    });
+
+    expect(installPlugin).toHaveBeenCalledOnce();
+    expect(persistentMutation).not.toHaveBeenCalled();
+  });
+
   it("preserves the install owner's failure instead of a nested CLI exit", async () => {
     const root = dirs.make("openclaw-claw-install-error-");
     const env = {
@@ -131,7 +178,9 @@ describe("Claw committed plugin requirement handoff", () => {
         let heldPackages = 0;
         const cleanup = vi.fn();
         const log = vi.fn();
-        const reloadPlugins = vi.fn<PluginInstallBatchReload>(async (targets) => {
+        const assertForwardCurrent = vi.fn();
+        const reloadPlugins = vi.fn<PluginInstallBatchReload>(async (targets, reloadOptions) => {
+          expect(reloadOptions?.commitGuard).toBe(assertForwardCurrent);
           expect(hasPluginLifecycleLease()).toBe(false);
           expect(heldPackages).toBe(0);
           expect(cleanup).not.toHaveBeenCalled();
@@ -158,6 +207,7 @@ describe("Claw committed plugin requirement handoff", () => {
             },
           },
           reloadPlugins,
+          assertForwardCurrent,
           deps: {
             ...packageDeps(root, async () => records),
             acquirePackageLease: () => {

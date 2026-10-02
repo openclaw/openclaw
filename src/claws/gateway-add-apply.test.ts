@@ -56,8 +56,22 @@ const plan = {
   actions: [],
   planIntegrity: "sha256:canonical",
 } as unknown as ClawAddPlan;
+const reviewedDesired: NonNullable<ClawConfiguredAccess["desired"]> = {
+  tools: { allowed: ["read"], excluded: ["exec"], explicitAllow: ["read"], explicitDeny: ["exec"] },
+  sandbox: { mode: "all", scope: "session", workspaceAccess: "rw", backend: "docker" },
+  filesystem: { workspaceOnly: true },
+  heartbeat: { enabled: false, intervalMs: null },
+  memorySearch: { state: "disabled" },
+  subagentTargets: {
+    allowedAgentIds: ["workflow-operator"],
+    allowAnyConfiguredAgent: false,
+    implicitSelfAllowed: true,
+    requireAgentId: false,
+  },
+};
 const reviewedAccess: ClawConfiguredAccess = {
   coverage: "configuration-only",
+  desired: reviewedDesired,
   unresolved: ["runtime-tools"],
 };
 const projected: ClawLifecyclePlanResult = {
@@ -89,6 +103,7 @@ function applyInput() {
     source: coordinate,
     planIntegrity: projected.planIntegrity,
     getPlanningContext: vi.fn(async () => ({ config, sourceMcpServers: {} })),
+    getRuntimeConfig: vi.fn(() => config),
     assertCurrent: vi.fn(),
   };
 }
@@ -161,10 +176,37 @@ describe("Gateway Claw Add application", () => {
     expect(mocks.apply).not.toHaveBeenCalled();
   });
 
-  it("checks effective access at the final config write without rejecting unrelated config edits", async () => {
+  it.each(["current", "persisted"] as const)(
+    "rejects a projection-only blocker at the %s replan",
+    async (phase) => {
+      const blockedProjection: ClawLifecyclePlanResult = {
+        ...projected,
+        blockers: [
+          {
+            code: "effect_disclosure_unavailable",
+            path: "$.actions[0]",
+            message: "The Claw effect cannot be reviewed safely.",
+          },
+        ],
+      };
+      mocks.project
+        .mockReturnValueOnce(projected)
+        .mockReturnValueOnce(phase === "current" ? blockedProjection : projected)
+        .mockReturnValueOnce(phase === "persisted" ? blockedProjection : projected);
+
+      await expect(applyClawAddForGateway(applyInput())).rejects.toBeInstanceOf(
+        ClawGatewayPlanChangedError,
+      );
+      expect(plan.blockers).toEqual([]);
+      expect(mocks.persist).toHaveBeenCalledTimes(phase === "current" ? 0 : 1);
+      expect(mocks.apply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("checks full access before config commit and actual agent access afterward", async () => {
     await applyClawAddForGateway(applyInput());
     const options = mocks.apply.mock.calls[0]?.[1] as {
-      assertReviewedConfig: (config: OpenClawConfig) => void;
+      assertReviewedConfig: (config: OpenClawConfig, phase?: "after-agent-commit") => void;
     };
     expect(options.assertReviewedConfig).toBeTypeOf("function");
     expect(() =>
@@ -183,6 +225,38 @@ describe("Gateway Claw Add application", () => {
       desiredAgent: plan.agent.config,
       operation: "add",
     });
+
+    const committedConfig: OpenClawConfig = {
+      agents: { entries: { "workflow-operator": {} } },
+    };
+    mocks.configuredAccess.mockReturnValueOnce({
+      ...reviewedAccess,
+      current: reviewedDesired,
+    });
+    expect(() => options.assertReviewedConfig(committedConfig, "after-agent-commit")).not.toThrow();
+    expect(mocks.configuredAccess).toHaveBeenLastCalledWith({
+      config: committedConfig,
+      agentId: "workflow-operator",
+      desiredAgent: plan.agent.config,
+      operation: "update",
+    });
+    mocks.configuredAccess.mockReturnValueOnce({
+      ...reviewedAccess,
+      current: { ...reviewedDesired, filesystem: { workspaceOnly: false } },
+    });
+    expect(() => options.assertReviewedConfig(committedConfig, "after-agent-commit")).toThrow(
+      ClawAddMutationError,
+    );
+  });
+
+  it("passes a synchronous live runtime getter to the Add transaction", async () => {
+    const input = applyInput();
+    await applyClawAddForGateway(input);
+
+    expect(mocks.apply).toHaveBeenCalledWith(
+      plan,
+      expect.objectContaining({ getCurrentConfig: input.getRuntimeConfig }),
+    );
   });
 
   it("does not acquire a mutation lease when the reviewed plan changed", async () => {

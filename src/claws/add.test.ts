@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetConfigOverrides, setConfigOverride } from "../config/runtime-overrides.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -20,6 +21,7 @@ import { buildClawUpdatePlan } from "./update-plan.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => {
+  resetConfigOverrides();
   closeOpenClawStateDatabaseForTest();
 });
 
@@ -43,8 +45,10 @@ describe("Claw add lifecycle", () => {
         entries: { researcher: {} },
       },
     };
-    const commitConfig = async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
-      config = transform(config);
+    const commitConfig = async (
+      transform: (current: OpenClawConfig, runtime: OpenClawConfig) => OpenClawConfig,
+    ) => {
+      config = transform(config, config);
     };
     await applyClawAddPlan(initial, {
       env,
@@ -186,7 +190,10 @@ describe("Claw add lifecycle", () => {
       assertReviewedConfig,
     });
 
-    expect(assertReviewedConfig).toHaveBeenCalledWith({ tools: { deny: ["web_fetch"] } });
+    expect(assertReviewedConfig).toHaveBeenCalledWith(
+      { tools: { deny: ["web_fetch"] } },
+      undefined,
+    );
     expect(result).toMatchObject({
       status: "partial",
       configCommitted: false,
@@ -194,6 +201,148 @@ describe("Claw add lifecycle", () => {
     });
     expect(diskConfig.agents?.entries?.worker).toBeUndefined();
     expect(readClawInstallRecord("worker", { env })?.status).toBe("partial");
+  });
+
+  it("stops before workspace mutation when access drifts after the first state write", async () => {
+    const root = tempDirs.make("openclaw-claw-add-early-access-drift-");
+    const env = stateEnv(root);
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+    let config: OpenClawConfig = {};
+    const seedPackageBootstrap = vi.fn(async () => undefined);
+
+    await expect(
+      applyClawAddPlan(plan, {
+        consentPlanIntegrity: plan.planIntegrity,
+        env,
+        getCurrentConfig: () => config,
+        assertReviewedConfig: (current) => {
+          if (current.tools?.deny?.includes("web_fetch")) {
+            throw new ClawAddMutationError("reviewed_access_changed", "Access changed.");
+          }
+        },
+        persistRecord: async (...args) => {
+          const record = persistClawInstallRecord(...args);
+          config = { tools: { deny: ["web_fetch"] } };
+          return record;
+        },
+        seedPackageBootstrap,
+      }),
+    ).rejects.toMatchObject({ code: "reviewed_access_changed" });
+
+    expect(seedPackageBootstrap).not.toHaveBeenCalled();
+    await expect(access(plan.agent.workspace)).rejects.toThrow();
+  });
+
+  it("rechecks access after the agent commit before writing workspace resources", async () => {
+    const root = tempDirs.make("openclaw-claw-add-post-commit-access-drift-");
+    const env = stateEnv(root);
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+    let config: OpenClawConfig = {};
+    const createWorkspaceFiles = vi.fn(async () => []);
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      getCurrentConfig: () => config,
+      assertReviewedConfig: (current, phase) => {
+        if (phase === "after-agent-commit" && current.tools?.deny?.includes("web_fetch")) {
+          throw new ClawAddMutationError("reviewed_access_changed", "Access changed.");
+        }
+      },
+      commitConfig: async (transform) => {
+        config = transform(config, config);
+        config = { ...config, tools: { deny: ["web_fetch"] } };
+      },
+      createWorkspaceFiles,
+    });
+
+    expect(result).toMatchObject({
+      status: "partial",
+      configCommitted: true,
+      error: { code: "reviewed_access_changed" },
+    });
+    expect(createWorkspaceFiles).not.toHaveBeenCalled();
+    expect(readClawInstallRecord("worker", { env })?.status).toBe("config_committed");
+  });
+
+  it("passes the reviewed guard to a nested forward mutation", async () => {
+    const root = tempDirs.make("openclaw-claw-add-nested-access-drift-");
+    const env = stateEnv(root);
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+    let config: OpenClawConfig = {};
+    const forwardMutation = vi.fn();
+    const installCronJobs = vi.fn(async () => []);
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      getCurrentConfig: () => config,
+      assertReviewedConfig: (current, phase) => {
+        if (phase === "after-agent-commit" && current.tools?.deny?.includes("web_fetch")) {
+          throw new ClawAddMutationError("reviewed_access_changed", "Access changed.");
+        }
+      },
+      commitConfig: async (transform) => {
+        config = transform(config, config);
+      },
+      installMcpServers: async (_plan, stageOptions) => {
+        config = { ...config, tools: { deny: ["web_fetch"] } };
+        if (!stageOptions) {
+          throw new Error("Missing MCP mutation options");
+        }
+        stageOptions.assertForwardCurrent?.();
+        forwardMutation();
+        return [];
+      },
+      installCronJobs,
+    });
+
+    expect(result).toMatchObject({ status: "partial", error: { code: "mcp_install_failed" } });
+    expect(forwardMutation).not.toHaveBeenCalled();
+    expect(installCronJobs).not.toHaveBeenCalled();
+  });
+
+  it("checks materialized runtime config and active overrides at the agent write", async () => {
+    const root = tempDirs.make("openclaw-claw-add-runtime-access-");
+    const env = stateEnv(root);
+    const { plan } = await makeProvenancePlan(root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+    const sourceConfig: OpenClawConfig = {};
+    const runtimeConfig: OpenClawConfig = { tools: { allow: ["read"] } };
+    expect(setConfigOverride("tools.deny", ["web_fetch"]).ok).toBe(true);
+    const assertReviewedConfig = vi.fn((current: OpenClawConfig) => {
+      if (!current.tools?.allow?.includes("read") || !current.tools?.deny?.includes("web_fetch")) {
+        throw new ClawAddMutationError("reviewed_access_changed", "Access changed.");
+      }
+    });
+    let writtenConfig: OpenClawConfig | undefined;
+
+    const result = await applyClawAddPlan(plan, {
+      consentPlanIntegrity: plan.planIntegrity,
+      env,
+      assertReviewedConfig,
+      commitConfig: async (transform) => {
+        writtenConfig = transform(sourceConfig, runtimeConfig);
+      },
+    });
+
+    expect(result.status).toBe("complete");
+    expect(assertReviewedConfig).toHaveBeenCalledWith(
+      { tools: { allow: ["read"], deny: ["web_fetch"] } },
+      undefined,
+    );
+    expect(writtenConfig?.tools).toBeUndefined();
   });
 
   it("retries after v1 promotion fails behind the bounded config commit", async () => {

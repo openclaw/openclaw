@@ -13,7 +13,9 @@ import {
 import { planClawAddForGateway } from "../../claws/gateway-add-plan.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
+import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
 import { normalizeCronJobCreate } from "../../cron/normalize.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -80,14 +82,20 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
     };
     try {
       assertCurrent();
+      const configPath = resolveConfigPath();
+      const configEnv = process.env;
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
-        ? async (plugins) => {
-            assertCurrent();
+        ? async (plugins, options) => {
+            const assertForwardCurrent = () => {
+              assertCurrent();
+              options?.commitGuard?.();
+            };
+            assertForwardCurrent();
             const { application } = await reloadManagedPlugin({
               plugins: [...plugins],
               applyRuntime,
-              beforePersistentApply: assertCurrent,
+              beforePersistentApply: assertForwardCurrent,
               ...(signal ? { signal } : {}),
             });
             if (!application) {
@@ -119,20 +127,25 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             sourceMcpServers: listedMcp.mcpServers,
           };
         },
+        getRuntimeConfig: () => readCurrentConfigForPolicyCheck({ configPath, env: configEnv }),
         assertCurrent,
         ...(signal ? { signal } : {}),
         ...(reloadPlugins ? { reloadPlugins } : {}),
         cronGateway: {
-          add: async (input) => {
+          add: async (input, options) => {
+            const assertForwardCurrent = () => {
+              assertCurrent();
+              options?.commitGuard?.();
+            };
             assertCurrent();
             const normalized = normalizeCronJobCreate(input);
             if (!normalized || !validateCronAddParams(normalized)) {
               throw new Error("Claw schedule declaration is invalid.");
             }
             await assertValidCronCreateDelivery(context.getRuntimeConfig(), normalized);
-            assertCurrent();
+            assertForwardCurrent();
             return await context.cron.add(normalized, {
-              commitGuard: assertCurrent,
+              commitGuard: assertForwardCurrent,
               matchesExisting: (job) => {
                 if (job.declarationKey === normalized.declarationKey) {
                   throw new Error("Claw schedule declaration appeared after the list check.");

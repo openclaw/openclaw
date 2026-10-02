@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawLifecyclePlanResult } from "../../packages/gateway-protocol/src/schema/claws.js";
+import type {
+  ClawConfiguredAccess,
+  ClawLifecyclePlanResult,
+} from "../../packages/gateway-protocol/src/schema/claws.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ClawHubClawTrust } from "./clawhub-source.js";
 import { ClawGatewayPlanChangedError } from "./gateway-add-apply.js";
@@ -18,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   apply: vi.fn(),
   persist: vi.fn(),
   owned: vi.fn(),
+  configuredAccess: vi.fn(),
 }));
 
 vi.mock("./clawhub-source.js", () => ({ withResolvedClawHubSource: mocks.resolve }));
@@ -31,7 +36,11 @@ vi.mock("./gateway-plan-projection.js", () => ({
   plansMatchAcrossSourceRoots: mocks.plansMatch,
 }));
 vi.mock("./gateway-plugin-consent.js", () => ({ bindClawPluginInstallConsent: mocks.consent }));
-vi.mock("./update-apply.js", () => ({ applyClawUpdatePlan: mocks.apply }));
+vi.mock("./gateway-disclosure.js", () => ({ projectClawConfiguredAccess: mocks.configuredAccess }));
+vi.mock("./update-apply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-apply.js")>()),
+  applyClawUpdatePlan: mocks.apply,
+}));
 
 const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.2.0" };
 const source = {
@@ -55,6 +64,25 @@ const plan = {
   blockers: [],
   actions: [],
 } as unknown as ClawUpdatePlan;
+const accessSnapshot = {
+  tools: { allowed: [], excluded: [], explicitAllow: [], explicitDeny: [] },
+  sandbox: { mode: "off", scope: "agent", workspaceAccess: "none", backend: "other" },
+  filesystem: { workspaceOnly: false },
+  heartbeat: { enabled: false, intervalMs: null },
+  memorySearch: { state: "disabled" },
+  subagentTargets: {
+    allowedAgentIds: [],
+    allowAnyConfiguredAgent: false,
+    implicitSelfAllowed: false,
+    requireAgentId: false,
+  },
+} satisfies NonNullable<ClawConfiguredAccess["desired"]>;
+const reviewedAccess: ClawConfiguredAccess = {
+  coverage: "configuration-only",
+  current: accessSnapshot,
+  desired: accessSnapshot,
+  unresolved: ["runtime-tools"],
+};
 const projection: ClawLifecyclePlanResult = {
   schemaVersion: "openclaw.clawsGatewayPlan.v1",
   operation: "update",
@@ -66,6 +94,7 @@ const projection: ClawLifecyclePlanResult = {
   skillReviews: [],
   blockers: [],
   riskAcknowledgementRequired: false,
+  configuredAccess: reviewedAccess,
   readiness: { ready: true, requirements: [] },
 };
 const skillReview = {
@@ -119,6 +148,7 @@ beforeEach(() => {
   mocks.build.mockResolvedValue(built);
   mocks.bindTrust.mockImplementation((value) => value);
   mocks.plansMatch.mockReturnValue(true);
+  mocks.configuredAccess.mockReturnValue(reviewedAccess);
   mocks.apply.mockResolvedValue({ agentId: "workflow-operator", status: "complete" });
 });
 
@@ -153,6 +183,7 @@ describe("Gateway Claw Update application", () => {
       expect.objectContaining({
         stateMode: "worker",
         config,
+        getCurrentConfig: input.getRuntimeConfig,
         sourceMcpServers: {},
         packagePreflight,
         planPackageDeps: packageDeps,
@@ -233,6 +264,63 @@ describe("Gateway Claw Update application", () => {
     );
     expect(mocks.persist).not.toHaveBeenCalled();
     expect(mocks.apply).not.toHaveBeenCalled();
+  });
+
+  it("binds the reviewed effective access to the worker updater's final config write", async () => {
+    await applyClawUpdateForGateway(applyInput());
+    const options = mocks.apply.mock.calls[0]?.[2] as {
+      assertReviewedConfig: (config: OpenClawConfig, desiredAgent: AgentConfig) => void;
+    };
+    const desiredAgent: AgentConfig = { id: "workflow-operator", name: "Workflow Operator v2" };
+    expect(options.assertReviewedConfig).toBeTypeOf("function");
+    expect(() =>
+      options.assertReviewedConfig(
+        { gateway: { controlUi: { experimental: { claws: true } } } },
+        desiredAgent,
+      ),
+    ).not.toThrow();
+    mocks.configuredAccess.mockReturnValueOnce({
+      ...reviewedAccess,
+      unresolved: ["runtime-tools", "memory-runtime"],
+    });
+    expect(() =>
+      options.assertReviewedConfig({ tools: { deny: ["web_fetch"] } }, desiredAgent),
+    ).toThrow("The effective Claw access changed since review");
+    expect(mocks.configuredAccess).toHaveBeenCalledWith({
+      config: { tools: { deny: ["web_fetch"] } },
+      agentId: "workflow-operator",
+      desiredAgent,
+      operation: "update",
+    });
+  });
+
+  it("rechecks the reviewed resulting access after the agent config commit", async () => {
+    await applyClawUpdateForGateway(applyInput());
+    const options = mocks.apply.mock.calls[0]?.[2] as {
+      assertReviewedConfig: (
+        config: OpenClawConfig,
+        desiredAgent: AgentConfig,
+        phase: "after-agent-commit",
+      ) => void;
+    };
+    const desiredAgent: AgentConfig = { id: "workflow-operator", name: "Workflow Operator v2" };
+    const effectiveConfig: OpenClawConfig = { tools: { deny: ["web_fetch"] } };
+
+    mocks.configuredAccess.mockReturnValueOnce({
+      ...reviewedAccess,
+      current: { ...accessSnapshot, tools: { allowed: [], excluded: ["web_fetch"] } },
+    });
+    expect(() =>
+      options.assertReviewedConfig(effectiveConfig, desiredAgent, "after-agent-commit"),
+    ).toThrow("The effective Claw access changed since review");
+
+    mocks.configuredAccess.mockReturnValueOnce({
+      ...reviewedAccess,
+      desired: { ...accessSnapshot, tools: { allowed: [], excluded: ["web_fetch"] } },
+    });
+    expect(() =>
+      options.assertReviewedConfig(effectiveConfig, desiredAgent, "after-agent-commit"),
+    ).toThrow("The effective Claw access changed since review");
   });
 
   it("passes the exact reviewed plugin acknowledgement to the worker updater", async () => {

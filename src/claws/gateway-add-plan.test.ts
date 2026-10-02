@@ -148,14 +148,17 @@ describe("Gateway Claw Add plan", () => {
             schedule: { cron: "0 * * * *", timezone: "UTC" },
             session: "isolated",
             delivery: "last-channel",
+            message: "Review active incidents and prepare a concise status summary.",
+            messageDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
           },
         },
       ],
     });
     const response = JSON.stringify(projected);
     expect(response).not.toContain(source.source.packageRoot);
-    expect(response).not.toContain("STATUSPAGE_TOKEN");
-    expect(response).not.toContain("Review active incidents");
+    expect(response).toContain('"sourceName":"STATUSPAGE_TOKEN"');
+    expect(response).not.toContain("${STATUSPAGE_TOKEN}");
+    expect(response).toContain("Review active incidents");
 
     const changed = projectGatewayClawAddPlan(
       plan,

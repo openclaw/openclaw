@@ -13,6 +13,7 @@ const planClawUpdateForGateway = vi.hoisted(() => vi.fn());
 const planClawRemoveForGateway = vi.hoisted(() => vi.fn());
 const applyClawUpdateForGateway = vi.hoisted(() => vi.fn());
 const applyClawRemoveForGateway = vi.hoisted(() => vi.fn());
+const reloadManagedPlugin = vi.hoisted(() => vi.fn());
 vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../claws/gateway-lifecycle-plan.js")>()),
   planClawUpdateForGateway,
@@ -20,6 +21,10 @@ vi.mock("../../claws/gateway-lifecycle-plan.js", async (importOriginal) => ({
 }));
 vi.mock("../../claws/gateway-update-apply.js", () => ({ applyClawUpdateForGateway }));
 vi.mock("../../claws/gateway-remove-apply.js", () => ({ applyClawRemoveForGateway }));
+vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
+  reloadManagedPlugin,
+}));
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -55,6 +60,7 @@ function callUpdateApply(
     hasCurrentClientAuthority?: () => boolean;
     sessionMutationCommitGuard?: () => void;
     cron?: unknown;
+    applyPluginLifecycleChange?: unknown;
     client?: unknown;
   } = {},
 ) {
@@ -71,6 +77,9 @@ function callUpdateApply(
         respond: (...args) => replies.push(args),
         context: {
           getRuntimeConfig,
+          ...(options.applyPluginLifecycleChange
+            ? { applyPluginLifecycleChange: options.applyPluginLifecycleChange }
+            : {}),
           cron: options.cron ?? {
             add: vi.fn(),
             readJob: vi.fn(),
@@ -306,6 +315,12 @@ describe("claws.update.apply Gateway method", () => {
 
   it("passes the live guard through both cron add and remove commit boundaries", async () => {
     let authorized = true;
+    let reviewedAccessCurrent = true;
+    const assertReviewedAccess = () => {
+      if (!reviewedAccessCurrent) {
+        throw new Error("reviewed access changed");
+      }
+    };
     const cron = {
       add: vi.fn(async (_job: unknown, _options: { commitGuard: () => void }) => ({ id: "job-1" })),
       readJob: vi.fn(async () => ({ id: "job-1" })),
@@ -315,20 +330,23 @@ describe("claws.update.apply Gateway method", () => {
       })),
     };
     applyClawUpdateForGateway.mockImplementation(async (input) => {
-      await input.cronGateway.add({
-        name: "Nightly",
-        declarationKey: "claw:worker:nightly",
-        owner: { agentId: "worker" },
-        enabled: true,
-        agentId: "worker",
-        schedule: { kind: "cron", expr: "0 8 * * *" },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "Review work" },
-        delivery: { mode: "none" },
-      });
+      await input.cronGateway.add(
+        {
+          name: "Nightly",
+          declarationKey: "claw:worker:nightly",
+          owner: { agentId: "worker" },
+          enabled: true,
+          agentId: "worker",
+          schedule: { kind: "cron", expr: "0 8 * * *" },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Review work" },
+          delivery: { mode: "none" },
+        },
+        { commitGuard: assertReviewedAccess },
+      );
       await input.cronGateway.get("job-1");
-      await input.cronGateway.remove("job-1");
+      await input.cronGateway.remove("job-1", { commitGuard: assertReviewedAccess });
       return {
         agentId: "worker",
         status: "complete",
@@ -348,9 +366,41 @@ describe("claws.update.apply Gateway method", () => {
     expect(cron.remove).toHaveBeenCalledWith("job-1", {
       commitGuard: expect.any(Function),
     });
+    reviewedAccessCurrent = false;
+    expect(() => cron.add.mock.calls[0]?.[1]?.commitGuard()).toThrow("reviewed access changed");
+    expect(() => cron.remove.mock.calls[0]?.[1]?.commitGuard()).toThrow("reviewed access changed");
+    reviewedAccessCurrent = true;
     authorized = false;
     expect(() => cron.add.mock.calls[0]?.[1]?.commitGuard()).toThrow();
     expect(() => cron.remove.mock.calls[0]?.[1]?.commitGuard()).toThrow();
+  });
+
+  it("rechecks reviewed access at plugin runtime activation after the batch handoff", async () => {
+    let reviewedAccessCurrent = true;
+    let activated = false;
+    const applyPluginLifecycleChange = vi.fn();
+    reloadManagedPlugin.mockImplementation(async (input) => {
+      reviewedAccessCurrent = false;
+      input.beforePersistentApply();
+      activated = true;
+      return { application: { generation: 1, pluginIds: ["demo"] } };
+    });
+    applyClawUpdateForGateway.mockImplementation(async (input) => {
+      await input.reloadPlugins([{ pluginId: "demo", installHash: "sha256:demo" }], {
+        commitGuard: () => {
+          if (!reviewedAccessCurrent) {
+            throw new Error("reviewed access changed");
+          }
+        },
+      });
+    });
+
+    const request = callUpdateApply(params, () => enabled, { applyPluginLifecycleChange });
+    await request.run();
+
+    expect(reloadManagedPlugin).toHaveBeenCalledOnce();
+    expect(activated).toBe(false);
+    expect(request.replies[0]?.[0]).toBe(false);
   });
 
   it("rejects stale review before effects, but reports a post-effect partial result", async () => {

@@ -15,7 +15,9 @@ import {
 } from "./state-mutation-write.js";
 import type { PersistedClawWorkspaceFile } from "./workspace.js";
 
-export type ClawUpdateStateOptions = ClawMutationStateOptions;
+export type ClawUpdateStateOptions = ClawMutationStateOptions & {
+  assertForwardCurrent?: () => void;
+};
 
 async function inventory(options: ClawUpdateStateOptions) {
   options.assertCurrent?.();

@@ -339,7 +339,7 @@ export function readAllClawWorkspaceFilesInDatabase(
 
 export async function createClawWorkspaceFiles(
   plan: ClawAddPlan,
-  options: ClawAddStateOptions & { nowMs?: number } = {},
+  options: ClawAddStateOptions & { nowMs?: number; assertForwardCurrent?: () => void } = {},
 ): Promise<PersistedClawWorkspaceFile[]> {
   const actions = plan.actions.filter((action) => action.kind === "workspaceFile");
   if (actions.length === 0) {
@@ -360,11 +360,17 @@ export async function createClawWorkspaceFiles(
   });
   const createdFiles: PersistedClawWorkspaceFile[] = [];
   const nowMs = options.nowMs ?? Date.now();
+  const assertForwardCurrent = () => {
+    options.assertCurrent?.();
+    options.assertForwardCurrent?.();
+  };
+  const forwardStateOptions = { ...options, assertCurrent: assertForwardCurrent };
 
   for (const action of actions) {
     const writeError = (code: string, message: string) =>
       new ClawWorkspaceWriteError([diagnostic(action, code, message)], createdFiles);
     try {
+      assertForwardCurrent();
       if (!action.source || !action.digest) {
         throw writeError("workspace_file_plan_invalid", "File action lacks source or digest.");
       }
@@ -388,6 +394,7 @@ export async function createClawWorkspaceFiles(
           `Workspace source for ${JSON.stringify(action.id)} changed after planning.`,
         );
       }
+      assertForwardCurrent();
       const expectedRecord: PersistedClawWorkspaceFile = {
         schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION,
         agentId: plan.agent.finalId,
@@ -431,7 +438,11 @@ export async function createClawWorkspaceFiles(
         const previousStatus = existingRecord.status;
         existingRecord.status = "complete";
         existingRecord.updatedAtMs = nowMs;
-        await updateClawWorkspaceFileStatusForAdd(existingRecord, [previousStatus], options);
+        await updateClawWorkspaceFileStatusForAdd(
+          existingRecord,
+          [previousStatus],
+          forwardStateOptions,
+        );
         createdFiles.push(existingRecord);
         continue;
       }
@@ -440,19 +451,19 @@ export async function createClawWorkspaceFiles(
         const previousStatus = record.status;
         record.status = "pending";
         record.updatedAtMs = nowMs;
-        await updateClawWorkspaceFileStatusForAdd(record, [previousStatus], options);
+        await updateClawWorkspaceFileStatusForAdd(record, [previousStatus], forwardStateOptions);
       } else {
-        await persistClawWorkspaceFileForAdd(record, options);
+        await persistClawWorkspaceFileForAdd(record, forwardStateOptions);
       }
       try {
-        options.assertCurrent?.();
+        assertForwardCurrent();
         await workspace.write(targetRelative, resolvedSource.content, {
           mkdir: true,
           overwrite: false,
-          assertBeforeMutation: options.assertCurrent,
+          assertBeforeMutation: assertForwardCurrent,
         });
         record.status = "complete";
-        await updateClawWorkspaceFileStatusForAdd(record, ["pending"], options);
+        await updateClawWorkspaceFileStatusForAdd(record, ["pending"], forwardStateOptions);
         createdFiles.push(record);
       } catch (error) {
         record.status = "failed";

@@ -99,6 +99,11 @@ export async function applyClawPackageUpdate(
     ]),
   );
   const allRefs = await readRefs(options);
+  const assertForwardCurrent = () => {
+    options.assertCurrent?.();
+    options.assertForwardCurrent?.();
+  };
+  const forwardOptions = { ...options, assertCurrent: assertForwardCurrent };
   const undo: Array<() => Promise<void>> = [];
   const externalMutations: string[] = [];
   const skillTransactions: PackageDirInstallTransaction[] = [];
@@ -116,6 +121,7 @@ export async function applyClawPackageUpdate(
 
   try {
     for (const action of actions) {
+      assertForwardCurrent();
       const previous = currentRefs.get(action.id);
       if (
         previous &&
@@ -134,7 +140,7 @@ export async function applyClawPackageUpdate(
             false,
           );
         }
-        await replaceExpected(previous, undefined, options);
+        await replaceExpected(previous, undefined, forwardOptions);
         undo.push(async () => await replaceExpected(undefined, previous, options));
         appliedIds.push(action.id);
         continue;
@@ -267,7 +273,7 @@ export async function applyClawPackageUpdate(
           );
         }
       };
-      await replaceExpected(previous, claimed, options);
+      await replaceExpected(previous, claimed, forwardOptions);
       const restoreRef = async () => await replaceExpected(claimed, previous, options);
       const undoIndex = undo.push(restoreRef) - 1;
       const refs = await installPackages(
@@ -332,7 +338,8 @@ export async function applyClawPackageUpdate(
                   : (persistOptions?.independentOwner ?? claimed.independentOwner),
                 updatedAtMs: nowMs,
               };
-              await replaceExpected(claimed, next, options);
+              assertForwardCurrent();
+              await replaceExpected(claimed, next, forwardOptions);
               claimed = next;
               return next;
             },
@@ -349,7 +356,14 @@ export async function applyClawPackageUpdate(
                   : {}),
                 updatedAtMs: completedAtMs,
               };
-              await replaceExpected(claimed, next, options);
+              if (status === "complete") {
+                assertForwardCurrent();
+              }
+              await replaceExpected(
+                claimed,
+                next,
+                status === "complete" ? forwardOptions : options,
+              );
               claimed = next;
               return next;
             },
@@ -419,7 +433,8 @@ export async function applyClawPackageUpdate(
         );
       }
       if (digest(installed) !== digest(claimed)) {
-        await replaceExpected(claimed, installed, options);
+        assertForwardCurrent();
+        await replaceExpected(claimed, installed, forwardOptions);
         claimed = installed;
       }
       appliedIds.push(action.id);

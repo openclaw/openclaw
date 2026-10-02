@@ -89,6 +89,11 @@ export async function applyClawCronUpdate(
   const appliedIds: string[] = [];
   const nowMs = options.nowMs ?? Date.now();
   let agentAvailable = false;
+  const assertForwardCurrent = () => {
+    options.assertCurrent?.();
+    options.assertForwardCurrent?.();
+  };
+  const forwardStateOptions = { ...options, assertCurrent: assertForwardCurrent };
 
   const waitForAgent = async () => {
     if (!agentAvailable) {
@@ -97,12 +102,22 @@ export async function applyClawCronUpdate(
       agentAvailable = true;
     }
   };
-  const add = async (ref: PersistedClawCronRef): Promise<string> => {
+  const add = async (ref: PersistedClawCronRef, rollback = false): Promise<string> => {
     await waitForAgent();
     let raw: unknown;
     try {
-      options.assertCurrent?.();
-      raw = await gateway.add(clawCronGatewayInput(updatePlan.agentId, ref));
+      if (rollback) {
+        options.assertCurrent?.();
+      } else {
+        assertForwardCurrent();
+      }
+      const commitGuard = rollback
+        ? options.assertCurrent
+        : options.assertForwardCurrent
+          ? assertForwardCurrent
+          : undefined;
+      const input = clawCronGatewayInput(updatePlan.agentId, ref);
+      raw = commitGuard ? await gateway.add(input, { commitGuard }) : await gateway.add(input);
       options.assertCurrent?.();
     } catch (error) {
       throw new ClawCronUpdateError(coerceErrorMessage(error), true);
@@ -113,6 +128,16 @@ export async function applyClawCronUpdate(
     }
     return result.id;
   };
+  const remove = async (schedulerJobId: string, rollback = false): Promise<unknown> => {
+    const commitGuard = rollback
+      ? options.assertCurrent
+      : options.assertForwardCurrent
+        ? assertForwardCurrent
+        : undefined;
+    return commitGuard
+      ? await gateway.remove(schedulerJobId, { commitGuard })
+      : await gateway.remove(schedulerJobId);
+  };
   const rollback = async () => {
     const failures = await collectClawRollbackFailures(undo.toReversed());
     if (failures.length > 0) {
@@ -122,6 +147,7 @@ export async function applyClawCronUpdate(
 
   try {
     for (const action of actions) {
+      assertForwardCurrent();
       const previous = currentRefs.get(action.id);
       if (previous && action.currentDigest && digest(previous.job) !== action.currentDigest) {
         throw new ClawCronUpdateError(
@@ -130,7 +156,7 @@ export async function applyClawCronUpdate(
       }
       if (previous?.schedulerJobId) {
         const live = await gateway.get!(previous.schedulerJobId);
-        options.assertCurrent?.();
+        assertForwardCurrent();
         if (!clawCronGatewayJobMatchesRef(updatePlan.agentId, previous, live)) {
           throw new ClawCronUpdateError(
             `Cron declaration ${JSON.stringify(action.id)} changed after planning.`,
@@ -143,19 +169,23 @@ export async function applyClawCronUpdate(
             `Cron declaration ${JSON.stringify(action.id)} is no longer safely removable.`,
           );
         }
-        await upsertRef({ ...previous, status: "pending", updatedAtMs: nowMs }, options);
+        assertForwardCurrent();
+        await upsertRef(
+          { ...previous, status: "pending", updatedAtMs: nowMs },
+          forwardStateOptions,
+        );
         try {
-          options.assertCurrent?.();
-          await gateway.remove(previous.schedulerJobId);
+          assertForwardCurrent();
+          await remove(previous.schedulerJobId);
           options.assertCurrent?.();
         } catch (error) {
           throw new ClawCronUpdateError(coerceErrorMessage(error), true);
         }
         undo.push(async () => {
-          const restoredId = await add(previous);
+          const restoredId = await add(previous, true);
           await upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
         });
-        await deleteRef(updatePlan.agentId, action.id, options);
+        await deleteRef(updatePlan.agentId, action.id, forwardStateOptions);
         appliedIds.push(action.id);
         continue;
       }
@@ -168,14 +198,15 @@ export async function applyClawCronUpdate(
       }
       // A readiness failure must leave this declaration's ownership untouched.
       await waitForAgent();
+      assertForwardCurrent();
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
-      await upsertRef(pending, options);
+      await upsertRef(pending, forwardStateOptions);
       const schedulerJobId = await add(pending);
       if (action.action === "change") {
         if (!previous?.schedulerJobId || schedulerJobId !== previous.schedulerJobId) {
           try {
             options.assertCurrent?.();
-            await gateway.remove(schedulerJobId);
+            await remove(schedulerJobId, true);
             options.assertCurrent?.();
             if (previous) {
               await upsertRef(previous, options);
@@ -191,18 +222,18 @@ export async function applyClawCronUpdate(
           );
         }
         undo.push(async () => {
-          const restoredId = await add(previous);
+          const restoredId = await add(previous, true);
           await upsertRef({ ...previous, schedulerJobId: restoredId, updatedAtMs: nowMs }, options);
         });
       } else {
         undo.push(async () => {
           options.assertCurrent?.();
-          await gateway.remove(schedulerJobId);
+          await remove(schedulerJobId, true);
           options.assertCurrent?.();
           await deleteRef(updatePlan.agentId, action.id, options);
         });
       }
-      await upsertRef({ ...pending, schedulerJobId, status: "complete" }, options);
+      await upsertRef({ ...pending, schedulerJobId, status: "complete" }, forwardStateOptions);
       appliedIds.push(action.id);
     }
   } catch (error) {

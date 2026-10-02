@@ -10,6 +10,7 @@ import type {
   ClawCatalogDetail,
   ClawCatalogEntry,
 } from "./claws-catalog-client.ts";
+import { hasCompleteClawActionEffects, renderClawActionEffect } from "./claws-effect-review.ts";
 import { pluginAcknowledgements, renderClawPluginReviews } from "./claws-plugin-review.ts";
 import { skillAcknowledgements, renderClawSkillReviews } from "./claws-skill-review.ts";
 import "../../styles/claws-catalog.css";
@@ -52,6 +53,7 @@ function renderCatalogList(props: ClawsCatalogViewProps) {
       <input
         type="search"
         data-claws-search
+        autofocus
         aria-label=${t("clawsCatalog.search")}
         placeholder=${t("clawsCatalog.searchPlaceholder")}
         .value=${props.query}
@@ -125,6 +127,7 @@ function renderReview(props: ClawsCatalogViewProps) {
   const detail = props.detail;
   const plan = props.plan;
   const blocked = Boolean(plan?.blockers.length || plan?.actions.some((action) => action.blocked));
+  const effectsComplete = hasCompleteClawActionEffects(plan);
   const canConfirm =
     props.canAdd &&
     !props.applying &&
@@ -135,6 +138,7 @@ function renderReview(props: ClawsCatalogViewProps) {
     !blocked &&
     Boolean(detail && plan) &&
     hasCompleteClawDisclosures(plan) &&
+    effectsComplete &&
     (!plan?.riskAcknowledgementRequired || props.riskAcknowledged) &&
     pluginAcknowledgements(plan?.pluginReviews, props.acceptedPluginRisks) !== null &&
     skillAcknowledgements(plan?.skillReviews, props.acceptedSkillWarnings) !== null;
@@ -185,9 +189,11 @@ function renderReview(props: ClawsCatalogViewProps) {
                     (action) => html`<li>
                       <strong>${action.action} ${action.kind}</strong>
                       <span>${action.id}${action.reason ? ` · ${action.reason}` : ""}</span>
+                      ${renderClawActionEffect(action.effect)}
                     </li>`,
                   )}
                 </ul>
+                ${!effectsComplete ? html`<div class="callout danger" role="alert">${t("clawsEffectReview.unavailable")}</div>` : nothing}
               </section>
               <section class="claws-catalog__section">
                 <h4>${t("clawsCatalog.capabilities")}</h4>

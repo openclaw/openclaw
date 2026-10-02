@@ -88,8 +88,10 @@ it("applies a real Update plan through the worker without caller-thread lifecycl
     workspace: { files: [{ source: "policy.md", path: "policy.md" }] },
   });
   let config: OpenClawConfig = {};
-  const commitConfig = async (transform: (current: OpenClawConfig) => OpenClawConfig) => {
-    config = transform(config);
+  const commitConfig = async (
+    transform: (current: OpenClawConfig, runtime: OpenClawConfig) => OpenClawConfig,
+  ) => {
+    config = transform(config, config);
   };
   expect(
     await applyClawAddPlan(addPlan, {

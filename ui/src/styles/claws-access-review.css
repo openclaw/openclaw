@@ -74,3 +74,28 @@
 .claws-access-review__jobs code {
   color: var(--text);
 }
+
+.claws-access-review__schedule {
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.claws-access-review__schedule strong,
+.claws-access-review__schedule small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.claws-access-review__schedule pre {
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}

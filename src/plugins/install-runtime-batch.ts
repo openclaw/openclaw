@@ -48,6 +48,7 @@ export type PluginInstallBatchTarget = {
 };
 export type PluginInstallBatchReload = (
   plugins: readonly PluginInstallBatchTarget[],
+  options?: { commitGuard?: () => void },
 ) => Promise<PluginRuntimeApplication>;
 
 function indexFromRow(value: string | undefined) {

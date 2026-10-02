@@ -87,8 +87,15 @@ export async function applyClawMcpUpdate(
         },
       }),
     );
+  const forForwardWrite = (stateOptions: ClawUpdateStateOptions): ClawUpdateStateOptions => ({
+    ...stateOptions,
+    assertCurrent: () => {
+      stateOptions.assertCurrent?.();
+      options.assertForwardCurrent?.();
+    },
+  });
   const configGuard = (stateOptions: ClawUpdateStateOptions) =>
-    options.stateMode === "worker" || options.assertCurrent
+    options.stateMode === "worker" || options.assertCurrent || options.assertForwardCurrent
       ? { assertCurrent: stateOptions.assertCurrent }
       : {};
 
@@ -102,6 +109,7 @@ export async function applyClawMcpUpdate(
   try {
     for (const action of actions) {
       await withLease(action.id, async (stateOptions) => {
+        const forwardOptions = forForwardWrite(stateOptions);
         const name = action.id;
         const previousRef = (await readRefs(updatePlan.agentId, stateOptions)).find(
           (candidate) => candidate.name === name,
@@ -133,7 +141,8 @@ export async function applyClawMcpUpdate(
               `MCP server ${JSON.stringify(name)} is no longer safely releasable.`,
             );
           }
-          await deleteRef(updatePlan.agentId, name, stateOptions);
+          forwardOptions.assertCurrent?.();
+          await deleteRef(updatePlan.agentId, name, forwardOptions);
           undo.push(
             async () =>
               await withLease(name, async (rollbackOptions) => {
@@ -155,13 +164,17 @@ export async function applyClawMcpUpdate(
               `MCP server ${JSON.stringify(name)} gained another owner after planning.`,
             );
           }
-          await upsertRef({ ...previousRef, status: "pending", updatedAtMs: nowMs }, stateOptions);
+          forwardOptions.assertCurrent?.();
+          await upsertRef(
+            { ...previousRef, status: "pending", updatedAtMs: nowMs },
+            forwardOptions,
+          );
           configMutationUncertain = true;
           const removed = await unsetServer({
             name,
             expectedServer: previousServer,
             recordIndependentOwner: false,
-            ...configGuard(stateOptions),
+            ...configGuard(forwardOptions),
           });
           configMutationUncertain = false;
           if (!removed.ok) {
@@ -186,7 +199,8 @@ export async function applyClawMcpUpdate(
                 await upsertRef(previousRef, rollbackOptions);
               }),
           );
-          await deleteRef(updatePlan.agentId, name, stateOptions);
+          forwardOptions.assertCurrent?.();
+          await deleteRef(updatePlan.agentId, name, forwardOptions);
           appliedNames.push(name);
           return;
         }
@@ -209,14 +223,15 @@ export async function applyClawMcpUpdate(
           createdAtMs: previousRef?.createdAtMs ?? nowMs,
           updatedAtMs: nowMs,
         };
-        await upsertRef(targetRef, stateOptions);
+        forwardOptions.assertCurrent?.();
+        await upsertRef(targetRef, forwardOptions);
         configMutationUncertain = true;
         const written = await setServer({
           name,
           server: targetServer,
           ...(previousServer ? { expectedServer: previousServer } : { createOnly: true }),
           recordIndependentOwner: false,
-          ...configGuard(stateOptions),
+          ...configGuard(forwardOptions),
         });
         configMutationUncertain = false;
         if (!written.ok) {
@@ -273,7 +288,8 @@ export async function applyClawMcpUpdate(
               }
             }),
         );
-        await upsertRef({ ...targetRef, status: "complete" }, stateOptions);
+        forwardOptions.assertCurrent?.();
+        await upsertRef({ ...targetRef, status: "complete" }, forwardOptions);
         appliedNames.push(name);
       });
     }

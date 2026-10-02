@@ -122,6 +122,29 @@ function readInstallStatus(agentId: string, root: string): string | undefined {
 }
 
 describe("createClawWorkspaceFiles", () => {
+  it("rechecks reviewed access before persisting a file after reading its source", async () => {
+    const { root, workspace, plan } = await makePlan();
+    let checks = 0;
+
+    await expect(
+      createClawWorkspaceFiles(plan, {
+        env: stateEnv(root),
+        assertForwardCurrent: () => {
+          checks += 1;
+          if (checks >= 2) {
+            throw new Error("reviewed access changed");
+          }
+        },
+      }),
+    ).rejects.toMatchObject({
+      diagnostics: [expect.objectContaining({ message: "reviewed access changed" })],
+    });
+
+    expect(checks).toBeGreaterThanOrEqual(2);
+    await expect(readFile(join(workspace, "AGENTS.md"), "utf8")).rejects.toThrow();
+    expect(readClawWorkspaceFiles(plan.agent.finalId, { env: stateEnv(root) })).toEqual([]);
+  });
+
   it.each([
     { schemaVersion: "future.workspace.v9", status: "complete" },
     { schemaVersion: CLAW_WORKSPACE_FILE_RECORD_SCHEMA_VERSION, status: "unknown" },

@@ -145,7 +145,7 @@ describe("applyClawUpdatePlan", () => {
         readInstall: vi.fn(() => install),
         persistInstall,
         commitConfig: async (transform) => {
-          config = transform(config);
+          config = transform(config, config);
         },
       },
     );
@@ -218,7 +218,7 @@ describe("applyClawUpdatePlan", () => {
         }),
         commitConfig: async (transform) => {
           order.push("agent");
-          config = transform(config);
+          config = transform(config, config);
           setImmediate(() => {
             runtimeConfig = config;
             order.push("runtime");
@@ -410,7 +410,7 @@ describe("applyClawUpdatePlan", () => {
             })),
             applyMcp: vi.fn(async () => ({ appliedNames: [], rollback: mcpRollback })),
             commitConfig: async (transform) => {
-              config = transform(config);
+              config = transform(config, config);
             },
             cronGateway: {
               add,
@@ -880,7 +880,7 @@ describe("applyClawUpdatePlan", () => {
               return { appliedIds: ["skill:legacy"], rollback: () => rollback("package") };
             }),
             commitConfig: async (transform) => {
-              config = transform(config);
+              config = transform(config, config);
               if (++commits === 1) {
                 if (stage === "agent") {
                   throw failure;
@@ -943,7 +943,7 @@ describe("applyClawUpdatePlan", () => {
           buildAddPlan: vi.fn(async () => addPlan),
           readInstall: vi.fn(() => install),
           commitConfig: async (transform) => {
-            config = transform(config);
+            config = transform(config, config);
             commits += 1;
             if (commits === 1) {
               config.agents!.entries!.worker!.model = { primary: "acme/changed-after-write" };
@@ -987,7 +987,7 @@ describe("applyClawUpdatePlan", () => {
           buildAddPlan: vi.fn(async () => addPlan),
           readInstall: vi.fn(() => install),
           commitConfig: async (transform) => {
-            config = transform(config);
+            config = transform(config, config);
           },
         },
       ),

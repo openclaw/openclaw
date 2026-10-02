@@ -64,6 +64,31 @@ function listedMcpServers(mcpServers: Record<string, Record<string, unknown>> = 
 }
 
 describe("installClawMcpServers", () => {
+  it("rechecks reviewed access after an awaited owner read before claiming an MCP server", async () => {
+    const current = await fixture();
+    let reviewed = true;
+    const setMcpServer = vi.fn().mockResolvedValue(listedMcpServers());
+
+    await expect(
+      installClawMcpServers(current.plan, {
+        env: current.env,
+        listMcpServers: async () => {
+          reviewed = false;
+          return listedMcpServers();
+        },
+        setMcpServer,
+        assertForwardCurrent: () => {
+          if (!reviewed) {
+            throw new Error("reviewed access changed");
+          }
+        },
+      }),
+    ).rejects.toThrow("reviewed access changed");
+
+    expect(setMcpServer).not.toHaveBeenCalled();
+    expect(readClawMcpServerRefs(current.plan.agent.finalId, { env: current.env })).toEqual([]);
+  });
+
   it("uses create-only config writes and stores digest-only ownership", async () => {
     const current = await fixture();
     const setMcpServer = vi

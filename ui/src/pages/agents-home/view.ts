@@ -3,8 +3,10 @@ import { repeat } from "lit/directives/repeat.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
+import { icons } from "../../components/icons.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
+import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import type { agentRosterCards } from "../../lib/agents/roster-activity.ts";
@@ -28,6 +30,7 @@ type AgentsHomeProps = {
   error: string | null;
   canCreate: boolean;
   showExplore: boolean;
+  onOpenCatalog: () => void;
   onSelectClaw: (entry: ClawCatalogEntry) => void;
   onRetry: () => void;
 };
@@ -46,11 +49,26 @@ export function renderAgentsHome(props: AgentsHomeProps) {
     @click=${(event: MouseEvent) => navigate(event, "agents")}
     >${t("agentsHome.manage")}</a
   >`;
+  const searchClaws = props.showExplore
+    ? html`<openclaw-tooltip .content=${t("clawsCatalog.search")}>
+        <button
+          type="button"
+          class="btn btn--icon"
+          data-claws-open-catalog
+          aria-label=${t("clawsCatalog.search")}
+          aria-haspopup="dialog"
+          ?disabled=${!props.connected}
+          @click=${props.onOpenCatalog}
+        >
+          ${icons.search}
+        </button>
+      </openclaw-tooltip>`
+    : nothing;
   return html` <div class="agents-home__header">
       ${renderSettingsPageHeader({
         title: titleForRoute("agents-home"),
         subtitle: subtitleForRoute("agents-home"),
-        actions: html`${manage}
+        actions: html`${searchClaws}${manage}
           <a
             class="btn primary"
             href=${props.canCreate ? `${pathForRoute("custodian", context.basePath)}?intent=new-agent` : pathForRoute("agents", context.basePath)}

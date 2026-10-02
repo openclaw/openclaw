@@ -15,6 +15,7 @@ import {
   plansMatchAcrossSourceRoots,
 } from "./gateway-plan-projection.js";
 import type { ClawRemovePlan } from "./lifecycle-remove-contract.js";
+import { digestClawMcpServer } from "./mcp.js";
 import type { ClawAddPlan } from "./types.js";
 import { makeEmptyClawUpdatePlan } from "./update-plan-empty.js";
 
@@ -61,6 +62,7 @@ function addPlan(sourceRoot: string, integrity = "sha256:artifact-a"): ClawAddPl
         action: "write",
         target: "/operator/workspace-workflow-operator/SOUL.md",
         source: path.join(sourceRoot, "SOUL.md"),
+        digest: "sha256:file-content",
         blocked: false,
       },
     ],
@@ -110,7 +112,18 @@ describe("Claw Gateway plan consent", () => {
     expect(JSON.stringify(projected)).not.toContain(root);
     expect(JSON.stringify(projected)).not.toContain("secret setup answer");
     expect(projected.actions).toEqual([
-      { kind: "workspaceFile", id: "SOUL.md", action: "write", blocked: false },
+      {
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "write",
+        blocked: false,
+        effect: {
+          type: "workspace-file",
+          destination: "workspace/SOUL.md",
+          source: "package/SOUL.md",
+          desiredDigest: "sha256:file-content",
+        },
+      },
     ]);
 
     const warned = bindClawLifecycleTrust(projected, {
@@ -119,6 +132,167 @@ describe("Claw Gateway plan consent", () => {
     });
     expect(warned.planIntegrity).not.toBe(projected.planIntegrity);
     expect(warned.riskAcknowledgementRequired).toBe(true);
+  });
+
+  it("discloses an MCP process without leaking resolved environment values", () => {
+    const root = "/tmp/private-claw-source";
+    const plan = addPlan(root);
+    plan.actions.push({
+      kind: "mcpServer",
+      id: "research",
+      action: "configure",
+      target: "mcp.servers.research",
+      blocked: false,
+      details: {
+        command: "npx",
+        args: ["-y", "@openclaw/research-mcp@1.0.0"],
+        env: { RESEARCH_TOKEN: "${RESEARCH_API_KEY}" },
+        toolFilter: { include: ["search"] },
+        expectedState: "absent",
+      },
+    });
+
+    const projected = projectClawAddPlan(plan, root, [], config);
+    expect(projected.blockers).toEqual([]);
+    expect(projected.actions[1]?.effect).toMatchObject({
+      type: "mcp-server",
+      proposed: {
+        transport: "stdio",
+        command: "npx",
+        arguments: ["-y", "@openclaw/research-mcp@1.0.0"],
+        environment: [{ name: "RESEARCH_TOKEN", sourceName: "RESEARCH_API_KEY" }],
+        authentication: "none",
+        toolFilter: { include: ["search"] },
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("/tmp/private-claw-source");
+  });
+
+  it("redacts remote MCP URL query values while binding them into consent", () => {
+    const root = "/tmp/private-claw-source";
+    const plan = addPlan(root);
+    plan.actions.push({
+      kind: "mcpServer",
+      id: "remote-search",
+      action: "configure",
+      target: "mcp.servers.remote-search",
+      blocked: false,
+      details: {
+        transport: "streamable-http",
+        url: "https://mcp.example.test/search?token=private-token&workspace=example",
+      },
+    });
+    const projected = projectClawAddPlan(plan, root, [], config);
+    expect(projected.blockers).toEqual([]);
+    expect(projected.actions[1]?.effect).toMatchObject({
+      type: "mcp-server",
+      proposed: {
+        transport: "streamable-http",
+        url: "https://mcp.example.test/search",
+        queryParameterNames: ["token", "workspace"],
+        urlDigest: expect.stringMatching(/^sha256:/u),
+      },
+    });
+    expect(JSON.stringify(projected)).not.toContain("private-token");
+    const changed = structuredClone(plan);
+    changed.actions[1]!.details!.url =
+      "https://mcp.example.test/search?token=another-token&workspace=example";
+    expect(projectClawAddPlan(changed, root, [], config).planIntegrity).not.toBe(
+      projected.planIntegrity,
+    );
+  });
+
+  it("blocks Add when a required file or MCP effect cannot be disclosed", () => {
+    const root = "/tmp/private-claw-source";
+    const plan = addPlan(root);
+    plan.actions[0]!.digest = undefined;
+    plan.actions.push({
+      kind: "mcpServer",
+      id: "uninspectable",
+      action: "configure",
+      target: "mcp.servers.uninspectable",
+      details: { command: "npx", env: { TOKEN: "resolved-private-value" } },
+      blocked: false,
+    });
+    const projected = projectClawAddPlan(plan, root, [], config);
+    expect(projected.blockers.map((blocker) => blocker.code)).toEqual([
+      "effect_disclosure_unavailable",
+      "effect_disclosure_unavailable",
+    ]);
+    expect(JSON.stringify(projected)).not.toContain("resolved-private-value");
+  });
+
+  it("discloses exact file and MCP changes on Update without current private config", () => {
+    const root = "/tmp/private-update-source";
+    const server = { command: "node", args: ["server.js"] };
+    const plan = makeEmptyClawUpdatePlan({
+      agentId: "workflow-operator",
+      source: addPlan(root).claw,
+      found: true,
+      blockers: [],
+    });
+    plan.actions.push(
+      {
+        kind: "workspaceFile",
+        id: "SOUL.md",
+        action: "change",
+        target: "/private/workspace:SOUL.md",
+        blocked: false,
+        reason: "File changes.",
+        currentDigest: "sha256:old",
+        desiredDigest: "sha256:new",
+      },
+      {
+        kind: "mcpServer",
+        id: "research",
+        action: "add",
+        target: "mcp.servers.research",
+        blocked: false,
+        reason: "MCP server added.",
+        desiredDigest: digestClawMcpServer(server),
+      },
+    );
+    const projected = projectClawUpdatePlan(plan, root, {
+      config: { agents: { list: [{ id: "workflow-operator" }] } },
+      desiredAgent: { id: "workflow-operator" },
+      currentJobs: [],
+      targetJobs: [],
+      targetActions: [
+        {
+          kind: "workspaceFile",
+          id: "SOUL.md",
+          action: "write",
+          target: "/private/workspace/SOUL.md",
+          source: `${root}/SOUL.md`,
+          digest: "sha256:new",
+          blocked: false,
+        },
+        {
+          kind: "mcpServer",
+          id: "research",
+          action: "configure",
+          target: "mcp.servers.research",
+          details: { ...server, expectedState: "absent" },
+          blocked: false,
+        },
+      ],
+    });
+    expect(projected.blockers).toEqual([]);
+    expect(projected.actions.map((action) => action.effect)).toMatchObject([
+      {
+        type: "workspace-file",
+        destination: "workspace/SOUL.md",
+        source: "package/SOUL.md",
+        currentDigest: "sha256:old",
+        desiredDigest: "sha256:new",
+      },
+      {
+        type: "mcp-server",
+        desiredDigest: digestClawMcpServer(server),
+        proposed: { transport: "stdio", command: "node", arguments: ["server.js"] },
+      },
+    ]);
+    expect(JSON.stringify(projected)).not.toContain("/private/workspace");
   });
 
   it("does not project an installable plugin without its capability review", () => {
@@ -146,12 +320,14 @@ describe("Claw Gateway plan consent", () => {
       id: "skill:@community/triage",
       action: "install",
       target: "clawhub:@community/triage@1.0.0",
+      digest: `sha256:${"a".repeat(64)}`,
       blocked: false,
       details: {
         kind: "skill",
+        source: "clawhub",
         ref: "@community/triage",
         version: "1.0.0",
-        integrity: "sha256:skill-artifact",
+        integrity: `sha256:${"a".repeat(64)}`,
         ownerAction: "install",
         riskWarning: "Review this community skill before installation.",
       },
@@ -161,11 +337,12 @@ describe("Claw Gateway plan consent", () => {
     expect(projected.skillReviews).toMatchObject([
       {
         actionId: "skill:@community/triage",
-        integrity: "sha256:skill-artifact",
+        integrity: `sha256:${"a".repeat(64)}`,
         riskWarning: "Review this community skill before installation.",
       },
     ]);
     expect(projected.skillReviews[0]?.reviewToken).toMatch(/^sha256:/);
+    expect(projected.blockers).toEqual([]);
     expect(JSON.stringify(projected)).not.toContain(root);
 
     const changed = structuredClone(plan);
@@ -228,6 +405,32 @@ describe("Claw Gateway plan consent", () => {
     }
   });
 
+  it("blocks Add when the Claw itself requests unresolved memory access", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("workflow-operator"),
+        state: "unavailable",
+        paths: ["/private/memory-provider"],
+        refKeys: ["private-memory-ref"],
+        reason: "private-provider-failure",
+      },
+    ]);
+    try {
+      const root = "/tmp/private-claw-source";
+      const plan = addPlan(root);
+      plan.agent.config.memory = { search: { enabled: true } };
+      const projected = projectClawAddPlan(plan, root, [], config);
+      expect(projected.configuredAccess?.desired?.memorySearch).toEqual({ state: "unresolved" });
+      expect(projected.blockers).toContainEqual(
+        expect.objectContaining({ code: "claw_memory_policy_unresolved" }),
+      );
+      expect(JSON.stringify(projected)).not.toMatch(/private-memory|private-provider/u);
+    } finally {
+      setActiveDegradedSecretOwners([]);
+    }
+  });
+
   it("does not hide forged or different-owner memory failures", () => {
     const forged = new Error("unrelated failure");
     forged.name = "SecretSurfaceUnavailableError";
@@ -284,6 +487,39 @@ describe("Claw Gateway plan consent", () => {
       expect(projected.configuredAccess?.desired?.memorySearch).toEqual({ state: "disabled" });
       expect(projected.blockers).toEqual([]);
       expect(JSON.stringify(projected)).not.toMatch(/private-memory|private-provider/u);
+    } finally {
+      setActiveDegradedSecretOwners([]);
+    }
+  });
+
+  it("blocks Update when the target Claw still requests unresolved memory access", () => {
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "capability",
+        ownerId: runtimeMemorySecretOwnerId("workflow-operator"),
+        state: "unavailable",
+        paths: ["/private/memory-provider"],
+        refKeys: ["private-memory-ref"],
+        reason: "private-provider-failure",
+      },
+    ]);
+    try {
+      const root = "/tmp/private-update-source";
+      const plan = makeEmptyClawUpdatePlan({
+        agentId: "workflow-operator",
+        source: addPlan(root).claw,
+        found: true,
+        blockers: [],
+      });
+      const projected = projectClawUpdatePlan(plan, root, {
+        config: { agents: { list: [{ id: "workflow-operator" }] } },
+        desiredAgent: { id: "workflow-operator", memory: { search: { enabled: true } } },
+        currentJobs: [],
+        targetJobs: [],
+      });
+      expect(projected.blockers).toContainEqual(
+        expect.objectContaining({ code: "claw_memory_policy_unresolved" }),
+      );
     } finally {
       setActiveDegradedSecretOwners([]);
     }
@@ -417,7 +653,7 @@ describe("Claw Gateway plan consent", () => {
       id: "daily-brief",
       schedule: { cron: "0 8 * * *", timezone: "UTC" },
       session: "isolated" as const,
-      message: "SECRET: include private incident details",
+      message: "Prepare a daily incident brief",
       delivery: { mode: "announce" as const, channel: "last" as const },
     };
     const plan = makeEmptyClawUpdatePlan({
@@ -444,8 +680,13 @@ describe("Claw Gateway plan consent", () => {
     });
     expect(projected.configuredAccess).toMatchObject({
       coverage: "configuration-only",
-      current: { tools: { allowed: expect.arrayContaining(["read"]) } },
-      desired: { tools: { allowed: expect.arrayContaining(["read", "web_fetch"]) } },
+      current: { tools: { allowed: expect.arrayContaining(["read"]), explicitAllow: ["read"] } },
+      desired: {
+        tools: {
+          allowed: expect.arrayContaining(["read", "web_fetch"]),
+          explicitAllow: ["read", "web_fetch"],
+        },
+      },
     });
     expect(projected.scheduledJobs).toEqual({
       coverage: "package-declarations",
@@ -458,11 +699,13 @@ describe("Claw Gateway plan consent", () => {
             schedule: { cron: "0 8 * * *", timezone: "UTC" },
             session: "isolated",
             delivery: "last-channel",
+            message: targetJob.message,
+            messageDigest: digestClawValue(targetJob.message),
           },
         },
       ],
     });
-    expect(JSON.stringify(projected)).not.toContain("SECRET");
+    expect(JSON.stringify(projected)).toContain(targetJob.message);
     expect(JSON.stringify(projected)).not.toContain("secret-scheduler-id");
 
     const changed = projectClawUpdatePlan(plan, root, {
@@ -504,7 +747,7 @@ describe("Claw Gateway plan consent", () => {
       ...currentChange,
       schedule: { cron: "0 9 * * *", timezone: "America/Los_Angeles" },
       session: "isolated" as const,
-      message: "SECRET: new task text",
+      message: "Prepare the new brief",
       delivery: { mode: "announce" as const, channel: "last" as const },
     };
     const currentRemove = {
@@ -557,11 +800,14 @@ describe("Claw Gateway plan consent", () => {
             schedule: currentChange.schedule,
             session: "main",
             delivery: "none",
+            messageDigest: digestClawValue(currentChange.message),
           },
           proposed: {
             schedule: targetChange.schedule,
             session: "isolated",
             delivery: "last-channel",
+            message: targetChange.message,
+            messageDigest: digestClawValue(targetChange.message),
           },
         },
         {
@@ -572,11 +818,14 @@ describe("Claw Gateway plan consent", () => {
             schedule: currentRemove.schedule,
             session: "main",
             delivery: "none",
+            messageDigest: digestClawValue(currentRemove.message),
           },
         },
       ],
     });
-    expect(JSON.stringify(projected)).not.toContain("SECRET");
+    expect(JSON.stringify(projected)).not.toContain(currentChange.message);
+    expect(JSON.stringify(projected)).not.toContain(currentRemove.message);
+    expect(JSON.stringify(projected)).toContain(targetChange.message);
     expect(JSON.stringify(projected)).not.toContain("secret-scheduler-id");
 
     const stale = projectClawUpdatePlan(plan, root, {
@@ -644,5 +893,69 @@ describe("Claw Gateway plan consent", () => {
       { kind: "workspace", id: "workflow-operator", action: "trash", blocked: false },
     ]);
     expect(JSON.stringify(projected)).not.toContain("secret");
+  });
+
+  it("distinguishes released shared resources from removed owned resources", () => {
+    const plan: ClawRemovePlan = {
+      schemaVersion: "openclaw.clawRemovePlan.v1",
+      stability: "experimental",
+      dryRun: true,
+      mutationAllowed: false,
+      planIntegrity: "sha256:canonical",
+      target: "workflow-operator",
+      agentId: "workflow-operator",
+      blockers: [],
+      actions: [
+        {
+          kind: "packageRef",
+          id: "plugin:@openclaw/shared@1.0.0",
+          action: "release",
+          target: "clawhub:@openclaw/shared@1.0.0",
+          blocked: false,
+          details: {
+            relationship: "referenced",
+            origin: "pre-existing",
+            independentOwner: true,
+            affectedClawAgentIds: ["another-agent"],
+          },
+        },
+        {
+          kind: "mcpServer",
+          id: "private-owned",
+          action: "remove",
+          target: "mcp.servers.private-owned",
+          blocked: false,
+          details: {
+            relationship: "managed",
+            origin: "claw-introduced",
+            independentOwner: false,
+            configDigest: "sha256:owned",
+            affectedClawAgentIds: [],
+          },
+        },
+      ],
+    };
+    const projected = projectClawRemovePlan(plan);
+    expect(projected.blockers).toEqual([]);
+    expect(projected.actions.map((action) => action.effect)).toMatchObject([
+      {
+        type: "ownership",
+        relationship: "referenced",
+        origin: "pre-existing",
+        independentOwner: true,
+        affectedClawCount: 1,
+      },
+      {
+        type: "mcp-server",
+        currentDigest: "sha256:owned",
+        ownership: {
+          relationship: "managed",
+          origin: "claw-introduced",
+          independentOwner: false,
+          affectedClawCount: 0,
+        },
+      },
+    ]);
+    expect(JSON.stringify(projected)).not.toContain("another-agent");
   });
 });
