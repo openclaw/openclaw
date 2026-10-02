@@ -689,22 +689,16 @@ export function createReplyDispatcherWithTyping(
   const resolvedOnIdle = onIdle ?? typingCallbacks?.onIdle;
   const resolvedOnCleanup = onCleanup ?? typingCallbacks?.onCleanup;
   let typingController: TypingController | undefined;
-  // A channel's own onIdle can do more than stop typing (Feishu finalizes streaming
-  // delivery there), so only a typing-only idle waits for a handed-off follow-up.
-  const handoff = createTypingHandoff(onIdle ? undefined : resolvedOnIdle, resolvedOnCleanup);
-  const runIdle = () => {
-    if (handoff.deferIdle()) {
-      return onIdle?.();
-    }
-    typingController?.markDispatchIdle();
-    return resolvedOnIdle?.();
-  };
+  const handoff = createTypingHandoff(resolvedOnIdle, resolvedOnCleanup);
   const dispatcher = createReplyDispatcher({
     ...dispatcherOptions,
     onIdle: async () => {
-      const idle = runIdle();
-      if (idle) {
-        await Promise.resolve(idle);
+      if (!handoff.deferIdle()) {
+        typingController?.markDispatchIdle();
+        const idle = resolvedOnIdle?.();
+        if (idle) {
+          await Promise.resolve(idle);
+        }
       }
       await onSettled?.();
     },
@@ -718,10 +712,16 @@ export function createReplyDispatcherWithTyping(
       onTypingController: (typing) => {
         typingController = typing;
       },
-      onTypingHandoff: handoff.onHandoff,
+      // A channel's own onIdle can do more than stop typing (Feishu finalizes and
+      // closes its streaming card there), so only typing-only channels hand off.
+      onTypingHandoff: onIdle ? undefined : handoff.onHandoff,
     },
     markDispatchIdle: () => {
-      void runIdle();
+      if (handoff.deferIdle()) {
+        return;
+      }
+      typingController?.markDispatchIdle();
+      resolvedOnIdle?.();
     },
     markRunComplete: () => {
       if (!handoff.isHandedOff()) {

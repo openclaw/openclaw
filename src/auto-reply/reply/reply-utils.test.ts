@@ -276,18 +276,15 @@ describe("typing controller", () => {
     expect(start).toHaveBeenCalledTimes(30);
   });
 
-  it("runs the channel idle callback while a queued follow-up holds typing", async () => {
+  it("keeps the dispatcher lifecycle for a channel that owns its idle callback", async () => {
+    vi.useFakeTimers();
     const events: string[] = [];
-    let finalize!: () => void;
-    const finalization = new Promise<string>((resolve) => {
-      finalize = () => resolve("finalized");
-    });
+    const onReplyStart = vi.fn();
     const lifecycle = createReplyDispatcherWithTyping({
       deliver: async () => undefined,
-      onReplyStart: () => undefined,
+      onReplyStart,
       onIdle: () => {
         events.push("idle");
-        finalize();
       },
       onCleanup: () => {
         events.push("cleanup");
@@ -296,22 +293,22 @@ describe("typing controller", () => {
     const typing = createTypingController({
       onReplyStart: lifecycle.replyOptions.onReplyStart,
       onCleanup: lifecycle.replyOptions.onTypingCleanup,
+      typingIntervalSeconds: 1,
     });
     lifecycle.replyOptions.onTypingController?.(typing);
     await typing.startTypingLoop();
     lifecycle.replyOptions.onTypingHandoff?.();
+    lifecycle.markRunComplete();
     lifecycle.dispatcher.markComplete();
     await lifecycle.dispatcher.waitForIdle();
-    lifecycle.markRunComplete();
+    expect(events).toEqual(["cleanup", "idle"]);
+    onReplyStart.mockClear();
 
-    const withheld = new Promise<string>((resolve) => {
-      setTimeout(() => resolve("finalization-withheld"), 50);
-    });
-    await expect(Promise.race([finalization, withheld])).resolves.toBe("finalized");
-    expect(events).toEqual(["idle"]);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onReplyStart).not.toHaveBeenCalled();
 
     typing.cleanup();
-    expect(events).toEqual(["idle", "cleanup"]);
+    expect(events).toEqual(["cleanup", "idle"]);
   });
 
   it("sends the first typing signal without periodic keepalive refreshes", async () => {
