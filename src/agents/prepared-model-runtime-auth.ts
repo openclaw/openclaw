@@ -90,6 +90,22 @@ export function hasSamePreparedModelCatalogAuth(
 
 /** Selected-account inventory belongs to the prepared generation, not an RPC projector. */
 export type PreparedAccountCatalogAccess = {
+  reconcileAuth: (
+    authStore: AuthProfileStore,
+    includesProvider: (provider: string) => boolean,
+    profileIds?: readonly string[],
+  ) => void;
+  readServiceTiers: (params: {
+    profileId: string;
+    modelId: string;
+    runtimeId: string;
+    api: string;
+    baseUrl: string;
+  }) => readonly string[] | undefined;
+  prepareServiceTierObserver: (params: {
+    profileId: string;
+    credential: AuthProfileCredential;
+  }) => (observation: NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number]) => boolean;
   acquire: (params: {
     profileId: string;
     credential: AuthProfileCredential;

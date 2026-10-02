@@ -66,7 +66,7 @@ struct RealtimeTalkRelaySessionOffMainTests {
                 }),
             options: .init(sessionKey: "main", provider: nil, model: nil, voice: nil),
             audioCapture: TestRealtimeTalkAudioCapture(),
-            pcmPlayer: UnusedPCMStreamingAudioPlayer(),
+            pcmPlayer: DrainingPCMStreamingAudioPlayer(),
             onStatus: { _ in },
             onSpeakingChanged: { _ in })
         defer { session.stop()
@@ -98,7 +98,7 @@ struct RealtimeTalkRelaySessionOffMainTests {
     @Test func `installed relay identity does not open startup routing`() {
         let notifications = AsyncStream<Void>.makeStream()
         let output = RealtimeTalkOutput(
-            player: UnusedPCMStreamingAudioPlayer(), transport: unusedRealtimeRelayTransport(),
+            player: DrainingPCMStreamingAudioPlayer(), transport: unusedRealtimeRelayTransport(),
             notification: notifications.continuation)
         output.withLock {
             $0.resetRouting(lifecycleGeneration: 1)

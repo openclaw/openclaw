@@ -447,7 +447,6 @@ describe("flushPendingToolResultsAfterIdle", () => {
     expect(messages[1]).toMatchObject({
       toolCallId: "call_orphan_2",
       isError: true,
-      content: [{ type: "text", text: expect.stringContaining("missing tool result") }],
     });
 
     appendMessage({

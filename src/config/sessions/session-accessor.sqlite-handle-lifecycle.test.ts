@@ -298,12 +298,14 @@ describe("SQLite session handle lifecycle", () => {
   });
 
   it("revalidates label ownership after the planning handle closes", async () => {
+    const planningDatabase = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     await applySessionEntryCanonicalReplacements({
       storePath: scope.storePath,
       sessionKeys: [scope.sessionKey],
       includeLabelOwners: "Renamed",
       update: async ([snapshot]) => {
         expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+        expect(planningDatabase.db.isOpen).toBe(false);
         return {
           result: undefined,
           replacements: [

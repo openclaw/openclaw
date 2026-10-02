@@ -25,7 +25,27 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.pairing",
 ] as const;
 
+async function startConnect(client: GatewayBrowserClient) {
+  client.start();
+  const ws = getLatestWebSocket();
+  ws.emitOpen();
+  ws.emitMessage({
+    type: "event",
+    event: "connect.challenge",
+    payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
+    id: string;
+    method: string;
+    params: ConnectParams;
+  };
+  return { ws, connectFrame };
+}
+
 describe("GatewayBrowserClient shared-auth handshake", () => {
+  let client: GatewayBrowserClient | undefined;
+
   beforeEach(() => {
     useNodeFakeTimers();
     const storage = createStorageMock();
@@ -37,30 +57,21 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
     wsInstances.length = 0;
   });
   afterEach(() => {
+    client?.stop();
+    client = undefined;
+    vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
   it("requests full control ui operator scopes with explicit shared auth", async () => {
-    const client = new GatewayBrowserClient({
+    client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
       clientBuildId: "build-a",
     });
 
-    client.start();
-    const ws = getLatestWebSocket();
-    ws.emitOpen();
-    ws.emitMessage({
-      type: "event",
-      event: "connect.challenge",
-      payload: { nonce: "handshake-challenge", ts: 1_800_000_000_000 },
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const connectFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as {
-      method?: string;
-      params?: ConnectParams;
-    };
+    const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
@@ -83,6 +94,45 @@ describe("GatewayBrowserClient shared-auth handshake", () => {
       GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
-    client.stop();
+  });
+
+  it.each([
+    { retryAfterMs: 500, draw: 0.25, delayMs: 525 },
+    { retryAfterMs: 500, draw: 0.75, delayMs: 575 },
+    { retryAfterMs: 90_000, draw: 0.5, delayMs: 2_200 },
+  ])("spreads bounded startup retries across tabs: %j", async ({ retryAfterMs, draw, delayMs }) => {
+    vi.spyOn(Math, "random").mockReturnValue(draw);
+    const onClose = vi.fn();
+    const onReconnectScheduled = vi.fn();
+    client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onClose,
+      onReconnectScheduled,
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    const error = {
+      code: "UNAVAILABLE",
+      message: "gateway starting; retry shortly",
+      details: { reason: "startup-sidecars" },
+      retryable: true,
+      retryAfterMs,
+    };
+    ws.emitMessage({ type: "res", id: connectFrame.id, ok: false, error });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ws.lastClose).toEqual({ code: 4013, reason: "gateway starting" });
+    ws.emitClose(4013, "gateway starting");
+    expect(onClose).toHaveBeenCalledWith({
+      code: 4013,
+      reason: "gateway starting",
+      error,
+      willRetry: true,
+    });
+    expect(onReconnectScheduled).toHaveBeenCalledExactlyOnceWith(delayMs);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(delayMs - 1);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(wsInstances).toHaveLength(2);
   });
 });

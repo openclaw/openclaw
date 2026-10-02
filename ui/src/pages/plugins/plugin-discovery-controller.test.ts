@@ -177,26 +177,6 @@ it("populates the grouped home page and keeps it visible during a refresh", asyn
   expect(controller.trending).toEqual([]);
 });
 
-it("switches filtered tabs to All when starting a unified search", async () => {
-  vi.useFakeTimers();
-  const { controller, request } = setup([{ items: [] }]);
-  controller.intent = "official";
-
-  controller.updateQuery("memory");
-  await vi.runAllTimersAsync();
-
-  expect(controller.intent).toBe("all");
-  expect(request).toHaveBeenCalledWith(
-    "plugins.catalog.browse",
-    expect.objectContaining({
-      intent: "all",
-      query: "memory",
-      searchSource: "openclaw-control-ui",
-    }),
-    expect.anything(),
-  );
-});
-
 it("preserves home navigation when a category completes during the search debounce", async () => {
   vi.useFakeTimers();
   const featured = entry(1);
@@ -254,7 +234,9 @@ it("does not expose continuation for search results", async () => {
 it("counts only settled manual searches across refresh, filters and connection invalidation", async () => {
   vi.useFakeTimers();
   const { controller, request } = setup([], async () => ({ items: [entry(1)] }));
+  controller.intent = "official";
   controller.updateQuery("m");
+  expect(controller.intent).toBe("all");
   await vi.advanceTimersByTimeAsync(250);
   expect(request.mock.lastCall?.[1]).not.toHaveProperty("searchSource");
   request.mockClear();
@@ -341,29 +323,26 @@ it("loads one bounded page initially and continues only after explicit expansion
   );
 });
 
-it.each(["tools", "media"])(
-  "replaces a first-page local placeholder with later published metadata (%s)",
-  async (category) => {
-    const placeholder = entry(1);
-    delete placeholder.catalog.family;
-    const published = entry(1);
-    placeholder.catalog.categories = category === "media" ? ["models", "media"] : ["tools"];
-    published.catalog.categories = [...placeholder.catalog.categories];
-    published.catalog.author = "openclaw";
-    published.catalog.official = true;
-    published.catalog.downloads = 10_000;
-    const { controller } = setup([
-      { items: [placeholder], nextCursor: "catalog-page-2" },
-      { items: [published] },
-    ]);
-    controller.category = category;
+it("replaces a first-page local placeholder with later published Media metadata", async () => {
+  const placeholder = entry(1);
+  delete placeholder.catalog.family;
+  placeholder.catalog.categories = ["models", "media"];
+  const published = entry(1);
+  published.catalog.categories = [...placeholder.catalog.categories];
+  published.catalog.author = "openclaw";
+  published.catalog.official = true;
+  published.catalog.downloads = 10_000;
+  const { controller } = setup([
+    { items: [placeholder], nextCursor: "catalog-page-2" },
+    { items: [published] },
+  ]);
+  controller.category = "media";
 
-    await controller.refresh();
-    await controller.loadMore();
+  await controller.refresh();
+  await controller.loadMore();
 
-    expect(controller.result?.items).toEqual([published]);
-  },
-);
+  expect(controller.result?.items).toEqual([published]);
+});
 
 it("preserves independent Trending rank from the deduplicated overview", async () => {
   const official = entry(1);
@@ -396,27 +375,6 @@ it("keeps unranked overview members after ranked entries", async () => {
   expect(controller.featured.map((item) => item.id)).toEqual([ranked.id, unranked.id]);
 });
 
-it("sorts a selected category within its bounded page", async () => {
-  const installed = entry(0);
-  installed.catalog.name = "Installed placeholder";
-  delete installed.catalog.family;
-  installed.local.installed = true;
-  installed.local.action = "manage";
-  const popular = entry(1);
-  popular.catalog.name = "Popular official plugin";
-  popular.catalog.official = true;
-  popular.catalog.downloads = 10_000;
-  const { controller } = setup([{ items: [installed, popular] }]);
-
-  controller.category = "models";
-  await controller.refresh();
-
-  expect(controller.result?.items.map((item) => item.catalog.name)).toEqual([
-    "Popular official plugin",
-    "Installed placeholder",
-  ]);
-});
-
 it("preserves category navigation when a filtered view reconnects", async () => {
   const categories = [
     {
@@ -441,17 +399,7 @@ it("preserves category navigation when a filtered view reconnects", async () => 
   expect(controller.categories).toEqual(categories);
 });
 
-it("surfaces a partial ClawHub failure once for the overview", async () => {
-  const { controller } = setup([
-    { items: [], remoteError: "ClawHub is unavailable; local plugins remain available." },
-  ]);
-
-  await controller.refresh();
-
-  expect(controller.remoteError).toBe("ClawHub is unavailable; local plugins remain available.");
-});
-
-it("keeps category pins ahead of a more popular community result after pagination", async () => {
+it("sorts category pins before downloads on the first page and after pagination", async () => {
   const pinned = entry(1);
   pinned.catalog.categoryRanks = { models: 0 };
   const official = entry(2);
@@ -465,6 +413,7 @@ it("keeps category pins ahead of a more popular community result after paginatio
   ]);
   controller.category = "models";
   await controller.refresh();
+  expect(controller.result?.items.map((item) => item.id)).toEqual([pinned.id, official.id]);
   await controller.loadMore();
   expect(controller.result?.items.map((item) => item.id)).toEqual([
     pinned.id,

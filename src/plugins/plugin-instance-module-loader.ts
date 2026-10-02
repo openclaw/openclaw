@@ -6,7 +6,6 @@ import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
 import {
-  isJavaScriptModulePath,
   resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
@@ -35,12 +34,11 @@ import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-ali
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
   const cache = getPluginCache();
-  if (params.origin === "bundled" && isJavaScriptModulePath(params.source)) {
+  if (params.origin === "bundled") {
     if (params.expectedSourceDigest !== undefined) {
       throw new Error("Source digest validation is not applicable to core-bundled runtime modules");
     }
-    // Core-shipped code keeps process identity. Recapturing it creates native ESM
-    // module jobs that Node retains after the inventory and its callbacks retire.
+    // Recaptured bundled code leaves native ESM jobs alive after its inventory retires.
     let loader: PluginModuleLoader;
     if (params.createHostModuleLoader) {
       loader = params.createHostModuleLoader();

@@ -385,10 +385,6 @@ export type AgentHarnessResultClassification =
 export type AgentHarnessDeliveryDefaults = {
   /** Default visible-reply policy when config does not override the harness. */
   visibleReplies?: "automatic" | "message_tool";
-  /**
-   * @deprecated Use visibleReplies. Kept for existing harness plugins.
-   */
-  sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
 /** Exact node authority and worker capacity required by one paired-device runtime. */

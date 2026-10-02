@@ -59,6 +59,7 @@ import {
   loadAgentReplacementOperations,
   loadAgentRestartRecoveryOperations,
   loadAgentEntryReadOperations,
+  loadAgentEntryPatchOperations,
   loadAgentTrajectoryOperations,
   loadAgentArchiveOperations,
   loadAgentAcpOperations,
@@ -360,6 +361,8 @@ function openAgentDatabaseBackend(
     keyof RegisteredAgentWorkerOperations
   >({
     "session.entry.read": loadAgentEntryReadOperations,
+    "session.entry.patch.prepare": loadAgentEntryPatchOperations,
+    "session.entry.patch.commit": loadAgentEntryPatchOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,

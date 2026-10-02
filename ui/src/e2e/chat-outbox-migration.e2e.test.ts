@@ -160,14 +160,21 @@ suite.define(() => {
             await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).count(),
           ).toBe(0);
           const notice = paneFor(page).locator(".chat-outbox-recovery");
-          await notice.locator("summary").click();
+          expect(await notice.getAttribute("open")).not.toBeNull();
           await notice
+            .locator(".chat-outbox-recovery__content")
             .getByText("Mock Gateway: retained v3 Blob submission", { exact: true })
             .waitFor();
           await expectRequestCountStable(gateway, "chat.send", 0);
-          await notice.getByRole("button", { name: "Restore here for review" }).click();
+          await notice.getByRole("button", { name: "Review in this chat" }).click();
           const dialog = page.locator("openclaw-modal-dialog");
-          await dialog.getByText(`${destination} (main)`, { exact: true }).waitFor();
+          await dialog
+            .getByText(
+              legacySessionKey === "global"
+                ? /Add this saved copy to “Main Session”/
+                : /Add this saved copy to “topic”/,
+            )
+            .waitFor();
           await page.screenshot({
             path: path.join(
               suite.artifactDir,
@@ -175,7 +182,7 @@ suite.define(() => {
             ),
             animations: "disabled",
           });
-          await dialog.getByRole("button", { name: "Restore here for review" }).click();
+          await dialog.getByRole("button", { name: "Review in this chat" }).click();
           await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
           await page.reload();
           await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
@@ -331,13 +338,16 @@ suite.define(() => {
       await paneFor(page).getByRole("button", { name: "Remove draft.txt", exact: true }).click();
       await waitForCommittedComposerDraft(page, "chat:v3:agent:main:main\u0000agent:main", null, 0);
       const notice = paneFor(page).locator(".chat-outbox-recovery");
-      await notice.locator("summary").click();
-      await notice.getByText("Mock Gateway: upgrade this inline queue", { exact: true }).waitFor();
+      expect(await notice.getAttribute("open")).not.toBeNull();
+      await notice
+        .locator(".chat-outbox-recovery__content")
+        .getByText("Mock Gateway: upgrade this inline queue", { exact: true })
+        .waitFor();
       await expectRequestCountStable(gateway, "chat.send", 0);
-      await notice.getByRole("button", { name: "Restore here for review" }).click();
+      await notice.getByRole("button", { name: "Review in this chat" }).click();
       const dialog = page.locator("openclaw-modal-dialog");
-      await dialog.getByText("agent:main:main (main)", { exact: true }).waitFor();
-      await dialog.getByRole("button", { name: "Restore here for review" }).click();
+      await dialog.getByText(/Add this saved copy to “Main/).waitFor();
+      await dialog.getByRole("button", { name: "Review in this chat" }).click();
       await expect
         .poll(() => readQueue(page))
         .toMatchObject([{ sendRunId: "legacy-idempotency", sendAttempts: 0, sendState: "failed" }]);

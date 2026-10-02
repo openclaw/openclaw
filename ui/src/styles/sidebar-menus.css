@@ -129,6 +129,11 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   line-height: 1.55;
 }
 
+/* People has text-only submenu rows, not the wider Sessions form controls. */
+.sidebar-people-filter-menu .sidebar-session-filter-panel {
+  width: max-content;
+}
+
 .sidebar-session-menu-section {
   display: grid;
 }

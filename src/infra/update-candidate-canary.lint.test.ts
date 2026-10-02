@@ -363,7 +363,9 @@ describe("update candidate Doctor lint", () => {
     expect(renderSteps([step])).toContain(
       physical.outputLimitExceeded && physical.exitCode === 0
         ? "Update health check output exceeded the inspection limit"
-        : "Update health check failed",
+        : physical.signal
+          ? `terminated by ${physical.signal}`
+          : "Update health check failed",
     );
     expect(renderUpdateRunReport(updateRunReportInputFromResult(failure)).markdown).toContain(
       "Failed: candidate-doctor-lint",

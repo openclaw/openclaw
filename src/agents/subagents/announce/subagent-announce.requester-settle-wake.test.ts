@@ -613,24 +613,26 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
   });
 
   it("stays out of pure fire-and-forget batches", async () => {
-    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+    const requesterTurnRunId = "requester-cancellation-owner";
+    const children = ["run-a", "run-b"].map((runId) =>
       makeSettledChild({
-        runId: "run-a",
+        runId,
+        requesterTurnRunId,
         expectsCompletionMessage: false,
         delivery: { status: "not_required" },
       }),
-      makeSettledChild({
-        runId: "run-b",
-        expectsCompletionMessage: false,
-        delivery: { status: "not_required" },
-      }),
-    ]);
+    );
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
 
     expect(woke).toBe(false);
     expect(deliverSpy).not.toHaveBeenCalled();
     expect(completeBatchSpy).toHaveBeenLastCalledWith(["run-a", "run-b"]);
+    expect(children.map((child) => child.requesterTurnRunId)).toEqual([
+      requesterTurnRunId,
+      requesterTurnRunId,
+    ]);
   });
 
   it("retains a yielded wake after a silent final and retries its visible reply", async () => {

@@ -160,11 +160,15 @@ test("release removes its receipt but preserves unknown sibling files", async ()
   }
 });
 
-test("cleanup recovers an actual restored archive with ordinary directory modes", async () => {
+test("cleanup recovers a restored archive after TDLib and uv wrote ordinary modes", async () => {
   const f = await fixture();
   try {
     const restored = restoreCredential(f.root, f.directory);
     assert.equal(fs.statSync(path.join(restored.userDriverDir, "db")).mode & 0o777, 0o755);
+    // TDLib 1.8.67 creates its database with the inherited umask (0644 under 022).
+    const database = path.join(restored.userDriverDir, "db", "db_test.sqlite");
+    fs.writeFileSync(database, "tdlib-database");
+    fs.chmodSync(database, 0o644);
     const cache = path.join(restored.stateRoot, "runtime", "uv-cache", "tool-created");
     fs.mkdirSync(cache);
     fs.chmodSync(cache, 0o755);
@@ -186,6 +190,20 @@ console.log(JSON.stringify({ ok: true, cleaned: true }));
     assert.deepEqual(JSON.parse(result.stdout), { ok: true, cleaned: true, leaseReleased: true });
     assert.equal(fs.existsSync(f.directory), false);
     assert.deepEqual(f.methods, ["heartbeat", "release"]);
+  } finally {
+    await f.close();
+  }
+});
+
+test("recovery accepts another spelling of the configured temporary root", async () => {
+  const f = await fixture();
+  try {
+    const alias = path.join(f.root, "tmp-alias");
+    fs.symlinkSync(f.temp, alias);
+    const result = await f.run(path.join(alias, path.basename(f.directory)), "status");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).leaseHealthy, true);
+    assert.deepEqual(f.methods, ["heartbeat"]);
   } finally {
     await f.close();
   }

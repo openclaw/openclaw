@@ -127,6 +127,7 @@ function parseArgs(argv) {
     scenarioPath: "",
     scenario: null,
     sourceGateway: false,
+    gatewayReadyTimeoutMs: undefined,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -161,7 +162,13 @@ function parseArgs(argv) {
     else if (arg === "--pre-send") args.preSend.push(argv[++i] || "");
     else if (arg === "--scenario") args.scenarioPath = argv[++i] || "";
     else if (arg === "--source-gateway") args.sourceGateway = true;
-    else if (arg === "--help" || arg === "-h") {
+    else if (arg === "--gateway-ready-timeout-ms") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) {
+        throw new Error("--gateway-ready-timeout-ms takes a positive integer.");
+      }
+      args.gatewayReadyTimeoutMs = value;
+    } else if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
     } else {
@@ -223,6 +230,9 @@ function printHelp() {
 
 Runtime:
   --source-gateway     run the exact TypeScript checkout without building dist
+  --gateway-ready-timeout-ms N
+                       Gateway startup budget (default 45000 built, 300000 source);
+                       raise it on a heavily loaded host
 
 Chat selection:
   --dm                direct chat with the leased SUT
@@ -784,17 +794,17 @@ function waitForExit(child, timeoutMs) {
   });
 }
 
-function processGroupExists(child) {
-  if (!child.pid) return false;
+function processGroupState(child) {
+  if (!child.pid) return "gone";
   try {
     process.kill(-child.pid, 0);
-    return true;
+    return "alive";
   } catch (error) {
-    if (error.code === "ESRCH") return false;
+    if (error.code === "ESRCH") return "gone";
     // macOS can report EPERM while an exiting group awaits reap. Keep waiting
     // for ESRCH; EPERM never confirms cleanup, and setuid ps cannot run confined.
     if (error.code === "EPERM") {
-      return true;
+      return "unconfirmed";
     }
     throw error;
   }
@@ -816,20 +826,24 @@ export function watchChildCompletion(child) {
   });
 }
 
-function waitForProcessGroupExit(child, timeoutMs) {
+function waitForProcessGroupExit(child, timeoutMs, acceptedTimeoutMs = timeoutMs) {
   return new Promise((resolveWait, reject) => {
-    const deadline = Date.now() + timeoutMs;
+    const startedAt = Date.now();
+    let accepted = false;
     const poll = () => {
+      let state;
       try {
-        if (!processGroupExists(child)) {
-          resolveWait(true);
-          return;
-        }
+        state = processGroupState(child);
       } catch (error) {
         reject(error);
         return;
       }
-      if (Date.now() >= deadline) {
+      if (state === "gone") {
+        resolveWait(true);
+        return;
+      }
+      accepted ||= state === "alive";
+      if (Date.now() - startedAt >= (accepted ? acceptedTimeoutMs : timeoutMs)) {
         resolveWait(false);
         return;
       }
@@ -851,6 +865,11 @@ async function stopChild(child, graceMs) {
   return await currentTelegramRun().stopChild(child, graceMs);
 }
 
+// The kernel delivers SIGKILL only when an uninterruptible syscall returns; loaded
+// macOS hosts held APFS rename() for 15-194 s (2026-10). A member that answers a
+// probe after SIGKILL has it pending, so a later EPERM means exiting, not unkillable.
+const KILLED_GROUP_EXIT_MS = 300_000;
+
 async function stopChildProcess(child, graceMs = 5_000) {
   if (!child) return;
   signalChild(child, "SIGTERM");
@@ -860,11 +879,12 @@ async function stopChildProcess(child, graceMs = 5_000) {
   ]);
   if (childExited && groupExited) return;
   signalChild(child, "SIGKILL");
-  const stopped = await Promise.all([
-    waitForExit(child, 2_000),
-    waitForProcessGroupExit(child, 2_000),
-  ]);
-  if (stopped.some((value) => !value))
+  // A group that only ever answers EPERM cannot be confirmed: fail closed quickly.
+  // A gone group means the child was reaped, so its exit wait returns at once.
+  if (
+    !(await waitForProcessGroupExit(child, 2_000, KILLED_GROUP_EXIT_MS)) ||
+    !(await waitForExit(child, 2_000))
+  )
     throw new Error(`Telegram process group did not stop: ${child.pid}`);
 }
 
@@ -1182,7 +1202,11 @@ async function driveWithTelegramProxy(args, repoRoot, creds, leaseHealth) {
         : ["dist/entry.js", "gateway", "--port", String(args.gatewayPort)];
       const child = spawnProcess(command, gatewayArgs, { cwd: repoRoot, env: gatewayEnv });
       try {
-        await waitForGatewayReady(child, args.gatewayPort, args.sourceGateway ? 300_000 : 45_000);
+        await waitForGatewayReady(
+          child,
+          args.gatewayPort,
+          args.gatewayReadyTimeoutMs ?? (args.sourceGateway ? 300_000 : 45_000),
+        );
         return child;
       } catch (error) {
         await stopChild(child);

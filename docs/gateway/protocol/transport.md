@@ -95,6 +95,12 @@ Small `sessions.messages.subscribe` requests without approval replay and
 including a per-connection limit. They keep the same FIFO order and yielding
 budget as other requests. Roster snapshots and approval replay retain the ordinary
 request budget.
+Session-list snapshots, catalog reads, and message subscriptions with approval
+replay share four preparation slots. A slot remains occupied until its request
+settles, and each start yields to ready socket I/O. WebSocket handshakes bypass
+the request queue, so reconnecting tabs cannot start an unbounded replay wave
+ahead of other clients' handshakes. Waiting requests retain FIFO order and the
+existing queue limits.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.

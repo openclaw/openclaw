@@ -139,8 +139,8 @@ export async function resolveSessionCatalogThreadVisibility(params: {
   threadId: string;
 }): Promise<SessionCatalogThreadVisibility | null> {
   const projection = requireSessionRowProjection(params.context);
-  while (projection.needsMaterialization) {
-    await projection.ensureMaterialized();
+  while (projection.needsSelectionPreparation()) {
+    await projection.prepareSelection();
   }
   let config = params.context.getRuntimeConfig();
   let visibility = resolveSessionCatalogVisibility(params.client, config);
@@ -176,8 +176,8 @@ export async function resolveSessionCatalogThreadVisibility(params: {
     }
     // Providers may populate planning entries before awaiting IO. Re-read privacy and caller
     // policy after enumeration, before granting read or mutation authority.
-    while (projection.needsMaterialization) {
-      await projection.ensureMaterialized();
+    while (projection.needsSelectionPreparation()) {
+      await projection.prepareSelection();
     }
     config = params.context.getRuntimeConfig();
     visibility = resolveSessionCatalogVisibility(params.client, config);

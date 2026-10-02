@@ -1099,7 +1099,7 @@ describe("applyModelAllowlist", () => {
     });
 
     const applied = applyModelAllowlist(config, []);
-    const next = stampConfigWriteMetadata(applied, undefined, undefined, config);
+    const next = stampConfigWriteMetadata(applied, undefined, config);
     expect(next.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "gpt" },
     });

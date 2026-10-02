@@ -13,6 +13,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "../../agents/embedded
 import { resolveSessionBoundaryPromptCacheKey } from "../../agents/embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { resolveEmbeddedAgentStream } from "../../agents/embedded-agent-runner/stream-resolution.js";
 import { mapThinkingLevel } from "../../agents/embedded-agent-runner/utils.js";
+import { resolveFastModeForElapsed, resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
@@ -49,6 +50,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { getModelLlmRuntime } from "../../llm/model-runtime-binding.js";
+import { createOpenAIServiceTierObservationWrapper } from "../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -443,19 +445,59 @@ export const executeWorkerInference: WorkerInferenceExecutor = async (params) =>
         ? { thinkingBudgets: { ...request.options.thinkingBudgets } }
         : {}),
     };
+    const fastMode = resolveFastModeState({
+      cfg: approved.config,
+      provider: approved.provider,
+      model: approved.model,
+      agentId: target.agentId,
+      sessionEntry: target.sessionEntry,
+    });
+    const fastModeSetting = promptCacheContext.fastMode ?? fastMode.mode;
+    const fastModeStartedAtMs =
+      promptCacheContext.fastModeStartedAtMs ??
+      runContext?.lifecycleStartedAt ??
+      runContext?.registeredAt ??
+      Date.now();
     applyExtraParamsToAgent(
       streamAgent,
       approved.config,
       approved.provider,
       approved.model,
-      structuredClone(streamPolicyOptions),
+      {
+        ...structuredClone(streamPolicyOptions),
+        fastMode:
+          fastModeSetting === "auto"
+            ? () =>
+                resolveFastModeForElapsed({
+                  mode: "auto",
+                  startedAtMs: fastModeStartedAtMs,
+                  fastAutoOnSeconds:
+                    promptCacheContext.fastModeAutoOnSeconds ?? fastMode.fastAutoOnSeconds,
+                }).enabled
+            : fastModeSetting,
+      },
       streamPolicyOptions.reasoning,
       target.agentId,
       approved.workspaceDir,
       providerModel,
       approved.agentDir,
     );
-    const scopedStream = streamAgent.streamFn;
+    const recordServiceTierObservation = prepared.recordServiceTierObservation;
+    const scopedStream = recordServiceTierObservation
+      ? createOpenAIServiceTierObservationWrapper(
+          streamAgent.streamFn,
+          (model) =>
+            !signal.aborted &&
+            params.isCurrent() &&
+            recordServiceTierObservation({
+              modelId: model.id,
+              runtimeId: "openclaw",
+              api: model.api,
+              baseUrl: model.baseUrl,
+              serviceTiers: ["priority"],
+            }),
+        )
+      : streamAgent.streamFn;
     const model = providerModel;
     if (
       [request.options.maxTokens, ...Object.values(request.options.thinkingBudgets ?? {})].some(

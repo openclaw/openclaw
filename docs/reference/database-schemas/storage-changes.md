@@ -1696,19 +1696,23 @@ Archived or protected index prefixes can also add work. Existing count and
 invalid-row queries remain separate costs; this is not a constant-work guarantee
 for every maintenance pass.
 
-The parent owns age facts and their tracked-write invalidation. Each planning
-request carries the current fact to the retained worker, replacing any fact from
-an earlier request. Commit authorization checks the captured parent state; after
-settlement, the parent adopts the returned fact only if that state is still
-current, before publication and writer release. A newer write keeps its own
-state. Rolled-back planning does not publish a fact.
+The canonical worker connection owns age facts and retains the planning snapshot
+before write admission. Applying the plan revalidates its rows and revision under
+the writer lane. Committed entry receipts carry activity changes to that owner before row
+observers run; native-compatible writes publish through the same post-commit
+boundary. The scheduler coalesces these changes and acknowledges only the batch
+consumed by the worker, preserving newer backdates, restores, and inserts across
+asynchronous settlement. No-op plans validate the connection incarnation,
+revision, and age capture before publishing their next deadline. Rolled-back
+planning does not publish a fact.
 
-The coalesced maintenance kick wakes at the earlier of the age boundary and the
-same periodic deadline for released work protection and external changes.
-Ordinary writes do not postpone that deadline. Its timer retires with
-the exact database connection. Planning still reads its protection-key inventory
-only when age or cap candidates exist. Archives and final deletion retain their
-existing post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
+The host retains coalescing, the one-second write quiet window, bounded rejection
+backoff, and timers. Its owner binds the physical database path and executor
+lifecycle, and retires through asynchronous database-resource cleanup. It needs
+no host SQLite handle. The kick wakes at the earlier age boundary or 30-minute
+recheck deadline; ordinary writes do not postpone it. Planning reads protection
+keys only when age or cap candidates exist. Archives and final deletion retain
+post-writer lifecycle checks. Retention rules, cap buffering, forced cleanup,
 and active-work, ancestor, and lifecycle protection remain unchanged. No schema
 or migration change is required.
 

@@ -135,6 +135,8 @@ public enum OpenClawChatGatewayPayloadCodec {
                         ?? OpenClawChatAgentChoice.normalizedName($0.identity?["name"]?.value as? String),
                     emoji: OpenClawChatAgentChoice.textAvatar($0.identity?["emoji"]?.value as? String)
                         ?? OpenClawChatAgentChoice.textAvatar($0.identity?["avatar"]?.value as? String),
+                    avatar: OpenClawChatAgentChoice.imageAvatar($0.identity?["avatarUrl"]?.value as? String)
+                        ?? OpenClawChatAgentChoice.imageAvatar($0.identity?["avatar"]?.value as? String),
                     workspaceGit: $0.workspacegit,
                     workspace: $0.workspace)
             },

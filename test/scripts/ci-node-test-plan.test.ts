@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -2053,6 +2053,32 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(owners).toHaveLength(1);
       expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
     }
+  });
+
+  it("runs Telegram skill script changes, including test-only edits, through the skill wrapper", () => {
+    const wrapper = "test/scripts/telegram-e2e-userbot-skill.test.ts";
+    const scriptsDir = ".agents/skills/telegram-e2e-userbot/scripts";
+    const scripts = readdirSync(scriptsDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.name.startsWith("."))
+      .map((entry) => `${scriptsDir}/${entry.name}`);
+    expect(scripts.filter((file) => /\.test\.(?:mjs|py)$/u.test(file)).length).toBeGreaterThan(0);
+    for (const changedPath of scripts) {
+      expect(resolvePolicyTestTargets([changedPath]), changedPath).toContain(wrapper);
+    }
+    const changedTest = `${scriptsDir}/telegram-run-composition.test.mjs`;
+    const shards = expectDefined(
+      createChangedNodeTestShards([changedTest], { selectionMode: "aggressive" }),
+      "skill test plan",
+    );
+    const groups = shards.flatMap((shard) => shard.groups ?? []);
+    const selected = [
+      ...shards.flatMap((shard) => shard.targets ?? []),
+      ...groups.flatMap((group) => group.includePatterns ?? []),
+    ];
+    expect(selected).not.toContain(changedTest);
+    const owners = groups.filter((group) => group.includePatterns?.includes(wrapper));
+    expect(owners).toHaveLength(1);
+    expect(owners[0]?.configs).toEqual(["test/vitest/vitest.tooling.config.ts"]);
   });
 
   it("matches policy owners with literal and native glob semantics", () => {

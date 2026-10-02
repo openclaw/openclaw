@@ -19,6 +19,7 @@ const ATTEMPT_COOLDOWN_MS = 5_000;
 // Keep timeout below the cooldown so a timed-out retry re-render cannot start
 // another probe immediately while the gateway is still unreachable.
 const DOCUMENT_PROBE_TIMEOUT_MS = 3_000;
+const BUILD_RELOAD_JITTER_MS = 2_000;
 
 // WebKit, Chromium, Firefox, and Vite's preload helper use these four phrases.
 const MODULE_IMPORT_ERROR_PATTERN =
@@ -38,7 +39,7 @@ type MissingStylesheetRecoveryDeps = {
   retry?: () => Promise<boolean>;
 };
 
-type ReloadAttempt = { attemptedAt: number; active: number };
+type ReloadAttempt = { attemptedAt: number; active: number; ready?: Promise<void> };
 type RecoveryState = [attemptsByBuild: Map<string, ReloadAttempt>, pendingBuildId: string | null];
 
 const recoveryByStorage = new WeakMap<object, RecoveryState>();
@@ -155,11 +156,23 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
     return false;
   }
   const attempt = previous ?? { attemptedAt: now, active: 0 };
+  if (!previous && deps.buildId !== undefined) {
+    // Sample once per target so reconnecting owners join the same wait instead of postponing it.
+    const delayMs = Math.floor(Math.random() * BUILD_RELOAD_JITTER_MS);
+    if (delayMs > 0) {
+      attempt.ready = new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+    }
+  }
   attempt.active += 1;
   attemptsByBuild.set(buildId, attempt);
   recovery[1] = buildId;
   recoveryByStorage.set(storageIdentity, recovery);
   try {
+    if (attempt.ready) {
+      await attempt.ready;
+    }
     if (
       !(await waitForReachableControlUiDocument(
         { timeoutMs: deps.buildId === undefined ? 0 : undefined },

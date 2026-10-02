@@ -5,13 +5,51 @@ import { shouldPauseGatewayReconnect } from "../../packages/gateway-client/src/r
 import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as pairingApprovals from "../infra/device-pairing-approval.js";
-import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
+import {
+  getPairedDevice,
+  listDevicePairing,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
 import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve", (attempt) => {
+  test("keeps an existing operator's node role upgrade pending from a matching CIDR", async () => {
+    await attempt({
+      identityName: "trusted-cidr-node-role-upgrade",
+      configure: async (lanIp) => {
+        await writeConfigFile({
+          gateway: { nodes: { pairing: { autoApproveCidrs: [`${lanIp}/32`], sshVerify: false } } },
+        });
+      },
+      run: async ({ loaded, connectNode }) => {
+        const pairing = await requestDevicePairing({
+          deviceId: loaded.identity.deviceId,
+          publicKey: loaded.publicKey,
+          role: "operator",
+          scopes: [],
+        });
+        await pairingApprovals.approveDevicePairing(pairing.request.requestId, {
+          callerScopes: [],
+        });
+        expect(await connectNode()).toMatchObject({
+          ok: false,
+          error: { details: { reason: "role-upgrade" } },
+        });
+        expect((await getPairedDevice(loaded.identity.deviceId))?.roles).toEqual(["operator"]);
+        expect((await listDevicePairing()).pending).toEqual([
+          expect.objectContaining({
+            deviceId: loaded.identity.deviceId,
+            isRepair: true,
+            silent: false,
+          }),
+        ]);
+      },
+    });
+  });
+
   test("keeps a pending request when its CIDR permission is removed before approval", async () => {
     await attempt({
       identityName: "trusted-cidr-revoked-before-approval",

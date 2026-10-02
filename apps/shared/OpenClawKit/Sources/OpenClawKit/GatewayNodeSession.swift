@@ -129,7 +129,6 @@ public actor GatewayNodeSession {
     private var attachmentLimits: GatewayAttachmentLimits?
     private var mainSessionKey: String?
     private var snapshotWaiters: [UUID: CheckedContinuation<Bool, Never>] = [:]
-    private var snapshotReadyWaiters: [CheckedContinuation<Bool, Never>] = []
     // `computer.act` is not safe to repeat after a response is lost. Keep recent
     // in-flight/results on the long-lived node session so a channel reconnect can
     // replay the receipt without posting input twice. App restart intentionally
@@ -926,9 +925,7 @@ extension GatewayNodeSession {
             self.reactionAccess = GatewayReactionAccessFacts(hello: ok)
             self.attachmentLimits = ok.advertisedAttachmentLimits()
             let snapshotMainSessionKey = ok.snapshot.sessiondefaults?["mainSessionKey"]?.value as? String
-            let trimmedMainSessionKey = snapshotMainSessionKey?
-                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
-            self.mainSessionKey = trimmedMainSessionKey.isEmpty ? nil : trimmedMainSessionKey
+            self.mainSessionKey = snapshotMainSessionKey?.trimmedNonEmpty
             if self.hasEverConnected {
                 self.broadcastServerEvent(
                     EventFrame(type: "event", event: "seqGap", payload: nil, seq: nil, stateversion: nil))
@@ -961,7 +958,6 @@ extension GatewayNodeSession {
         self.attachmentLimits = nil
         self.mainSessionKey = nil
         self.drainSnapshotWaiters(returning: false)
-        self.drainSnapshotReadyWaiters(returning: false)
     }
 
     private func handleChannelDisconnected(
@@ -1003,31 +999,22 @@ extension GatewayNodeSession {
     private func markSnapshotReceived() {
         self.snapshotReceived = true
         self.drainSnapshotWaiters(returning: true)
-        self.drainSnapshotReadyWaiters(returning: true)
     }
 
-    private func waitForSnapshot(timeoutMs: Int) async -> Bool {
+    private func waitForSnapshot(timeoutMs: Int? = nil) async -> Bool {
         if self.snapshotReceived {
             return true
         }
-        let clamped = max(0, timeoutMs)
         let waiterID = UUID()
         return await withCheckedContinuation { cont in
             self.snapshotWaiters[waiterID] = cont
-            Task { [weak self] in
-                guard let self else { return }
-                try? await Task.sleep(nanoseconds: UInt64(clamped) * 1_000_000)
-                await self.timeoutSnapshotWaiter(id: waiterID)
+            if let timeoutMs {
+                Task { [weak self] in
+                    guard let self else { return }
+                    try? await Task.sleep(nanoseconds: UInt64(max(0, timeoutMs)) * 1_000_000)
+                    await self.timeoutSnapshotWaiter(id: waiterID)
+                }
             }
-        }
-    }
-
-    private func waitForSnapshot() async -> Bool {
-        if self.snapshotReceived {
-            return true
-        }
-        return await withCheckedContinuation { cont in
-            self.snapshotReadyWaiters.append(cont)
         }
     }
 
@@ -1041,14 +1028,6 @@ extension GatewayNodeSession {
     private func drainSnapshotWaiters(returning value: Bool) {
         let waiters = self.snapshotWaiters.values
         self.snapshotWaiters.removeAll()
-        for waiter in waiters {
-            waiter.resume(returning: value)
-        }
-    }
-
-    private func drainSnapshotReadyWaiters(returning value: Bool) {
-        let waiters = self.snapshotReadyWaiters
-        self.snapshotReadyWaiters.removeAll()
         for waiter in waiters {
             waiter.resume(returning: value)
         }
@@ -1661,12 +1640,7 @@ extension GatewayNodeSession {
         _ paramsJSON: String?) throws -> [String: AnyCodable]?
     {
         guard let paramsJSON, !paramsJSON.isEmpty else { return nil }
-        guard let data = paramsJSON.data(using: .utf8) else {
-            throw NSError(domain: "Gateway", code: 12, userInfo: [
-                NSLocalizedDescriptionKey: "paramsJSON not UTF-8",
-            ])
-        }
-        return try JSONDecoder().decode([String: AnyCodable].self, from: data)
+        return try self.decoder.decode([String: AnyCodable].self, from: Data(paramsJSON.utf8))
     }
 
     private func broadcastServerEvent(_ evt: EventFrame) {
