@@ -5,6 +5,7 @@ import path from "node:path";
  */
 import { isDeepStrictEqual } from "node:util";
 import { cloneAuthProfileStore } from "./clone.js";
+import { observeCachedCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import {
   getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath,
   recordRuntimeAuthProfileStorePersistedMutation,
@@ -231,6 +232,9 @@ export function getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
   databasePath: string,
 ): RuntimeAuthProfileStore | undefined {
   const store = runtimeAuthStoreSnapshots.get(databasePath)?.store;
+  if (store) {
+    observeCachedCanonicalAuthProfileCredentials(store.profiles);
+  }
   return store ? cloneAuthProfileStore(store) : undefined;
 }
 
@@ -256,6 +260,9 @@ export function getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(
   databasePath: string,
 ): OwnedRuntimeAuthProfileStoreSnapshotEntry | undefined {
   const entry = runtimeAuthStoreSnapshots.get(databasePath);
+  if (entry) {
+    observeCachedCanonicalAuthProfileCredentials(entry.store.profiles);
+  }
   return (
     entry && {
       databasePath,

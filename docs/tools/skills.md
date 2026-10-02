@@ -836,6 +836,13 @@ The prompt contains a bounded skill directory. Skills omitted by the prompt
 budget remain discoverable through `skills_search` when that tool is enabled.
 Small catalogs continue to appear in full.
 
+When search is available, the agent is instructed to check for a relevant skill
+before work involving files, specialized tools, or a reusable workflow.
+An omitted directory is identified explicitly; the agent searches by task goal
+instead of trying to scan a list that is not present. Known names and clear
+directory matches can go directly to a complete skill read. Simple conversation
+and self-contained answers do not require discovery.
+
 - `skills_search({ query, limit? })` searches eligible installed names,
   descriptions, and bounded instruction text. The default limit is 5; the maximum
   is 20. Queries must contain 1-1,000 characters. Results contain names, locations,

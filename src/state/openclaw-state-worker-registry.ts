@@ -5,6 +5,7 @@ import type { McpOAuthWorkerOperations } from "../agents/mcp-oauth-store.worker.
 import type { WorktreeWorkerOperations } from "../agents/worktrees/dispatch.worker.js";
 import type { AuditWorkerOperations } from "../audit/audit-event-writer.worker.js";
 import type { ChannelIngressWorkerOperations } from "../channels/message/ingress-queue.worker-contract.js";
+import type { ClawProvenanceWriteOperations } from "../claws/provenance-write.worker-contract.js";
 import type { DoctorWorkerOperations } from "../commands/doctor-state.worker.js";
 import type { FleetRegistryWriteOperations } from "../fleet/registry.worker-contract.js";
 import type { ManagedImageRecordWorkerOperations } from "../gateway/managed-image-record-store.kernel.js";
@@ -41,7 +42,8 @@ import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-w
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
-export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
+export type RegisteredStateWorkerOperations = ClawProvenanceWriteOperations &
+  WebPushWorkerOperations &
   ProjectRegistryWorkerOperations &
   ApnsRegistrationWorkerOperations &
   WorktreeWorkerOperations &
@@ -82,6 +84,8 @@ export type RegisteredStateWorkerOperations = WebPushWorkerOperations &
   UserProfileWorkerOperations;
 
 export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredStateWorkerOperations>({
+  clawProvenance: () =>
+    import("../claws/provenance-write.worker.js").then((m) => m.clawProvenanceOperations),
   projects: () =>
     import("../projects/project-registry.worker.js").then((m) => m.projectRegistryOperations),
   operatorApprovals: () =>

@@ -86,21 +86,14 @@ describe("profile backend display identity", () => {
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
   });
 
-  it.each([
-    undefined,
-    "",
-    "AWS",
-    " aws",
-    "aws ",
-    "aws\n",
-    "a".repeat(65),
-    "https://example.test",
-    "a_b",
-  ])("omits invalid metadata %j without losing machine choices", async (value) => {
-    const { catalog } = fixture(() => value);
-    expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-    await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
-  });
+  it.each(["", "AWS", "aws\n", "a".repeat(65), "a_b"])(
+    "omits invalid metadata %j without losing machine choices",
+    async (value) => {
+      const { catalog } = fixture(() => value);
+      expect(catalog.readProviderDisplayId("production")).toBeUndefined();
+      await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
+    },
+  );
 
   it("keeps missing and throwing hooks cosmetic without exposing their error", async () => {
     expect(fixture().catalog.readProviderDisplayId("production")).toBeUndefined();

@@ -99,9 +99,9 @@ For targets with [test runtime selection](/ci/pipeline#test-runtime-selection),
 Bun-compatible selection on Bun. Both results are required; they share existing
 jobs and execute sequentially within each worker slot. Older targets without this
 capability retain Node-only testing.
-This includes the Control UI config when the target's runtime owner admits it;
-its Bun pass excludes two GC-sensitive files retained in the full Node pass.
-An older unit-only runtime owner retains the UI's Node pass.
+This includes the complete Control UI selection on both runtimes, including the
+retention assertions, when the target's runtime owner admits it. Older targets
+retain the UI's Node pass and only the Bun selections their runtime owner admits.
 
 Package Acceptance separately retains expanded published-upgrade scenarios:
 current unpublished candidates include native operator state, and stable/full

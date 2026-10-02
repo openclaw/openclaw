@@ -279,9 +279,6 @@ describe("automatic config repair", () => {
             session: { idleMinutes: 45 },
             meta: { lastTouchedAt: "2026-02-15T00:00:00.000Z" },
             agents: { list: [{ id: "work", name: "Operator" }] },
-            plugins: {
-              installs: { example: { source: "path", installPath: "/synthetic/plugin" } },
-            },
           } as OpenClawConfig,
           issuePaths: ["session.idleMinutes"],
         });
@@ -291,9 +288,7 @@ describe("automatic config repair", () => {
           reset: { mode: "idle", idleMinutes: 45 },
         });
         expect(resolved?.sourceConfig).not.toHaveProperty("meta.lastTouchedAt");
-        expect(resolved?.sourceConfig).not.toHaveProperty("plugins.installs");
         expect(resolved?.sourceConfig.agents?.entries?.work).toEqual({ name: "Operator" });
-        expect(snapshot.sourceConfig).toHaveProperty("plugins.installs.example");
       });
     } finally {
       await fs.rm(root, { recursive: true, force: true });

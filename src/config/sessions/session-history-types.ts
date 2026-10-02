@@ -12,13 +12,13 @@ import type {
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { ConversationRecord } from "./conversation-registry.js";
 import type {
-  SessionTranscriptBoundedMessageTailOptions,
-  SessionTranscriptBoundedMessageTailPage,
-} from "./session-accessor.sqlite-active-events.js";
-import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
 } from "./session-accessor.sqlite-history-query.js";
+import type {
+  SessionTranscriptBoundedMessageTailOptions,
+  SessionTranscriptBoundedMessageTailPage,
+} from "./session-accessor.sqlite-projection-read.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptReadScope,
@@ -154,6 +154,10 @@ export type SessionHistoryWorkerRequest =
         options: SessionTranscriptBoundedMessageTailOptions;
       };
     }
+  | {
+      kind: "inline-visibility";
+      params: { target: SessionTranscriptReadScope; lookup: SessionHistorySubagentLookup };
+    }
   | { kind: "reactions"; params: { target: SessionTranscriptReadScope } }
   | {
       kind: "conversation-binding";
@@ -227,6 +231,7 @@ export type SessionHistoryWorkerRequest =
 export type SessionHistoryWorkerResult =
   | { kind: "active-accounting"; result: SessionTranscriptAccountingSnapshot }
   | { kind: "bounded-tail"; result: SessionTranscriptBoundedMessageTailPage }
+  | { kind: "inline-visibility"; subagentCoordination: SessionHistorySubagentFacts }
   | { kind: "reactions"; result: Record<string, StoredMessageReactionSummary[]> }
   | { kind: "conversation-binding"; result: SessionConversationBinding | null }
   | { kind: "artifacts"; result: SessionArtifactReadResult }

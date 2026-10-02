@@ -109,7 +109,7 @@ async function patchCliSessionForkBinding(
 }
 
 /** Clears the one-shot fork marker before the resumed CLI process starts. */
-export async function consumeCliSessionForkInStore(
+async function consumeCliSessionForkInStore(
   params: CliSessionForkStoreParams,
 ): Promise<SessionEntry | undefined> {
   return await patchCliSessionForkBinding(params, (binding) => {
@@ -130,8 +130,52 @@ export async function restoreCliSessionForkInStore(
   );
 }
 
-/** Rebinds a claimed fork to its successor before the rest of the CLI turn can fail. */
-export async function persistCliSessionForkSuccessorInStore(
+/** Share fork publication and cancellation rules across command and live reply callers. */
+export function buildCliSessionForkRunParams(
+  params: CliSessionForkStoreParams & { abortSignal?: AbortSignal },
+  onEntryPatched: (entry: SessionEntry) => void,
+): {
+  claimCliSessionFork: () => Promise<boolean>;
+  restoreCliSessionFork: () => Promise<void>;
+  persistCliSessionForkSuccessor: (successorCliSessionId: string) => Promise<void>;
+} {
+  const activeParams = {
+    ...params,
+    assertCommitAllowed: () => {
+      params.assertCommitAllowed?.();
+      params.abortSignal?.throwIfAborted();
+    },
+  };
+  return {
+    claimCliSessionFork: async () => {
+      const claimed = await consumeCliSessionForkInStore(activeParams);
+      if (claimed) {
+        onEntryPatched(claimed);
+      }
+      return Boolean(claimed);
+    },
+    restoreCliSessionFork: async () => {
+      // Cancellation can restore an unspent marker, but a released owner cannot.
+      const restored = await restoreCliSessionForkInStore(params);
+      if (restored) {
+        onEntryPatched(restored);
+      }
+    },
+    persistCliSessionForkSuccessor: async (successorCliSessionId) => {
+      const persisted = await persistCliSessionForkSuccessorInStore({
+        ...activeParams,
+        successorCliSessionId,
+      });
+      if (!persisted) {
+        throw new Error("CLI session fork successor could not be persisted");
+      }
+      onEntryPatched(persisted);
+    },
+  };
+}
+
+/** Rebinds a claimed fork without bypassing its retained account/environment checks. */
+async function persistCliSessionForkSuccessorInStore(
   params: CliSessionForkStoreParams & {
     successorCliSessionId: string;
   },
@@ -142,7 +186,7 @@ export async function persistCliSessionForkSuccessorInStore(
   return await patchCliSessionForkBinding(params, (binding) =>
     binding.forkNextResume === true
       ? undefined
-      : { ...binding, sessionId: params.successorCliSessionId, forceReuse: true },
+      : { ...binding, sessionId: params.successorCliSessionId },
   );
 }
 

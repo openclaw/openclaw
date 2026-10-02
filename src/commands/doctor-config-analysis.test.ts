@@ -239,33 +239,6 @@ describe("doctor config analysis helpers", () => {
       expect(result.removed).toEqual([]);
     });
   });
-
-  describe("plugins.installs whitelist", () => {
-    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-
-    beforeEach(() => {
-      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-    });
-
-    afterEach(() => {
-      if (originalEnv !== undefined) {
-        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
-      } else {
-        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-      }
-    });
-
-    it("never strips plugins.installs even when env is unset", () => {
-      const result = stripUnknownConfigKeys({
-        plugins: { installs: ["matrix"], badKey: true },
-      } as never);
-      expect(result.removed).toContain("plugins.badKey");
-      expect(result.removed).not.toContain("plugins.installs");
-      expect((result.config as Record<string, Record<string, unknown>>).plugins?.installs).toEqual([
-        "matrix",
-      ]);
-    });
-  });
 });
 
 describe("collectImplicitFallbackClobberWarnings", () => {

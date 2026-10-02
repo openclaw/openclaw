@@ -123,10 +123,12 @@ it("batches automation names across history reads after rename and deletion with
     });
     expect(
       (
-        await measure("no-id-sse", () =>
-          emptySse.appendInlineMessage({
-            message: { role: "user", content: "An ordinary message." },
-          }),
+        await measure("no-id-sse", async () =>
+          (
+            await emptySse.prepareInlineMessage({
+              message: { role: "user", content: "An ordinary message." },
+            })
+          )(),
         )
       )?.message,
     ).toMatchObject({ role: "user", content: "An ordinary message." });
@@ -186,10 +188,12 @@ it("batches automation names across history reads after rename and deletion with
             snapshot,
           });
           const currentSse = sse;
-          const appended = await measure(`${name}-sse`, () =>
-            currentSse.appendInlineMessage({
-              message: { role: "user", content: `Next message after ${name}.` },
-            }),
+          const appended = await measure(`${name}-sse`, async () =>
+            (
+              await currentSse.prepareInlineMessage({
+                message: { role: "user", content: `Next message after ${name}.` },
+              })
+            )(),
           );
           expect(currentSse.snapshot().messages.slice(0, messages.length)).toMatchObject(expected);
           if (name !== "Daily report") {

@@ -175,6 +175,7 @@ export function createSessionHistoryWorkerReaders(
             value.kind !== "rpc" &&
             value.kind !== "http" &&
             value.kind !== "delta" &&
+            value.kind !== "inline-visibility" &&
             value.kind !== "recent" &&
             value.kind !== "message-by-id" &&
             value.kind !== "message-count" &&

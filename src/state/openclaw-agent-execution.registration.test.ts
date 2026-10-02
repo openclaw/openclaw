@@ -30,6 +30,7 @@ const edge = vi.hoisted(() => {
     agentId: "main",
     path: "/synthetic/agent.sqlite",
     db: { isOpen: true, isTransaction: false },
+    walMaintenance: { stop: async () => {} },
   };
   return {
     database,
@@ -118,7 +119,10 @@ vi.mock("./openclaw-agent-db-lifecycle.js", () => ({
 vi.mock("./openclaw-state-db.js", () => ({ openOpenClawStateDatabase: () => ({}) }));
 vi.mock("./openclaw-state-db-cache.js", () => ({
   requireOpenClawStateDatabaseIdentity: () => ({ key: "file:state" }),
-  retainOpenClawStateDatabase: () => ({ release: edge.releaseShared }),
+  retainOpenClawStateDatabase: () => ({
+    release: edge.releaseShared,
+    releaseAsync: edge.releaseShared,
+  }),
 }));
 const input: AgentDatabaseExecutionOpen = {
   leaseId: "fixture",
@@ -267,7 +271,7 @@ it("settles eager native factory creation synchronously", async () => {
   });
   const backend = createSqliteWorkerBackend(input, { databasePath: input.databasePath });
   expect(backend).not.toBeInstanceOf(Promise);
-  expect(backend.close()).toBeUndefined();
+  await backend.close();
   expect(edge.database.db.isOpen).toBe(false);
   expect(edge.releaseAgent).toHaveBeenCalledOnce();
   expect(edge.releaseShared).toHaveBeenCalledOnce();

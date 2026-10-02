@@ -17,6 +17,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
+    case reconnected
     case seqGap
 }
 

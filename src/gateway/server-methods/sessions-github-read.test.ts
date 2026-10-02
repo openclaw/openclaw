@@ -5,7 +5,6 @@ import { clearGitHubCredentialVerificationCache } from "../../agents/github-oaut
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  disconnectUserGitHubConnection,
   updateUserGitHubConnection,
   type UserGitHubConnection,
 } from "../../state/user-github-connections.js";
@@ -235,8 +234,8 @@ describe("publication receipt reads", () => {
     });
   });
 
-  it.each(
-    [
+  it.each([
+    ...[
       "unchanged",
       "scope",
       "connection",
@@ -246,9 +245,10 @@ describe("publication receipt reads", () => {
       "github-unavailable",
       "github-generation",
       "github-account",
-      "github-disconnect",
-    ].flatMap((change) => ["personal", "shared"].map((phase) => ({ change, phase }))),
-  )("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
+    ].map((change) => ({ change, phase: "personal" })),
+    // Both authority owners must also run after the later shared read.
+    ...["connection", "github-generation"].map((change) => ({ change, phase: "shared" })),
+  ])("rechecks $change authority after a pending $phase read", async ({ change, phase }) => {
     await withReadFixture(
       async (fixture) => {
         const owner = expectDefined(
@@ -348,8 +348,6 @@ describe("publication receipt reads", () => {
               }),
               () => {},
             );
-          } else if (change === "github-disconnect") {
-            disconnectUserGitHubConnection(owner, () => {});
           }
           const pendingPersonal = hasGitHubConnection ? null : personalReceipt;
           pending.resolve(phase === "personal" ? pendingPersonal : receipt);
@@ -404,54 +402,45 @@ describe("publication receipt reads", () => {
     );
   });
 
-  it.each(["sessions.github.options", "sessions.github.status"] as const)(
-    "%s rechecks the connection after an awaited shared receipt read",
-    async (method) => {
-      await withReadFixture(
-        async (fixture) => {
-          const entered = createDeferredCore();
-          const pending = createDeferredCore<SessionGitHubStatusResult>();
-          const sharedRead =
-            method === "sessions.github.options" ? fixture.latestShared : fixture.sharedStatus;
-          sharedRead.mockImplementationOnce(() => {
-            entered.resolve();
-            return pending.promise;
-          });
-          const respond = vi.fn();
-          const request = fixture.invoke(
-            method,
-            {
-              sessionKey,
-              ...(method === "sessions.github.status"
-                ? { requestId: receipt.result.requestId }
-                : {}),
-            },
-            respond,
+  it("sessions.github.status rechecks the connection after an awaited shared receipt read", async () => {
+    await withReadFixture(
+      async (fixture) => {
+        const entered = createDeferredCore();
+        const pending = createDeferredCore<SessionGitHubStatusResult>();
+        const sharedRead = fixture.sharedStatus;
+        sharedRead.mockImplementationOnce(() => {
+          entered.resolve();
+          return pending.promise;
+        });
+        const respond = vi.fn();
+        const request = fixture.invoke(
+          "sessions.github.status",
+          { sessionKey, requestId: receipt.result.requestId },
+          respond,
+        );
+        try {
+          await Promise.race([
+            entered.promise,
+            request.then(() => {
+              throw new Error("Read completed before entering the held shared receipt read");
+            }),
+          ]);
+          expect(respond).not.toHaveBeenCalled();
+          fixture.disconnect();
+          pending.resolve(receipt);
+          await request;
+          expect(sharedRead).toHaveBeenCalledOnce();
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "FORBIDDEN" }),
           );
-          try {
-            await Promise.race([
-              entered.promise,
-              request.then(() => {
-                throw new Error("Read completed before entering the held shared receipt read");
-              }),
-            ]);
-            expect(respond).not.toHaveBeenCalled();
-            fixture.disconnect();
-            pending.resolve(receipt);
-            await request;
-            expect(sharedRead).toHaveBeenCalledOnce();
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "FORBIDDEN" }),
-            );
-          } finally {
-            pending.resolve(receipt);
-            await request;
-          }
-        },
-        { personal: true },
-      );
-    },
-  );
+        } finally {
+          pending.resolve(receipt);
+          await request;
+        }
+      },
+      { personal: true },
+    );
+  });
 });

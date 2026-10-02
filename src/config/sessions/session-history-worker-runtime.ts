@@ -24,6 +24,7 @@ import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.trans
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import type {
   SessionHistoryDelta,
+  SessionHistorySubagentFacts,
   SessionHistoryWorkerRequest,
   SessionHistoryWorkerResult,
 } from "./session-history-types.js";
@@ -134,6 +135,12 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       return {
         kind: request.kind,
         params: { target: capturedTarget, query: structuredClone(request.params.query) },
+      };
+    }
+    if (request.kind === "inline-visibility") {
+      return {
+        kind: request.kind,
+        params: { target: capturedTarget, lookup: { ...request.params.lookup } },
       };
     }
     const captureOptions = <T>(options: T) => ({
@@ -272,7 +279,9 @@ type SessionHistoryPageValue<Result> = Result extends { result: infer Value }
             ? Value
             : Result extends { kind: "delta" }
               ? AdmittedSessionHistoryDelta
-              : never;
+              : Result extends { kind: "inline-visibility" }
+                ? { subagentCoordination: SessionHistorySubagentFacts; assertCurrent: () => void }
+                : never;
 
 type SessionHistoryPageValues = {
   [Result in SessionHistoryWorkerResult as Result["kind"]]: SessionHistoryPageValue<Result>;
@@ -348,7 +357,8 @@ export async function readSessionHistoryPageInWorker(
       const sourceReads =
         capturedRequest.kind === "rpc" ||
         capturedRequest.kind === "http" ||
-        capturedRequest.kind === "delta"
+        capturedRequest.kind === "delta" ||
+        capturedRequest.kind === "inline-visibility"
           ? await prepareGatewaySessionStoreReadSourcesAsync({
               cfg,
               currentSource,
@@ -572,6 +582,9 @@ export async function readSessionHistoryPageInWorker(
     if (result.kind === "delta") {
       const delta: AdmittedSessionHistoryDelta = { ...result, assertCurrent };
       return delta;
+    }
+    if (result.kind === "inline-visibility") {
+      return { subagentCoordination: result.subagentCoordination, assertCurrent };
     }
     return result.kind === "rpc"
       ? result.page

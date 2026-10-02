@@ -167,10 +167,15 @@ it.each([
       ...parentScope,
       defaultSessionId: "parent-session",
     });
+    const conversationLink = {
+      url: "https://chat.example.test/thread/123",
+      label: "Source Thread",
+    };
     const live = closure === "live";
     const thread = stage === "thread";
     const readChild = (sessionKey: string) => loadSessionEntry({ sessionKey, agentId: "fixture" });
     if (live) {
+      await sessionAccessor.upsertSessionEntryCore(parentScope, { conversationLink });
       await recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
         promptedAt: 1,
@@ -301,6 +306,7 @@ it.each([
         if (live) {
           const entry = readChild(input.sessionKey);
           expect(entry?.inheritedGitContributorProfileIds).toEqual(["human-contributor"]);
+          expect(entry?.conversationLink).toEqual(conversationLink);
           expect(entry?.participants ?? []).toEqual([]);
         }
         ensuredSessions.push(input.sessionKey);
