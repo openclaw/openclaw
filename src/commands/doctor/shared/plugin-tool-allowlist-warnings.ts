@@ -9,6 +9,10 @@ import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-b
 import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
 import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
+import {
+  isToolAllowed,
+  resolveSandboxToolPolicyForAgent,
+} from "../../../agents/sandbox/tool-policy.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import {
   mergeAlsoAllowPolicy,
@@ -380,8 +384,6 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
  */
 function collectSandboxCoreToolAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const defaultSandboxActive = isSandboxModeActive(cfg.agents?.defaults?.sandbox?.mode);
-  const globalAgentPolicy = cfg.tools;
-  const globalSandboxPolicy = cfg.tools?.sandbox?.tools;
   const warnings: string[] = [];
 
   for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
@@ -399,39 +401,19 @@ function collectSandboxCoreToolAllowlistWarnings(cfg: OpenClawConfig): string[] 
       continue;
     }
 
-    const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
-    const agentSandboxPolicy = hasRecord(agentToolsSandbox?.tools)
-      ? agentToolsSandbox.tools
-      : undefined;
-    const sandboxPolicy = agentSandboxPolicy ?? globalSandboxPolicy;
-    const sandboxAllowEntries = [
-      ...(getList(sandboxPolicy, "allow") ?? []),
-      ...(getList(sandboxPolicy, "alsoAllow") ?? []),
-    ];
-    const normalizedSandboxAllow = sandboxAllowEntries.map(normalizeToolPolicyName).filter(Boolean);
-    // An unrestricted sandbox allow (no `allow`, only global defaults) or an
-    // explicit wildcard/plugin-group entry covers every core tool already.
-    const sandboxAllowIsWildcard =
-      !hasRecord(sandboxPolicy) ||
-      (!Array.isArray(sandboxPolicy.allow) && !Array.isArray(sandboxPolicy.alsoAllow)) ||
-      normalizedSandboxAllow.some((entry) => entry === "*" || entry === "group:plugins");
-    if (sandboxAllowIsWildcard) {
-      continue;
-    }
-    const sandboxAllowSet = new Set(normalizedSandboxAllow);
-
-    const globalAllowEntries = getList(globalAgentPolicy, "allow") ?? [];
+    // Resolve the exact same effective sandbox tool policy the runtime uses
+    // (allow/alsoAllow layered over DEFAULT_TOOL_ALLOW, with deny applied),
+    // instead of re-deriving the gating rules here. This keeps the warning
+    // in lockstep with the real enforcement path and avoids false positives
+    // for tools the sandbox already allows by default (e.g. "exec").
+    const resolvedPolicy = resolveSandboxToolPolicyForAgent(cfg, agent.id);
     const label =
       source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list[${source.index}]`;
     const missingEntries = agentAllow
       .map(normalizeToolPolicyName)
       .filter(Boolean)
       .filter((entry) => entry !== "*" && isKnownCoreToolId(entry))
-      .filter((entry) => !sandboxAllowSet.has(entry))
-      // Already allowed globally without a sandbox gate (e.g. ask_user-style
-      // tools added to tools.sandbox.tools.alsoAllow) stay available; only
-      // flag entries genuinely missing from every applicable sandbox allow.
-      .filter((entry) => !globalAllowEntries.map(normalizeToolPolicyName).includes(entry));
+      .filter((entry) => !isToolAllowed(resolvedPolicy, entry));
     if (missingEntries.length === 0) {
       continue;
     }
@@ -439,7 +421,8 @@ function collectSandboxCoreToolAllowlistWarnings(cfg: OpenClawConfig): string[] 
       left.localeCompare(right),
     );
     const entryNoun = uniqueMissing.length === 1 ? "tool" : "tools";
-    const sandboxLabel = agentSandboxPolicy
+    const agentToolsSandbox = hasRecord(agentTools?.sandbox) ? agentTools.sandbox : undefined;
+    const sandboxLabel = hasRecord(agentToolsSandbox?.tools)
       ? `${label}.tools.sandbox.tools.alsoAllow`
       : "tools.sandbox.tools.alsoAllow";
     warnings.push(

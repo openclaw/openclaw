@@ -419,13 +419,55 @@ describe("collectPluginToolAllowlistWarnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
-  it("does not warn about core tools when the sandbox allow policy is unrestricted", () => {
+  it("warns about core tools even when no tools.sandbox.tools config is set at all", () => {
+    // With zero sandbox tool config, the runtime falls back to a fixed
+    // default allowlist (DEFAULT_TOOL_ALLOW) that does not include most core
+    // tools (e.g. "secrets"). This is the most common way agents hit this
+    // bug: adding a core tool to tools.allow without realizing a sandboxed
+    // agent needs it mirrored into tools.sandbox.tools.alsoAllow too.
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
         agents: {
           defaults: { sandbox: { mode: "all" } },
           entries: {
             main: { tools: { allow: ["secrets"] } },
+          },
+        },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([
+      '- agents.entries.main.tools.allow includes tool "secrets", but this agent is sandboxed and tools.sandbox.tools.alsoAllow does not include it. Sandboxed agents filter tools against the sandbox allowlist before the provider sees them, so this tool stays unavailable even though agents.entries.main.tools.allow permits it. Add "secrets" to tools.sandbox.tools.alsoAllow.',
+    ]);
+  });
+
+  it("does not warn about core tools when the sandbox allow policy is an explicit wildcard", () => {
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: { tools: { allow: ["secrets"] } },
+          },
+        },
+        tools: { sandbox: { tools: { allow: ["*"] } } },
+      },
+      manifestRegistry,
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn about core tools already covered by the sandbox default allowlist", () => {
+    // "exec" ships in DEFAULT_TOOL_ALLOW, so it is available to every
+    // sandboxed agent even with no sandbox.tools config at all.
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          entries: {
+            main: { tools: { allow: ["exec"] } },
           },
         },
       },
