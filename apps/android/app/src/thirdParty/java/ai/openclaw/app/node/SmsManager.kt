@@ -1,13 +1,13 @@
 package ai.openclaw.app.node
 
 import ai.openclaw.app.PermissionRequester
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.provider.ContactsContract
 import android.provider.Telephony
-import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -480,11 +480,11 @@ class SmsManager(
     }
   }
 
-  fun hasSmsPermission(): Boolean = hasPermission(Manifest.permission.SEND_SMS)
+  fun hasSmsPermission(): Boolean = context.hasPermission(Manifest.permission.SEND_SMS)
 
-  fun hasReadSmsPermission(): Boolean = hasPermission(Manifest.permission.READ_SMS)
+  fun hasReadSmsPermission(): Boolean = context.hasPermission(Manifest.permission.READ_SMS)
 
-  fun hasReadContactsPermission(): Boolean = hasPermission(Manifest.permission.READ_CONTACTS)
+  fun hasReadContactsPermission(): Boolean = context.hasPermission(Manifest.permission.READ_CONTACTS)
 
   fun canSendSms(): Boolean = hasSmsPermission() && hasTelephonyFeature()
 
@@ -635,10 +635,8 @@ class SmsManager(
       }
     }
 
-  private fun hasPermission(permission: String): Boolean = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-
   private suspend fun ensurePermission(permission: String): Boolean {
-    if (hasPermission(permission)) return true
+    if (context.hasPermission(permission)) return true
     val requester = permissionRequester ?: return false
     return requester.requestIfMissing(listOf(permission))[permission] == true
   }
