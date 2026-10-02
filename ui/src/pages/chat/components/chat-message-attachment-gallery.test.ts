@@ -70,12 +70,6 @@ describe("message attachment image gallery projection", () => {
         container,
         createAssistantMessage(content, {
           timestamp: 1000,
-          __openclaw: {
-            media: [
-              { path: "https://example.com/before.png", contentType: "image/png" },
-              { path: "https://example.com/after.png", contentType: "image/png" },
-            ],
-          },
         }),
         { onOpenImage },
       );
