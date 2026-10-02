@@ -3,7 +3,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { GatewayStartupCleanupError } from "./server-shutdown.js";
+import {
+  GatewayStartupCleanupError,
+  rethrowGatewayStartupError,
+  runGatewayShutdownSteps,
+} from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
@@ -34,7 +38,7 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => {
 vi.mock("./server-start.js", () => ({
   startGatewayServerCore: async () => {
     if (runtime.startupError) {
-      throw runtime.startupError;
+      return await rethrowGatewayStartupError(runtime.startupError, runtime.close);
     }
     return {
       startupSettled: Promise.resolve(),
@@ -108,17 +112,32 @@ it("keeps the run loop's owner across server generations and rejects its retired
 it.each(["startup", "shutdown"] as const)(
   "retains direct ownership when %s cleanup has not completed",
   async (phase) => {
-    const failure = new GatewayStartupCleanupError(new Error("startup"), new Error("cleanup"));
+    const startupError = new Error("startup failed");
+    const cleanupError = new Error("cleanup failed");
+    runtime.close = () =>
+      runGatewayShutdownSteps({
+        steps: [
+          {
+            name: "test cleanup",
+            run: () => {
+              throw cleanupError;
+            },
+          },
+        ],
+        onError: () => {},
+      });
     if (phase === "startup") {
-      runtime.startupError = failure;
-      await expect(startGatewayServer(18701)).rejects.toBe(failure);
+      runtime.startupError = startupError;
+      const failure = await startGatewayServer(18701).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(GatewayStartupCleanupError);
+      expect(failure).toMatchObject({ cause: startupError });
       runtime.startupError = undefined;
     } else {
       const first = await startGatewayServer(18701);
-      runtime.close = async () => {
-        throw failure;
-      };
-      await expect(first.close()).rejects.toBe(failure);
+      await expect(first.close()).rejects.toMatchObject({
+        message: "Gateway shutdown did not complete cleanly",
+        errors: [expect.objectContaining({ cause: cleanupError })],
+      });
       runtime.close = async () => {};
     }
     await expect(startGatewayServer(18702)).rejects.toThrow("gateway already running");

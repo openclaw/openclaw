@@ -1504,6 +1504,17 @@ describe("redactSensitiveText", () => {
     expect(output).toContain("OPENAI_API_KEY=sk-123…cdef");
   });
 
+  it("keeps configured boundary patterns on the bounded scan path", () => {
+    const token = "tok_abcdefghij";
+    const input = `${"x".repeat(16_384)}${token}${"y".repeat(32_768)}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: [String.raw`(^|[^A-Za-z0-9])(tok_[a-z]{10})`],
+    });
+
+    expect(output).not.toContain(token);
+  });
+
   it("masks Tencent Cloud SecretId (AKID prefix, uppercase-only)", () => {
     const input = "SecretId is AKIDZ8EXAMPLEFAKE01KEY99TEST";
     const output = redactSensitiveText(input, { mode: "tools" });

@@ -347,7 +347,10 @@ describe("createGatewayKernel", () => {
       const successfulPeer = { stop: vi.fn(async () => {}) };
       kernel.kernel.setGatewayLifetimeSidecars([persistentSidecar, successfulPeer]);
 
-      await expect(kernel.closeOnStartupFailure()).resolves.toBeUndefined();
+      await expect(kernel.closeOnStartupFailure()).rejects.toMatchObject({
+        message: "Gateway shutdown did not complete cleanly",
+        errors: [expect.objectContaining({ cause: persistentError })],
+      });
       expect(persistentStop).toHaveBeenCalledTimes(2);
       expect(successfulPeer.stop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.gatewayLifetimeSidecars).toEqual([persistentSidecar]);

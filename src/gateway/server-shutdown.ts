@@ -32,11 +32,17 @@ export async function runGatewayShutdownSteps(params: {
   steps: readonly GatewayShutdownStep[];
   onError: (message: string) => void;
 }): Promise<void> {
+  const errors: Error[] = [];
   for (const step of params.steps) {
     try {
       await step.run();
     } catch (error) {
-      params.onError(`shutdown step failed (${step.name}): ${formatErrorMessage(error)}`);
+      const message = `shutdown step failed (${step.name}): ${formatErrorMessage(error)}`;
+      params.onError(message);
+      errors.push(new Error(message, { cause: error }));
     }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "Gateway shutdown did not complete cleanly");
   }
 }

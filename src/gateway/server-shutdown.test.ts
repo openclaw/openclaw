@@ -16,12 +16,17 @@ describe("gateway shutdown steps", () => {
     const closeGateway = vi.fn(async () => {});
     const messages: string[] = [];
 
-    await runGatewayShutdownSteps({
-      steps: [
-        { name: "gateway lifetime sidecars", run: loadStopModule },
-        { name: "gateway close", run: closeGateway },
-      ],
-      onError: (message) => messages.push(message),
+    await expect(
+      runGatewayShutdownSteps({
+        steps: [
+          { name: "gateway lifetime sidecars", run: loadStopModule },
+          { name: "gateway close", run: closeGateway },
+        ],
+        onError: (message) => messages.push(message),
+      }),
+    ).rejects.toMatchObject({
+      message: "Gateway shutdown did not complete cleanly",
+      errors: [expect.objectContaining({ cause: missingModule })],
     });
 
     expect(closeGateway).toHaveBeenCalledOnce();
@@ -37,11 +42,30 @@ describe("gateway startup cleanup", () => {
     const startupError = new Error("startup failed");
     const cleanupError = new Error("cleanup failed");
 
-    const failure = await rethrowGatewayStartupError(startupError, () => {
-      throw cleanupError;
-    }).catch((error: unknown) => error);
+    const failure = await rethrowGatewayStartupError(startupError, () =>
+      runGatewayShutdownSteps({
+        steps: [
+          {
+            name: "startup cleanup",
+            run: () => {
+              throw cleanupError;
+            },
+          },
+        ],
+        onError: () => {},
+      }),
+    ).catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(GatewayStartupCleanupError);
-    expect(failure).toMatchObject({ cause: startupError, errors: [startupError, cleanupError] });
+    expect(failure).toMatchObject({
+      cause: startupError,
+      errors: [
+        startupError,
+        expect.objectContaining({
+          message: "Gateway shutdown did not complete cleanly",
+          errors: [expect.objectContaining({ cause: cleanupError })],
+        }),
+      ],
+    });
   });
 });

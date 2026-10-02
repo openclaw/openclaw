@@ -14,7 +14,6 @@ import { isFullContextToolPayloadRedaction } from "./redact-internal.js";
 import {
   AWS_SECRET_ACCESS_KEY_FIELD_KEYS,
   AWS_SECRET_ACCESS_KEY_VALUE_PATTERN,
-  BASE64_SAFE_TOKEN_BOUNDARY,
   BODY_SECRET_KEYS,
   CHUNK_UNSAFE_PATTERN_SOURCES,
   DEFAULT_REDACT_PATTERNS,
@@ -183,9 +182,7 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   if (
     pattern &&
     typeof raw === "string" &&
-    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) ||
-      raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) ||
-      CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
+    (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || CHUNK_UNSAFE_PATTERN_SOURCES.has(raw))
   ) {
     chunkUnsafePatterns.add(pattern);
   }

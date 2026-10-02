@@ -11,6 +11,7 @@ import { prepareGatewayLifecycle } from "./server-lifecycle.js";
 import { registerGatewayModelCatalogPrivateAccess } from "./server-model-catalog-auth.js";
 import type { GatewayServerOptions } from "./server-public.js";
 import { prepareGatewayKernelState } from "./server-runtime-state-prepare.js";
+import { rethrowGatewayStartupError } from "./server-shutdown.js";
 import { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
@@ -179,16 +180,17 @@ export async function createGatewayKernel(port = 18789, opts: GatewayServerOptio
     });
     return await prepareGatewayKernelRequestRuntime({ coreRuntime, log, logHealth });
   } catch (error) {
-    try {
+    return await rethrowGatewayStartupError(error, async () => {
       if (lifecycleRuntime) {
         await lifecycleRuntime.closeOnStartupFailure();
       } else {
-        clearGatewayAgentCliShim();
-        clearSecretsRuntimeSnapshotState();
+        try {
+          clearGatewayAgentCliShim();
+          clearSecretsRuntimeSnapshotState();
+        } finally {
+          releasePluginMetadata();
+        }
       }
-    } finally {
-      releasePluginMetadata();
-    }
-    throw error;
+    });
   }
 }
