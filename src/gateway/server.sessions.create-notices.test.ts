@@ -57,7 +57,7 @@ test("sessions.create stamps trusted operator provenance and records created", a
   expect(created.payload?.entry).not.toHaveProperty("createdActor.label");
   const key = expectDefined(created.payload?.key, "created session key");
   expect(loadSessionEntry({ sessionKey: key, storePath })).not.toHaveProperty("createdActor.label");
-  expect(listSessionStateEventsSince(key, "main", 0, 20).events).toContainEqual(
+  expect((await listSessionStateEventsSince(key, "main", 0, 20)).events).toContainEqual(
     expect.objectContaining({
       kind: "created",
       actorType: "human",

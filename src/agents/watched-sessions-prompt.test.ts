@@ -14,8 +14,8 @@ function stubStateDir() {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 }
 
-function watchGroup(sessionKey: string) {
-  expect(registerMainSessionGroupWatch({ sessionKey, agentId: "main" })).toBe(true);
+async function watchGroup(sessionKey: string) {
+  expect(await registerMainSessionGroupWatch({ sessionKey, agentId: "main" })).toBe(true);
 }
 
 afterEach(() => {
@@ -25,8 +25,8 @@ afterEach(() => {
 describe("prepareWatchedSessionsPrompt", () => {
   it("returns key-sorted watched sessions with store-derived titles", async () => {
     stubStateDir();
-    watchGroup("agent:main:telegram:group:beta");
-    watchGroup("agent:main:telegram:group:alpha:topic:7");
+    await watchGroup("agent:main:telegram:group:beta");
+    await watchGroup("agent:main:telegram:group:alpha:topic:7");
     await upsertSessionEntryCore(
       { sessionKey: "agent:main:telegram:group:beta" },
       { sessionId: "session-beta", displayName: "Family group", updatedAt: 1 },
@@ -49,10 +49,10 @@ describe("prepareWatchedSessionsPrompt", () => {
     });
   });
 
-  it("caps rendered rows and reports the overflow count", () => {
+  it("caps rendered rows and reports the overflow count", async () => {
     stubStateDir();
     for (let index = 0; index < 23; index += 1) {
-      watchGroup(`agent:main:telegram:group:room-${String(index).padStart(2, "0")}`);
+      await watchGroup(`agent:main:telegram:group:room-${String(index).padStart(2, "0")}`);
     }
 
     const prepared = prepareWatchedSessionsPrompt({
@@ -68,9 +68,9 @@ describe("prepareWatchedSessionsPrompt", () => {
     expect(prepared?.listToolAvailable).toBe(false);
   });
 
-  it("accepts capability-provided read tools regardless of casing", () => {
+  it("accepts capability-provided read tools regardless of casing", async () => {
     stubStateDir();
-    watchGroup("agent:main:telegram:group:beta");
+    await watchGroup("agent:main:telegram:group:beta");
 
     const prepared = prepareWatchedSessionsPrompt({
       enabled: true,
@@ -82,9 +82,9 @@ describe("prepareWatchedSessionsPrompt", () => {
     expect(prepared?.readToolNames).toEqual(["sessions_search"]);
   });
 
-  it("keeps the section for sandboxed sessions only when the clamp allows non-spawned reads", () => {
+  it("keeps the section for sandboxed sessions only when the clamp allows non-spawned reads", async () => {
     stubStateDir();
-    watchGroup("agent:main:telegram:group:beta");
+    await watchGroup("agent:main:telegram:group:beta");
     const base = {
       enabled: true,
       sessionKey: mainSessionKey,
@@ -101,9 +101,9 @@ describe("prepareWatchedSessionsPrompt", () => {
     ).toHaveLength(1);
   });
 
-  it("returns undefined when disabled, keyless, non-main, toolless, or unwatched", () => {
+  it("returns undefined when disabled, keyless, non-main, toolless, or unwatched", async () => {
     stubStateDir();
-    watchGroup("agent:main:telegram:group:beta");
+    await watchGroup("agent:main:telegram:group:beta");
     const base = { enabled: true, sessionKey: mainSessionKey, toolNames: sessionReadTools };
 
     expect(prepareWatchedSessionsPrompt({ ...base, enabled: false })).toBe(undefined);
@@ -120,9 +120,9 @@ describe("prepareWatchedSessionsPrompt", () => {
     );
   });
 
-  it("renders the harness context block plugin-owned runtimes inject per turn", () => {
+  it("renders the harness context block plugin-owned runtimes inject per turn", async () => {
     stubStateDir();
-    watchGroup("agent:main:telegram:group:beta");
+    await watchGroup("agent:main:telegram:group:beta");
 
     const block = buildWatchedSessionsHarnessContext({
       sessionKey: mainSessionKey,

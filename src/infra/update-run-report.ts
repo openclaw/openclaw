@@ -333,6 +333,9 @@ export function renderUpdateRunReport(
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
+    if (step.termination === "signal" && step.stderrTail) {
+      lines.push(`Stderr (${step.signal ?? "unknown signal"}):\n${step.stderrTail}`);
+    }
     lines.push(
       ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
         formatUpdateFailureFact({

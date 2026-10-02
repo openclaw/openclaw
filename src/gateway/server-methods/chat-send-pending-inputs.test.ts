@@ -85,7 +85,7 @@ describe("ordinary chat input admission", () => {
       inbox,
       read,
       cleanup: async () => {
-        inbox.dispose();
+        await inbox.dispose();
         await fixture.cleanup();
       },
     };

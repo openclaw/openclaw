@@ -1,3 +1,4 @@
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";

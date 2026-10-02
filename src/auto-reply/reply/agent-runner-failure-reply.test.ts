@@ -67,6 +67,33 @@ describe("buildExternalRunFailureReply", () => {
     });
   });
 
+  it("uses typed runtime guidance without exposing the private diagnostic", () => {
+    const error = Object.assign(new Error("private runtime diagnostic"), {
+      code: "codex_node_disconnected",
+      name: "CodexNodeExecServerDisconnectedError",
+    });
+    expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+      text: "⚠️ Codex execution node disconnected. Start a fresh attempt.",
+      isGenericRunnerFailure: false,
+    });
+  });
+
+  it.each(["runner-offline", "node_runner_update_required", "codex_node_disconnected"])(
+    "does not trust provider code %s as runtime coordination provenance",
+    (code) => {
+      const error = new FailoverError("private provider diagnostic", {
+        code,
+        provider: "private-provider",
+        reason: "server_error",
+        status: 500,
+      });
+      expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+        text: "⚠️ The AI service is having trouble. Please try again in a moment.",
+        isGenericRunnerFailure: false,
+      });
+    },
+  );
+
   it("uses preserved format diagnostics without exposing raw details", () => {
     const message = "safe summary";
     const error = new FailoverError(message, {

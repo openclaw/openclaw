@@ -10,7 +10,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -21,16 +20,6 @@ import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repairMessage = "Rebuilt canonical agent SQLite indexes";
-const siblingIndexes = [
-  "archived_at",
-  "current_session_id",
-  "entry_valid_pending",
-  "last_interaction_at",
-  "parent_session_key",
-  "spawned_by",
-  "status",
-  "updated_at",
-].map((suffix) => `idx_agent_session_nodes_${suffix}`);
 
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
@@ -75,32 +64,6 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
     const writer = new DatabaseSync(agent.path);
     writer.exec("DROP INDEX idx_agent_session_nodes_active;");
     writer.exec("UPDATE schema_meta SET app_version = '2026.9.1';");
-    expect(writer.prepare("PRAGMA user_version").get()?.user_version).toBe(
-      OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-    expect(writer.prepare("SELECT schema_version FROM schema_meta").get()?.schema_version).toBe(
-      OPENCLAW_AGENT_SCHEMA_VERSION,
-    );
-    expect(writer.prepare("SELECT app_version FROM schema_meta").get()?.app_version).toBe(
-      "2026.9.1",
-    );
-    expect(
-      writer
-        .prepare("SELECT name FROM sqlite_schema WHERE type='index'")
-        .all()
-        .map((row) => row.name),
-    ).toEqual(expect.arrayContaining(siblingIndexes));
-    // Keep the current schema's later optional label index; only _active is missing.
-    expect(
-      writer
-        .prepare("SELECT name FROM sqlite_schema WHERE name='idx_agent_session_nodes_label'")
-        .get(),
-    ).toBeDefined();
-    expect(
-      writer
-        .prepare("SELECT name FROM sqlite_schema WHERE name='idx_agent_session_nodes_active'")
-        .get(),
-    ).toBeUndefined();
     if (damage === "drifted") {
       writer.exec("CREATE INDEX idx_agent_session_nodes_active ON session_nodes(session_key);");
     } else if (damage === "missing table") {

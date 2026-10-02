@@ -25,6 +25,7 @@ import { resolveKilledSubagentTaskEndedAt } from "./subagent-registry-completion
 import {
   persistSubagentSessionTiming,
   safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
   updateSubagentArchiveAtMs,
 } from "./subagent-registry-helpers.js";
 import {
@@ -62,7 +63,7 @@ class SubagentRunManager extends SubagentLaunchManager {
     }
     this.options.clearPendingLifecycleError(runId);
     clearGatewayContextResolver(entry);
-    if (this.shouldDeleteAttachments(entry)) {
+    if (shouldRemoveSubagentAttachments(entry)) {
       void safeRemoveAttachmentsDir(entry);
     }
     const releasedSessionStillUnowned = () =>
@@ -464,7 +465,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 childSessionKey: entry.childSessionKey,
               });
             }),
-            this.shouldDeleteAttachments(entry)
+            shouldRemoveSubagentAttachments(entry)
               ? safeRemoveAttachmentsDir(entry)
               : Promise.resolve(),
           ]);

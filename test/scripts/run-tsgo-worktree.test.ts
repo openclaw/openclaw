@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   materializeNativeCompiler,
@@ -11,6 +12,14 @@ import {
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const sourceRoot = process.cwd();
+// Commit only the wrapper's runtime closure: staging all of scripts/lib (~480
+// files) exceeded the fixture's Git budget on loaded hosts. The CLI shim loads
+// the implementation and its tsx loader by path, so they are explicit inputs.
+const WRAPPER_FILES = collectRuntimeImportClosure(
+  sourceRoot,
+  ["scripts/run-tsgo.mjs", "scripts/run-tsgo.mts", "scripts/tsx.mjs"],
+  { includeDynamicImports: true },
+);
 
 function createLinkedCheckoutFixture() {
   const directory = fs.realpathSync.native(roots.make("native-wrapper-worktree-"));
@@ -56,17 +65,10 @@ function createLinkedCheckoutFixture() {
   writeNativeFixtureFile(primary, "package.json", '{"private":true,"type":"module"}\n');
   writeNativeFixtureFile(primary, "pnpm-workspace.yaml", "packages: []\n");
   writeNativeFixtureFile(primary, ".gitignore", "node_modules/\n.artifacts/\n");
-  for (const file of [
-    "scripts/run-tsgo.mjs",
-    "scripts/run-tsgo.mts",
-    "scripts/generate-kysely-types.mts",
-    "scripts/tsx.mjs",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib",
-  ]) {
+  for (const file of WRAPPER_FILES) {
     const target = path.join(primary, file);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.cpSync(path.join(sourceRoot, file), target, { recursive: true });
+    fs.copyFileSync(path.join(sourceRoot, file), target);
   }
   git(["add", "."]);
   git(["commit", "-qm", "Synthetic compiler wrapper fixture"]);

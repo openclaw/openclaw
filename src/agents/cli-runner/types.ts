@@ -241,6 +241,7 @@ export type PreparedCliRunContext = {
   workspaceDir: string;
   cwd?: string;
   backendResolved: ResolvedCliBackend;
+  hostOwnedTools?: readonly string[];
   preparedBackend: CliPreparedBackend;
   /** Enforced timeout of this run's managed Claude MCP server, when present. */
   managedMcpToolTimeoutMs?: number;
