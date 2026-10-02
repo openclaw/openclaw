@@ -1,7 +1,11 @@
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
+import type { ApplicationContext } from "../app/context.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -16,7 +20,7 @@ import {
 const suite = createControlUiE2eSuite({ name: "Session-only chat read gates" });
 
 suite.define(() => {
-  it("retires the visible PR badge after read access is revoked on reconnect", async () => {
+  it("retires the visible PR badge and chat chip after read access is revoked on reconnect", async () => {
     await suite.withPage(
       {
         colorScheme: "light",
@@ -89,11 +93,15 @@ suite.define(() => {
             '"] [data-pull-request-state="open"]',
         );
         await indicator.waitFor();
+        const chatChip = page.locator(
+          '.chat-pr__link[href="https://github.com/synthetic/repo/pull/42"]',
+        );
+        await chatChip.waitFor();
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "pr-scope-before-revocation.png"),
-            animations: "disabled",
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "pr-scope-before-revocation.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [chatChip]),
+          );
         }
         const priorRequests = (await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD))
           .length;
@@ -101,21 +109,39 @@ suite.define(() => {
         await gateway.setOperatorScopes(["operator.sessions.read", "operator.sessions.write"]);
         await gateway.closeLatest();
         await gateway.waitForRequest("connect", { after: priorConnects });
+        await waitForControlUiGatewayReady(page);
         await indicator.waitFor({ state: "hidden" });
+        await expect.poll(() => chatChip.count()).toBe(0);
         expect(await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).toHaveLength(
           priorRequests,
         );
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "pr-scope-after-revocation.png"),
-            animations: "disabled",
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "pr-scope-after-revocation.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.getByText("The scoped session remains readable.", { exact: true }),
+            ]),
+          );
         }
+        expect(await chatChip.count()).toBe(0);
+        expect(await indicator.count()).toBe(0);
+        expect(
+          await page.evaluate(() => {
+            const app = document.querySelector<
+              HTMLElement & { runtime: { context: ApplicationContext } }
+            >("openclaw-app");
+            const snapshot = app?.runtime.context.gateway.snapshot;
+            return { phase: snapshot?.phase, scopes: snapshot?.hello?.auth?.scopes };
+          }),
+        ).toEqual({
+          phase: "connected",
+          scopes: ["operator.sessions.read", "operator.sessions.write"],
+        });
       },
     );
   });
 
-  it("does not load publication options or PR status with session-only scopes", async () => {
+  it("loads shared publication options without broad PR status with session-only scopes", async () => {
     await suite.withPage(
       {
         colorScheme: "light",
@@ -133,7 +159,10 @@ suite.define(() => {
           featureMethods: publicationMethods,
           methodResponses: {
             "sessions.github.options": {
-              __mockError: { code: "FORBIDDEN", message: "missing scope operator.read" },
+              shared: null,
+              personal: null,
+              pendingPersonal: null,
+              latestShared: null,
             },
             [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: {
               __mockError: { code: "FORBIDDEN", message: "missing scope operator.read" },
@@ -143,14 +172,16 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
         await gateway.waitForRequest("chat.startup");
         await page.locator("openclaw-chat-pane.chat-pane-cache__pane--active").waitFor();
-        expect(await gateway.getRequests("sessions.github.options")).toHaveLength(0);
+        await gateway.waitForRequest("sessions.github.options");
         expect(await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).toHaveLength(0);
         expect(await page.getByText("missing scope operator.read").count()).toBe(0);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "session-only-chat-after.png"),
-            animations: "disabled",
-          });
+          await writeFile(
+            path.join(suite.artifactDir, "session-only-chat-after.png"),
+            await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
+              page.locator("openclaw-chat-pane.chat-pane-cache__pane--active"),
+            ]),
+          );
         }
       },
     );

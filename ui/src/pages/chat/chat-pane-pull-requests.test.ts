@@ -238,10 +238,7 @@ function createPublicationPane(
 
 describe("chat pane pushed pull request state", () => {
   it("does not attach the publication card from an advertised method without read access", () => {
-    const { pane, request } = createPublicationPane(undefined, [
-      "operator.sessions.read",
-      "operator.sessions.write",
-    ]);
+    const { pane, request } = createPublicationPane(undefined, []);
     pane.render();
     expect(pane.chatProps?.githubPublication).toBeUndefined();
     expect(request.mock.calls.some(([method]) => method === "sessions.github.options")).toBe(false);

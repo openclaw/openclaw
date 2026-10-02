@@ -108,6 +108,9 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   let refreshingKeys: readonly string[] = [];
   let requestController: AbortController | null = null;
 
+  const canReadPullRequests = () =>
+    canCallGatewayMethod(gateway.snapshot, SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "operator.read");
+
   const retireRequest = () => {
     requestController?.abort();
     requestController = null;
@@ -358,12 +361,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
   function sync() {
     const snapshot = gateway.snapshot;
     const client = snapshot.client;
-    const available = canCallGatewayMethod(
-      snapshot,
-      SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-      "operator.read",
-    );
-    if (!available || !client) {
+    if (!canReadPullRequests() || !client) {
       retainRefreshIntent(watchedKeys());
       lastHello = null;
       lastSignature = null;
@@ -553,13 +551,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       // before the waiter is registered and keeps gateway events available for resolution.
       watch(owner, [key], { foreground: true });
       try {
-        if (
-          !canCallGatewayMethod(
-            gateway.snapshot,
-            SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-            "operator.read",
-          )
-        ) {
+        if (!canReadPullRequests()) {
           return undefined;
         }
         const current = snapshots.get(key);
@@ -588,14 +580,7 @@ function createStore(gateway: ApplicationGateway): SessionPullRequestSnapshotSto
       }
     },
     refresh,
-    get: (sessionKey) =>
-      canCallGatewayMethod(
-        gateway.snapshot,
-        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        "operator.read",
-      )
-        ? snapshots.get(sessionKey)
-        : undefined,
+    get: (sessionKey) => (canReadPullRequests() ? snapshots.get(sessionKey) : undefined),
     subscribe: (listener) => {
       const wasActive = isActive();
       listeners.add(listener);
