@@ -1,3 +1,4 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 // Tests for the per-session network broker (Stage S4-P1, XIN-1936 — Candidate 2).
 //
@@ -18,6 +19,8 @@ import { createServer, type Server } from "node:http";
 // no_proxy so the request actually traverses the broker's proxy rather than
 // being bypassed as a localhost direct-connect.
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { buildBrokerRuntimeConfig, sameParentProxy } from "./broker-config.js";
 import { ScopeChildReaper } from "./scope-reaper.js";
@@ -202,12 +205,12 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
     }
   });
 
-  function makeBroker(allowedDomains: string[]): SessionBroker {
+  function makeBroker(allowedDomains: string[], writableRoots: string[] = []): SessionBroker {
     const reaper = new ScopeChildReaper();
     reapers.push(reaper);
     const broker = new SessionBroker({
       reaper,
-      writableRoots: [],
+      writableRoots,
       policy: { allowedDomains },
       cwd: process.cwd(),
       binShell: "/bin/bash",
@@ -309,13 +312,41 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
     LIVE_TIMEOUT,
   );
 
+  it(
+    "cancellation reaps the broker command's detached descendant tree",
+    async () => {
+      const writable = mkdtempSync(path.join(tmpdir(), "srt-broker-abort-"));
+      const pidFile = path.join(writable, "descendant.pid");
+      const a = makeBroker([`${alpha.host}:${alpha.port}`], [writable]);
+      const controller = new AbortController();
+      const running = a.exec({
+        script: `sleep 30 & echo $! > ${JSON.stringify(pidFile)}; wait`,
+        signal: controller.signal,
+      });
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(pidFile) && Date.now() < deadline) {
+        await new Promise((resolve) => {
+          setTimeout(resolve, 25);
+        });
+      }
+      const descendantPid = Number.parseInt(readFileSync(pidFile, "utf8"), 10);
+      expect(isAlive(descendantPid)).toBe(true);
+      controller.abort(new Error("test cancellation"));
+      await expect(running).rejects.toThrow("test cancellation");
+      await expectDeadWithin(descendantPid);
+      expect(await httpCode(a, alpha)).toBe("200");
+      rmSync(writable, { recursive: true, force: true });
+    },
+    LIVE_TIMEOUT,
+  );
+
   // AC-P1-7 / AC-P1-3 resource accounting. Linux-only: reads /proc for the
   // broker subtree (srt node + bwrap + socat bridge), reports per-broker cost at
   // a stated concurrency, and asserts the whole subtree reaps back to baseline.
   it.skipIf(process.platform !== "linux")(
     "AC-P1-7: measures per-broker resource cost and reaps to baseline (no orphan proc/fd/socat)",
     async () => {
-      const { readFileSync, readdirSync } = await import("node:fs");
+      const { readFileSync: readProcFile, readdirSync } = await import("node:fs");
       type Snap = { procs: number; socat: number; bwrap: number; rssKb: number; selfFds: number };
       const readProcs = (): Snap => {
         let procs = 0;
@@ -329,8 +360,8 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
           let cmdline: string;
           let comm: string;
           try {
-            cmdline = readFileSync(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
-            comm = readFileSync(`/proc/${pid}/comm`, "utf8").trim();
+            cmdline = readProcFile(`/proc/${pid}/cmdline`, "utf8").replace(/\0/g, " ");
+            comm = readProcFile(`/proc/${pid}/comm`, "utf8").trim();
           } catch {
             continue;
           }
@@ -348,7 +379,7 @@ describe.skipIf(!isLive)("session broker — live per-session network isolation 
             bwrap += 1;
           }
           try {
-            const status = readFileSync(`/proc/${pid}/status`, "utf8");
+            const status = readProcFile(`/proc/${pid}/status`, "utf8");
             const m = status.match(/VmRSS:\s+(\d+)\s+kB/);
             if (m) {
               rssKb += Number(m[1]);

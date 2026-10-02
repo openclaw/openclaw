@@ -28,7 +28,7 @@
 // SRT policy, so selecting python3 and executing bash are both permitted; the
 // broker's filesystem allowlist still confines any writes the command makes.
 export const BROKER_EXECUTOR_PYTHON = String.raw`
-import sys, os, json, base64, subprocess
+import sys, os, json, base64, signal, subprocess
 
 def respond(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -43,31 +43,44 @@ def run_exec(req):
     timeout = req.get("timeoutMs")
     timeout_s = (timeout / 1000.0) if isinstance(timeout, (int, float)) and timeout > 0 else None
     shell = req.get("shell") or "/bin/bash"
+    read_fd, write_fd = os.pipe()
+    launcher = (
+        '{ while IFS= read -r _ <&%d; do :; done; kill -KILL -- "-$$" 2>/dev/null; } '
+        '<&%d 1>&- 2>&- & __srt_live=$!\n%s\n__srt_ec=$?\n'
+        'kill "$__srt_live" 2>/dev/null\nexit "$__srt_ec"'
+    ) % (read_fd, read_fd, script)
     try:
-        proc = subprocess.run(
-            [shell, "-c", script],
-            input=stdin_bytes,
+        proc = subprocess.Popen(
+            [shell, "-c", launcher],
+            stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            timeout=timeout_s,
+            start_new_session=True,
+            pass_fds=(read_fd,),
         )
+        os.close(read_fd)
+        stdout, stderr = proc.communicate(input=stdin_bytes, timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
-        # Fail closed: a wedged command reports a non-zero code and whatever
-        # was captured before the deadline, never a hang the driver can't see.
-        out = exc.stdout or b""
-        err = (exc.stderr or b"") + b"\n[srt-broker] command timed out\n"
+        os.killpg(proc.pid, signal.SIGKILL)
+        stdout, stderr = proc.communicate()
+        err = (stderr or b"") + b"\n[srt-broker] command timed out\n"
         return {
             "ok": True,
             "code": 124,
             "timedOut": True,
-            "stdout": base64.b64encode(out).decode("ascii"),
+            "stdout": base64.b64encode(stdout or b"").decode("ascii"),
             "stderr": base64.b64encode(err).decode("ascii"),
         }
+    finally:
+        try:
+            os.close(write_fd)
+        except OSError:
+            pass
     return {
         "ok": True,
         "code": proc.returncode,
-        "stdout": base64.b64encode(proc.stdout).decode("ascii"),
-        "stderr": base64.b64encode(proc.stderr).decode("ascii"),
+        "stdout": base64.b64encode(stdout).decode("ascii"),
+        "stderr": base64.b64encode(stderr).decode("ascii"),
     }
 
 def main():

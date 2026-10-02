@@ -19,18 +19,40 @@
         "type": "string",
         "enum": ["deny", "allow"]
       },
+      "allowedDomains": {
+        "type": "array",
+        "items": { "type": "string", "minLength": 1 }
+      },
       "writablePaths": {
         "type": "array",
         "items": {
           "type": "string",
           "minLength": 1,
-          "pattern": "^\\/"
+          "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)"
         }
       },
       "commandTimeoutSeconds": {
         "type": "number",
         "minimum": 1,
         "maximum": 2147000
+      },
+      "perSessionNetwork": { "type": "boolean" },
+      "parentProxy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "http": { "type": "string", "format": "uri" },
+          "https": { "type": "string", "format": "uri" },
+          "noProxy": { "type": "string", "minLength": 1 }
+        }
+      },
+      "windows": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "srtWinPath": { "type": "string", "minLength": 1, "pattern": "^(?:/|[A-Za-z]:[\\\\/]|\\\\\\\\)" },
+          "proxyPortBase": { "type": "integer", "minimum": 1024, "maximum": 60000 }
+        }
       }
     }
   },
@@ -44,6 +66,11 @@
       "label": "Network",
       "help": "Network posture for sandboxed commands. 'deny' blocks all outbound network (default); 'allow' leaves it open."
     },
+    "allowedDomains": {
+      "label": "Allowed Domains",
+      "help": "Domains allowed when network is deny. An empty list denies all outbound network.",
+      "advanced": true
+    },
     "writablePaths": {
       "label": "Extra Writable Paths",
       "help": "Additional absolute paths added to the sandbox writable allowlist beyond the scope workspace directories.",
@@ -52,6 +79,21 @@
     "commandTimeoutSeconds": {
       "label": "Command Timeout Seconds",
       "help": "Timeout for buffered backend commands.",
+      "advanced": true
+    },
+    "perSessionNetwork": {
+      "label": "Per-session Network",
+      "help": "Run each session with an isolated SRT network broker.",
+      "advanced": true
+    },
+    "parentProxy": {
+      "label": "Parent Proxy",
+      "help": "Optional upstream HTTP/HTTPS proxy for per-session network brokers.",
+      "advanced": true
+    },
+    "windows": {
+      "label": "Windows",
+      "help": "Windows srt-win path, sandbox-account pool, and proxy-port settings.",
       "advanced": true
     }
   }

@@ -33,6 +33,7 @@ import type {
 import { shellEscape } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedSrtPluginConfig } from "./config.js";
 import { assertSrtSandboxAvailable } from "./dependency-probe.js";
+import { ExecCustody } from "./exec-custody.js";
 import { createSrtFsBridge } from "./fs-bridge.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { buildPinOwnerCommand } from "./pin-owner-source.js";
@@ -70,6 +71,7 @@ const liveScopeBackends = new Set<DisposableScopeBackend>();
 
 /** Monotonic per-scope index (Windows account-pool / port-slot assignment). */
 let windowsScopeCounter = 0;
+let windowsScopeActive = false;
 
 /** Dispose every live SRT scope backend (plugin disable/restart teardown). */
 export function disposeAllSrtScopeBackends(): void {
@@ -110,6 +112,7 @@ class SrtSandboxBackend {
   private readonly runtimeConfig: SandboxRuntimeConfig;
   /** Per-scope process-group reaper (S2). Owns every sandbox child's lifecycle. */
   private readonly reaper = new ScopeChildReaper();
+  private readonly execCustody = new ExecCustody();
   /** Per-scope AC4 pin owner RPC client (S3). Lazily spawns the owner process. */
   private readonly pinOwnerClient: PinOwnerClient;
   private fsBridge: ReturnType<typeof createSrtFsBridge> | undefined;
@@ -138,6 +141,7 @@ class SrtSandboxBackend {
 
   /** Tear down this scope: reap every tracked sandbox process group, drop the pin owner. */
   dispose(): void {
+    this.execCustody.dispose();
     this.pinOwnerClient.dispose();
     this.sessionBroker?.dispose();
     this.sessionBroker = undefined;
@@ -228,6 +232,7 @@ class SrtSandboxBackend {
         script,
         stdin: params.stdin,
         timeoutMs: this.deps.pluginConfig.commandTimeoutMs,
+        signal: params.signal,
       });
       if (!params.allowFailure && result.code !== 0) {
         throw new Error(
@@ -266,17 +271,37 @@ class SrtSandboxBackend {
       // The browser sandbox is a container capability; the local SRT backend
       // does not provide it (design D: capabilities.browser=false).
       capabilities: { browser: false },
+      prepareProcessCleanup: (env) => this.execCustody.prepare(env),
       buildExecSpec: async ({ command, workdir, env }) => {
+        this.execCustody.assertCurrent();
+        const preparedEnv = this.execCustody.ensurePreparedEnv(env);
+        if (this.perSessionNetworkEnabled) {
+          const prepared = this.ensureSessionBroker().prepareCommand(command, preparedEnv);
+          return this.execCustody.wrap(
+            {
+              argv: prepared.argv,
+              env: prepared.env,
+              cwd: workdir ?? prepared.cwd,
+              stdinMode: "pipe-open",
+            },
+            preparedEnv,
+            prepared.cleanup,
+          );
+        }
         const { argv } = await this.wrap(command);
-        return {
-          argv,
-          // Spawn with the command's resolved environment; deny-all network
-          // means no proxy env is required from the wrapper.
-          env,
-          cwd: workdir ?? this.params.workspaceDir,
-          stdinMode: "pipe-open",
-        };
+        return this.execCustody.wrap(
+          {
+            argv,
+            // Spawn with the command's resolved environment; deny-all network
+            // means no proxy env is required from the wrapper.
+            env,
+            cwd: workdir ?? this.params.workspaceDir,
+            stdinMode: "pipe-open",
+          },
+          preparedEnv,
+        );
       },
+      finalizeExec: ({ token }) => this.execCustody.finalize(token),
       runShellCommand,
       // S3: AC4 pinned-mutation fs bridge backed by the per-scope pin owner.
       createFsBridge: ({ sandbox }) => {
@@ -310,18 +335,32 @@ export function createSrtSandboxBackendFactory(
     if (process.platform === "win32") {
       // S6 Windows path: low-priv account + NTFS ACL + WFP + worker-RPC per-scope
       // (windows-backend.ts). Additive; the macOS/Linux path below is untouched.
-      const srtWin = resolveWindowsSrtWin(deps.pluginConfig.windows ?? {});
-      await assertSrtSandboxAvailable(srtWin);
-      const backend = new WindowsSrtSandboxBackend(params, deps, windowsScopeCounter++);
-      const entry: DisposableScopeBackend = {
-        scopeKey: backend.scopeKey,
-        dispose: () => {
-          backend.dispose();
-          liveScopeBackends.delete(entry);
-        },
-      };
-      liveScopeBackends.add(entry);
-      return backend.asHandle();
+      if (windowsScopeActive) {
+        throw new Error(
+          "srt-sandbox: SRT 0.0.76 cannot bind concurrent scopes to distinct Windows accounts",
+        );
+      }
+      // Reserve the one supported Windows scope before the first await so two
+      // concurrent factory calls cannot both pass the admission check.
+      windowsScopeActive = true;
+      try {
+        const srtWin = resolveWindowsSrtWin(deps.pluginConfig.windows ?? {});
+        await assertSrtSandboxAvailable(srtWin);
+        const backend = new WindowsSrtSandboxBackend(params, deps, windowsScopeCounter++);
+        const entry: DisposableScopeBackend = {
+          scopeKey: backend.scopeKey,
+          dispose: () => {
+            backend.dispose();
+            windowsScopeActive = false;
+            liveScopeBackends.delete(entry);
+          },
+        };
+        liveScopeBackends.add(entry);
+        return backend.asHandle();
+      } catch (error) {
+        windowsScopeActive = false;
+        throw error;
+      }
     }
     await assertSrtSandboxAvailable();
     const backend = new SrtSandboxBackend(params, deps);

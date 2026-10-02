@@ -125,4 +125,27 @@ describe.skipIf(!isLive)("srt sandbox backend — per-session broker wiring (S4-
     },
     LIVE_TIMEOUT,
   );
+
+  it("routes normal exec/process preparations through a scope-owned SRT broker", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const handle = await handleWith(true, mkdtempSync(`${tmpdir()}/srt-broker-exec-`));
+    const cleanup = handle.prepareProcessCleanup!({ PATH: process.env.PATH ?? "" });
+    const spec = await handle.buildExecSpec({
+      command: "printf brokered",
+      env: cleanup.env,
+      usePty: false,
+    });
+    const innerArgv = JSON.parse(
+      Buffer.from(spec.env.SRT_CUSTODY_ARGV!, "base64").toString("utf8"),
+    ) as string[];
+    expect(innerArgv).toContain("--settings");
+    expect(innerArgv).toContain("printf brokered");
+    await handle.finalizeExec?.({
+      status: "completed",
+      exitCode: 0,
+      timedOut: false,
+      token: spec.finalizeToken,
+    });
+  });
 });

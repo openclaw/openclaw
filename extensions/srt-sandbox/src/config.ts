@@ -1,3 +1,4 @@
+import path from "node:path";
 // SRT sandbox plugin configuration parsing and normalization.
 //
 // Mirrors the extension config idiom used by the OpenShell backend
@@ -55,13 +56,11 @@ export type ResolvedSrtPluginConfig = {
   /**
    * S6 Windows options. Each scope maps to a low-privilege account + WFP
    * sublayer + loopback port range (per-scope isolation). `srtWinPath` overrides
-   * the vendored per-arch `srt-win.exe`; `sandboxUsers` is the account pool a
-   * scope adopts (default a single managed account); `proxyPortBase` is the base
+   * the vendored per-arch `srt-win.exe`; `proxyPortBase` is the base
    * loopback PERMIT port. Only consulted on win32.
    */
   windows?: {
     srtWinPath?: string;
-    sandboxUsers?: string[];
     proxyPortBase?: number;
   };
 };
@@ -79,6 +78,12 @@ const absolutePath = (fieldName: string) =>
     { error: `${fieldName} entries must be absolute paths` },
   );
 
+const portableAbsolutePath = (fieldName: string) =>
+  nonEmptyTrimmedString(`${fieldName} must be a non-empty string`).refine(
+    (value) => path.posix.isAbsolute(value) || path.win32.isAbsolute(value),
+    { error: `${fieldName} entries must be absolute paths` },
+  );
+
 const SrtPluginConfigSchema = z.strictObject({
   binShell: absolutePath("binShell").optional(),
   network: z.enum(["deny", "allow"], { error: "network must be one of deny, allow" }).optional(),
@@ -88,7 +93,7 @@ const SrtPluginConfigSchema = z.strictObject({
     })
     .optional(),
   writablePaths: z
-    .array(absolutePath("writablePaths"), {
+    .array(portableAbsolutePath("writablePaths"), {
       error: "writablePaths must be an array of absolute path strings",
     })
     .optional(),
@@ -111,12 +116,7 @@ const SrtPluginConfigSchema = z.strictObject({
     .optional(),
   windows: z
     .strictObject({
-      srtWinPath: nonEmptyTrimmedString("windows.srtWinPath must be a non-empty string").optional(),
-      sandboxUsers: z
-        .array(nonEmptyTrimmedString("windows.sandboxUsers entries must be non-empty strings"), {
-          error: "windows.sandboxUsers must be an array of non-empty account names",
-        })
-        .optional(),
+      srtWinPath: portableAbsolutePath("windows.srtWinPath").optional(),
       proxyPortBase: z
         .number({ error: "windows.proxyPortBase must be a number" })
         .int({ error: "windows.proxyPortBase must be an integer" })

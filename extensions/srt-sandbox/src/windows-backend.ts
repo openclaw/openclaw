@@ -3,9 +3,8 @@
 // The Windows analogue of SrtSandboxBackend (backend.ts). Windows enforcement is
 // CLI-based (`srt-win.exe`) rather than a persistent SandboxManager, so this
 // backend:
-//   - provisions a per-scope low-privilege account + WFP sublayer + loopback
-//     port range on first use (distinct SID + SID-keyed WFP filter set per scope
-//     = per-scope filesystem + network isolation, AC-S6-1), grants the sandbox
+//   - provisions SRT's supported low-privilege account plus a scope WFP
+//     sublayer and loopback port range on first use, grants the sandbox
 //     account read+execute on the helper-path chain (the seclogon deployment-ACL
 //     fix), grants its writable roots, and verifies the WFP egress fence is live
 //     (fail-closed under the deny posture, AC-S6-3);
@@ -35,6 +34,7 @@ import type {
 } from "openclaw/plugin-sdk/sandbox";
 import { shellEscape } from "openclaw/plugin-sdk/sandbox";
 import type { ResolvedSrtPluginConfig } from "./config.js";
+import { ExecCustody } from "./exec-custody.js";
 import { createSrtFsBridge } from "./fs-bridge.js";
 import { PinOwnerClient } from "./pin-owner-client.js";
 import { resolveWritableRoots, type SrtScopePolicyInput } from "./srt-runtime-config.js";
@@ -74,6 +74,7 @@ export class WindowsSrtSandboxBackend {
   private readonly srtWin: SrtWinSpawn;
   private readonly identity: WindowsScopeIdentity;
   private readonly reaper = new WindowsScopeReaper();
+  private readonly execCustody = new ExecCustody();
   private readonly writableRoots: string[];
   private provisioning: Promise<string> | undefined;
   private sandboxUserSid: string | undefined;
@@ -172,6 +173,7 @@ export class WindowsSrtSandboxBackend {
       cwd: this.params.workspaceDir,
       allowWrite: this.writableRoots,
       srtWin: this.srtWin,
+      sandboxUser: this.identity.sandboxUser,
       setEnvVars: positionalArgEnv(params.args),
     });
     const result = await this.reaper.exec({
@@ -180,6 +182,7 @@ export class WindowsSrtSandboxBackend {
       cwd: this.params.workspaceDir,
       stdin: params.stdin,
       timeoutMs: this.deps.pluginConfig.commandTimeoutMs,
+      signal: params.signal,
     });
     if (!params.allowFailure && result.code !== 0) {
       throw new Error(
@@ -215,12 +218,14 @@ export class WindowsSrtSandboxBackend {
       cwd: this.params.workspaceDir,
       allowWrite: this.writableRoots,
       srtWin: this.srtWin,
+      sandboxUser: this.identity.sandboxUser,
       binShell: { exe: inner[0]!, args: inner.slice(1, -1) },
     });
     return this.reaper.spawnPersistent({ argv, env, cwd: this.params.workspaceDir });
   }
 
   dispose(): void {
+    this.execCustody.dispose();
     this.fsBridge?.dispose();
     this.fsBridge = undefined;
     this.pinOwnerClient?.dispose();
@@ -259,16 +264,31 @@ export class WindowsSrtSandboxBackend {
       configLabel: this.identity.sandboxUser,
       configLabelKind: "Account",
       capabilities: { browser: false },
-      buildExecSpec: async ({ command, workdir }) => {
+      prepareProcessCleanup: (env) => this.execCustody.prepare(env),
+      buildExecSpec: async ({ command, workdir, env }) => {
+        this.execCustody.assertCurrent();
+        const preparedEnv = this.execCustody.ensurePreparedEnv(env);
         await this.ensureProvisioned();
-        const { argv, env } = buildWindowsExecSpec({
+        this.execCustody.assertCurrent();
+        const built = buildWindowsExecSpec({
           command,
           cwd: workdir ?? this.params.workspaceDir,
           allowWrite: this.writableRoots,
           srtWin: this.srtWin,
+          sandboxUser: this.identity.sandboxUser,
+          setEnvVars: preparedEnv,
         });
-        return { argv, env, cwd: workdir ?? this.params.workspaceDir, stdinMode: "pipe-open" };
+        return this.execCustody.wrap(
+          {
+            argv: built.argv,
+            env: built.env,
+            cwd: workdir ?? this.params.workspaceDir,
+            stdinMode: "pipe-open",
+          },
+          preparedEnv,
+        );
       },
+      finalizeExec: ({ token }) => this.execCustody.finalize(token),
       runShellCommand,
       createFsBridge: ({ sandbox }) => {
         if (!this.fsBridge) {

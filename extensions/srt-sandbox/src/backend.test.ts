@@ -152,10 +152,12 @@ describe.skipIf(!isDarwin)("srt sandbox macOS Seatbelt minimal path (8/8)", () =
       env: { PATH: process.env.PATH ?? "" },
       usePty: false,
     });
-    // macOS wraps as [<shell>, -c, <sandbox-exec ...>]; the wrapper binary is
-    // Seatbelt's sandbox-exec, proving kernel enforcement is in the argv.
-    expect(spec.argv.length).toBeGreaterThanOrEqual(3);
-    expect(spec.argv.join(" ")).toContain("sandbox-exec");
+    // Normal exec is launched through backend-owned custody. The encoded inner
+    // argv remains the Seatbelt sandbox wrapper.
+    expect(spec.argv.slice(0, 2)).toEqual([process.execPath, "-e"]);
+    const encoded = spec.env.SRT_CUSTODY_ARGV;
+    expect(encoded).toBeTruthy();
+    expect(Buffer.from(encoded!, "base64").toString("utf8")).toContain("sandbox-exec");
     expect(spec.stdinMode).toBe("pipe-open");
     expect(spec.cwd).toBe(rwZone);
   });

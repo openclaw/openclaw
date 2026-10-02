@@ -24,6 +24,12 @@ describe("pin-owner PowerShell runtime escaping", () => {
     expect(PIN_OWNER_POWERSHELL).not.toContain("-replace '/', '\\\\'");
   });
 
+  it("enforces maxBytes before allocation and after every read chunk", () => {
+    expect(PIN_OWNER_POWERSHELL).toContain("fs.Length > maxBytes");
+    expect(PIN_OWNER_POWERSHELL).toContain("ms.Length + n > maxBytes");
+    expect(PIN_OWNER_POWERSHELL).toContain("new byte[262144]");
+  });
+
   it("splits path segments on a [\\/]+ regex (one literal backslash escape)", () => {
     // Regex char class matching '\' or '/': exactly one '\\' escape, not '\\\\'.
     expect(PIN_OWNER_POWERSHELL).toContain("-split '[\\\\/]+'");

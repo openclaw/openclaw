@@ -79,6 +79,7 @@ export type BrokerExecParams = {
   stdin?: Buffer | string;
   timeoutMs?: number;
   shell?: string;
+  signal?: AbortSignal;
 };
 
 export type SessionBrokerDeps = {
@@ -116,6 +117,7 @@ type PendingCall = {
   resolve: (value: BrokerResponse) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  abort?: () => void;
 };
 
 const require = createRequire(import.meta.url);
@@ -139,6 +141,7 @@ export class SessionBroker {
   private readyResolve: (() => void) | undefined;
   private readyReject: ((error: Error) => void) | undefined;
   private settingsDir: string | undefined;
+  private readonly preparedSettings = new Set<string>();
   private allowedDomains: string[];
   private readonly parentProxy: BrokerParentProxy | undefined;
   private readonly srtCliPath: string;
@@ -208,6 +211,37 @@ export class SessionBroker {
       delete env.all_proxy;
     }
     return env;
+  }
+
+  /** Prepare one streaming exec/process command with this session's network policy. */
+  prepareCommand(
+    script: string,
+    env: Record<string, string>,
+  ): {
+    argv: string[];
+    env: NodeJS.ProcessEnv;
+    cwd: string;
+    cleanup: () => void;
+  } {
+    if (this.disposed) {
+      throw new SessionBrokerDeadError("session broker has been disposed");
+    }
+    const dir = mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "srt-exec-"));
+    const settingsPath = path.join(dir, "settings.json");
+    writeFileSync(settingsPath, this.buildRuntimeConfigJson(), { mode: 0o600 });
+    this.preparedSettings.add(dir);
+    const cleanup = () => {
+      if (!this.preparedSettings.delete(dir)) {
+        return;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    };
+    return {
+      argv: [this.nodePath, this.srtCliPath, "--settings", settingsPath, "-c", script],
+      env: { ...this.brokerEnv(), ...env },
+      cwd: this.deps.cwd,
+      cleanup,
+    };
   }
 
   private async ensureBroker(): Promise<BrokerChildHandle> {
@@ -338,6 +372,7 @@ export class SessionBroker {
       }
       this.pending.delete(id);
       clearTimeout(call.timer);
+      call.abort?.();
       if (message.ok === true) {
         call.resolve(message);
       } else {
@@ -360,6 +395,7 @@ export class SessionBroker {
     const error = new SessionBrokerDeadError(reason);
     for (const call of this.pending.values()) {
       clearTimeout(call.timer);
+      call.abort?.();
       call.reject(error);
     }
     this.pending.clear();
@@ -376,25 +412,67 @@ export class SessionBroker {
     }
   }
 
+  private terminateBroker(reason: string): void {
+    const proc = this.proc;
+    if (!proc) {
+      return;
+    }
+    try {
+      if (proc.child.pid !== undefined) {
+        process.kill(-proc.child.pid, "SIGKILL");
+      }
+    } catch {
+      // The process group is already gone.
+    }
+    this.onBrokerGone(proc, reason);
+  }
+
   private request(
     proc: BrokerChildHandle,
     payload: Record<string, unknown>,
     timeoutMs: number,
     opLabel: string,
+    signal?: AbortSignal,
   ): Promise<BrokerResponse> {
     const id = this.nextRequestId++;
     return new Promise<BrokerResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) {
+          this.terminateBroker(`srt broker RPC timed out (op=${opLabel})`);
           reject(new SessionBrokerDeadError(`srt broker RPC timed out (op=${opLabel})`));
         }
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const onAbort = () => {
+        if (this.pending.delete(id)) {
+          clearTimeout(timer);
+          this.terminateBroker("srt broker command aborted");
+          reject(
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new Error("srt broker command aborted"),
+          );
+        }
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        abort: () => signal?.removeEventListener("abort", onAbort),
+      });
+      // Close the race where cancellation lands between the caller's initial
+      // throwIfAborted() check and listener registration above.
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
       try {
         proc.stdin.write(`${JSON.stringify({ ...payload, id })}\n`);
       } catch (error) {
+        const call = this.pending.get(id);
         this.pending.delete(id);
         clearTimeout(timer);
+        call?.abort?.();
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -402,6 +480,7 @@ export class SessionBroker {
 
   /** Run one command inside the broker's sandbox and network scope. */
   async exec(params: BrokerExecParams): Promise<BrokerExecResult> {
+    params.signal?.throwIfAborted();
     const proc = await this.ensureBroker();
     const timeoutMs = params.timeoutMs ?? this.deps.rpcTimeoutMs;
     const payload: Record<string, unknown> = { op: "exec", script: params.script };
@@ -419,7 +498,7 @@ export class SessionBroker {
     // command that runs to its limit reports a real result instead of an
     // RPC timeout racing it.
     const rpcTimeout = params.timeoutMs !== undefined ? timeoutMs + 5_000 : this.deps.rpcTimeoutMs;
-    const response = await this.request(proc, payload, rpcTimeout, "exec");
+    const response = await this.request(proc, payload, rpcTimeout, "exec", params.signal);
     return {
       code: typeof response.code === "number" ? response.code : 1,
       stdout: Buffer.from(typeof response.stdout === "string" ? response.stdout : "", "base64"),
@@ -489,5 +568,9 @@ export class SessionBroker {
     } else {
       this.cleanupSettings();
     }
+    for (const dir of this.preparedSettings) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    this.preparedSettings.clear();
   }
 }

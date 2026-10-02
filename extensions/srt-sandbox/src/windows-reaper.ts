@@ -32,6 +32,7 @@ export type WindowsExecParams = {
   cwd: string;
   stdin?: Buffer | string;
   timeoutMs: number;
+  signal?: AbortSignal;
 };
 
 /** The worker process is gone (exited / EOF / disposed); the call failed closed. */
@@ -55,6 +56,7 @@ type PendingCall = {
   resolve: (value: WorkerResponse) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
+  abort?: () => void;
 };
 
 const DEFAULT_READY_TIMEOUT_MS = 20_000;
@@ -198,6 +200,7 @@ export class WindowsScopeReaper {
       }
       this.pending.delete(id);
       clearTimeout(call.timer);
+      call.abort?.();
       if (message.ok === true) {
         call.resolve(message);
       } else {
@@ -215,6 +218,7 @@ export class WindowsScopeReaper {
     const error = new WindowsWorkerDeadError(reason);
     for (const call of this.pending.values()) {
       clearTimeout(call.timer);
+      call.abort?.();
       call.reject(error);
     }
     this.pending.clear();
@@ -225,20 +229,47 @@ export class WindowsScopeReaper {
     payload: Record<string, unknown>,
     timeoutMs: number,
     opLabel: string,
+    signal?: AbortSignal,
   ): Promise<WorkerResponse> {
     const id = this.nextId++;
     return new Promise<WorkerResponse>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending.delete(id)) {
+          killTree(child.pid);
           reject(new WindowsWorkerDeadError(`windows worker RPC timed out (op=${opLabel})`));
         }
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      const onAbort = () => {
+        if (this.pending.delete(id)) {
+          clearTimeout(timer);
+          killTree(child.pid);
+          reject(
+            signal?.reason instanceof Error
+              ? signal.reason
+              : new Error("windows sandbox command aborted"),
+          );
+        }
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        abort: () => signal?.removeEventListener("abort", onAbort),
+      });
+      // Close the race where cancellation lands between the caller's initial
+      // throwIfAborted() check and listener registration above.
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
       try {
         child.stdin?.write(`${JSON.stringify({ ...payload, id })}\n`);
       } catch (error) {
+        const call = this.pending.get(id);
         this.pending.delete(id);
         clearTimeout(timer);
+        call?.abort?.();
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -246,6 +277,7 @@ export class WindowsScopeReaper {
 
   /** Run one sandboxed command inside the worker's Job Object (buffered). */
   async exec(params: WindowsExecParams): Promise<WindowsExecResult> {
+    params.signal?.throwIfAborted();
     const child = await this.ensureWorker();
     const payload: Record<string, unknown> = {
       op: "exec",
@@ -260,7 +292,13 @@ export class WindowsScopeReaper {
     }
     // RPC deadline headroom over the command's own timeout so a command that runs
     // to its limit reports a real result instead of an RPC timeout racing it.
-    const response = await this.request(child, payload, params.timeoutMs + 10_000, "exec");
+    const response = await this.request(
+      child,
+      payload,
+      params.timeoutMs + 10_000,
+      "exec",
+      params.signal,
+    );
     return {
       code: typeof response.code === "number" ? response.code : 1,
       stdout: Buffer.from(typeof response.stdout === "string" ? response.stdout : "", "base64"),

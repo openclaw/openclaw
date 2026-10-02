@@ -143,11 +143,21 @@ namespace Srt {
       return 0;
     }
 
-    public static byte[] ReadByPath(string ntPath, out int status) {
+    public static byte[] ReadByPath(string ntPath, long maxBytes, out int status) {
       IntPtr h = Open(IntPtr.Zero, ntPath, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, FILE_OPEN,
         FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT, out status);
       if (status != 0) return null;
-      using (var sfh = new SafeFileHandle(h, true)) using (var fs = new FileStream(sfh, FileAccess.Read)) using (var ms = new MemoryStream()) { fs.CopyTo(ms); return ms.ToArray(); }
+      using (var sfh = new SafeFileHandle(h, true)) using (var fs = new FileStream(sfh, FileAccess.Read)) using (var ms = new MemoryStream()) {
+        if (maxBytes >= 0 && fs.Length > maxBytes) throw new IOException("file exceeds maximum read size");
+        byte[] buffer = new byte[262144];
+        while (true) {
+          int n = fs.Read(buffer, 0, buffer.Length);
+          if (n == 0) break;
+          if (maxBytes >= 0 && ms.Length + n > maxBytes) throw new IOException("file exceeds maximum read size");
+          ms.Write(buffer, 0, n);
+        }
+        return ms.ToArray();
+      }
     }
 
     // FILE_RENAME_INFORMATION (native, class 10) supports a RootDirectory HANDLE
@@ -359,8 +369,9 @@ while ($true) {
       }
       'release'  { Release-Op $req.opId; Respond @{ id=$rid; ok=$true } }
       'read'     {
+        $maxBytes = if ($null -ne $req.maxBytes) { [long]$req.maxBytes } else { -1 }
         $status = 0
-        $bytes = [Srt.PinOwner]::ReadByPath((To-NtPath (To-Win32 $req.path)), [ref]$status)
+        $bytes = [Srt.PinOwner]::ReadByPath((To-NtPath (To-Win32 $req.path)), $maxBytes, [ref]$status)
         if ($status -ne 0) { throw "read failed: 0x$('{0:X8}' -f $status)" }
         Respond @{ id=$rid; ok=$true; data=[Convert]::ToBase64String($bytes) }
       }

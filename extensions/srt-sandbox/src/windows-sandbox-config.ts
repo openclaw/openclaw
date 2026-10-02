@@ -3,9 +3,9 @@
 // SRT's Windows enforcement is CLI-based (`srt-win.exe`), not a persistent
 // manager process like macOS/Linux. This module translates one OpenClaw scope
 // into the Windows enforcement inputs:
-//   - a per-scope low-privilege account + sublayer + loopback proxy port range
-//     (distinct SID + SID-keyed WFP filter set per scope = the per-scope
-//     isolation building block, design v8 §5 "true worker RPC per-scope");
+//   - SRT's supported low-privilege account plus a scope sublayer and loopback
+//     proxy port range. SRT 0.0.76 cannot select an account at exec time, so the
+//     backend deliberately admits only one live Windows scope;
 //   - the exec argv wrapper (wrapCommandWithSandboxWindows) the scope reaper
 //     spawns with {shell:false};
 //   - the helper-path ACL enablement that lets seclogon's
@@ -27,7 +27,7 @@ import {
 // Windows exec wrapper on its package index; the subpath is the only entrypoint.
 import { wrapCommandWithSandboxWindows } from "@anthropic-ai/sandbox-runtime/dist/sandbox/windows-sandbox-utils.js";
 
-/** Per-scope Windows enforcement identity — distinct account/SID/WFP per scope. */
+/** Windows enforcement identity for the single admitted live scope. */
 export type WindowsScopeIdentity = {
   /** Low-privilege local account this scope's children run as. */
   sandboxUser: string;
@@ -37,12 +37,10 @@ export type WindowsScopeIdentity = {
   proxyPortRange: [number, number];
 };
 
-/** Windows-specific plugin options (all optional; sane defaults applied). */
+/** Windows-specific plugin options supported by SRT 0.0.76. */
 export type WindowsPluginOptions = {
   /** Explicit `srt-win.exe` path; defaults to the vendored per-arch binary. */
   srtWinPath?: string;
-  /** Named account pool; scope N adopts pool[N % pool.length]. */
-  sandboxUsers?: string[];
   /** Base loopback port; scope N gets [base + N*span, base + N*span + span-1]. */
   proxyPortBase?: number;
 };
@@ -79,11 +77,10 @@ export function deriveWindowsScopeIdentity(
   index: number,
   options: WindowsPluginOptions,
 ): WindowsScopeIdentity {
-  const pool =
-    options.sandboxUsers && options.sandboxUsers.length > 0
-      ? options.sandboxUsers
-      : [...DEFAULT_SANDBOX_USERS];
-  const sandboxUser = pool[index % pool.length]!;
+  // SRT 0.0.76 `exec` has no account selector and always consumes the default
+  // install record. Keep that limitation explicit instead of pretending a
+  // configured pool can bind commands to different accounts.
+  const sandboxUser = DEFAULT_SANDBOX_USERS[0];
   const base = options.proxyPortBase ?? DEFAULT_PROXY_PORT_BASE;
   const slot = index % 64; // bound the port window per host
   const low = base + slot * PROXY_PORT_SPAN;
@@ -142,6 +139,7 @@ export type WindowsExecSpecInput = {
   denyRead?: readonly string[];
   denyWrite?: readonly string[];
   srtWin: SrtWinSpawn;
+  sandboxUser: string;
   /** Proxy env for the sandboxed child (deny-all needs none). */
   httpProxyPort?: number;
   socksProxyPort?: number;
@@ -161,6 +159,11 @@ export function buildWindowsExecSpec(input: WindowsExecSpecInput): {
   argv: string[];
   env: NodeJS.ProcessEnv;
 } {
+  if (input.sandboxUser !== DEFAULT_SANDBOX_USERS[0]) {
+    throw new Error(
+      `srt-sandbox: SRT 0.0.76 can execute only as '${DEFAULT_SANDBOX_USERS[0]}'; account pools are unsupported`,
+    );
+  }
   const spec = wrapCommandWithSandboxWindows({
     command: input.command,
     cwd: input.cwd,

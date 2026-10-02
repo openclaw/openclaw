@@ -14,12 +14,11 @@ describe("deriveWindowsScopeIdentity", () => {
     expect(a).toEqual(b);
   });
 
-  it("gives distinct accounts, sublayers, and port ranges to distinct scopes", () => {
-    const pool = { sandboxUsers: ["srt-a", "srt-b"] };
-    const s0 = deriveWindowsScopeIdentity("scope-0", 0, pool);
-    const s1 = deriveWindowsScopeIdentity("scope-1", 1, pool);
-    expect(s0.sandboxUser).toBe("srt-a");
-    expect(s1.sandboxUser).toBe("srt-b");
+  it("keeps SRT's supported account while separating sublayers and port ranges", () => {
+    const s0 = deriveWindowsScopeIdentity("scope-0", 0, {});
+    const s1 = deriveWindowsScopeIdentity("scope-1", 1, {});
+    expect(s0.sandboxUser).toBe("srt-sandbox");
+    expect(s1.sandboxUser).toBe("srt-sandbox");
     expect(s0.sublayerGuid).not.toBe(s1.sublayerGuid);
     expect(s0.proxyPortRange).not.toEqual(s1.proxyPortRange);
     // Port ranges are disjoint (per-scope loopback PERMIT windows).

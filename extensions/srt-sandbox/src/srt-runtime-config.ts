@@ -1,3 +1,4 @@
+import path from "node:path";
 // Translate an OpenClaw sandbox scope into an SRT runtime config.
 //
 // Encodes the file-system model verified during research (XIN-1912, macOS
@@ -28,6 +29,10 @@ export type SrtScopePolicyInput = {
   workspaceAccess: "none" | "ro" | "rw";
 };
 
+function isAbsolutePath(value: string): boolean {
+  return path.posix.isAbsolute(value) || path.win32.isAbsolute(value);
+}
+
 function dedupeAbsolute(paths: Array<string | undefined>): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -36,7 +41,7 @@ function dedupeAbsolute(paths: Array<string | undefined>): string[] {
       continue;
     }
     const value = raw.trim();
-    if (!value || !value.startsWith("/") || seen.has(value)) {
+    if (!value || !isAbsolutePath(value) || seen.has(value)) {
       continue;
     }
     seen.add(value);
@@ -73,7 +78,12 @@ function resolveNetwork(
   // "allow" leaves the network fully open (no allowlist, no denylist) — reserved
   // for opt-in callers.
   if (mode === "allow") {
-    return { allowedDomains: [], deniedDomains: [] };
+    return {
+      allowedDomains: [],
+      deniedDomains: [],
+      strictAllowlist: false,
+      filterRequest: async () => ({ action: "allow" }),
+    };
   }
   // S5 P0 global allowlist (v1 plan §6.4 P0): with a non-empty allowlist, permit
   // those domains and deny everything else. On macOS this is kernel-enforced; on
@@ -81,9 +91,9 @@ function resolveNetwork(
   // allowlist is applied at the SRT host proxy (see config.ts allowedDomains and
   // the AC-L3 limitation note). Empty allowlist => strict deny-all (S1 default).
   if (allowedDomains.length > 0) {
-    return { allowedDomains: [...allowedDomains], deniedDomains: ["*"] };
+    return { allowedDomains: [...allowedDomains], deniedDomains: [], strictAllowlist: true };
   }
-  return { allowedDomains: [], deniedDomains: ["*"] };
+  return { allowedDomains: [], deniedDomains: [], strictAllowlist: true };
 }
 
 /**
