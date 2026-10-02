@@ -8,7 +8,7 @@ import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { getFileLockProcessStartTime, getProcessInstanceStartTime } from "../shared/pid-alive.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
-import type { CommandProcessCustody } from "./command-process-custody.js";
+import type { CommandProcessCustody } from "./command-process-custody.types.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,

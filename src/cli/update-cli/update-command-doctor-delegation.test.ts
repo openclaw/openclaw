@@ -24,10 +24,8 @@ import { UpdateRequesterRevokedError } from "../../infra/update-requester-author
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
-import {
-  settleCommandProcessGroups,
-  type CommandProcessIdentity,
-} from "../../process/command-process-custody.js";
+import { settleCommandProcessGroups } from "../../process/command-process-custody.js";
+import type { CommandProcessIdentity } from "../../process/command-process-custody.types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processRunner from "../../process/exec.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
@@ -465,9 +463,9 @@ it.skipIf(process.platform === "win32").each([true, false])(
           ...doctorOptions(runId, fence, guards),
           results: steps,
           progress: {
-            onStepComplete: (step) => {
-              if (identityAvailable || step.name !== "doctor process settlement") {
-                return;
+            onStepComplete: (completedStep) => {
+              if (identityAvailable || completedStep.name !== "doctor process settlement") {
+                return undefined;
               }
               const reporting = Promise.resolve().then(() => {
                 throw reportingError;
