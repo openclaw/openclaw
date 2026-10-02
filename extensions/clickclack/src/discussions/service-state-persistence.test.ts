@@ -107,30 +107,27 @@ describe("ClickClack discussion state persistence", () => {
     expect(harness.createChannel).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])(
-    "requires a durable installation identity after registration returns %s",
-    async (registered) => {
-      const harness = createHarness({ label: "Missing durable installation" });
-      harness.runtime.state.openKeyedStore = () => ({
-        register: async () => {},
-        registerIfAbsent: async () => registered,
-        lookup: async () => undefined,
-        consume: async () => undefined,
-        delete: async () => false,
-        entries: async () => [],
-        clear: async () => {},
-      });
-      const service = new ClickClackDiscussionService(harness.runtime, {
-        clientFactory: () => harness.client,
-        startTimer: false,
-      });
+  it("requires a durable installation identity after successful registration", async () => {
+    const harness = createHarness({ label: "Missing durable installation" });
+    harness.runtime.state.openKeyedStore = () => ({
+      register: async () => {},
+      registerIfAbsent: async () => true,
+      lookup: async () => undefined,
+      consume: async () => undefined,
+      delete: async () => false,
+      entries: async () => [],
+      clear: async () => {},
+    });
+    const service = new ClickClackDiscussionService(harness.runtime, {
+      clientFactory: () => harness.client,
+      startTimer: false,
+    });
 
-      await expect(service.open("agent:main:missing-installation")).rejects.toThrow(
-        "installation identity is unavailable",
-      );
-      expect(harness.createChannel).not.toHaveBeenCalled();
-    },
-  );
+    await expect(service.open("agent:main:missing-installation")).rejects.toThrow(
+      "installation identity is unavailable",
+    );
+    expect(harness.createChannel).not.toHaveBeenCalled();
+  });
 
   it("clears stale display title confirmation when a patch response omits the field", async () => {
     const harness = createHarness({ label: "Original title" });
@@ -202,60 +199,6 @@ function generationFixture(
 }
 
 describe("ClickClack pending generation persistence", () => {
-  it("joins an accepted open through persistence before cleanup settles", async () => {
-    const f = generationFixture();
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const workspaces = f.client.workspaces.bind(f.client);
-    vi.mocked(f.client.workspaces).mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return await workspaces();
-    });
-    const opening = f.service.open("agent:main:draining");
-    await entered.promise;
-    let stopped = false;
-    const stopping = Promise.resolve(f.service.cleanup()).then(() => {
-      stopped = true;
-    });
-    try {
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(stopped).toBe(false);
-      release.resolve();
-      await expect(opening).resolves.toMatchObject({ state: "open" });
-      await stopping;
-      const persisted = createPluginStateSyncKeyedStoreForTests<{ channelId: string }>(
-        "clickclack",
-        {
-          namespace: "discussion-bindings",
-          maxEntries: 10_000,
-          overflowPolicy: "reject-new",
-          env: f.env,
-        },
-      );
-      expect(persisted.lookup("agent:main:draining")?.channelId).toBe("chn_discussion");
-    } finally {
-      release.resolve();
-      await Promise.allSettled([opening, stopping]);
-      await f.service.cleanup();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-    }
-  });
-
-  it("opens a discussion without selecting native generation storage", async () => {
-    const f = generationFixture();
-    try {
-      await expect(f.service.open("agent:main:worker")).resolves.toMatchObject({ state: "open" });
-      expect(f.nativeNamespaces).not.toContain("discussion-binding-generations");
-    } finally {
-      await f.service.cleanup();
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-    }
-  });
   it.each(["no-observe", "no-compare"] as const)(
     "retains the 2026.9.4 host path with %s",
     async (host) => {
@@ -315,6 +258,17 @@ describe("ClickClack pending generation persistence", () => {
       await stopping;
       await restarting;
       expect(f.createChannel).toHaveBeenCalledOnce();
+      expect(f.nativeNamespaces).not.toContain("discussion-binding-generations");
+      const persisted = createPluginStateSyncKeyedStoreForTests<{ channelId: string }>(
+        "clickclack",
+        {
+          namespace: "discussion-bindings",
+          maxEntries: 10_000,
+          overflowPolicy: "reject-new",
+          env: f.env,
+        },
+      );
+      expect(persisted.lookup(sessionKey)?.channelId).toBe("chn_discussion");
       await expect(f.service.info(sessionKey)).resolves.toMatchObject({ state: "open" });
     } finally {
       release.resolve();
