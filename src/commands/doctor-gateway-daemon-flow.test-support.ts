@@ -1,5 +1,5 @@
 /** Prompt fixture for interactive Doctor service repair. */
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import type { GatewayService } from "../daemon/service-types.js";
@@ -11,7 +11,7 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 export const doctorSqliteDiagnostic =
   "SQLite (doctor process): /fixture/libsqlite3.dylib (3.53.4, extension loading enabled)";
 
-export function mockDoctorRuntimeFacts(runExec: ReturnType<typeof vi.fn>) {
+export function mockDoctorRuntimeFacts(runExec: Mock<typeof import("../process/exec.js").runExec>) {
   runExec.mockReset().mockImplementation(async (executable: string) => ({
     stdout: JSON.stringify({
       nodeVersion: "26.8.1",
