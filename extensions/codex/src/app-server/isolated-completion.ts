@@ -48,6 +48,7 @@ export async function runCodexIsolatedCompletion(
     ...authSelection,
     authRequirement,
     timeoutMs: params.timeoutMs,
+    thinkLevel: params.thinkLevel,
     signal: params.abortSignal,
     assertCurrent: params.assertCurrent,
     agentDir: params.agentDir,

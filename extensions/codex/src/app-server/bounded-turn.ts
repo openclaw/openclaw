@@ -31,6 +31,7 @@ import type {
   JsonObject,
   JsonValue,
 } from "./protocol.js";
+import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import {
   isCodexAppServerStartSelectionChangedError,
   type createIsolatedCodexAppServerClient,
@@ -92,6 +93,7 @@ type CodexBoundedTurnParams = {
   config?: OpenClawConfig;
   model: CodexBoundedTurnModelSelection;
   modelProvider?: string;
+  thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
   profile?: string;
   preparedAuth?: CodexAppServerPreparedAuth;
   authRequirement?: CodexAppServerAuthRequirement;
@@ -309,7 +311,14 @@ async function runBoundedCodexAppServerTurnInWorkspace(
             threadId: thread.thread.id,
             input: params.input,
             approvalPolicy: "on-request",
-            effort: "low",
+            effort:
+              params.thinkLevel === undefined
+                ? "low"
+                : resolveCodexAppServerReasoningEffort({
+                    thinkLevel: params.thinkLevel,
+                    modelId: modelSelection.catalogId,
+                    supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
+                  }),
           } satisfies CodexTurnStartParams,
           requestOptions,
         ),
@@ -484,7 +493,7 @@ async function resolveCodexBoundedTurnModel(params: {
   timeoutMs: number;
   signal: AbortSignal;
   assertCurrent?: () => void;
-}): Promise<{ catalogId: string; runtimeModelId: string }> {
+}): Promise<{ catalogId: string; runtimeModelId: string; supportedReasoningEfforts: string[] }> {
   const result = await params.client.request<unknown>(
     "model/list",
     { limit: null, cursor: null, includeHidden: params.selection.mode === "required" },
@@ -505,7 +514,11 @@ async function resolveCodexBoundedTurnModel(params: {
         `Codex app-server has no model supporting ${params.requiredModalities.join(" and ")} input.`,
       );
     }
-    return { catalogId: selected.id, runtimeModelId: selected.model };
+    return {
+      catalogId: selected.id,
+      runtimeModelId: selected.model,
+      supportedReasoningEfforts: selected.supportedReasoningEfforts,
+    };
   }
 
   const model = params.selection.id;
@@ -519,7 +532,11 @@ async function resolveCodexBoundedTurnModel(params: {
   if (params.requiredModalities.includes("text") && !match.inputModalities.includes("text")) {
     throw new Error(`Codex app-server model does not support text: ${model}`);
   }
-  return { catalogId: match.id, runtimeModelId: match.model };
+  return {
+    catalogId: match.id,
+    runtimeModelId: match.model,
+    supportedReasoningEfforts: match.supportedReasoningEfforts,
+  };
 }
 
 function resolveCodexBoundedTurnAbortError(

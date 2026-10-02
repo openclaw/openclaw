@@ -848,3 +848,39 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     expect(fake.methods).not.toContain("turn/start");
   });
 });
+
+describe("isolated completion reasoning effort", () => {
+  it.each([undefined, "low", "medium", "high", "max"] as const)(
+    "sends requested %s effort to turn/start",
+    async (thinkLevel) => {
+      const fake = createClientFactory({
+        models: [
+          {
+            ...codexModel(),
+            supportedReasoningEfforts: ["low", "medium", "high", "max"].map((reasoningEffort) => ({
+              reasoningEffort,
+              description: reasoningEffort,
+            })),
+          },
+        ],
+      });
+      await runBoundedCodexAppServerTurn({
+        model: { mode: "required", id: "gpt-5.4" },
+        thinkLevel,
+        timeoutMs: 5000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Classify only.",
+        input: [{ type: "text", text: "Synthetic evidence", text_elements: [] }],
+        requiredModalities: ["text"],
+        isolation: "configured-transport",
+        requireNoExternalCapabilities: true,
+      });
+      const turn = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
+      expect(turn).toMatchObject({ effort: thinkLevel ?? "low" });
+      expect(
+        fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1],
+      ).toMatchObject({ dynamicTools: [], environments: [] });
+    },
+  );
+});

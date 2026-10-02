@@ -59,6 +59,7 @@ function createParams(): IsolatedParams {
     systemPrompt: "Name the conversation.",
     prompt: "Help me plan a garden.",
     timeoutMs: 5_000,
+    thinkLevel: "medium",
   } as unknown as IsolatedParams;
 }
 
@@ -118,6 +119,7 @@ describe("runCodexIsolatedCompletion", () => {
         profile: "openai:test",
         authRequirement: "subscription",
         isolation: "configured-transport",
+        thinkLevel: "medium",
         assertCurrent: params.assertCurrent,
         requireNoExternalCapabilities: true,
         developerInstructions: "Name the conversation.",
