@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import * as diskSpace from "../infra/disk-space.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -99,7 +99,9 @@ it("converts legacy stores once, preserves canonical rowids/search, and enables 
     expect(paths.map(inspect)).toEqual(
       before.map((item) => Object.assign({}, item, { mode: 2, free: 0 })),
     );
-    const agent = openNodeSqliteDatabase(agents[0].path, { readOnly: true });
+    const [agentTarget] = agents;
+    assert.isDefined(agentTarget);
+    const agent = openNodeSqliteDatabase(agentTarget.path, { readOnly: true });
     try {
       expect(agent.prepare("SELECT rowid,seq FROM transcript_events").all()).toEqual([
         { rowid: 41, seq: 7 },
@@ -319,7 +321,9 @@ it("rejects a pathname replacement after the native compactor closes", async () 
 it("delivers queued cancellation after verified closure and before the next database", async () => {
   await withOpenClawTestState({ scenario: "external-service" }, async (state) => {
     const { shared, agents } = await seed(state, true);
-    const agentBefore = fs.readFileSync(agents[0].path);
+    const [agentTarget] = agents;
+    assert.isDefined(agentTarget);
+    const agentBefore = fs.readFileSync(agentTarget.path);
     const controller = new AbortController();
     const interruption = new Error("stop before another database");
     await expect(
@@ -334,6 +338,6 @@ it("delivers queued cancellation after verified closure and before the next data
       }),
     ).rejects.toBe(interruption);
     expect(inspect(shared)).toMatchObject({ mode: 2, free: 0, integrity: "ok" });
-    expect(fs.readFileSync(agents[0].path)).toEqual(agentBefore);
+    expect(fs.readFileSync(agentTarget.path)).toEqual(agentBefore);
   });
 });
