@@ -7,6 +7,7 @@ import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import * as processExec from "../process/exec.js";
 import { pathExists } from "../utils.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import { buildUpdateCommandRunner } from "./update-runner-command.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
@@ -548,6 +549,12 @@ export async function assertCandidateCommandEnvironment(params: {
     prepareGitExposure: async (candidateRoot, _sha, env) => {
       exposed = true;
       expect(env?.OPENCLAW_DEV_SOURCE_ROOT).toBe(candidateRoot);
+      expect(
+        resolveExecutableFromPathEnv("node", env?.PATH ?? "", env, {
+          cwd: candidateRoot,
+          useCache: false,
+        }),
+      ).toBe(nodeRuntime.path);
     },
   });
   expect(result.status).toBe("ok");
