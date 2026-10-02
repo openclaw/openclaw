@@ -4,7 +4,8 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
-import { resolveStateDir } from "../config/paths.js";
+import { createConfigRuntimeEnv } from "../config/config-env-vars.js";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import { resolveConfiguredAgentDatabaseCandidatePaths } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -74,11 +75,7 @@ function listExistingAgentDirsFromState(
   );
 }
 
-/**
- * One canonical enumeration of legacy auth-store repair candidates. Sidecar
- * inline-recovery and flat-store SQLite migration must see the same dirs, or
- * decryptable sidecar secrets get imported as credential-less profiles.
- */
+/** Keep auth import and repair on the same physical owners. */
 export function listAuthProfileRepairCandidates(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
@@ -134,4 +131,26 @@ export function resolveLegacyAuthStatePath(agentDir?: string): string {
 
 export function resolveLegacyFlatAuthPath(agentDir?: string): string {
   return path.join(resolveLegacyAuthAgentDir(agentDir), "auth.json");
+}
+
+export function listLegacyOAuthSidecarPaths(
+  env: NodeJS.ProcessEnv,
+  cfg?: OpenClawConfig,
+  stateDir?: string,
+): string[] {
+  const directory = path.join(
+    resolveOAuthDir(cfg ? createConfigRuntimeEnv(cfg, env) : env, stateDir),
+    "auth-profiles",
+  );
+  try {
+    return fs
+      .readdirSync(directory)
+      .filter((name) => /^[a-f0-9]{32}\.json$/.test(name))
+      .map((name) => path.join(directory, name));
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  }
 }

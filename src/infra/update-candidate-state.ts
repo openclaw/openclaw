@@ -288,6 +288,20 @@ export async function readUpdateCandidateStateInventoryInProcess(
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateSnapshotInventorySchema>> {
+  const [{ listLegacyOAuthSidecarPaths }, { assertNoRetiredStateFiles }] = await Promise.all([
+    import("../commands/doctor-auth-legacy-paths.js"),
+    import("./state-migrations.retired-files.js"),
+  ]);
+  // Published 9.7 sends source home selectors in stdin and inherits the OAuth override.
+  const sourceEnv = {
+    ...input.env,
+    OPENCLAW_STATE_DIR: input.stateDir,
+    OPENCLAW_OAUTH_DIR: input.env?.OPENCLAW_OAUTH_DIR ?? process.env.OPENCLAW_OAUTH_DIR,
+  };
+  assertNoRetiredStateFiles(
+    "OAuth credential sidecars",
+    listLegacyOAuthSidecarPaths(sourceEnv, input.config),
+  );
   await fs.mkdir(input.targetStateDir, { recursive: true, mode: 0o700 });
   const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
   await fs.writeFile(planPath, "", { mode: 0o600, flag: "wx" });

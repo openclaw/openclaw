@@ -5,7 +5,14 @@ import { probePathCaseInsensitiveSync, resolvePathPrefixSync } from "@openclaw/f
 import { isWithinDir, safeStatSync } from "@openclaw/fs-safe/path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveProfileStateDir } from "../cli/profile-utils.js";
-import { resolveLegacyStateDirs, resolveNewStateDir, resolveStateDir } from "../config/paths.js";
+import { listLegacyOAuthSidecarPaths } from "../commands/doctor-auth-legacy-paths.js";
+import { readCurrentConfigForResolution } from "../config/io.runtime.js";
+import {
+  resolveConfigPath,
+  resolveLegacyStateDirs,
+  resolveNewStateDir,
+  resolveStateDir,
+} from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
@@ -331,6 +338,14 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
   const hasCustomStateDir = Boolean(env.OPENCLAW_STATE_DIR?.trim());
   const targetDir = hasCustomStateDir ? resolveStateDir(env, homedir) : resolveNewStateDir(homedir);
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(targetDir));
+  const { env: inspectionEnv } = readCurrentConfigForResolution({
+    env,
+    configPath: resolveConfigPath(env, resolveStateDir(env, homedir), homedir),
+  });
+  assertNoRetiredStateFiles(
+    "OAuth credential sidecars",
+    listLegacyOAuthSidecarPaths(inspectionEnv, undefined, targetDir),
+  );
   const finishMigration = (): StateDirMigrationResult => {
     const legacyIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir: targetDir });
     if (migrationFileExists(legacyIndexPath)) {
@@ -411,6 +426,10 @@ function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMig
   }
 
   assertNoRetiredStateFiles("JSON delivery queues", listRetiredDeliveryQueueFiles(legacyDir));
+  assertNoRetiredStateFiles(
+    "OAuth credential sidecars",
+    listLegacyOAuthSidecarPaths(inspectionEnv, undefined, legacyDir),
+  );
   if (safeStatSync(targetDir)?.isDirectory()) {
     if (isLegacyDirSymlinkMirror(legacyDir, targetDir)) {
       return finishMigration();

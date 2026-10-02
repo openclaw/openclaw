@@ -123,6 +123,56 @@ afterEach(async () => {
 });
 
 describe("legacy state migration caller execution", () => {
+  it.each(["automatic", "doctor", "direct"] as const)(
+    "refuses retired OAuth sidecars before %s schema preparation on every attempt",
+    async (mode) => {
+      const fixture = await makeFixture();
+      delete fixture.env.OPENCLAW_OAUTH_DIR;
+      const oauthDir = path.join(fixture.stateDir, "configured-oauth");
+      const cfg: OpenClawConfig = { env: { vars: { OPENCLAW_OAUTH_DIR: oauthDir } } };
+      fs.writeFileSync(fixture.configPath, JSON.stringify(cfg));
+      const detected =
+        mode === "direct"
+          ? await detectLegacyStateMigrations({
+              cfg,
+              mode: "doctor",
+              env: fixture.env,
+              homedir: () => fixture.homeDir,
+              doctorOnlyStateMigrations: true,
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            })
+          : undefined;
+      const sidecarPath = path.join(oauthDir, "auth-profiles", `${"b".repeat(32)}.json`);
+      const sidecarBytes = "retired encrypted bytes\n";
+      fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+      fs.writeFileSync(sidecarPath, sidecarBytes);
+      const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
+      writeLegacyStateSchemaV1(stateDatabasePath);
+      const before = snapshotSqliteArtifacts(stateDatabasePath);
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const migration = detected
+          ? runLegacyStateMigrations({
+              detected,
+              config: cfg,
+              env: fixture.env,
+              doctorOnlyStateMigrations: true,
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            })
+          : autoMigrateLegacyState({
+              cfg,
+              env: fixture.env,
+              homedir: () => fixture.homeDir,
+              doctorOnlyStateMigrations: mode === "doctor",
+              legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+            });
+        await expect(migration).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+        expect(snapshotSqliteArtifacts(stateDatabasePath)).toEqual(before);
+        expect(fs.readFileSync(sidecarPath, "utf8")).toBe(sidecarBytes);
+      }
+    },
+  );
+
   it("executes and receipts Doctor-owned exec and TUI migrations from the same mode", async () => {
     const fixture = await makeFixture();
     const cfg = {

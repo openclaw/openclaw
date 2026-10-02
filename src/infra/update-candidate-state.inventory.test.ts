@@ -24,6 +24,64 @@ import { UpdateCandidateSnapshotInventorySchema } from "./update-candidate-state
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 
+it.each(["default", "worker environment", "config home"])(
+  "refuses retired OAuth sidecars in the original %s before inventory writes",
+  async (selector) => {
+    const root = dirs.make("candidate-retired-auth-");
+    const sourceHome = path.join(root, "source-home");
+    const stateDir = path.join(sourceHome, ".openclaw");
+    const rehearsal = path.join(root, "rehearsal");
+    const targetStateDir = path.join(root, "inventory");
+    const oauthDir =
+      selector === "default"
+        ? path.join(stateDir, "credentials")
+        : path.join(sourceHome, "credentials $literal");
+    const sidecar = path.join(oauthDir, "auth-profiles", `${"c".repeat(32)}.json`);
+    await fs.mkdir(path.dirname(sidecar), { recursive: true });
+    await fs.mkdir(rehearsal);
+    const bytes = Buffer.from("unparsed original sidecar bytes\n");
+    await fs.writeFile(sidecar, bytes);
+    const result = await runCommandBuffered(
+      [
+        process.execPath,
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
+        ),
+      ],
+      {
+        input: JSON.stringify({
+          mode: "inventory",
+          stateDir,
+          targetStateDir,
+          candidateRoot: root,
+          config:
+            selector === "config home"
+              ? { env: { vars: { OPENCLAW_OAUTH_DIR: "~/credentials $literal" } } }
+              : {},
+          env: { HOME: sourceHome, USERPROFILE: sourceHome },
+        }),
+        baseEnv: {
+          ...process.env,
+          HOME: rehearsal,
+          USERPROFILE: rehearsal,
+          OPENCLAW_HOME: rehearsal,
+          OPENCLAW_STATE_DIR: rehearsal,
+          OPENCLAW_OAUTH_DIR: selector === "worker environment" ? oauthDir : undefined,
+        },
+        timeoutMs: 30_000,
+        killGraceMs: 500,
+        maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+      },
+    );
+    expect(result.code).not.toBe(0);
+    expect(result.stderr.toString("utf8")).toContain("Upgrade through OpenClaw 2026.9.7");
+    expect(result.stderr.toString("utf8")).toContain(sidecar);
+    expect(await fs.readFile(sidecar)).toEqual(bytes);
+    await expect(fs.stat(targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readdir(rehearsal)).toEqual([]);
+  },
+);
+
 it.each([
   "missing plugin dependency",
   "install record",
