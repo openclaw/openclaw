@@ -142,6 +142,13 @@ describe("security review rollout", () => {
     );
   });
 
+  it("enforces an older PR after a rebase or merge incorporates the rollout", () => {
+    const result = evaluate({
+      comparison: { ...comparison, merge_base_commit: { sha: mergeCommit }, status: "ahead" },
+    });
+    expect(result.mode).toBe("enforced");
+  });
+
   it("enforces an older PR whose head is exactly the rollout commit", () => {
     const result = evaluate({ pullRequest: { ...pullRequest, head: { sha: mergeCommit } } });
     expect(result.mode).toBe("enforced");
