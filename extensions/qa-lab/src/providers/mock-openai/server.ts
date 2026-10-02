@@ -903,7 +903,11 @@ async function buildResponsesPayload(
           mode: "run",
         });
       }
-      return buildAssistantEvents("NO_REPLY");
+      return buildAssistantEvents(
+        current.includes(QA_SUBAGENT_PRIVATE_SECOND_RESULT)
+          ? "Private review complete."
+          : "Second worker started.",
+      );
     }
     if (hasCompletedToolOutput) {
       return buildAssistantEvents("Worker started.");
