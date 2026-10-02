@@ -154,7 +154,7 @@ export function describeSessionsSpawnTool(options?: {
     'Omit `placement` or use `{kind:"local"}` for local execution. `{kind:"profile",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally.',
     visibilityLine,
     ...(options?.swarmEnabled ? [SESSIONS_SPAWN_COLLECTOR_GUIDANCE] : []),
-    "Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message.",
+    "Inherits parent workspace. Native task arrives in the child's initial user message.",
     ...(options?.acpAvailable === false
       ? []
       : ['`runtime="acp"` ids: codex, claude, gemini, opencode, or configured ACP.']),

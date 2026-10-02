@@ -163,10 +163,6 @@ type SessionDisplayRow = {
   accountId?: string;
 } & SessionWorktreeDisplayRow;
 
-type SessionDisplayOptions = {
-  includeSubagentPrefix?: boolean;
-};
-
 export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
@@ -180,7 +176,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
 
   if (key.includes(":subagent:")) {
     const prefix = t("sessionsView.subagentPrefix");
-    return { kind: "subagent", prefix, fallbackName: prefix };
+    return { kind: "subagent", prefix, fallbackName: prefix.replace(/:\s*$/u, "") };
   }
 
   // Automation (cron) job. Session keys keep the `cron:` prefix; only the
@@ -250,11 +246,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
   return { prefix: "", fallbackName: key };
 }
 
-export function resolveSessionDisplayName(
-  key: string,
-  row?: SessionDisplayRow,
-  options: SessionDisplayOptions = {},
-): string {
+export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow): string {
   const label = normalizeOptionalString(row?.label);
   const displayName = normalizeOptionalString(row?.displayName);
   const derivedTitle = normalizeOptionalString(row?.derivedTitle);
@@ -275,7 +267,7 @@ export function resolveSessionDisplayName(
         ? rawName.replace(/^cron(\s+job)?:\s*/i, "").trim() || rawName
         : rawName;
     const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*`, "i");
-    if (kind === "subagent" && options.includeSubagentPrefix === false) {
+    if (kind === "subagent") {
       return name.replace(prefixPattern, "").trim() || fallbackName;
     }
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
