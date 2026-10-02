@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
@@ -8,8 +7,8 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHistoryHandler } from "./cron-history.js";
 import { cronHandlers } from "./cron.js";
-import { createCronJob } from "./cron.validation.test-support.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
+import type { RespondFn } from "./types.js";
 
 const publication = vi.hoisted(() => ({
   afterVerification: () => {},
@@ -100,26 +99,16 @@ it.each([
         snapshotRevision: "fixture:off-page",
       };
     });
-    const instance = createOperationalRunInstanceRef("publication-run");
-    const claim = { jobId: job.id, expiresAtMs: Date.now() + 60_000 };
-    const client: GatewayClient = {
-      connect: {} as GatewayClient["connect"],
-      internal: {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey: "agent:main:cron:cron-1:run:reader",
-          operationalRunInstance: instance,
-          delegatedAuthority: {
-            kind: "local",
-            operationalRunInstance: instance,
-            lifecycleGeneration: "fixture",
-            claimId: "fixture",
-          },
-          cronSelfManagementContext: claim,
-        },
-      },
-    };
+    const client = createCronCallerClient(
+      "main",
+      undefined,
+      "agent:main:cron:cron-1:run:reader",
+      job.id,
+    );
+    const claim = expectDefined(
+      client.internal?.agentRuntimeIdentity?.cronSelfManagementContext,
+      "self-management claim",
+    );
     let current = true;
     publication.verified = false;
     publication.afterVerification = () => {

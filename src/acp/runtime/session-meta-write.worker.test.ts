@@ -7,6 +7,9 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readLegacyAcpMigrationContext } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
+import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import * as entryPublication from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { projectSessionSharingEntry } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import * as historyMaintenance from "../../config/sessions/session-history-eviction.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -110,8 +113,44 @@ it("creates, updates, and closes file-backed ACP metadata without host data SQL"
     try {
       const created = await upsertAcpSessionMeta({ ...scope, mutate: initialize });
       expect(created?.acp).toEqual(META);
-      const updated = await upsertAcpSessionMeta({ ...scope, mutate: update });
-      expect(updated?.acp?.state).toBe("running");
+      if (!created) {
+        throw new Error("Expected the initialized ACP session");
+      }
+      const retainedMembership: boolean[] = [];
+      const releases: Array<() => void> = [];
+      const retainPublication = entryPublication.retainSessionEntryWorkerPublication;
+      const publication = vi
+        .spyOn(entryPublication, "retainSessionEntryWorkerPublication")
+        .mockImplementation((input) => {
+          const retained = retainPreparedSessionSharingFacts({
+            databaseIdentity: `file:${input.databaseIdentity}`,
+            sessionKey: scope.sessionKey,
+            entry: projectSessionSharingEntry(created),
+            membership: new Set(["existing-reader"]),
+          });
+          releases.push(retained.release);
+          const owner = retainPublication(input);
+          return {
+            ...owner,
+            begin(...args) {
+              owner.begin(...args);
+              retainedMembership.push(
+                retained.readCurrent()?.membership.has("existing-reader") === true,
+              );
+            },
+          };
+        });
+      try {
+        const updated = await upsertAcpSessionMeta({ ...scope, mutate: update });
+        expect(updated?.acp?.state).toBe("running");
+        expect(retainedMembership.length).toBeGreaterThan(0);
+        expect(retainedMembership.every(Boolean)).toBe(true);
+      } finally {
+        publication.mockRestore();
+        for (const release of releases) {
+          release();
+        }
+      }
       expect(initialize).toHaveBeenCalledOnce();
       expect(update).toHaveBeenCalledOnce();
       expect(update.mock.calls[0]?.[0]).toEqual(META);

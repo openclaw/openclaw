@@ -1775,7 +1775,11 @@ describe("scripts/test-projects changed-target routing", () => {
         `${embeddedRoot}/run.overflow-compaction.test.ts`,
         "agents-embedded-agent-overflow-compaction",
       ],
-      [`${embeddedRoot}/run/attempt.abort-race.test.ts`, "agents-embedded-agent-run"],
+      [`${embeddedRoot}/run/attempt.abort-race.test.ts`, "infra"],
+      [
+        `${embeddedRoot}/run/attempt-transcript-helpers.presence.test.ts`,
+        "agents-embedded-agent-run",
+      ],
       [`${embeddedRoot}/run/attempt-system-prompt.test.ts`, "infra"],
     ] as const;
 

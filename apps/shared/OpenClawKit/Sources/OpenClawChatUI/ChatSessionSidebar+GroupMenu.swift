@@ -2,9 +2,35 @@
 import AppKit
 import SwiftUI
 
+enum ChatSessionMenuPresentation: Identifiable {
+    case appearance(OpenClawChatSessionEntry, OpenClawSessionMenuConnection)
+    case defaults(ChatSessionGroupDefaultsModel)
+    var id: String {
+        switch self {
+        case let .appearance(session, _): "appearance:\(session.key)"
+        case let .defaults(model): "defaults:\(model.name)"
+        }
+    }
+}
+
 extension ChatSessionSidebar {
+    @ViewBuilder
+    func menuSheet(_ presentation: ChatSessionMenuPresentation) -> some View {
+        switch presentation {
+        case let .appearance(session, connection):
+            ChatSessionIconPicker(session: session, connection: connection, viewModel: self.viewModel)
+        case let .defaults(model):
+            ChatSessionGroupDefaultsSheet(model: model)
+        }
+    }
+
     func groupMenu(_ name: String) -> some View {
         Group {
+            Button("Group defaults…") {
+                guard let connection = self.menuActions.connection else { return }
+                self.menuPresentation = .defaults(ChatSessionGroupDefaultsModel(
+                    name: name, connection: connection, agentWorkspace: self.viewModel.selectedAgent?.workspace))
+            }.disabled(self.menuActions.connection?.allows("sessions.groups.update") != true)
             Button("Rename…") { self.viewModel.promptSidebarGroup(name: name) }
                 .disabled(self.menuActions.connection?.allows("sessions.groups.rename") != true)
             Button("New group…") { self.viewModel.promptSidebarGroup() }

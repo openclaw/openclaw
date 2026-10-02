@@ -515,6 +515,10 @@ type AgentHarnessContract<
   runIsolatedCompletionV2?(
     params: AgentHarnessIsolatedCompletionParamsV2,
   ): Promise<AgentHarnessIsolatedCompletionResult>;
+  /** Side-effect-free engine selection, shared with this harness's isolated dispatch. */
+  resolveIsolatedCompletionRuntime?(params: {
+    authorizationOwner: AgentHarnessIsolatedCompletionAuthorization["owner"];
+  }): "openclaw" | "self";
 
   runSideQuestion?(params: TSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
 

@@ -130,7 +130,11 @@ export async function updateAcpSessionStoreEntry(params: {
         const receipt = facts.publication as NonNullable<
           AcpSessionEntryMutationResult["publication"]
         >;
-        publication?.begin(receipt.changedKeys, receipt.membershipInvalidatedKeys);
+        publication?.begin(
+          receipt.changedKeys,
+          receipt.membershipInvalidatedKeys,
+          receipt.sharingUnchangedKeys,
+        );
       }
     },
     execution,

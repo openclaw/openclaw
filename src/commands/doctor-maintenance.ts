@@ -13,6 +13,7 @@ import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { DoctorMaintenanceRefusalError, UpdateDoctorError } from "../infra/update-doctor-result.js";
@@ -603,6 +604,15 @@ export async function beginDoctorMaintenance(
       for (const message of result.changes) {
         params.runtime.log(message);
       }
+      for (const message of result.warnings) {
+        warn(message);
+      }
+    },
+    async enableSqliteReclamation(agents: readonly AgentDatabaseMigrationTarget[]) {
+      if (this !== maintenance || custody !== "held") {
+        throw new Error("SQLite reclamation requires its original live maintenance owner.");
+      }
+      const result = await settle(() => state.enableSqliteReclamation(agents));
       for (const message of result.warnings) {
         warn(message);
       }

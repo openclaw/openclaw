@@ -115,11 +115,16 @@
       ]
     },
     "assetScripts": {
-      "build": "node --import tsx ../../scripts/build-discord-activity-sdk.mts"
+      "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts && cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/discord",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/discord --copy",
+      "buildOutputs": [
+        "openclaw.plugin.json"
+      ]
     },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
-    }
+    },
+    "controlUi": "./browser/index.ts"
   }
 }

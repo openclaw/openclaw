@@ -53,6 +53,13 @@ private actor GatewayConfigReadGate {
 @MainActor
 struct AppStateRemoteConfigTests {
     @Test
+    func `July discovery preference remains readable`() async {
+        await TestIsolation.withIsolatedState(defaults: ["gateway.preferredStableID": "gateway-july"]) {
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "gateway-july")
+        }
+    }
+
+    @Test
     func `config fingerprint ignores writer bookkeeping metadata`() {
         let base: [String: Any] = [
             "gateway": ["mode": "local"],
