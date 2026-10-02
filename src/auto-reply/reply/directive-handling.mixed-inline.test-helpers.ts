@@ -13,6 +13,7 @@ export function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEn
 
 export async function applyMixedDirectives(params: {
   body: string;
+  abortSignal?: AbortSignal;
   cfg?: OpenClawConfig;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -28,6 +29,8 @@ export async function applyMixedDirectives(params: {
   senderIsOwner?: boolean;
   gatewayClientScopes?: string[];
   directives?: InlineDirectives;
+  resolveDefaultThinkingLevel?: () => Promise<"off">;
+  resolveThinkingCatalog?: () => Promise<ModelCatalogEntry[]>;
 }) {
   const cfg =
     params.cfg ?? ({ commands: { text: true }, agents: { defaults: {} } } as OpenClawConfig);
@@ -59,8 +62,8 @@ export async function applyMixedDirectives(params: {
     allowedModelCatalog: allowedModels,
     policyAliasIndex: aliasIndex,
     resetModelOverride: false,
-    resolveThinkingCatalog: async () => allowedModels,
-    resolveDefaultThinkingLevel: async () => "off",
+    resolveThinkingCatalog: params.resolveThinkingCatalog ?? (async () => allowedModels),
+    resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel ?? (async () => "off"),
     resolveDefaultReasoningLevel: async () => "off",
     needsModelCatalog: false,
   };
@@ -82,6 +85,7 @@ export async function applyMixedDirectives(params: {
       Surface: channel,
       ...(params.gatewayClientScopes ? { GatewayClientScopes: params.gatewayClientScopes } : {}),
     },
+    abortSignal: params.abortSignal,
     cfg,
     agentId: "main",
     agentDir: "/tmp/agent",

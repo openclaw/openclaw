@@ -30,7 +30,6 @@ export async function ensureWritableSkillDirectories(
       rootRealPath: fixedRoot,
       boundaryLabel: "skills directory",
       allowedType: "directory",
-      symlinks: "reject",
     });
     if (!opened.ok) {
       throw new Error("Could not open skill directory safely", { cause: opened.error });

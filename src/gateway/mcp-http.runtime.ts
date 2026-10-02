@@ -1,3 +1,4 @@
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 // MCP loopback runtime scope cache.
 // Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
@@ -34,6 +35,7 @@ type CachedScopedTools = {
 
 type McpLoopbackScopeParams = Omit<McpLoopbackRequestContext, "senderIsOwner"> & {
   cfg: OpenClawConfig;
+  admittedRunContext?: AdmittedRunContext;
   authProfileStore?: AuthProfileStore;
   authProfileStoreAgentDir?: string;
   grantToken?: string;

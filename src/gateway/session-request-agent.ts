@@ -8,6 +8,7 @@ import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-a
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  classifySessionKeyShape,
   normalizeAgentId,
   normalizeAgentIdStrict,
   normalizeMainKey,
@@ -25,6 +26,25 @@ export type SessionEventAgentScope = readonly [
   routingAgentId: string | undefined,
   compatibilityOwnerAgentId: string | undefined,
 ];
+
+export function resolveRequestedSessionAgentInput(
+  key: string | undefined,
+  explicitAgentId?: string,
+) {
+  if (classifySessionKeyShape(key) === "malformed_agent") {
+    return {
+      ok: false as const,
+      error: errorShape(ErrorCodes.INVALID_REQUEST, `malformed session key "${key}"`),
+    };
+  }
+  const agent = explicitAgentId === undefined ? null : normalizeAgentIdStrict(explicitAgentId);
+  return agent && !agent.ok
+    ? {
+        ok: false as const,
+        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${explicitAgentId}"`),
+      }
+    : { ok: true as const, value: agent?.value };
+}
 
 /** Resolves public event identity separately from private session routing ownership. */
 export function resolveSessionEventAgentScope(

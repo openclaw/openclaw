@@ -8,7 +8,6 @@ import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { readConfigMachineState } from "./config-machine-state.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   repairOpenClawStateDatabaseSchema,
@@ -18,18 +17,17 @@ import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
+  afterEach(() => {
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
 });
 let templatePath: string;
 
-beforeAll(async () => {
+beforeAll(() => {
   const stateDir = templateDirs.make("openclaw-plugin-index-template-");
   templatePath = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).path;
-  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
   const legacy = new (requireNodeSqlite().DatabaseSync)(templatePath);
   try {
     legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);

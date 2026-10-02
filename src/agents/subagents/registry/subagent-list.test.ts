@@ -241,11 +241,11 @@ describe("buildSubagentList", () => {
     addSubagentRunForTests(child);
     const list = () => buildSubagentList({ cfg: {}, runs: [parent, child], recentMinutes: 30 });
 
-    const finished = await list();
+    const finished = list();
     expect(finished.active).toEqual([]);
     expect(finished.recent).toMatchObject([
       { runId: parent.runId, status: "done", pendingDescendants: 0 },
-      { runId: child.runId, status: "done", deliveryStatus: "suspended" },
+      { runId: child.runId, status: "done" },
     ]);
     expect(finished.text).not.toContain("waiting on");
 
@@ -257,7 +257,7 @@ describe("buildSubagentList", () => {
       createdAt: now,
       execution: { status: "running", startedAt: now },
     });
-    const active = await list();
+    const active = list();
     expect(active.active).toMatchObject([
       { runId: parent.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },
       { runId: child.runId, status: "active (waiting on 1 child)", pendingDescendants: 1 },

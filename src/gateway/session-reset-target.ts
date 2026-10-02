@@ -1,9 +1,13 @@
+import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveRequestedSessionAgentInput } from "./session-request-agent.js";
-import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveGatewaySessionStoreTarget, resolveSessionStoreKey } from "./session-utils.js";
+
+function invalidSessionRequest(message: string) {
+  return { ok: false as const, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
+}
 
 export function resolveSessionResetTarget(
   cfg: OpenClawConfig,

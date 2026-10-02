@@ -126,6 +126,18 @@ describe("OpenAI dynamic model capabilities", () => {
           supportsTemperature: false,
           supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
         });
+      } else if (id === "gpt-6.1-sol") {
+        expect(model?.thinkingLevelMap).toEqual({
+          off: null,
+          minimal: "low",
+          xhigh: "xhigh",
+          max: "max",
+        });
+        expect(model?.compat).toMatchObject({
+          supportsReasoningEffort: true,
+          supportsTemperature: false,
+          supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+        });
       } else {
         expect(model?.mediaInput).toEqual({
           image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },

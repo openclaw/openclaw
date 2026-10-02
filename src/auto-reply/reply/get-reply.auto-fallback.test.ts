@@ -217,31 +217,48 @@ describe("getReplyFromConfig auto-fallback primary probes", () => {
     vi.mocked(runPreparedReplyMock).mockResolvedValue({ text: "ok" });
   });
 
-  it("does not start a primary probe after cancellation while its thinking catalog is pending", async () => {
+  it("does not start a reply after cancellation while its status thinking catalog is pending", async () => {
     const { sessionKey } = mockAutoFallbackSession();
-    mockFallbackDirectiveResult({ sessionKey, resolvedThinkLevel: "off" });
     const catalog = createDeferred<never[]>();
     const started = createDeferred();
-    const catalogRuntime = await import("../../agents/model-catalog.runtime.js");
-    vi.mocked(catalogRuntime.loadProviderScopedThinkingCatalog).mockImplementationOnce(() => {
-      started.resolve();
-      return catalog.promise;
+    mocks.resolveReplyDirectives.mockImplementation(async () => {
+      const result = createGetReplyContinueDirectivesResult({
+        body: "hello",
+        abortKey: sessionKey,
+        from: "telegram:user:42",
+        to: "telegram:123",
+        senderId: "telegram:user:42",
+        commandSource: "text",
+        senderIsOwner: true,
+        resetHookTriggered: false,
+        provider: "anthropic",
+        model: "claude-fallback",
+        resolvedThinkLevel: "off",
+      });
+      result.result.inlineStatusRequested = true;
+      result.result.modelState.resolveThinkingCatalog = () => {
+        started.resolve();
+        return catalog.promise;
+      };
+      return result;
     });
     const controller = new AbortController();
     const cfg = makeReasoningModelConfig();
-    delete cfg.models;
     const pending = getReplyFromConfig(buildGetReplyCtx(), { abortSignal: controller.signal }, cfg);
-    await Promise.race([
-      started.promise,
-      pending.then(() => {
-        throw new Error("reply finished without awaiting thinking catalog discovery");
-      }),
-    ]);
-    controller.abort(new Error("reply deadline"));
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    catalog.resolve([]);
-    await catalog.promise;
-    expect(runPreparedReplyMock).not.toHaveBeenCalled();
+    try {
+      await Promise.race([
+        started.promise,
+        pending.then(() => {
+          throw new Error("reply finished without awaiting thinking catalog discovery");
+        }),
+      ]);
+      controller.abort(new Error("reply deadline"));
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(runPreparedReplyMock).not.toHaveBeenCalled();
+    } finally {
+      catalog.resolve([]);
+      await catalog.promise;
+    }
   });
 
   it("does not probe the primary model for a model-locked session", async () => {

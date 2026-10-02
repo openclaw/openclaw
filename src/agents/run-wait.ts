@@ -204,17 +204,15 @@ function snapshotAssistantReply(message: unknown): ResolvedAssistantReplySnapsho
   }
   const meta =
     message && typeof message === "object" && !Array.isArray(message)
-      ? (message as { __openclaw?: unknown })["__openclaw"]
+      ? Reflect.get(message, "__openclaw")
       : undefined;
-  const messageMeta =
-    meta && typeof meta === "object" && !Array.isArray(meta)
-      ? (meta as { id?: unknown; truncated?: unknown })
-      : undefined;
+  const messageId = meta && typeof meta === "object" ? Reflect.get(meta, "id") : undefined;
+  const truncated = meta && typeof meta === "object" ? Reflect.get(meta, "truncated") : undefined;
   return {
     text,
     fingerprint,
-    messageId: typeof messageMeta?.id === "string" ? messageMeta.id : undefined,
-    truncated: messageMeta?.truncated === true ? true : undefined,
+    messageId: typeof messageId === "string" ? messageId : undefined,
+    truncated: truncated === true ? true : undefined,
   };
 }
 

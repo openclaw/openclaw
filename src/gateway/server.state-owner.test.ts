@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayLock, readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { GatewayStartupCleanupError } from "./server-shutdown.js";
 import { startGatewayServer } from "./server.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
@@ -21,7 +20,8 @@ vi.mock("../infra/gateway-lock.js", async (importOriginal) => {
       const lock = await actual.acquireGatewayLock({
         ...options,
         allowInTests: true,
-        timeoutMs: 0,
+        // This release line's lock loop needs a positive budget for its first attempt.
+        timeoutMs: 25,
       });
       if (lock) {
         runtime.locks.push(lock);
@@ -69,7 +69,7 @@ it("refuses a second direct Gateway until the first finishes closing", async () 
   const stop = first.close();
   await closing.promise;
   try {
-    await expect(startGatewayServer(18702)).rejects.toThrow("gateway state ownership");
+    await expect(startGatewayServer(18702)).rejects.toThrow("gateway already running");
     expect(await readActiveGatewayLockIdentity()).toMatchObject({ pid: process.pid, port: 18701 });
   } finally {
     closed.resolve();
@@ -95,7 +95,7 @@ it("keeps the run loop's owner across server generations and rejects its retired
   expect(lock).not.toBeNull();
   const first = await startGatewayServer(18701, { gatewayStateOwner: lock! });
   await first.close();
-  await expect(startGatewayServer(18702)).rejects.toThrow("gateway state ownership");
+  await expect(startGatewayServer(18702)).rejects.toThrow("gateway already running");
   const restarted = await startGatewayServer(18701, { gatewayStateOwner: lock! });
   await restarted.close();
   await lock!.release();
@@ -104,22 +104,13 @@ it("keeps the run loop's owner across server generations and rejects its retired
   );
 });
 
-it.each(["startup", "shutdown"] as const)(
-  "retains direct ownership when %s cleanup has not completed",
-  async (phase) => {
-    const failure = new GatewayStartupCleanupError(new Error("startup"), new Error("cleanup"));
-    if (phase === "startup") {
-      runtime.startupError = failure;
-      await expect(startGatewayServer(18701)).rejects.toBe(failure);
-      runtime.startupError = undefined;
-    } else {
-      const first = await startGatewayServer(18701);
-      runtime.close = async () => {
-        throw failure;
-      };
-      await expect(first.close()).rejects.toBe(failure);
-      runtime.close = async () => {};
-    }
-    await expect(startGatewayServer(18702)).rejects.toThrow("gateway state ownership");
-  },
-);
+it("retains direct ownership when shutdown cleanup has not completed", async () => {
+  const failure = new Error("cleanup failed");
+  const first = await startGatewayServer(18701);
+  runtime.close = async () => {
+    throw failure;
+  };
+  await expect(first.close()).rejects.toBe(failure);
+  runtime.close = async () => {};
+  await expect(startGatewayServer(18702)).rejects.toThrow("gateway already running");
+});

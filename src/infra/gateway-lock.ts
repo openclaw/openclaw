@@ -65,6 +65,7 @@ export type GatewayLockHandle = {
   stateLockPath: string;
   configPath: string;
   stateDir: string;
+  assertDatabaseAccess(this: void, databasePath: string): void;
   releaseInTree: () => Promise<void>;
   release: () => Promise<void>;
 };
@@ -385,6 +386,21 @@ export async function acquireGatewayLock(
   const role = opts.role ?? "gateway";
   const ownerId = randomUUID();
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
+  const ownedDatabasePath = resolveIdentityPathViaExistingAncestorSync(
+    path.join(paths.stateDir, "state", "openclaw.sqlite"),
+  );
+  let databaseAccessCurrent = true;
+  const assertDatabaseAccess = (databasePath: string) => {
+    if (!databaseAccessCurrent) {
+      throw new GatewayLockError("gateway state ownership is no longer current");
+    }
+    const requestedPath = resolveIdentityPathViaExistingAncestorSync(databasePath);
+    if (requestedPath !== ownedDatabasePath) {
+      throw new GatewayLockError(
+        `gateway state ownership for ${ownedDatabasePath} does not authorize ${requestedPath}`,
+      );
+    }
+  };
   let stateLifecycle: ReturnType<typeof acquireGatewayLifecycleCoordinator>;
   try {
     stateLifecycle = acquireGatewayLifecycleCoordinator({
@@ -417,12 +433,14 @@ export async function acquireGatewayLock(
         return;
       }
       inTreeReleased = true;
+      databaseAccessCurrent = false;
       await stateLock.release();
     };
     return {
       ...stateLock,
       stateDir: paths.stateDir,
       stateLockPath: stateLock.lockPath,
+      assertDatabaseAccess,
       releaseInTree,
       release: async () => {
         let releaseError: unknown;
@@ -457,6 +475,7 @@ export async function acquireGatewayLock(
         return;
       }
       inTreeReleased = true;
+      databaseAccessCurrent = false;
       let releaseError: Error | undefined;
       try {
         await configLock.release();
@@ -482,6 +501,7 @@ export async function acquireGatewayLock(
       ...configLock,
       stateDir: paths.stateDir,
       stateLockPath: stateLock.lockPath,
+      assertDatabaseAccess,
       releaseInTree,
       release: async () => {
         let releaseError: Error | undefined;
@@ -525,7 +545,9 @@ async function acquireLockFile(
     stateDir: string;
     ownerId: string;
   },
-): Promise<Omit<GatewayLockHandle, "releaseInTree" | "stateDir" | "stateLockPath">> {
+): Promise<
+  Omit<GatewayLockHandle, "assertDatabaseAccess" | "releaseInTree" | "stateDir" | "stateLockPath">
+> {
   const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, DEFAULT_TIMEOUT_MS, 0);
   const pollIntervalMs = resolvePositiveTimerTimeoutMs(
     opts.pollIntervalMs,
