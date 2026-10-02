@@ -52,12 +52,11 @@ extensions/browser/src/browser/chrome.diagnostics.ts	1
 extensions/browser/src/browser/chrome.executables.ts	1
 extensions/browser/src/browser/chrome.ts	4
 extensions/browser/src/browser/client-fetch.ts	2
-extensions/browser/src/browser/config-mutations.ts	1
 extensions/browser/src/browser/errors.ts	4
 extensions/browser/src/browser/extension-install-layout.ts	4
 extensions/browser/src/browser/extension-relay/auth-v2.ts	4
 extensions/browser/src/browser/extension-relay/relay-bridge.ts	8
-extensions/browser/src/browser/extension-relay/relay-protocol.ts	2
+extensions/browser/src/browser/extension-relay/relay-protocol.ts	1
 extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/paths.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
@@ -117,7 +116,6 @@ extensions/clickclack/src/setup-claim.ts	1
 extensions/clickclack/src/setup-core.ts	5
 extensions/clickclack/src/setup-surface.ts	8
 extensions/clickclack/src/setup-verify.ts	4
-extensions/codex/doctor-contract-api.ts	1
 extensions/codex/harness.ts	1
 extensions/codex/index.ts	5
 extensions/codex/src/app-server/attempt-diagnostics.ts	2
@@ -159,7 +157,6 @@ extensions/codex/src/app-server/startup-binding.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
-extensions/codex/src/app-server/transcript-history-projection.ts	1
 extensions/codex/src/app-server/transcript-mirror.ts	1
 extensions/codex/src/app-server/transport-stdio.ts	1
 extensions/codex/src/app-server/upstream-fork-boundary.ts	1
@@ -926,10 +923,9 @@ extensions/telegram/src/audit-membership-runtime.ts	1
 extensions/telegram/src/audit.ts	1
 extensions/telegram/src/bot-core.ts	1
 extensions/telegram/src/bot-deps.ts	1
-extensions/telegram/src/bot-handlers.callback-router-controls.ts	4
+extensions/telegram/src/bot-handlers.callback-router-controls.ts	2
 extensions/telegram/src/bot-handlers.callback-router.ts	1
 extensions/telegram/src/bot-handlers.inbound-authorization.ts	1
-extensions/telegram/src/bot-handlers.inbound-buffer.ts	1
 extensions/telegram/src/bot-handlers.inbound-media.ts	2
 extensions/telegram/src/bot-handlers.inbound-pipeline.ts	2
 extensions/telegram/src/bot-handlers.message-context.ts	1
@@ -940,7 +936,6 @@ extensions/telegram/src/bot-message-context.session.ts	2
 extensions/telegram/src/bot-message-context.ts	3
 extensions/telegram/src/bot-message-dispatch-reply.ts	1
 extensions/telegram/src/bot-message-dispatch-session.ts	1
-extensions/telegram/src/bot-message-dispatch-turn.ts	2
 extensions/telegram/src/bot-native-command-dispatch.ts	1
 extensions/telegram/src/bot-native-command-plugins.ts	1
 extensions/telegram/src/bot/body-helpers.ts	1
@@ -1057,7 +1052,6 @@ extensions/workboard/browser/lib/workboard/metadata-contract-normalization.ts	1
 extensions/workboard/browser/lib/workboard/normalization.ts	5
 extensions/workboard/browser/pages/workboard/view-card-actions.ts	2
 extensions/workboard/browser/pages/workboard/view-card-modal.ts	1
-extensions/workboard/doctor-contract-api.ts	1
 extensions/workboard/src/cli.ts	2
 extensions/workboard/src/command.ts	1
 extensions/workboard/src/store-automation.ts	1
@@ -2553,11 +2547,9 @@ src/plugin-sdk/memory-host-core.ts	2
 src/plugin-sdk/migration-runtime.ts	2
 src/plugin-sdk/migration.ts	8
 src/plugin-sdk/plugin-test-api.ts	1
-src/plugin-sdk/provider-auth-copilot-cache.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	3
 src/plugin-sdk/provider-auth-runtime.ts	1
-src/plugin-sdk/provider-auth.ts	1
 src/plugin-sdk/provider-catalog-shared.ts	1
 src/plugin-sdk/provider-entry.ts	3
 src/plugin-sdk/provider-onboard.ts	3

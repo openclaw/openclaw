@@ -37,7 +37,7 @@ export async function skillsObservationScope(
 /** Capture transport policy and its diagnostic lifetime with the subscription. */
 export function skillsObservationTransport(targetPath: string) {
   const mode = resolveFsObservationMode();
-  const pollIntervalMs = Math.max(30_000, resolveFsObservationIntervalMs());
+  const pollIntervalMs = resolveFsObservationIntervalMs(process.env, 30_000);
   let pollingFallbackWarned = false;
   return {
     mode,

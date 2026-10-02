@@ -114,13 +114,15 @@ existing rebuild claims, cursors, active-path rows, and canonical-validation
 pending rows are preserved. The unpublished compressed schema-22 draft is not
 a supported predecessor.
 
-The admitted migration converts one transcript record at a time, verifies each
-compressed frame against its original bytes, preserves row identities and
-timestamps, and commits table replacements with both schema markers. Unknown
-columns or dependencies that a rebuild would discard cause a refusal. Earlier
-supported schemas run their prerequisite migrations first. Conversion needs
-temporary space for old and replacement tables, journal/WAL activity, and the
-verified backup. Freed pages are reusable; a smaller payload does not by itself
+The admitted migration converts one transcript record or memory vector at a time,
+verifies each compressed transcript frame against its original bytes, preserves
+row identities and timestamps, and commits table replacements with both schema
+markers. Memory validation and conversion return from SQLite after each row so
+large legacy embedding caches do not accumulate their JSON strings in the
+JavaScript heap. Unknown columns or dependencies that a rebuild would discard
+cause a refusal. Earlier supported schemas run their prerequisite migrations
+first. Conversion needs temporary space for old and replacement tables,
+journal/WAL activity, and the verified backup. Freed pages are reusable; a smaller payload does not by itself
 shrink the database file. Existing maintenance owns physical reclamation.
 
 Stop all writers and take a verified WAL-aware backup before upgrading. Supported

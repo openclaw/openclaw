@@ -250,7 +250,12 @@ export function executeSharedStateCommand(
   if (command.type === "sessionUpstream.current" || command.type === "sessionUpstream.settle") {
     return executeSessionUpstreamCommand(command, writeOptions);
   }
-  if (command.type === "sessionState.record" || command.type === "sessionState.prune") {
+  if (
+    command.type === "sessionState.record" ||
+    command.type === "sessionState.prune" ||
+    command.type === "sessionState.registerWatch" ||
+    command.type === "sessionState.acknowledge"
+  ) {
     return executeSessionStateCommand(command, writeOptions);
   }
   if (command.type === "subagents.persistChanges") {

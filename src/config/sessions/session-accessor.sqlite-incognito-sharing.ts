@@ -11,8 +11,13 @@ import {
   updateSessionSharingField,
   type CommittedSessionSharingFacts,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
+import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionEntry } from "./types.js";
+
+type IncognitoSessionSharingFacts = CommittedSessionSharingFacts & {
+  capability?: ReturnType<typeof projectSessionEntryCapabilityFacts>;
+};
 
 // Process-held stores cannot be reopened in a worker. Their existing writer publishes
 // content-free metadata, bounded by live entries and the native database's lifetime.
@@ -22,8 +27,8 @@ const incognitoSharingEntries = resolveGlobalSingleton(
     new WeakMap<
       DatabaseSync,
       {
-        entries: Map<string, CommittedSessionSharingFacts | null>;
-        pending: Map<string, Map<object, CommittedSessionSharingFacts | null | undefined>>;
+        entries: Map<string, IncognitoSessionSharingFacts | null>;
+        pending: Map<string, Map<object, IncognitoSessionSharingFacts | null | undefined>>;
       }
     >(),
 );
@@ -40,13 +45,13 @@ function incognitoSharingState(database: DatabaseSync) {
 export function stageIncognitoSharingPublication(
   database: DatabaseSync,
   sessionKey: string,
-  current?: { facts: CommittedSessionSharingFacts | null | undefined },
+  current?: { facts: IncognitoSessionSharingFacts | null | undefined },
 ) {
   const state = incognitoSharingState(database);
   const token = {};
   const pending =
     state.pending.get(sessionKey) ??
-    new Map<object, CommittedSessionSharingFacts | null | undefined>();
+    new Map<object, IncognitoSessionSharingFacts | null | undefined>();
   state.pending.set(sessionKey, pending);
   let facts = current ? current.facts : state.entries.get(sessionKey);
   if (!current) {
@@ -66,7 +71,7 @@ export function stageIncognitoSharingPublication(
 export function commitIncognitoSessionSharingFacts(
   database: DatabaseSync,
   sessionKey: string,
-  facts: CommittedSessionSharingFacts | null | undefined,
+  facts: IncognitoSessionSharingFacts | null | undefined,
 ): void {
   const entries = incognitoSharingState(database).entries;
   if (facts !== undefined) {
@@ -108,7 +113,7 @@ export function readIncognitoSessionEntryCurrent(database: DatabaseSync, session
   if (!pending?.size) {
     return readCommittedIncognitoSessionSharing(database, sessionKey)?.entry;
   }
-  let current: CommittedSessionSharingFacts | null | undefined;
+  let current: IncognitoSessionSharingFacts | null | undefined;
   for (const facts of pending.values()) {
     current = facts;
   }
@@ -122,13 +127,14 @@ export function publishIncognitoSessionEntryChange(
   database: SessionEntryCacheDatabase & { path: string },
   update: { sessionKey: string; entry?: SessionEntry },
 ): void {
-  let current: CommittedSessionSharingFacts | null | undefined;
+  let current: IncognitoSessionSharingFacts | null | undefined;
   try {
     const entry =
       update.entry ?? readExactSessionEntryRow(database, update.sessionKey, "list")?.entry;
     current = entry
       ? {
           entry: projectSessionSharingEntry(entry),
+          capability: projectSessionEntryCapabilityFacts(entry),
           membership: new Set(
             listSessionMembersInDatabase(database, update.sessionKey).map(
               (member) => member.identityId,

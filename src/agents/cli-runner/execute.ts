@@ -512,6 +512,7 @@ export async function executePreparedCliRun(
             params.cliToolAvailability && nodePlacement
               ? { native: params.cliToolAvailability.native, openClaw: [] }
               : params.cliToolAvailability,
+          hostOwnedTools: context.hostOwnedTools,
           useResume,
           baseArgs: baseArgsWithSkills,
         });

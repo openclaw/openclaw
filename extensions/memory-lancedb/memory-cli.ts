@@ -10,7 +10,7 @@ import {
   type MemoryQueryFilter,
   type MemoryDB,
 } from "./lancedb-store.js";
-import { normalizeRecallQuery } from "./memory-policy.js";
+import { normalizeRecallQuery, projectMemorySearchResult } from "./memory-policy.js";
 import type { MemoryStatsSource } from "./memory-stats.js";
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
@@ -150,14 +150,7 @@ export function registerMemoryCli(
               config.embedding,
             );
             const results = await db.search(agentId, vector, limit, 0.3);
-            const output = results.map((r) => ({
-              id: r.entry.id,
-              text: r.entry.text,
-              category: r.entry.category,
-              importance: r.entry.importance,
-              score: r.score,
-            }));
-            defaultRuntime.writeJson(output);
+            defaultRuntime.writeJson(results.map(projectMemorySearchResult));
           } catch (error) {
             failure = { error };
           }

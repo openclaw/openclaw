@@ -13,7 +13,10 @@ import * as emptySourceRecovery from "../infra/deferred-plugin-session-empty.js"
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as migrationArtifacts from "../infra/session-sqlite-migration-artifact.js";
 import { readSessionSqliteMigrationManifest } from "../infra/session-sqlite-migration-manifest.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as transcriptArchives from "./doctor-session-sqlite-archive.js";
@@ -223,6 +226,7 @@ describe("retained session receipt recovery", () => {
           { ...scope, sessionKey: "agent:main:kept" },
           { label: "Current metadata" },
         );
+        await closeOpenClawAgentDatabasesAsync(state.root);
         closeOpenClawAgentDatabasesForTest();
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
         const replaced = replacement === "index" ? storePath : sqlitePath;

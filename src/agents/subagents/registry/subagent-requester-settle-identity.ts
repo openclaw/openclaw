@@ -257,7 +257,7 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
     const wake = entry?.requesterSettleWake;
     if (
       !entry ||
-      entry.requesterTurnRunId ||
+      (entry.expectsCompletionMessage === true && entry.requesterTurnRunId) ||
       !isRequesterSettleRunBindingCurrent(entry, observed) ||
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||

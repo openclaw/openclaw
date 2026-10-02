@@ -252,6 +252,8 @@ vi.mock("./subagent-registry-helpers.js", () => ({
   resolveAnnounceRetryDelayMs: (retryCount: number) =>
     Math.min(1_000 * 2 ** Math.max(0, retryCount - 1), 8_000),
   safeRemoveAttachmentsDir: helperMocks.safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments: (entry: SubagentRunRecord, cleanup = entry.cleanup) =>
+    cleanup === "delete" || !entry.retainAttachmentsOnKeep,
   updateSubagentArchiveAtMs: () => false,
 }));
 

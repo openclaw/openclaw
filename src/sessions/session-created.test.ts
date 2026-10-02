@@ -43,13 +43,13 @@ afterEach(async () => {
 describe("Home session creation notices", () => {
   it.each([undefined, true, false])(
     "honors notifyOnCreate=%s through the config schema",
-    (enabled) => {
+    async (enabled) => {
       const cfg = {
         session: SessionSchema.parse(enabled === undefined ? {} : { notifyOnCreate: enabled }),
       };
       recordSessionCreated(cfg, { sessionKey, agentId: "ops", entry: entry() });
       expect(peekSystemEvents(mainSessionKey)).toHaveLength(enabled === false ? 0 : 1);
-      expect(listSessionStateEventsSince(sessionKey, "ops", 0).events).toMatchObject([
+      expect((await listSessionStateEventsSince(sessionKey, "ops", 0)).events).toMatchObject([
         { kind: "created", actorId: "profile-alice" },
       ]);
     },

@@ -3,6 +3,7 @@ import { projectProviderCatalogOutcomes } from "../gateway/server-methods/models
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { copyProviderCatalogOutcomes } from "../plugins/provider-catalog-result.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
+import { platformRoute } from "./model-auth-availability.test-support.js";
 import { resolveModelCatalogServiceTiers } from "./model-catalog-service-tiers.js";
 
 const entry = { provider: "fixture", id: "opaque-model" };
@@ -42,6 +43,49 @@ function resolve(overrides: Partial<Parameters<typeof resolveModelCatalogService
   });
 }
 describe("account-bound catalog service tiers", () => {
+  it("offers API-key Responses tiers without a catalog, scoped to the available embedded route", () => {
+    const apiEvaluation = {
+      ...evaluation,
+      selectedRoute: platformRoute,
+      selectedAuthMode: "api_key",
+    };
+    const params = {
+      entry: { ...entry, provider: "openai" },
+      evaluation: apiEvaluation,
+      runtimeId: "openclaw",
+      snapshot: { entries: [], routeVariants: [] },
+    };
+    expect(resolve(params)).toEqual(["priority", "ultrafast"]);
+    expect(
+      resolve({
+        ...params,
+        evaluation: {
+          ...apiEvaluation,
+          selectedRoute: { ...platformRoute, requestTransportOverrides: "present" },
+        },
+      }),
+    ).toEqual(["priority", "ultrafast"]);
+    expect(resolve({ ...params, snapshot: { ...params.snapshot, refreshFailed: true } })).toEqual([
+      "priority",
+      "ultrafast",
+    ]);
+    for (const overrides of [
+      { runtimeId: "codex" },
+      { entry },
+      { evaluation: { ...apiEvaluation, selectedAuthMode: "oauth" } },
+      { evaluation: { ...apiEvaluation, availability: false } },
+      { evaluation: { ...apiEvaluation, selectedProfileId: undefined } },
+      {
+        evaluation: {
+          ...apiEvaluation,
+          selectedRoute: { ...platformRoute, api: "openai-completions" as const },
+        },
+      },
+      { isCurrent: () => false },
+    ]) {
+      expect(resolve({ ...params, ...overrides })).toBeUndefined();
+    }
+  });
   it("projects only the selected account/model/runtime/route and clears unknown observations", () => {
     expect(resolve()).toEqual(["ultrafast"]);
     for (const overrides of [

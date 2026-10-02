@@ -89,6 +89,13 @@ const gatewayClientTarget = "src/gateway/talk/handlers/client-native-control.tes
 const memoryConfig = "test/vitest/vitest.extension-memory.config.ts";
 const memoryTarget = "extensions/memory-lancedb/config.test.ts";
 const memoryIncludes = ["extensions/memory-lancedb", "extensions/memory-wiki"];
+const uiNodeFiles = [
+  "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+  "ui/src/pages/chat/chat-pane-retention.test.ts",
+  "ui/src/pages/chat/chat-thread-retention.test.ts",
+  "ui/src/pages/chat/session-snapshot-store.test.ts",
+  "ui/src/pages/usage/usage-page-retention.test.ts",
+];
 
 function makeScratchDir(): string {
   const dir = mkdtempSync(path.join(tmpdir(), "openclaw-shard-test-"));
@@ -270,12 +277,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     "preserves selected UI discovery before runtime partitioning under %s",
     async (policy) => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
-      const includePatterns = [
-        "ui/src/pages/chat/chat-pane-history.test.ts",
-        "ui/src/pages/chat/chat-pane-retention.test.ts",
-        "ui/src/pages/chat/chat-thread-retention.test.ts",
-        "ui/src/pages/usage/usage-page-retention.test.ts",
-      ];
+      const bunFile = "ui/src/pages/chat/chat-pane-history.test.ts";
+      const includePatterns = [bunFile, ...uiNodeFiles];
       const seen: Array<{ runtime: string | undefined; membership?: string[] }> = [];
       await expect(
         runShardPlans(
@@ -307,10 +310,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           },
         ),
       ).resolves.toBe(0);
-      expect(seen).toEqual([
-        ...(policy === "dual" ? [{ runtime: "node", membership: undefined }] : []),
-        { runtime: "bun", membership: includePatterns },
-      ]);
+      const expected = [
+        { runtime: "node", membership: policy === "dual" ? undefined : uiNodeFiles },
+        { runtime: "bun", membership: [bunFile] },
+      ];
+      expect(seen).toEqual(policy === "dual" ? expected : expected.toReversed());
     },
   );
 
@@ -741,10 +745,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each(["bun-compatible", "dual"] as const)(
-    "runs native Bun PTY coverage on Bun while retaining process siblings on Node under %s",
+    "runs qualified process coverage on Bun while retaining process siblings on Node under %s",
     async (policy) => {
-      const bunFile = "src/process/terminal-pty-bun.test.ts";
-      const nodeFile = "src/process/terminal-pty.test.ts";
+      const bunFiles = [
+        "src/process/spawn-broker/event-order.test.ts",
+        "src/process/spawn-broker/group-custody.test.ts",
+        "src/process/terminal-pty-bun.test.ts",
+      ];
+      const nodeFiles = [
+        "src/process/spawn-broker/context.test.ts",
+        "src/process/spawn-broker/startup.test.ts",
+        "src/process/terminal-pty.test.ts",
+      ];
+      const includePatterns = [...bunFiles, ...nodeFiles];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
         runShardPlans(
@@ -754,7 +767,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               name: "process",
               plan: {
                 configs: ["test/vitest/vitest.process.config.ts"],
-                includePatterns: [bunFile, nodeFile],
+                includePatterns,
               },
             },
           ],
@@ -772,12 +785,14 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { runtime: "node", includes: policy === "dual" ? [bunFile, nodeFile] : [nodeFile] },
-        { runtime: "bun", includes: [bunFile] },
+        { runtime: "node", includes: policy === "dual" ? includePatterns : nodeFiles },
+        { runtime: "bun", includes: bunFiles },
       ]);
-      expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual(
-        policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
-      );
+      for (const bunFile of bunFiles) {
+        expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual(
+          policy === "dual" ? [{ runtime: "node" }, { runtime: "bun" }] : [{ runtime: "bun" }],
+        );
+      }
     },
   );
 
@@ -1094,6 +1109,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      config: "test/vitest/vitest.extension-provider-openai.config.ts",
+      dir: "extensions",
+      targets: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
+      sibling: "extensions/openai/realtime-quicksilver-socket-worker.test.ts",
+      glob: "openai/realtime-quicksilver-*.test.ts",
+    },
+    {
       config: "test/vitest/vitest.plugins.config.ts",
       dir: "src/plugins",
       targets: ["src/plugins/plugin-module-generation.interop.test.ts"],
@@ -1280,11 +1302,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           allocatorInterval: "1000",
         },
       ];
-      expect(seen).toEqual(policy === "dual" ? expected : expected.slice(1));
+      expect(seen).toEqual(policy === "dual" ? expected : expected.toReversed());
     },
   );
 
-  it("runs qualified UI only on Bun without joined process ownership", async () => {
+  it("retains Node-first UI execution without joined process ownership", async () => {
     vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
     const seen: string[] = [];
     await expect(
@@ -1298,7 +1320,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         },
       }),
     ).resolves.toBe(0);
-    expect(seen).toEqual(["bun"]);
+    expect(seen).toEqual(["node", "bun"]);
   });
 
   it.each([
@@ -1318,17 +1340,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
       const seen: string[] = [];
       let receiptFile: string | undefined;
-      const nodeFile = "ui/src/synthetic-node-only.test.ts";
+      const nodeFile = "ui/src/pages/usage/usage-page-retention.test.ts";
       const bunFile = "ui/src/pages/chat/chat-pane-history.test.ts";
-      // All current UI files qualify for Bun; preserve the receipt transport's
-      // fallback coverage with an explicit synthetic mixed-runtime partition.
-      vi.spyOn(
-        await import("../../scripts/lib/ci-test-runtime.mts"),
-        "resolveCiTestRuntimeSelections",
-      ).mockReturnValue([
-        { runtime: "node", includePatterns: [nodeFile], includeAfterShard: true },
-        { runtime: "bun", includePatterns: [bunFile], includeAfterShard: true },
-      ]);
       await expect(
         runShardPlans([{ kind: "group", name: "ui", plan: { configs: ["ui/vitest.config.ts"] } }], {
           env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-compatible" },
@@ -1339,7 +1352,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
               const included = JSON.parse(
                 readFileSync(env.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE!, "utf8"),
               );
-              expect(included).toEqual([nodeFile]);
+              expect(included).toEqual(uiNodeFiles);
               return 0;
             }
             receiptFile = env.OPENCLAW_VITEST_NATIVE_SHARD_RECEIPT;

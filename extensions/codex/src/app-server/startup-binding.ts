@@ -116,12 +116,7 @@ async function listCodexAppServerRolloutFilesForThread(
     }
   }
   const files: CodexAppServerRolloutFile[] = [];
-  const visited = new Set<string>();
-  for (const root of roots) {
-    if (visited.has(root)) {
-      continue;
-    }
-    visited.add(root);
+  for (const root of new Set(roots)) {
     const stack = [root];
     while (stack.length > 0) {
       const dir = stack.pop();
@@ -271,12 +266,6 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
 }
 
-function readCompactionConfig(config: EmbeddedRunAttemptParams["config"] | undefined) {
-  return isJsonObject(config?.agents?.defaults?.compaction)
-    ? config.agents.defaults.compaction
-    : undefined;
-}
-
 function resolveCodexAppServerNativeThreadTokenFuse(params: {
   modelContextWindow: number | undefined;
   reserveTokens: number;
@@ -297,14 +286,9 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   return Math.max(1, promptBudget - projectedTurnTokens);
 }
 
-function maxFiniteNumber(values: Array<number | undefined>): number | undefined {
-  const nums = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value),
-  );
-  if (nums.length === 0) {
-    return undefined;
-  }
-  return Math.max(...nums);
+function maxDefinedNumber(values: Array<number | undefined>): number | undefined {
+  const nums = values.filter((value) => value !== undefined);
+  return nums.length ? Math.max(...nums) : undefined;
 }
 
 /** Clears and drops a binding when the native Codex thread is too large to resume safely. */
@@ -338,7 +322,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
     params.codexHome,
     binding.rolloutPath,
   );
-  const compaction = readCompactionConfig(params.config);
+  const compaction = params.config?.agents?.defaults?.compaction;
   const maxBytes = parseCodexAppServerByteLimit(compaction?.maxActiveTranscriptBytes);
   const shouldDeferByteGuard =
     maxBytes !== undefined &&
@@ -391,10 +375,10 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       readCodexAppServerRolloutTokenSnapshot(file.path, file.handle),
     ),
   );
-  const nativeTokens = maxFiniteNumber(
+  const nativeTokens = maxDefinedNumber(
     nativeTokenSnapshots.map((snapshot) => snapshot?.totalTokens),
   );
-  const nativeModelContextWindow = maxFiniteNumber(
+  const nativeModelContextWindow = maxDefinedNumber(
     nativeTokenSnapshots.map((snapshot) => snapshot?.modelContextWindow),
   );
   const reserveTokens = CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;

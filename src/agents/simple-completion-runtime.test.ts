@@ -185,9 +185,9 @@ beforeEach(() => {
   );
 });
 
-function expectPreparedModelResult(
-  result: Awaited<ReturnType<typeof prepareSimpleCompletionModel>>,
-): asserts result is Exclude<typeof result, { error: string }> {
+function expectPreparedModelResult<
+  T extends Awaited<ReturnType<typeof prepareSimpleCompletionModel>>,
+>(result: T): asserts result is Exclude<T, { error: string }> {
   expect(result).not.toHaveProperty("error");
   if ("error" in result) {
     throw new Error(result.error);

@@ -542,10 +542,12 @@ describe("isNonProviderRuntimeCoordinationError", () => {
     ).toBe(true);
   });
 
-  it("returns true for direct and nested runner admission failures", () => {
-    const coordination = Object.assign(new Error("The device runner is offline"), {
-      name: "WorkerRunnerUnavailableError",
-    });
+  it.each([
+    "WorkerRunnerUnavailableError",
+    "NodeRunnerUpdateRequiredError",
+    "CodexNodeExecServerDisconnectedError",
+  ])("returns true for direct and nested %s coordination failures", (name) => {
+    const coordination = Object.assign(new Error("private coordination diagnostic"), { name });
     for (const error of [coordination, new Error("worker turn failed", { cause: coordination })]) {
       expect(isNonProviderRuntimeCoordinationError(error)).toBe(true);
       expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });

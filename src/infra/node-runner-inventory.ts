@@ -144,6 +144,24 @@ export function formatNodeRunnerInventoryIssue(
     : `device worker node ${nodeId} requires an update before it can host sessions; run ${issue.updateCommand}, then reconnect it (for a headless node, run ${issue.headlessReconnectCommand})`;
 }
 
+class NodeRunnerUpdateRequiredError extends Error {
+  readonly code = "node_runner_update_required";
+
+  constructor(nodeId: string) {
+    super(formatNodeRunnerInventoryIssue(nodeId, NODE_RUNNER_UPDATE_REQUIRED_ISSUE));
+    this.name = "NodeRunnerUpdateRequiredError";
+  }
+}
+
+export function createNodeRunnerInventoryIssueError(
+  nodeId: string,
+  issue: NodeRunnerInventoryIssue,
+): Error {
+  return issue.code === "update-required"
+    ? new NodeRunnerUpdateRequiredError(nodeId)
+    : new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+}
+
 /** Worker execution requires the node to preserve the Gateway's captured exec policy. */
 export function resolveNodeWorkerExecutionIssue(
   workerHost: NodeWorkerHostDeclaration,

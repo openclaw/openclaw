@@ -521,8 +521,8 @@ describe("first-hop package fixtures", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each(["explicit", "recorded"])(
-    "carries the candidate registry into the first-hop Docker lane with %s sources",
+  it.skipIf(process.platform === "win32").each(["explicit", "recorded", "missing-load-path"])(
+    "routes the first-hop Docker lane with the %s scenario",
     (sourceMode) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-first-hop-docker-"));
       const bin = path.join(root, "bin");
@@ -586,7 +586,8 @@ if (process.argv[2] === "run") {
   const args = process.argv.slice(3);
   fs.appendFileSync(process.env.DOCKER_ARGS_FILE, JSON.stringify(args) + "\\n");
   const artifact = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-artifacts")).split(":")[0];
-  const source = JSON.parse(fs.readFileSync(path.join(artifact, "source.json"), "utf8"));
+  const sourceFile = path.join(artifact, "source.json");
+  const source = fs.existsSync(sourceFile) ? JSON.parse(fs.readFileSync(sourceFile, "utf8")) : undefined;
   const inspect = (name) => {
     const mount = args.find(arg => arg.endsWith(":/tmp/openclaw-update-first-hop-" + name + ".tgz:ro"));
     if (!mount) return undefined;
@@ -626,6 +627,8 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
           OPENCLAW_UPDATE_FIRST_HOP_DOCKER_RUN_TIMEOUT: "",
           OPENCLAW_UPDATE_FIRST_HOP_E2E_SKIP_BUILD: "1",
           OPENCLAW_UPDATE_FIRST_HOP_SOURCE_PACKAGE_TGZ: sourceMode === "explicit" ? tarball : "",
+          OPENCLAW_UPDATE_FIRST_HOP_SCENARIO:
+            sourceMode === "missing-load-path" ? "missing-load-path" : "all",
           OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK: "shared-Y6bNiw2w.js",
           OPENCLAW_UPDATE_FIRST_HOP_CANDIDATE_PACKAGE_TGZ: tarball,
           OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR: path.join(root, "artifacts"),
@@ -641,7 +644,7 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));
-      expect(invocations).toHaveLength(sourceMode === "explicit" ? 1 : 3);
+      expect(invocations).toHaveLength(sourceMode === "recorded" ? 3 : 1);
       const firstFixture = JSON.parse(
         fs.readFileSync(path.join(root, "artifacts/first-hop-fixture.json"), "utf8"),
       );
@@ -661,7 +664,12 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
       const recorded = JSON.parse(
         fs.readFileSync(path.join(root, "artifacts/summary.json"), "utf8"),
       );
-      const packages = sourceMode === "recorded" ? recorded.sources : [recorded];
+      const packages =
+        sourceMode === "missing-load-path"
+          ? []
+          : sourceMode === "recorded"
+            ? recorded.sources
+            : [recorded];
       for (const artifact of packages) {
         const fixtureDirectory =
           sourceMode === "recorded"
@@ -706,8 +714,17 @@ process.stdout.write(JSON.stringify(version === "2026.9.2" ? { openclaw: packed 
         expect(args).toContain(`${registry}:/tmp/openclaw-prepublish-plugin-registry:ro`);
         expect(args).toContain(`${tarball}:/tmp/openclaw-update-first-hop-original.tgz:ro`);
         expect(args).toContain("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION=2026.8.1");
+        expect(args).toContain(
+          `OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=${
+            sourceMode === "missing-load-path" ? "missing-load-path" : "all"
+          }`,
+        );
         expect(args).toContain("bash");
         expect(args).toContain("scripts/e2e/lib/upgrade-survivor/update-first-hop-compat.sh");
+      }
+      if (sourceMode === "missing-load-path") {
+        expect(fs.existsSync(path.join(root, "artifacts/source.json"))).toBe(false);
+        expect(fs.existsSync(path.join(root, "artifacts/negative-fixture.json"))).toBe(false);
       }
       if (sourceMode === "recorded") {
         const summary = JSON.parse(

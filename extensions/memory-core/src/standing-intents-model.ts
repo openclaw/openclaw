@@ -106,59 +106,39 @@ export function encodeStandingIntentSenderScope(params: {
   ] satisfies StoredSenderScope);
 }
 
+function parseStoredScope(value: string | null, length: number): string[] | null {
+  if (value === null) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (
+      Array.isArray(parsed) &&
+      parsed.length === length &&
+      parsed[0] === "v1" &&
+      parsed.every((entry): entry is string => typeof entry === "string" && entry.length > 0)
+    ) {
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
 function parseStoredChannelScope(value: string | null): {
   scope: IntentScope;
   identity: string | null;
 } {
-  if (value === null) {
-    return { scope: "anywhere", identity: null };
+  const parsed = parseStoredScope(value, 5);
+  if (parsed && (parsed[1] === "channel" || parsed[1] === "conversation")) {
+    return { scope: parsed[1], identity: parsed[4]! };
   }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (Array.isArray(parsed) && parsed.length === 5) {
-      const [version, scope, provider, accountId, identity]: unknown[] = parsed;
-      if (
-        version === "v1" &&
-        (scope === "channel" || scope === "conversation") &&
-        typeof provider === "string" &&
-        provider.length > 0 &&
-        typeof accountId === "string" &&
-        accountId.length > 0 &&
-        typeof identity === "string" &&
-        identity.length > 0
-      ) {
-        return { scope, identity };
-      }
-    }
-  } catch {}
   // Standing-intent storage is unreleased. Untagged rows are not a compatibility
   // contract and must fail closed rather than collapsing provider/conversation scopes.
   return { scope: "anywhere", identity: null };
 }
 
 function parseStoredSenderScope(value: string | null): string | null {
-  if (value === null) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    if (!Array.isArray(parsed) || parsed.length !== 4) {
-      return null;
-    }
-    const [version, provider, accountId, senderId]: unknown[] = parsed;
-    return version === "v1" &&
-      typeof provider === "string" &&
-      provider.length > 0 &&
-      typeof accountId === "string" &&
-      accountId.length > 0 &&
-      typeof senderId === "string" &&
-      senderId.length > 0
-      ? senderId
-      : null;
-  } catch {
-    // See parseStoredChannelScope: raw sender ids are not globally safe identities.
-    return null;
-  }
+  return parseStoredScope(value, 4)?.[3] ?? null;
 }
 
 export function rowToIntent(row: StandingIntentRow): StandingIntent {

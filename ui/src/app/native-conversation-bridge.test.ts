@@ -188,7 +188,7 @@ describe("native conversation contract", () => {
     });
   });
 
-  it.each(["current", "superseded", "retired"] as const)(
+  it.each(["current", "superseded", "detached", "retired"] as const)(
     "waits for rendered session actions without opening a stale menu (%s)",
     async (owner) => {
       const f = fixture(["session-actions-v1"]);
@@ -211,9 +211,20 @@ describe("native conversation contract", () => {
       if (owner === "superseded") {
         f.data.sessionKey = "agent:main:other";
         f.changed();
+        // The pane cache retains the prior session's pane and moves only its class.
+        pane.classList.remove("chat-pane-cache__pane--active");
+      } else if (owner === "detached") {
+        pane.remove();
       } else if (owner === "retired") {
         f.bridge.dispose();
       }
+      await flush();
+      // A retired pane settles the command now, not at the response deadline.
+      expect(results()).toMatchObject(
+        owner === "superseded" || owner === "detached"
+          ? [{ requestId: "request-1", ok: false, error: "unavailable" }]
+          : [],
+      );
       const menu = document.createElement("openclaw-chat-header-session-menu");
       const dropdown = document.createElement("wa-dropdown");
       dropdown.open = false;
@@ -226,12 +237,8 @@ describe("native conversation contract", () => {
         dropdown.dispatchEvent(new Event("wa-after-show"));
         await flush();
         expect(results()).toMatchObject([{ requestId: "request-1", ok: true }]);
-      } else if (owner === "superseded") {
-        expect(results()).toMatchObject([
-          { requestId: "request-1", ok: false, error: "unavailable" },
-        ]);
       } else {
-        expect(results()).toEqual([]);
+        expect(results()).toHaveLength(owner === "retired" ? 0 : 1);
       }
     },
   );

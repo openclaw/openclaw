@@ -202,17 +202,19 @@ snapshot, including both MCP reconstruction passes. Process-held incognito
 databases retain their native owner. There is no synchronous fallback when the
 worker is busy and no retained summary cache.
 
-Legacy session-entry patches yield while waiting for a competing SQLite writer.
-Each `BEGIN IMMEDIATE` attempt uses a zero busy timeout and can retry within the
-connection's existing admission budget. Once admitted, the synchronous callback
-and commit retain the connection's original busy timeout: rollback-journal
-readers can temporarily block commit even after writer admission succeeds.
-The session writer queue retains FIFO order, the captured connection stays
-retained, and each attempt rechecks its owner. The admitted transaction revalidates
-the prepared rows and caller authority before mutation. Its callback and committed
-publications never replay. Entry reads and transaction bodies still execute on
-the calling thread; this bounded cutover removes native writer-admission waits without
-changing schemas, durability, or update behavior.
+Audited internal session-entry patches use the agent executor for snapshot reads,
+CAS validation, mutation, and COMMIT. Usage accounting, unguarded compaction
+accounting, restart cleanup, activity recaps, and the entry owner's prepared
+upsert, replacement, and route-metadata operations select this path explicitly.
+The host runs each updater once and retains live authority. Recap transcript
+predicates run inside the write transaction before CAS. Bounded provisional
+result transfers precede the final grant; a compact native receipt certifies the
+exact committed result. Publication, committed callbacks, and identity observers
+settle before the physical database FIFO is released. Unknown writes never replay.
+Incognito, maintenance, opaque plugin callbacks, and unclassified internal guards
+retain native transactions and yielding writer admission. Arbitrary async plugin
+updaters retain their existing nested-admission behavior. Schemas, durability,
+public callback contracts, and update behavior are unchanged.
 
 Channel setup awaits a fresh policy read after the agent-selection prompt.
 Deferred plugin migration rows are read by the shared-state worker, and setup
@@ -521,6 +523,19 @@ including when ordinary reply delivery fails. Local forced completion and final
 cleanup join the same pending release. Restart recovery, schemas, persisted
 fields, and update behavior are unchanged.
 
+Worker transcript replay-ledger begin, completion, and exact discard use typed
+`placementTranscript` commands in the existing shared-state registry. The
+placement mutation owner captures physical store identity before yielding,
+rechecks live host authority at transaction and commit admission, and returns
+acknowledged receipts through the existing keyed session queue. Pending records
+commit before agent transcript effects; terminal results commit before the RPC
+reply. Lost replies use native commit receipts, never write replay. Unknown
+outcomes retain pending recovery. Only the invocation holding a fresh claim may
+discard after a known rollback, using its original store and exact row identity
+even if request authority has since ended. Database close joins accepted work.
+The agent transcript writer, schema, stored bytes, retention, and update behavior
+are unchanged.
+
 Staged workspace-result pointers also commit through that placement worker. The
 same transaction checks the pending-result claim, immutable staged ref, and exact
 repository session owner, with live caller guards rechecked at admission and
@@ -690,8 +705,23 @@ current session authority; upstream observations compare the captured source in
 the committing transaction. Goal events and normalized child-run terminal outcomes
 share that recording command. Child completion joins recording and rechecks its
 current lifecycle or ACP actor authority at transaction and commit admission.
-Synchronous creation, compaction, watch, reset, and deletion callbacks remain
-separate migration work.
+Watch registration and consumed-notice acknowledgment use that same writer. Group
+turns keep an unchanged watch read-only; registration preserves explicit provenance
+and seeds only a new physical watcher store. Completion callers supply source-bound
+lineage and requester predicates: workers reread durable session facts at admission
+and after the host grant, while the host checks live caller authority without querying SQLite.
+Incognito callers use committed facts from their original in-memory store owner.
+The unchanged-watch path retains the same fresh lineage check without writing.
+Custom-store discovery prepares the
+existing system-event owner's path cache through the session read worker. Acknowledgment
+captures the consumed notices' store addresses before yielding, rechecks the host's current system-event store at transaction
+and commit admission, and publishes interleaved follow-up notices after commit. It
+advances only the frozen notification watermark. Version enrichment and bounded event
+pages use the shared-state reader, preserving composite session identity and per-session
+pruned watermarks. Accepted operations retain the existing worker's FIFO and settlement
+owner. Schemas, retention, and update behavior are unchanged.
+Synchronous creation, compaction, reset, deletion, and the public SDK's ambient prompt
+probe remain separate migration work; the restart notice sweep stays in boot admission.
 
 Durable session entry replacement reads its detached snapshot in the history
 worker and commits through the existing agent database executor. The transaction
@@ -1069,6 +1099,15 @@ worker; visibility and public-share mutations use the same prepared authority
 through their existing entry-patch owner. Participant and category writes retain
 their existing collaboration worker, and incognito retains its native owner.
 This changes no schema, permission, retention, or update contract.
+
+Session-scoped command and skill discovery uses those same current sharing facts.
+It captures the session and physical source before membership readiness yields,
+refuses dirty membership, and rechecks caller, role, session, and source authority
+after discovery. Exact row preparation carries pinned skill selections separately
+from compact sharing facts; response publication compares the current selections
+in the same synchronous consuming frame. Personal skill-library storage, exec-policy
+eligibility, and process-held incognito ownership remain with their existing owners.
+This changes no SDK, RPC schema, stored data, permission, or update contract.
 
 For writes, shared-state domain operations registered by
 `src/state/openclaw-state-worker-runtime.ts` reuse the broker and publish results

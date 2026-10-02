@@ -3,6 +3,7 @@
  * A concurrent touch or competing sweep cannot delete another generation's row.
  */
 import { randomUUID } from "node:crypto";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -56,14 +57,7 @@ export type CloseParams = SessionEntryCurrentPreparation & {
   onDebug?: (message: string) => void;
 };
 
-/**
- * The deferral a tracked tab row already reported. A stopped managed browser can
- * defer cleanup for the whole 24h retire window while the sweep ticks every few
- * minutes, so the same unreachable state must warn once per row rather than once
- * per sweep. Row identity is part of the key so a retracked or re-owned tab can
- * report again. Owned by `globalThis` because the Browser plugin can run from
- * more than one bundle instance inside the same Gateway process.
- */
+/** Deduplicate deferrals by row generation across Browser plugin bundle instances. */
 type DeferredTabDiagnostic = {
   reason: string;
   trackedAt: number;
@@ -79,12 +73,7 @@ const deferredTabDiagnosticsSymbol = Symbol.for(
 const MAX_DEFERRED_TAB_DIAGNOSTICS = 512;
 
 function deferredTabDiagnostics(): Map<string, DeferredTabDiagnostic> {
-  // SAFETY: symbol-keyed extension only adds our own process-local map; the Browser plugin can run from multiple bundle instances sharing globalThis.
-  const state = globalThis as typeof globalThis & {
-    [deferredTabDiagnosticsSymbol]?: Map<string, DeferredTabDiagnostic>;
-  };
-  state[deferredTabDiagnosticsSymbol] ??= new Map();
-  return state[deferredTabDiagnosticsSymbol];
+  return resolveGlobalMap(deferredTabDiagnosticsSymbol);
 }
 
 function sameDeferredTabRow(previous: DeferredTabDiagnostic, tab: DurableTab): boolean {
@@ -128,11 +117,7 @@ function forgetDeferredTabDiagnostic(tab: DurableTab): void {
   }
 }
 
-/**
- * Reports a tab whose cleanup could not complete yet. The first deferral of a row
- * warns; later identical deferrals stay observable at debug level so a stopped
- * browser cannot flood the warning stream for the full retire window.
- */
+/** Warn once per deferral; repeated sweeps remain visible at debug level. */
 function reportDeferredTab(params: CloseParams, tab: DurableTab, reason: string): void {
   const message = `deferred tracked browser tab ${tab.nativeTargetId}: ${reason}`;
   if (recordDeferredTabDiagnostic(tab, reason)) {
