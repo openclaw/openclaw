@@ -31,8 +31,8 @@
     ],
     "controlUi": "./browser/index.ts",
     "assetScripts": {
-      "build": "node --import ../../scripts/tsx.mjs ../../scripts/build-plugin-control-ui.mts",
-      "copy": "node --import ../../scripts/tsx.mjs ../../scripts/build-plugin-control-ui.mts --copy",
+      "build": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/workboard",
+      "copy": "cd ../.. && node --import ./scripts/tsx.mjs scripts/build-plugin-control-ui.mts extensions/workboard --copy",
       "buildOutputs": [
         "openclaw.plugin.json"
       ]

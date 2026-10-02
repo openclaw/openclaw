@@ -1,10 +1,9 @@
 import { ok } from "@openclaw/normalization-core/result";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
+import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
@@ -42,37 +41,8 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
     [agentId, ...(parsedAgent ? [parsedAgent] : [])],
     params.env,
   );
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: inventory.env });
-  const target = await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-    let registryStarted = false;
-    const assertCurrent = () => {
-      params.assertActive?.();
-      discovery.assertCurrent();
-      if (registryStarted) {
-        registry.assertCurrent();
-      }
-    };
-    let sources = await discovery.readTargetInventory({
-      ...inventory,
-      registeredDatabases: { status: "deferred" },
-    });
-    assertCurrent();
-    if (sources.kind === "session-target-registry-required") {
-      registryStarted = true;
-      const current = await registry.read();
-      assertCurrent();
-      sources = await discovery.readTargetInventory({
-        ...inventory,
-        registeredDatabases:
-          current.result.status === "available"
-            ? current.result.entries
-            : { status: "unavailable" },
-      });
-      assertCurrent();
-    }
-    if (sources.kind !== "session-target-inventory") {
-      throw new Error("Session store inventory requested registry rows twice");
-    }
+  const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...inventory, candidates });
+  const target = await inventoryRead.withRead(async (sources, assertCurrent) => {
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
     for (const source of sources.agents) {
       if (!source.result.available && source.result.reason !== "database-missing") {
@@ -125,7 +95,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
     );
     assertCurrent();
     return selected;
-  });
+  }, params.assertActive);
   params.assertActive?.();
   return target;
 }
