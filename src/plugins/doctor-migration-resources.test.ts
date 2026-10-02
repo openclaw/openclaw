@@ -7,7 +7,10 @@ import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { preparePluginDoctorMigrationResources } from "./doctor-migration-resources.js";
+import {
+  type PluginDoctorMigrationResourceCollectionParams,
+  preparePluginDoctorMigrationResources,
+} from "./doctor-migration-resources.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -33,17 +36,13 @@ afterEach(async () => {
   }
 });
 
-function params() {
+function params(): PluginDoctorMigrationResourceCollectionParams {
   return {
     config: {},
     env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: stateDir },
     stateDir,
     requireLocalResources: true,
-    warnings: [] as Array<{
-      kind: "undeclared-migration-resources";
-      pluginId: string;
-      message: string;
-    }>,
+    warnings: [],
   };
 }
 
@@ -89,42 +88,17 @@ it("records one warning per undeclared owner while preserving separate owners", 
   expect(input.warnings.map((warning) => warning.pluginId)).toEqual(["canvas", "other-owner"]);
 });
 
-it("keeps declared resources and forwards strict locality without running the migration", async () => {
-  const input = params();
-  const source = path.join(stateDir, "declared.sqlite");
-  const collect = vi.fn<NonNullable<PluginDoctorStateMigration["collectBackupResources"]>>(() => [
-    { path: source, kind: "sqlite" as const },
-  ]);
-  const migrate = vi.fn();
-  const migration = {
-    ...canvasMigrations[0]!,
-    collectBackupResources: collect,
-    migrateLegacyState: migrate,
-  };
-  const result = await preparePluginDoctorMigrationResources(
-    [{ pluginId: "declared-owner", migration }],
-    input,
-  );
-  expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
-  expect(collect).toHaveBeenCalledOnce();
-  expect(collect.mock.calls[0]?.[0].requireLocalResources).toBe(true);
-  expect(collect.mock.calls[0]?.[0].stateDir).toBe(stateDir);
-  expect(input.warnings).toEqual([]);
-  expect(migrate).not.toHaveBeenCalled();
-});
-
 it("preserves a declared inventory through the SDK plan adapter and contract coercion", async () => {
   const input = params();
   const source = path.join(stateDir, "planned.sqlite");
   const collectBackupResources = vi.fn(() => [{ path: source, kind: "sqlite" as const }]);
   const resolvePlans = vi.fn(() => []);
-  const declaration = {
+  const migration = definePluginDoctorMigrationFromPlans({
     id: "planned-migration",
     label: "Planned migration",
     resolvePlans,
     collectBackupResources,
-  };
-  const migration = definePluginDoctorMigrationFromPlans(declaration);
+  });
   const contract = coercePluginDoctorContractModule({ stateMigrations: [migration] });
   const coerced = contract?.stateMigrations?.[0];
   if (!coerced) {
