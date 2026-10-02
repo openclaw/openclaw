@@ -54,6 +54,7 @@ type Fixture = {
   probeGit?: boolean;
   protectedGh?: boolean;
   cleanupFailure?: boolean;
+  commandFailure?: { stdout: string; stderr: string };
   authorSources?: unknown;
   authorPages?: unknown[];
   coreQuotaAt?: string[];
@@ -126,6 +127,11 @@ if (args[0] === "api" && inputPath !== undefined) {
   fs.appendFileSync(path.join(root, "payloads"), JSON.stringify({path:inputPath,base64:inputBytes.toString("base64")}) + "\\n");
 }
 if (args.includes("rate_limit") && fs.readFileSync(0).length) throw new Error("Payload leaked to quota probe");
+if (fixture.commandFailure) {
+  process.stdout.write(fixture.commandFailure.stdout);
+  process.stderr.write(fixture.commandFailure.stderr);
+  process.exit(7);
+}
 const out = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 const defaultHost = process.env.GH_HOST || fixture.configuredHost || "github.com";
 const qualifyRepository = (repository) => {
@@ -339,6 +345,37 @@ if (endpoint === "user") {
 }
 
 describe("PR metadata through REST", () => {
+  it.each([
+    { stream: "stdout", stdout: "  provider response\r\n\n", stderr: "" },
+    { stream: "stderr", stdout: "", stderr: " \tprovider diagnostic\r\n\n" },
+    { stream: "both", stdout: " provider response\r\n", stderr: " \tdiagnostic\n\n" },
+  ])("preserves failed CLI $stream bytes without a local diagnostic", ({ stdout, stderr }) => {
+    const result = readPrMetadata(
+      { commandFailure: { stdout, stderr } },
+      "pr_gh_plain api repos/base-owner/base-repo",
+    );
+    expect(result.status).toBe(7);
+    expect(result.stdout).toBe(stdout);
+    expect(result.stderr).toBe(stderr);
+  });
+
+  it("reports a child failure when neither output stream contains bytes", () => {
+    const result = readPrMetadata(
+      { commandFailure: { stdout: "", stderr: "" } },
+      "pr_gh_plain api repos/base-owner/base-repo",
+    );
+    expect(result.status).toBe(7);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Command failed:");
+  });
+
+  it("reports a local CLI failure without captured child output", () => {
+    const result = readPrMetadata({}, "pr_gh_plain pr view 42");
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("GitHub metadata reads require explicit JSON fields.\n");
+  });
+
   it.each(["inherited", "buffer", "string", "empty", "ignored"] as const)(
     "preserves %s API payload bytes in a private file and removes it after dispatch",
     (source) => {

@@ -1015,14 +1015,18 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
       process.stdout.write('{"graphqlQuotaExhausted":true}\n');
     } else {
       // Quota errors contain only bounded numeric metadata, never raw response text.
-      if (error.code !== "OPENCLAW_GH_ACCESS" && error.stdout) {
-        process.stdout.write(error.stdout);
+      if (error.code === "OPENCLAW_GH_ACCESS") {
+        console.error(error.message);
+      } else if (error.stdout?.length || error.stderr?.length) {
+        if (error.stdout?.length) {
+          process.stdout.write(error.stdout);
+        }
+        if (error.stderr?.length) {
+          process.stderr.write(error.stderr);
+        }
+      } else {
+        console.error(error.message);
       }
-      console.error(
-        error.code === "OPENCLAW_GH_ACCESS"
-          ? error.message
-          : String(error.stderr || error.message).trim(),
-      );
       process.exitCode = Number.isInteger(error.status) && error.status > 0 ? error.status : 1;
     }
   }
