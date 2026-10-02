@@ -174,6 +174,7 @@ export type PendingSessionEntryPublication = {
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
   settled: boolean;
+  completion: Promise<void>;
 };
 
 export function readSessionEntryCreationIdentity(creation: CreationRecord): DatabaseSync | string {

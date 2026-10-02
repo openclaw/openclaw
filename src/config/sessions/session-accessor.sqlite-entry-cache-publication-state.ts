@@ -84,6 +84,16 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
           (membership && publication.membershipInvalidated.has(params.sessionKey))),
     );
   return {
+    prepareRead: (): Promise<void> | undefined => {
+      // Publication begins only after writer admission; queued writers cannot block their owner.
+      const completions = [...(pendingSessionEntryPublications.get(key) ?? [])].flatMap(
+        (publication) =>
+          !publication.settled && !publication.superseded.has(params.sessionKey)
+            ? [publication.completion]
+            : [],
+      );
+      return completions.length > 0 ? Promise.all(completions).then(() => {}) : undefined;
+    },
     initialize: (snapshot: CommittedSessionSharingFacts) => {
       const acquisition = read.acquisition;
       if (!active || !acquisition) {
@@ -120,7 +130,11 @@ export function retainPreparedSessionGenerationFacts(params: {
     membership: new Set(),
     generation: { current: params.entry ?? null, initiallyAbsent: params.entry ? undefined : true },
   });
-  return { readCurrent: retained.readGeneration, release: retained.release };
+  return {
+    readCurrent: retained.readGeneration,
+    prepareRead: retained.prepareRead,
+    release: retained.release,
+  };
 }
 
 export function retainedSharingReads(

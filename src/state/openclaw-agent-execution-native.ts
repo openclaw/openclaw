@@ -20,6 +20,7 @@ import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import {
   closeUnclaimedSharedStateSqliteWorkers,
   isSqliteWorkerStoreAvailable,
@@ -48,7 +49,9 @@ import { publishOpenClawStateDatabaseWorkerAdmission } from "./openclaw-state-db
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 type Store = SqliteWorkerStore<AgentDatabaseOperations>;
-type Registration = ReturnType<typeof captureOpenClawAgentDatabaseRegistration>;
+type Registration = ReturnType<typeof captureOpenClawAgentDatabaseRegistration> & {
+  nativeSettlement?: Promise<SqliteWorkerOperationSettlement>;
+};
 
 async function settleAgentRegistration<T>(
   registration: Registration,
@@ -61,7 +64,8 @@ async function settleAgentRegistration<T>(
     result = { ok: false, error };
   }
   try {
-    registration.finish();
+    // Native exit and queued receipts settle before registration publication.
+    registration.finish(await registration.nativeSettlement);
   } catch (error) {
     if (!result.ok) {
       throw createSqliteLifecycleAggregateError(
@@ -142,6 +146,9 @@ export function createAgentDatabaseNativeGeneration(
       assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     ): SqliteWorkerAdmissionFactory =>
     (operation) => {
+      if (registration) {
+        registration.nativeSettlement = operation.settled;
+      }
       const assertPreparationJournal = captureAgentDatabasePreparationJournal(agentId, {
         env: context.environment,
       });
@@ -164,9 +171,7 @@ export function createAgentDatabaseNativeGeneration(
           );
         }
       };
-      const authorizeNative = (
-        request: SqliteWorkerAdmissionRequest,
-      ): AgentDatabaseFileExecutionIdentity | undefined => {
+      const observeNative = (request: SqliteWorkerAdmissionRequest): void => {
         const facts = request.facts;
         if (
           request.stage === "prepare" &&
@@ -192,6 +197,17 @@ export function createAgentDatabaseNativeGeneration(
             stateDatabasePath: lease.sharedStatePath,
             stateDatabaseIdentity: lease.sharedStateIdentity,
           });
+        }
+      };
+      const authorizeNative = (
+        request: SqliteWorkerAdmissionRequest,
+      ): AgentDatabaseFileExecutionIdentity | undefined => {
+        const facts = request.facts;
+        if (
+          request.stage === "prepare" &&
+          isRecord(facts) &&
+          facts.kind === "agent-registration-committed"
+        ) {
           return undefined;
         }
         assertCurrent();
@@ -327,7 +343,7 @@ export function createAgentDatabaseNativeGeneration(
         }
         return undefined;
       };
-      return source.createAdmission({
+      const captured = source.createAdmission({
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
@@ -360,6 +376,8 @@ export function createAgentDatabaseNativeGeneration(
           assertSourceCurrent(identity);
         },
       })(operation);
+      captured.admission.observeRequests(observeNative);
+      return captured;
     };
   const open = (
     source: AgentDatabaseRequestExecutionSource,
@@ -376,6 +394,7 @@ export function createAgentDatabaseNativeGeneration(
             agentId,
             agentPath: pathname,
             admission: context.admission,
+            assertPublicationCurrent: context.assertPublicationCurrent,
             onRegistryChange: source.onRegistryChange,
           })
         : undefined;
@@ -387,7 +406,7 @@ export function createAgentDatabaseNativeGeneration(
           signal?.throwIfAborted();
         };
         const createAdmission = admission(source, registration, assertCallerCurrent);
-        return await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
+        const store = await openAgentDatabaseSqliteWorkerStore<AgentDatabaseOperations>(
           {
             moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.agentDatabaseExecution),
             databasePath: pathname,
@@ -406,6 +425,9 @@ export function createAgentDatabaseNativeGeneration(
             },
           },
         );
+        // Keep the native owner reachable if registration publication fails after open.
+        openedStore = store;
+        return store;
       };
       const store = registration
         ? await settleAgentRegistration(registration, openStore)
@@ -413,7 +435,6 @@ export function createAgentDatabaseNativeGeneration(
       if (!store) {
         return undefined;
       }
-      openedStore = store;
       try {
         assertCurrent();
         return store;
@@ -465,6 +486,7 @@ export function createAgentDatabaseNativeGeneration(
         agentId,
         agentPath: pathname,
         admission: context.admission,
+        assertPublicationCurrent: context.assertPublicationCurrent,
         onRegistryChange: source.onRegistryChange,
       });
       await settleAgentRegistration(registration, async () => {

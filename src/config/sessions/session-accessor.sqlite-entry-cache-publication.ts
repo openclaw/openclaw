@@ -5,6 +5,7 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -477,6 +478,7 @@ export function retainSessionEntryWorkerPublication(params: {
   databaseIdentity: string;
 }) {
   const creation = preparedSharingChanges.current.getStore();
+  const completion = createDeferredCore();
   const owner: PendingSessionEntryPublication = {
     superseded: new Map(),
     metadataSuperseded: new Set(),
@@ -484,6 +486,7 @@ export function retainSessionEntryWorkerPublication(params: {
     membershipInvalidated: new Set(),
     sharingUnchanged: new Set(),
     settled: false,
+    completion: completion.promise,
   };
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
@@ -689,6 +692,7 @@ export function retainSessionEntryWorkerPublication(params: {
           }
         }
         pending = false;
+        completion.resolve();
       }
     },
   };
