@@ -21,7 +21,7 @@ import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 type PromptParams = Parameters<typeof buildAgentSystemPrompt>[0];
 const SKILLS =
-  "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
+  "<available_skills>\n  <skill>\n    <name>demo</name>\n    <location>/skills/demo/SKILL.md</location>\n  </skill>\n</available_skills>";
 
 function renderPrompt(params: Partial<PromptParams> = {}) {
   return buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", ...params });

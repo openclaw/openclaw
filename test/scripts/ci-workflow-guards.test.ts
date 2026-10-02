@@ -1676,7 +1676,16 @@ AFTER_CD
       [{ eventName: "push", runnerBackend: "github" }, 2],
       [{ eventName: "push", runnerBackend: "blacksmith", runAttempt: 2 }, 2],
       [{ eventName: "workflow_dispatch", runnerBackend: "blacksmith" }, 2],
-      [{ eventName: "pull_request", headRepository: "contributor/openclaw" }, 2],
+      [{ eventName: "pull_request", headRepository: "contributor/openclaw" }, 4],
+      [{ eventName: "schedule", runnerBackend: "blacksmith" }, 2],
+      [
+        {
+          eventName: "workflow_dispatch",
+          runnerBackend: "hybrid",
+          preflightOutputs: { ci_qualification: "true", qualification_runner_backend: "hybrid" },
+        },
+        2,
+      ],
       [{ eventName: "push", repository: "contributor/openclaw" }, 2],
     ] as const) {
       expect(
@@ -1687,6 +1696,28 @@ AFTER_CD
         }),
         JSON.stringify(context),
       ).toBe(expected);
+    }
+    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github"] as const) {
+      for (const runAttempt of [1, 2]) {
+        const context = {
+          eventName: "pull_request" as const,
+          repository: "openclaw/openclaw",
+          headRepository: "contributor/openclaw",
+          authorAssociation: "FIRST_TIME_CONTRIBUTOR",
+          runnerBackend,
+          runAttempt,
+        };
+        const runner = evaluateWorkflowExpression(workflow.jobs.android["runs-on"], context);
+        const parallel = evaluateWorkflowExpression(
+          workflow.jobs.android.strategy["max-parallel"],
+          context,
+        );
+        const hosted = runnerBackend === "github" || runAttempt > 1;
+        expect(runner, JSON.stringify(context)).toBe(
+          hosted ? "ubuntu-24.04" : "blacksmith-8vcpu-ubuntu-2404",
+        );
+        expect(parallel, JSON.stringify(context)).toBe(hosted ? 2 : 4);
+      }
     }
   });
 

@@ -16,6 +16,14 @@ paths are migration debt, not a pattern to extend. The
 [migration inventory](/reference/database-schemas/worker-access-inventory) separates
 candidate main-thread paths from SQL already executing in workers.
 
+Runtime cache-TTL, bootstrap, prompt-error, and provider replay markers append
+through the existing transcript writer worker. Custom-message appends use the
+same worker and adopt their committed view before notifying observers. Bootstrap
+continuation checks, memory accounting, and delivery-mirror tail selection use
+the existing read worker, with the original snapshot, reset, and read-fence rules.
+Shipped synchronous SDK callbacks and process-held incognito storage retain
+their current owners; durable worker failures never fall back to host SQLite.
+
 Explicit restart-tombstone recovery clones the transcript and changes both session
 identities atomically in the agent writer worker. Source preparation uses worker
 reads, while the Gateway retains current caller authority and invalidates prepared
@@ -24,6 +32,61 @@ guards; accepted writes retain settlement and committed identity publication.
 These cutovers change no schema, stored bytes, retention, or update behavior.
 
 ## Keep one store owner
+
+### Incognito worker ownership (P1, inactive)
+
+The accepted incognito migration extends the canonical agent execution owner
+with an explicit ephemeral target. P1 supplies isolated actor creation,
+existing-only lookup, memory diagnostics, and close. Production incognito stays
+with its current host owner until P7; there is no flag selecting competing
+writers, no session-domain routing change, and no reduction in main-thread
+database access yet.
+
+Each agent and state-root namespace has one pinned actor on a dedicated broker
+worker. Concurrent creation joins the same opening owner. If the initiating
+caller is cancelled or loses authority during opening, a remaining current
+creator can retry after the failed opening and native cleanup settle, provided
+the captured agent and state-root facts remain current. Existing-only lookups
+see published actors; missing or still-opening targets create nothing.
+Process-private opaque handles and incarnations bind work to
+that exact actor; they are locators, never permission. Reads and future writes
+share the existing agent writer queue, and caller authority is checked after
+waits and before disclosure. Explicit close seals admission, joins accepted work
+and native cleanup, then releases the namespace. Failed cleanup keeps custody.
+Idle borrows never evict an incognito database.
+
+Maintainer decisions accepted for this staged migration:
+
+- Worker loss ends that agent's incognito sessions. Old handles return the typed
+  `INCOGNITO_SESSION_ENDED` error; new sessions may create a new incarnation after
+  cleanup. There is no recovery copy or replay into an empty replacement.
+- Connections use `:memory:` and `temp_store=MEMORY`, with no durable database
+  registration, lease, WAL, archive, snapshot, or backing file. The reserved
+  sentinel remains a namespace and existing files there are refused. OS swap and
+  crash dumps remain outside the application's memory-store guarantee.
+- There is no new content cap or eviction policy. The per-agent diagnostics
+  gauge reports `page_count * page_size`; it excludes SQLite allocator overhead,
+  decoded results, process RSS, and transport buffers. Pinned actors share the
+  broker's finite worker capacity with durable actors; capacity exhaustion
+  visibly refuses creation without evicting a live store.
+- Shared ACP metadata keeps its existing persistence and retention.
+- The separate SDK migration adds an awaited `*Async` twin for every
+  `SessionManager` persistence method, returning the committed result, and
+  migrates all bundled/internal callers. Synchronous methods receive `@deprecated`
+  JSDoc naming the async twin, an SDK compatibility record with removal at the
+  next Plugin SDK major, a docs migration note, and a once-per-method runtime
+  warning. After P7 activation, synchronous persistence targeting an incognito
+  session throws an actionable error naming the async replacement. Durable
+  targets keep working until the removal major.
+
+P2 adds session facts, creation, and authority; P3 adds side-data adapters;
+P4 migrates transcript mutation and lifecycle; P5 adds history and compute
+routing; P6 completes ACP and the shared-owner audit. P7 switches all reachable
+callers together and deletes the host incognito routes. The existing 24-hour,
+nonrenewing session deadline and restart loss remain unchanged. P1 has no update
+behavior, schema change, migration, or operator action because it is inactive.
+
+### Existing worker flows
 
 Shared-state transaction diagnostics inherit the executing worker command name
 when the store does not supply a more specific operation label. Slow holds and

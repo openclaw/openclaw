@@ -32,6 +32,10 @@ import type {
   AgentDatabaseRequestExecutionSource,
 } from "./openclaw-agent-execution-contract.js";
 import {
+  createAgentDatabaseExecutionCapture,
+  type IncognitoAgentExecutionOwner,
+} from "./openclaw-agent-execution-incognito.js";
+import {
   createAgentDatabaseNativeGeneration,
   type AgentDatabaseExecutionScope,
   type AgentDatabaseNativeGeneration,
@@ -75,6 +79,7 @@ export type OpenClawAgentDatabaseExecution = {
 };
 
 type ExecutionOwner = {
+  readonly kind: "file";
   readonly agentId: string;
   readonly sharedDatabaseKey: string;
   borrow(
@@ -90,12 +95,18 @@ type ExecutionOwner = {
 const log = createSubsystemLogger("state/agent-db");
 // References are derived; the canonical agent and shared resource owners govern retirement.
 const executionState = resolveGlobalSingleton<{
-  owners: Map<string, ExecutionOwner>;
+  owners: Map<string, ExecutionOwner | IncognitoAgentExecutionOwner>;
   // The slot stays occupied during eviction and after failed cleanup.
   idle?: ExecutionOwner;
 }>(Symbol.for("openclaw.agentDatabaseExecutionOwners"), () => ({ owners: new Map() }));
 const executions = executionState.owners;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
+
+/** File captures stay synchronous; explicit ephemeral targets await their pinned actor. */
+export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutionCapture(
+  executions,
+  captureFileAgentDatabaseExecution,
+);
 
 function supportsAgentDatabaseExecutionScope(options: OpenClawAgentDatabaseOptions): boolean {
   return (
@@ -116,7 +127,7 @@ export function supportsOpenClawAgentDatabaseExecution(
 }
 
 /** Borrow before callers yield; native opening stays lazy and release joins owned work. */
-export function captureOpenClawAgentDatabaseExecution(
+function captureFileAgentDatabaseExecution(
   options: OpenClawAgentDatabaseOptions,
   constraints: {
     expectedIdentity?: AgentDatabaseExecutionFileIdentity;
@@ -165,6 +176,9 @@ export function captureOpenClawAgentDatabaseExecution(
         requestedPath: constraints.requestedPath,
       });
     }
+  }
+  if (existing.kind !== "file") {
+    throw new Error("Agent namespace belongs to an incognito execution owner");
   }
   if (existing.agentId !== agentId) {
     throw new Error(
@@ -433,6 +447,7 @@ function createAgentDatabaseExecution(
     }
   }
   const owner: ExecutionOwner = {
+    kind: "file",
     agentId,
     get sharedDatabaseKey() {
       return context.admission.identity.key;

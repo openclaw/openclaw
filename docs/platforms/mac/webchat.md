@@ -78,14 +78,20 @@ when message indexing is still in progress or archived transcripts are excluded.
 Choose **Retry** after a list or search failure. Loaded rows stay visible while
 the same Gateway reconnects.
 
+Hover over a thread or focus its row with the keyboard to see a detail card.
+When available, it shows the session's age, people, channel, workspace, pull
+request status, progress, and last-message preview or agent notepad. Move into
+the card to follow its links; press Escape to close it and return to the row.
+These cards are available in the full native macOS sidebar.
+
 The sidebar and New Thread picker show the agent roster immediately, using
 configured names or agent IDs. Resolved identities update each agent as they
 arrive, including the toolbar subtitle and composer, without delaying selection.
 Configured names keep precedence; the Gateway's default identity is **Assistant**.
 Text and emoji avatars refresh with the same catalog after reconnects or identity
 changes. Badges show at most two complete characters, preserving emoji sequences.
-Image avatars are not shown in the full native window; a text avatar or name
-initial appears instead.
+Agent rows show a text avatar or name initial. Session detail cards can show
+authenticated images for agents and participants.
 
 File attachments keep their original filename, MIME type, and bytes through the durable outbox. Admission uses the Gateway’s advertised image and file size limits. The file limit also caps the combined bytes of all attachments in one message, with images counted after resizing. Files that exceed the remaining budget stay out of the draft; send admission rechecks the total and keeps an oversized draft intact. For older Gateways that do not advertise limits, native chat caps non-image files and the combined attachment budget at 19,464,192 bytes (the decoded budget for a 25 MiB frame), and processed images at 5 MB after resizing. Image source reads have a separate 64 MiB cap to bound resize-input memory; a larger source photo within that cap can be sent when its resized JPEG fits the image and batch budgets. Empty or unreadable files show **Could not attach**; oversized files show **Too large to send**, with the affected filenames. Recorded voice notes keep their separate recording flow. Sent uploads remain visible after history refresh; downloading inbound uploads from native history is not supported yet. Assistant-generated managed files retain their **Download file** action.
 
@@ -124,9 +130,18 @@ and tool activity do not gain timestamp footers.
 ## Thread view options
 
 Open **View options** at the right of the native sidebar's **Threads** heading.
+The **Filters** panel stays open as you change options. Choose **Active**,
+**Archived**, or **All** threads. When multiple sharing identities are available,
+expand **Owners** to search owners, select yourself, or choose **Involving me**.
+The button counts active owner and status filters; **Reset** restores the defaults.
+
+**Group by** offers **Category**, **Project**, **Person**, and **None**; **Person**
+appears when the Gateway supports multiple owners. **Hide empty groups** can hide
+empty destinations **When filtering** by owner, **Always**, or **Never**.
 **Sort → Created** is the default, with newest threads first; threads without a
 creation date follow dated threads. Choose **Last updated** to sort by recent
-activity instead. Pinned threads keep their pin order.
+activity instead, or **People** to sort by owner when available. Pinned threads
+keep their pin order. These choices are saved locally for the app profile.
 
 Rows place unread, running, queued, and attention indicators before the title.
 Linked channel names stay visible when previews are off.

@@ -2814,7 +2814,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/sessions-reset-subagent-cleanup.test.ts",
   "src/gateway/server-methods/sessions-rewind.storage.test.ts",
   "src/gateway/server-methods/sessions-rewind.test.ts",
-  "src/gateway/server-methods/sessions-row-projection.benchmark.test.ts",
   "src/gateway/server-methods/sessions-row-projection.sqlite.test.ts",
   "src/gateway/server-methods/sessions-search-scope.test.ts",
   "src/gateway/server-methods/sessions-search.test.ts",

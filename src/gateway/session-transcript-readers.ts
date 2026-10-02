@@ -1,11 +1,11 @@
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import {
   isSessionTranscriptProjectionUnavailableError,
-  readSessionTranscriptBoundedMessageTailPageFromProjection,
-  type SessionTranscriptBoundedMessageTailOptions,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { withCurrentProjectionSnapshot } from "../config/sessions/session-accessor.sqlite-active-projection.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.sqlite-contract.js";
+import type { SessionTranscriptBoundedMessageTailOptions } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import {
   prepareSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -85,17 +85,28 @@ function createHistoryPageReader<Options, Result>(
     read: typeof import("../config/sessions/session-history-worker-runtime.js").readSessionHistoryPageInWorker,
     target: SessionTranscriptReadScope,
     options: Options,
+    signal?: AbortSignal,
   ) => Promise<Result>,
 ) {
-  return async (scope: SessionTranscriptReadScope, inputOptions: Options): Promise<Result> => {
+  return async (
+    scope: SessionTranscriptReadScope,
+    inputOptions: Options,
+    signal?: AbortSignal,
+  ): Promise<Result> => {
+    signal?.throwIfAborted();
     const target = captureHistoryReadScope(scope);
     const options = structuredClone(inputOptions);
     if (usesProcessHeldTranscript(target)) {
-      return readLocal(target, options);
+      const result = await readLocal(target, options);
+      signal?.throwIfAborted();
+      return result;
     }
     const { readSessionHistoryPageInWorker } =
       await import("../config/sessions/session-history-worker-runtime.js");
-    return readWorker(readSessionHistoryPageInWorker, target, options);
+    signal?.throwIfAborted();
+    const result = await readWorker(readSessionHistoryPageInWorker, target, options, signal);
+    signal?.throwIfAborted();
+    return result;
   };
 }
 
@@ -109,7 +120,8 @@ export const readSessionTranscriptAccountingAsync = createHistoryPageReader(
     withCurrentProjectionSnapshot(target, (projection) =>
       readSessionTranscriptAccountingFromProjection(projection, options),
     ),
-  (read, target, options) => read({ kind: "active-accounting", params: { target, options } }),
+  (read, target, options, signal) =>
+    read({ kind: "active-accounting", params: { target, options } }, signal),
 );
 
 export const readSessionTranscriptBoundedMessageTailPageAsync = createHistoryPageReader(

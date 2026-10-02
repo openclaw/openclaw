@@ -55,7 +55,7 @@ describe("embedded attempt phase lifecycle state", () => {
     const messages: never[] = [];
     const removeTrailingEntries = vi.fn(() => 0);
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
       removeTrailingEntries,
@@ -132,7 +132,7 @@ describe("embedded attempt phase lifecycle state", () => {
     hoisted.waitForCompletionRequiredAsyncTasks.mockRejectedValueOnce(abortError);
     const messages: never[] = [];
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
       removeTrailingEntries: vi.fn(() => 0),
@@ -224,7 +224,7 @@ describe("embedded attempt phase lifecycle state", () => {
       sessionId: "session-1",
     };
     const sessionManager = Object.assign(SessionManager.inMemory(), {
-      appendCustomEntry: vi.fn(),
+      appendCustomEntryAsync: vi.fn(),
       buildSessionContext: () => ({ messages }),
       getEntries: () => [],
       removeTrailingEntries: vi.fn(() => 0),

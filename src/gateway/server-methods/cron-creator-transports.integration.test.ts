@@ -78,7 +78,8 @@ describe("original caller through Cron creator transports", () => {
             delivery: { mode: "none" },
           },
         });
-        expect(await fixture.read()).toMatchObject([
+        const jobs = await fixture.read();
+        expect(jobs).toMatchObject([
           {
             createdActor: CREATOR,
             owner: { agentId: "main", sessionKey: SESSION, accountId: "default" },
@@ -90,6 +91,7 @@ describe("original caller through Cron creator transports", () => {
             payload: { toolsAllow: ["*"], timeoutSeconds: 0 },
           },
         ]);
+        expect(jobs[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
       } finally {
         clearGatewayContextResolver(admitted);
       }
@@ -226,6 +228,7 @@ describe("original caller through Cron creator transports", () => {
               },
             },
           ]);
+          expect(before[0]?.payload).not.toHaveProperty("toolsAllowIsDefault");
           expect(before[0]?.runtimeAuthority).toBeUndefined();
           hold = true;
           pending = invoke("Revoked creator");

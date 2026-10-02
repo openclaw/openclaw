@@ -199,8 +199,8 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, and other side services are suppressed in this canary.
 The copied databases undergo the same schema checks and migrations without
 reviving the removed Tasks registry.
-The canary also defers session catalog hydration, worker recovery, and startup
-maintenance until activation, recording a warning. Required configuration,
+The canary also defers session catalog hydration, subagent and worker recovery,
+and startup maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
 plugin runtime loading remains part of validation. The serving Gateway prepares
 its session catalogs and maintenance normally after activation.

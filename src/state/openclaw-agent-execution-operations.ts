@@ -227,6 +227,10 @@ export async function loadAgentPendingInputOperations() {
 export async function loadAgentArchivePruningOperations() {
   const kernel = await import("../config/sessions/session-history-archive-pruning.worker.js");
   return {
+    "session.archivePruning.pruneRetention": (
+      input: Parameters<typeof kernel.pruneSessionArchivesByRetentionInDatabase>[2],
+      { open, options, admit },
+    ) => kernel.pruneSessionArchivesByRetentionInDatabase(open(), options, input, admit),
     "session.archivePruning.deletePublished": (
       input: Parameters<typeof kernel.deletePublishedSessionArchiveInDatabase>[2],
       { open, options, admit },
@@ -237,6 +241,34 @@ export async function loadAgentArchivePruningOperations() {
     ) => kernel.removeLegacySessionArchiveInDatabase(open(), options, input.filePath, admit),
     "session.archivePruning.reclaimPages": (input: { maxPages?: number }, { open, admit }) =>
       kernel.reclaimSessionArchivePagesInWorker(open(), input.maxPages, admit),
+  } satisfies Handlers;
+}
+
+export async function loadConversationDeliveryOperations() {
+  const kernel = await import("../config/sessions/conversation-delivery-store.kernel.js");
+  return {
+    "conversation.delivery.begin": (
+      input: Parameters<typeof kernel.beginConversationDeliveryInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("conversation-delivery.begin", "Conversation delivery", (database) => {
+        const result = kernel.beginConversationDeliveryInDatabase(database, input);
+        admit("commit");
+        return result;
+      }),
+    "conversation.delivery.transition": (
+      input: Parameters<typeof kernel.transitionConversationDeliveryInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction(
+        `conversation-delivery.${input.status}`,
+        "Conversation delivery",
+        (database) => {
+          const result = kernel.transitionConversationDeliveryInDatabase(database, input);
+          admit("commit");
+          return result;
+        },
+      ),
   } satisfies Handlers;
 }
 
@@ -251,5 +283,6 @@ export type RegisteredAgentWorkerOperations = WorkerOperations<
     Awaited<ReturnType<typeof loadAgentProviderReviewOperations>> &
     Awaited<ReturnType<typeof loadAgentReactionOperations>> &
     Awaited<ReturnType<typeof loadAgentPendingInputOperations>> &
-    Awaited<ReturnType<typeof loadAgentArchivePruningOperations>>
+    Awaited<ReturnType<typeof loadAgentArchivePruningOperations>> &
+    Awaited<ReturnType<typeof loadConversationDeliveryOperations>>
 >;

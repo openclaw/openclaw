@@ -43,6 +43,7 @@ import {
 import { readActiveTranscriptStats } from "../../config/sessions/session-accessor.sqlite-history.test-support.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import * as transcriptAccounting from "../../config/sessions/session-transcript-accounting.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import {
@@ -61,6 +62,7 @@ import {
 } from "./agent-runner-memory.js";
 import {
   createMemoryRunEntryMockImplementation,
+  seedMemoryAccountingTranscript,
   type CompactEmbeddedAgentSessionParams,
   type EmbeddedAgentParams,
   type ModelFallbackParams,
@@ -614,47 +616,15 @@ describe("runMemoryFlushIfNeeded", () => {
     async ({ customTail, newUser, tainted, senderIsOwner = true }) => {
       const scope = sessionScope("agent:main:main", "tainted-owner-session.json");
       const { sessionKey, storePath } = scope;
-      await upsertSessionEntryCore(scope, { sessionId: "session", updatedAt: 10 });
-      const transcript = SessionManager.open(scope, rootDir);
-      const user = {
-        role: "user" as const,
-        content: "Research this",
-        timestamp: 1,
-        __openclaw: { senderIsOwner: true },
-      };
-      transcript.appendMessage(user);
-      const networkResult = {
-        role: "toolResult" as const,
-        toolCallId: "network-read",
-        toolName: "read",
-        isError: false,
-        content: [{ type: "text" as const, text: "untrusted page" }],
-        timestamp: 2,
-        __openclaw: { resultContentSource: "network" as const },
-      };
-      transcript.appendMessage(networkResult);
-      const answer = {
-        ...makeAssistantMessageFixture({
-          content: [{ type: "text", text: "network-derived answer" }],
-          stopReason: "stop",
-          errorMessage: undefined,
-        }),
-        usage: {
-          ...makeAssistantMessageFixture().usage,
-          input: 78_000,
-          output: 100,
-          totalTokens: 78_100,
-        },
-      };
-      transcript.appendMessage(answer);
-      if (newUser) {
-        transcript.appendMessage({ ...user, content: "Save my own notes", timestamp: 3 });
-      }
-      // The bounded case loses the original turn marker across this tail.
-      for (let index = 0; index < customTail; index += 1) {
-        transcript.appendCustomEntry("fixture-tail", { index });
-      }
+      await seedMemoryAccountingTranscript(scope, rootDir, { customTail, newUser });
       const sessionEntry = createFlushSessionEntry({ totalTokensFresh: customTail > 0 });
+      const hostAccounting = vi.spyOn(
+        transcriptAccounting,
+        "readSessionTranscriptAccountingFromProjection",
+      );
+      onTestFinished(() => {
+        hostAccounting.mockRestore();
+      });
 
       await runDefaultMemoryFlush(sessionEntry, {
         followupRun: createTestFollowupRun({
@@ -670,6 +640,7 @@ describe("runMemoryFlushIfNeeded", () => {
       expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
         expect.objectContaining({ initialTurnTainted: tainted }),
       );
+      expect(hostAccounting).not.toHaveBeenCalled();
       if (customTail === 0) {
         expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeGreaterThanOrEqual(
           78_000,

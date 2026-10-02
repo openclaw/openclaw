@@ -190,12 +190,18 @@ afterEach(() => {
 });
 
 describe("buildWorkspaceSkillCommandSpecs", () => {
-  it("moves a colliding dashboard skill to the documented generated alias", async () => {
+  it.each([
+    ["dashboard", "dashboard_2"],
+    ["export-session", "export_session_2"],
+    ["export_session", "export_session_2"],
+    ["export-trajectory", "export_trajectory_2"],
+    ["export_trajectory", "export_trajectory_2"],
+  ])("moves a colliding %s skill to the generated alias %s", async (skillName, commandName) => {
     const workspaceDir = await makeWorkspace();
     await writeSkill({
-      dir: path.join(workspaceDir, "skills", "dashboard"),
-      name: "dashboard",
-      description: "Custom dashboard skill",
+      dir: path.join(workspaceDir, "skills", skillName),
+      name: skillName,
+      description: "Custom command skill",
     });
 
     const [command] = withWorkspaceHome(workspaceDir, () =>
@@ -205,7 +211,24 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
       }),
     );
 
-    expect(command).toMatchObject({ name: "dashboard_2", skillName: "dashboard" });
+    expect(command).toMatchObject({ name: commandName, skillName });
+  });
+
+  it("preserves reserved generated names ending in a truncated underscore", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillName = `${"a".repeat(31)}-more`;
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "long-name"),
+      name: skillName,
+      description: "Long command skill",
+    });
+    const [command] = withWorkspaceHome(workspaceDir, () =>
+      buildWorkspaceSkillCommandSpecs(workspaceDir, {
+        ...resolveTestSkillDirs(workspaceDir),
+        reservedNames: new Set([`${"a".repeat(31)}_`]),
+      }),
+    );
+    expect(command).toMatchObject({ name: `${"a".repeat(30)}_2`, skillName });
   });
 
   it("sanitizes and de-duplicates command names", async () => {

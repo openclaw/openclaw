@@ -45,6 +45,10 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   named memory-heavy command; see `docs/reference/test/remote-proof.md`.
   That workflow has at most four concurrent leases inside the shared 32-slot
   Testbox pool. All Testbox profiles cap idle time at 15 minutes.
+- Allocate through the current OpenClaw wrapper with workflow ref `main`;
+  the source capsule preserves the checkout being tested. Do not dispatch an
+  old workflow ref to bypass spending limits. Queue age is checked before
+  checkout; an admitted lease keeps its job and idle deadlines.
 - Do not promote an entire workflow family because one command needs more RAM.
   Keep proven high-memory CI rows scoped to their owning planner and evidence;
   remeasure before changing their allocation. A 32-class label is not proof of
@@ -341,7 +345,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
-  PR first attempts, including forks, on a non-frozen Blacksmith or hybrid Node plan, and otherwise 96; Windows stays at 5 and Android at 2.
+  PR first attempts, including forks, on a non-frozen Blacksmith or hybrid Node plan, and otherwise 96; Windows stays at 5 and Android at 4 for canonical Blacksmith push/PR first attempts, including forks, otherwise 2.
   Hosted plans, RunsOn, retries, main, and all manual/qualification dispatches
   retain 96. This removes a second admission wave for 97–130-row PRs without
   adding jobs or planned vCPU-minutes. Keep the 130/70 final PR/main row caps and 90 native/96 hosted compact
@@ -392,7 +396,9 @@ These are intentionally guarded by the `ci-workflow-guards`,
   in the Kotlin-lint row when benchmark/build/dependency inputs change or the
   changed-path manifest is unusable. Full manual validation retains all six
   rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
-  The cap stays at two; frozen task contracts and npm native deferral are unchanged.
+  Canonical Blacksmith push/PR first attempts, including forks, overlap four rows.
+  The GitHub override, retries, manual dispatches, schedules, and noncanonical
+  repositories retain two; frozen task contracts and npm native deferral are unchanged.
 - iOS regular PR/main and PR `release_gate` CI runs one required Debug build
   and Swift lint smoke. Ordinary full-scope manual validation retains Release
   and Debug/native-test phases, both screenshot shards, and the evidence reducer.

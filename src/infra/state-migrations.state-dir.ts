@@ -309,7 +309,7 @@ export function prepareLegacyStateDirMigration(params: StateDirMigrationParams) 
   const result = migrateLegacyStateDirRoot(params);
   return {
     stateDir: resolveStateDir(params.env ?? process.env, params.homedir ?? os.homedir),
-    complete: () => Promise.resolve(result),
+    result,
   };
 }
 
@@ -317,9 +317,7 @@ export async function autoMigrateLegacyStateDir(
   params: StateDirMigrationParams,
 ): Promise<StateDirMigrationResult> {
   const prepared = prepareLegacyStateDirMigration(params);
-  return prepared
-    ? prepared.complete()
-    : { migrated: false, skipped: true, changes: [], warnings: [] };
+  return prepared ? prepared.result : { migrated: false, skipped: true, changes: [], warnings: [] };
 }
 
 function migrateLegacyStateDirRoot(params: StateDirMigrationParams): StateDirMigrationResult {

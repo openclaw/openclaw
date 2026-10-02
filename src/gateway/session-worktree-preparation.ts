@@ -24,6 +24,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isPathInside } from "../infra/path-guards.js";
 import {
+  ProjectCheckoutError,
+  resolveProjectCheckout,
+  resolveProjectDirectory,
+  resolveProjectRegistry,
   resolveWorkspaceProject,
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
@@ -36,6 +40,35 @@ import type {
 import { invalidSessionRequest } from "./session-request-error.js";
 import { resolveExplicitSessionName } from "./session-title-state.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+/** Resolve registered sources identically for dashboard and native child sessions. */
+export async function resolveSessionProjectRoot(
+  cfg: OpenClawConfig,
+  projectId: string,
+  worktree: boolean,
+): Promise<Result<string, ErrorShape>> {
+  const project = await resolveProjectRegistry(cfg, projectId);
+  if (!project) {
+    return invalidSessionRequest(`unknown project id: ${projectId}`);
+  }
+  try {
+    const checkout = worktree ? await resolveProjectCheckout(project.repoRoot) : undefined;
+    const root = checkout?.path ?? (await resolveProjectDirectory(project.repoRoot));
+    if (checkout && project.source !== "workspace" && checkout.path !== checkout.repoRoot) {
+      throw new ProjectCheckoutError("project root is no longer a git checkout");
+    }
+    return ok(root);
+  } catch (error) {
+    const detail =
+      error instanceof ProjectCheckoutError ? error.message : formatErrorMessage(error);
+    return err(
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `project ${projectId} is unavailable (${detail}); update the agent workspace path or re-register the project`,
+      ),
+    );
+  }
+}
 
 export function validateSessionWorktreeSelection(
   params: SessionsCreateParams,

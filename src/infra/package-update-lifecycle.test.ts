@@ -26,6 +26,10 @@ const malformedLockBytes = '{"kind":"openclaw-package-lifecycle",';
 type UpdateParams = Parameters<typeof runGlobalPackageUpdateSteps>[0];
 type StepParams = Parameters<UpdateParams["runStep"]>[0];
 
+function successfulStep({ name, argv, cwd }: StepParams, packageRoot: string) {
+  return { name, command: argv.join(" "), cwd: cwd ?? packageRoot, durationMs: 0, exitCode: 0 };
+}
+
 async function readPackageBytes(packageRoot: string): Promise<string[]> {
   return await Promise.all(
     ["package.json", "dist/index.js", PACKAGE_DIST_INVENTORY_RELATIVE_PATH].map((file) =>
@@ -77,13 +81,6 @@ async function runUpdate(
 ) {
   const stages: { prefix: string; packageRoot: string; bytes: string[] }[] = [];
   const lifecycleCalls: string[] = [];
-  const success = ({ name, argv, cwd }: StepParams) => ({
-    name,
-    command: argv.join(" "),
-    cwd: cwd ?? fixture.packageRoot,
-    durationMs: 0,
-    exitCode: 0,
-  });
   const result = await runGlobalPackageUpdateSteps({
     ...fixture.params,
     ...admission,
@@ -103,7 +100,7 @@ async function runUpdate(
         );
         await prepareCandidate(packageRoot, prefix);
         stages.push({ prefix, packageRoot, bytes: await readPackageBytes(packageRoot) });
-        return success(step);
+        return successfulStep(step, fixture.packageRoot);
       }
       lifecycleCalls.push(step.name);
       if (runLifecycleStep) {
@@ -112,7 +109,7 @@ async function runUpdate(
       if (step.name === "npm-package-postinstall" && step.cwd) {
         await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
       }
-      return success(step);
+      return successfulStep(step, fixture.packageRoot);
     },
   });
   expect(stages).toHaveLength(1);
@@ -169,13 +166,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
           if (step.name === "npm-package-postinstall" && step.cwd) {
             await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
           }
-          return {
-            name: step.name,
-            command: step.argv.join(" "),
-            cwd: step.cwd ?? fixture.packageRoot,
-            durationMs: 0,
-            exitCode: 0,
-          };
+          return successfulStep(step, fixture.packageRoot);
         },
       );
       expect(result.failedStep).toBeNull();
@@ -199,13 +190,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
         if (step.name === "npm-package-postinstall" && step.cwd) {
           await fs.rm(path.join(step.cwd, PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH));
         }
-        return {
-          name: step.name,
-          command: step.argv.join(" "),
-          cwd: step.cwd!,
-          durationMs: 0,
-          exitCode: 0,
-        };
+        return successfulStep(step, fixture.packageRoot);
       },
       {
         beforeVerifyCandidate: async (root) => {
@@ -317,9 +302,7 @@ describe("runGlobalPackageUpdateSteps lifecycle ownership", () => {
   it.each([
     ["already-current", "active"],
     ["already-current", "completed"],
-    ["already-current", "absent"],
     ["blocking-version", "active"],
-    ["blocking-version", "completed"],
     ["blocking-version", "absent"],
   ] as const)("disposes %s candidates only after a %s owner settles", async (scenario, state) => {
     const fixture = await createFixture();

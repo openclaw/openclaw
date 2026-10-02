@@ -701,6 +701,7 @@ src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
+src/infra/gateway-scheduler.ts
 src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
 src/infra/git-exec.ts
