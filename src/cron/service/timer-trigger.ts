@@ -11,6 +11,7 @@ import type {
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   errorBackoffMs,
+  HEARTBEAT_SKIP_DISABLED,
   resolveNextRunAtMsOrDisable,
 } from "./jobs-scheduling.js";
 import type {
@@ -20,7 +21,6 @@ import type {
   DeferredCronNotifications,
 } from "./state.js";
 import type { CronTriggerEvalOutcome } from "./timer-execution-timeout.js";
-import { HEARTBEAT_SKIP_DISABLED } from "./timer-execution-timeout.js";
 
 /** Default max retries for cron jobs on transient errors (#24355). */
 const DEFAULT_MAX_TRANSIENT_RETRIES = 3;

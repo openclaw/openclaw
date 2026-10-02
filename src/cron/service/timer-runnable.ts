@@ -5,6 +5,7 @@ import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
   hasScheduledNextRunAtMs,
+  HEARTBEAT_SKIP_DISABLED,
   isJobEnabled,
   isTimeScheduledJob,
   resolveJobErrorBackoffUntilMs,
@@ -167,7 +168,7 @@ function isScheduledTerminalOneShotRetry(
     lastRunStatus === "skipped" &&
     job.sessionTarget === "main" &&
     job.wakeMode === "now" &&
-    job.state.lastError === "disabled"
+    job.state.lastError === HEARTBEAT_SKIP_DISABLED
   );
 }
 
