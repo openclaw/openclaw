@@ -237,13 +237,13 @@ describe("package verification bounds", () => {
     },
   );
 
-  it.each(
+  it.for(
     (
       ["activation", "rollback", "changed identity", "changed version", "launcher limit"] as const
     ).flatMap((outcome) => (["time", "byte"] as const).map((budget) => ({ outcome, budget }))),
   )(
     "handles $outcome after the baseline fingerprint exhausts its $budget budget",
-    async ({ outcome, budget }) => {
+    async ({ outcome, budget }, { signal }) => {
       await withTestDir({ prefix: "openclaw-fingerprint-advisory-" }, async (base) => {
         const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
         const original = await fs.stat(packageRoot);
@@ -251,6 +251,7 @@ describe("package verification bounds", () => {
           await fs.truncate(launcher, 1024 * 1024 + 1);
         }
         const open = fs.open.bind(fs);
+        const stalled = createDeferredCore();
         const blocked = createDeferredCore();
         let entered = false;
         if (budget === "byte") {
@@ -261,6 +262,7 @@ describe("package verification bounds", () => {
           vi.spyOn(fs, "open").mockImplementation(async (...args) => {
             if (!entered && String(args[0]) === path.join(packageRoot, "dist", "index.js")) {
               entered = true;
+              stalled.resolve();
               await blocked.promise;
             }
             return open(...args);
@@ -268,15 +270,30 @@ describe("package verification bounds", () => {
         }
         let transaction: PackageUpdateTransaction | undefined;
         const beforeActivate = vi.fn();
+        // Reader budgets run on the wall clock. Freeze it so host load cannot expire the
+        // launcher capture or a later reader; only the stalled baseline spends its budget.
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        const update = swapStagedPackageInstall({
+          ...params,
+          ...(budget === "time" ? { timeoutMs: 200 } : {}),
+          beforeActivate,
+          onTransaction: (value) => {
+            transaction = value;
+          },
+        });
         try {
-          const result = await swapStagedPackageInstall({
-            ...params,
-            ...(budget === "time" ? { timeoutMs: 200 } : {}),
-            beforeActivate,
-            onTransaction: (value) => {
-              transaction = value;
-            },
-          });
+          if (budget === "time") {
+            await withinTest(
+              awaitGateBeforeSettlement(
+                stalled.promise,
+                update,
+                "Baseline fingerprint settled before its walk stalled",
+              ),
+              signal,
+            );
+            await vi.advanceTimersByTimeAsync(200);
+          }
+          const result = await withinTest(update, signal);
           expect(entered).toBe(budget === "time");
           if (outcome === "launcher limit") {
             expect(result.status).toBe("failed");
@@ -342,6 +359,7 @@ describe("package verification bounds", () => {
           ).toBeUndefined();
         } finally {
           blocked.resolve();
+          vi.useRealTimers();
         }
       });
     },
