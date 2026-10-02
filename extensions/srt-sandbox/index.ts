@@ -42,8 +42,7 @@ export default definePluginEntry({
         if (reason === "disable" || reason === "restart") {
           // Reap every live scope's sandbox process groups (S2) before the
           // backend retires, so no orphan sandbox process outlives the plugin.
-          await shutdownSrtSandboxRuntime();
-          unregister();
+          await shutdownSrtSandboxRuntime({ finishTeardown: unregister });
         }
       },
     });

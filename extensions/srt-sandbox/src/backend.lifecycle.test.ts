@@ -8,6 +8,7 @@ import {
   SRT_SANDBOX_BACKEND_ID,
 } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
+import { assertSrtSandboxAvailable } from "./dependency-probe.js";
 
 const srt = vi.hoisted(() => ({
   config: undefined as SandboxRuntimeConfig | undefined,
@@ -57,9 +58,13 @@ function makeParams(scopeKey: string): CreateSandboxBackendParams {
   };
 }
 
-const factory = createSrtSandboxBackendFactory({
-  pluginConfig: resolveSrtPluginConfig(undefined),
-});
+let factory: ReturnType<typeof createSrtSandboxBackendFactory>;
+
+function startPluginCycle(): void {
+  factory = createSrtSandboxBackendFactory({
+    pluginConfig: resolveSrtPluginConfig(undefined),
+  });
+}
 
 async function removeScope(scopeKey: string): Promise<void> {
   const manager = createSrtSandboxBackendManager();
@@ -79,6 +84,7 @@ beforeEach(() => {
     srt.config = undefined;
     srt.proxyPort = undefined;
   });
+  startPluginCycle();
 });
 
 afterEach(async () => {
@@ -103,6 +109,7 @@ describe("process-global SRT runtime lifecycle", () => {
 
     // Plugin stop retired the Windows scope, so a later plugin cycle can admit
     // the one supported Windows scope without disturbing the external owner.
+    startPluginCycle();
     await factory(makeParams("windows-after-restart"));
     await shutdownSrtSandboxRuntime();
     expect(srt.reset).not.toHaveBeenCalled();
@@ -122,6 +129,7 @@ describe("process-global SRT runtime lifecycle", () => {
     expect(srt.proxyPort).toBeUndefined();
 
     platform.mockReturnValue("win32");
+    startPluginCycle();
     await factory(makeParams("windows-after-mixed-stop"));
     await shutdownSrtSandboxRuntime();
     expect(srt.reset).toHaveBeenCalledTimes(1);
@@ -187,6 +195,7 @@ describe("process-global SRT runtime lifecycle", () => {
     await shutdownSrtSandboxRuntime();
     expect(srt.reset).toHaveBeenCalledTimes(1);
 
+    startPluginCycle();
     await factory(makeParams("after-restart"));
     expect(srt.initialize).toHaveBeenCalledTimes(2);
     expect(srt.proxyPort).toBe(43123);
@@ -200,6 +209,171 @@ describe("process-global SRT runtime lifecycle", () => {
     await factory(makeParams("retry"));
     expect(srt.initialize).toHaveBeenCalledTimes(2);
     expect(srt.proxyPort).toBe(43123);
+  });
+
+  it("rejects a racing Windows admission after the existing Windows scope is disposed mid-shutdown", async () => {
+    // Initial live scopes: one Windows scope plus a manager-backed scope. The
+    // manager owner forces a reset(), giving a deterministic pause point AFTER
+    // the Windows scope has been disposed (which clears the internal
+    // windows-active flag) but BEFORE plugin teardown has completed.
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await factory(makeParams("windows-initial"));
+    platform.mockReturnValue("darwin");
+    await factory(makeParams("manager-anchor"));
+
+    const resetStarted = Promise.withResolvers<void>();
+    const releaseReset = Promise.withResolvers<void>();
+    srt.reset.mockImplementationOnce(async () => {
+      resetStarted.resolve();
+      await releaseReset.promise;
+      srt.config = undefined;
+      srt.proxyPort = undefined;
+    });
+
+    const shutdown = shutdownSrtSandboxRuntime();
+    await resetStarted.promise;
+
+    // The Windows scope has been disposed, so the per-scope windows-active flag
+    // alone no longer rejects. A concurrent Windows factory must still fail
+    // closed on the shared plugin-wide teardown authority and never publish a
+    // scope that would outlive the in-flight shutdown.
+    platform.mockReturnValue("win32");
+    await expect(factory(makeParams("windows-racing"))).rejects.toThrow(
+      "runtime admission rejected while shutdown is in progress",
+    );
+
+    releaseReset.resolve();
+    await shutdown;
+    expect(srt.reset).toHaveBeenCalledTimes(1);
+
+    // The rejected admission left no surviving Windows scope, so a completed
+    // restart boundary admits exactly one fresh Windows scope again.
+    startPluginCycle();
+    await factory(makeParams("windows-after-restart"));
+    await shutdownSrtSandboxRuntime();
+    expect(srt.reset).toHaveBeenCalledTimes(1);
+    platform.mockRestore();
+  });
+
+  it("fails closed and disposes the partial Windows scope when teardown begins during provisioning", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    await factory(makeParams("manager-anchor"));
+
+    // Pause the Windows availability probe so a shutdown can claim teardown
+    // after the scope reserves the windows slot but before it publishes.
+    const probe = vi.mocked(assertSrtSandboxAvailable);
+    const probeStarted = Promise.withResolvers<void>();
+    const releaseProbe = Promise.withResolvers<void>();
+    probe.mockImplementationOnce(async () => {
+      probeStarted.resolve();
+      await releaseProbe.promise;
+    });
+
+    platform.mockReturnValue("win32");
+    const racing = factory(makeParams("windows-provisioning"));
+    await probeStarted.promise;
+
+    const resetStarted = Promise.withResolvers<void>();
+    const releaseReset = Promise.withResolvers<void>();
+    srt.reset.mockImplementationOnce(async () => {
+      resetStarted.resolve();
+      await releaseReset.promise;
+      srt.config = undefined;
+      srt.proxyPort = undefined;
+    });
+
+    const shutdown = shutdownSrtSandboxRuntime();
+    await resetStarted.promise;
+
+    // Teardown is now in progress; the in-flight Windows provisioning must
+    // recheck the shared authority at publish time, fail closed, and dispose
+    // the partial scope rather than leak it past shutdown.
+    releaseProbe.resolve();
+    await expect(racing).rejects.toThrow(
+      "runtime admission rejected while shutdown is in progress",
+    );
+
+    releaseReset.resolve();
+    await shutdown;
+
+    // The failed admission released the windows slot, so a fresh scope admits.
+    startPluginCycle();
+    await factory(makeParams("windows-after-failed-provisioning"));
+    await shutdownSrtSandboxRuntime();
+    platform.mockRestore();
+  });
+
+  it("holds admission closed through final unregister and requires a fresh plugin cycle", async () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await factory(makeParams("windows-before-unregister"));
+    const staleFactory = factory;
+    const unregisterStarted = Promise.withResolvers<void>();
+    const releaseUnregister = Promise.withResolvers<void>();
+
+    const shutdown = shutdownSrtSandboxRuntime({
+      finishTeardown: async () => {
+        unregisterStarted.resolve();
+        await releaseUnregister.promise;
+      },
+    });
+    await unregisterStarted.promise;
+
+    try {
+      await expect(staleFactory(makeParams("windows-during-unregister"))).rejects.toThrow(
+        "runtime admission rejected while shutdown is in progress",
+      );
+    } finally {
+      releaseUnregister.resolve();
+    }
+    await shutdown;
+
+    await expect(staleFactory(makeParams("windows-after-stop"))).rejects.toThrow(
+      "runtime admission rejected while shutdown is in progress",
+    );
+    startPluginCycle();
+    await factory(makeParams("windows-after-register"));
+    await shutdownSrtSandboxRuntime();
+    platform.mockRestore();
+  });
+
+  it("runs a teardown finalizer added by a coalesced shutdown", async () => {
+    await factory(makeParams("manager-before-coalesced-stop"));
+    const resetStarted = Promise.withResolvers<void>();
+    const releaseReset = Promise.withResolvers<void>();
+    srt.reset.mockImplementationOnce(async () => {
+      resetStarted.resolve();
+      await releaseReset.promise;
+      srt.config = undefined;
+      srt.proxyPort = undefined;
+    });
+    const finalizer = vi.fn();
+
+    const first = shutdownSrtSandboxRuntime();
+    await resetStarted.promise;
+    const second = shutdownSrtSandboxRuntime({ finishTeardown: finalizer });
+    releaseReset.resolve();
+    await Promise.all([first, second]);
+
+    expect(finalizer).toHaveBeenCalledTimes(1);
+  });
+
+  it("unregisters after failed cleanup and admits only after a successful retry", async () => {
+    await factory(makeParams("manager-before-failed-stop"));
+    srt.reset.mockRejectedValueOnce(new Error("injected reset failure"));
+    const unregister = vi.fn();
+
+    await expect(shutdownSrtSandboxRuntime({ finishTeardown: unregister })).rejects.toThrow(
+      "injected reset failure",
+    );
+    expect(unregister).toHaveBeenCalledTimes(1);
+
+    expect(() => startPluginCycle()).not.toThrow();
+    await expect(factory(makeParams("manager-while-faulted"))).rejects.toThrow(
+      "runtime cleanup failed; shutdown must succeed before retry",
+    );
+
+    await shutdownSrtSandboxRuntime();
+    await factory(makeParams("manager-after-cleanup-retry"));
   });
 
   it("rejects a process-global runtime already owned by another SRT consumer", async () => {

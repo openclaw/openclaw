@@ -78,19 +78,134 @@ const liveScopeBackends = new Set<DisposableScopeBackend>();
 let windowsScopeCounter = 0;
 let windowsScopeActive = false;
 
+type PluginLifecycleState =
+  | { phase: "stopped" }
+  | { phase: "running"; generation: number }
+  | {
+      phase: "stopping";
+      generation: number;
+      finalizers: Set<TeardownFinalizer>;
+      promise: Promise<void>;
+    }
+  | { phase: "faulted"; generation: number; error: unknown };
+
+type TeardownFinalizer = () => void | Promise<void>;
+
+let pluginLifecycleState: PluginLifecycleState = { phase: "stopped" };
+let pluginLifecycleGeneration = 0;
+
+function teardownInProgress(): Error {
+  return new Error("srt-sandbox: runtime admission rejected while shutdown is in progress");
+}
+
+/** Begin one plugin registration/start cycle when teardown has fully settled. */
+function startSrtSandboxRuntime(): number | undefined {
+  if (pluginLifecycleState.phase === "stopped") {
+    pluginLifecycleState = { phase: "running", generation: ++pluginLifecycleGeneration };
+  }
+  return pluginLifecycleState.phase === "running" ? pluginLifecycleState.generation : undefined;
+}
+
+function assertSrtSandboxAdmission(generation: number | undefined): number {
+  if (pluginLifecycleState.phase === "faulted") {
+    throw new Error("srt-sandbox: runtime cleanup failed; shutdown must succeed before retry", {
+      cause: pluginLifecycleState.error,
+    });
+  }
+  const admittedGeneration = generation ?? startSrtSandboxRuntime();
+  if (
+    admittedGeneration === undefined ||
+    pluginLifecycleState.phase !== "running" ||
+    pluginLifecycleState.generation !== admittedGeneration
+  ) {
+    throw teardownInProgress();
+  }
+  return admittedGeneration;
+}
+
 /** Dispose every live SRT scope backend (plugin disable/restart teardown). */
 export async function disposeAllSrtScopeBackends(): Promise<void> {
   // Snapshot: dispose() removes the backend from the set as it runs.
+  const errors: unknown[] = [];
   for (const backend of Array.from(liveScopeBackends)) {
-    await backend.dispose();
+    try {
+      await backend.dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) {
+    throw new AggregateError(errors, "srt-sandbox: one or more scope backends failed to dispose");
   }
 }
 
-/** Reap every scope and release SRT's process-global proxy/runtime resources. */
-export async function shutdownSrtSandboxRuntime(): Promise<void> {
-  // Claim teardown ownership before the first await so a concurrent factory
-  // fails closed for the entire scope-disposal and any owned reset interval.
-  await shutdownSrtRuntime(disposeAllSrtScopeBackends);
+function stopSrtSandboxRuntime(finishTeardown?: TeardownFinalizer): Promise<void> {
+  if (pluginLifecycleState.phase === "stopping") {
+    if (finishTeardown) {
+      pluginLifecycleState.finalizers.add(finishTeardown);
+    }
+    return pluginLifecycleState.promise;
+  }
+  if (pluginLifecycleState.phase === "stopped") {
+    return Promise.resolve().then(finishTeardown);
+  }
+
+  const generation = pluginLifecycleState.generation;
+  const stopping: Extract<PluginLifecycleState, { phase: "stopping" }> = {
+    phase: "stopping",
+    generation,
+    finalizers: new Set(finishTeardown ? [finishTeardown] : []),
+    promise: Promise.resolve(),
+  };
+  // Publish the stop before taking the live-backend snapshot in
+  // shutdownSrtRuntime(), so every platform observes one admission authority.
+  pluginLifecycleState = stopping;
+  stopping.promise = (async () => {
+    const errors: unknown[] = [];
+    try {
+      await shutdownSrtRuntime(disposeAllSrtScopeBackends);
+    } catch (error) {
+      errors.push(error);
+    }
+    while (stopping.finalizers.size > 0) {
+      const finalizers = Array.from(stopping.finalizers);
+      stopping.finalizers.clear();
+      for (const finalize of finalizers) {
+        try {
+          await finalize();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "srt-sandbox: runtime and registration teardown failed");
+    }
+  })().then(
+    () => {
+      if (pluginLifecycleState === stopping) {
+        pluginLifecycleState = { phase: "stopped" };
+      }
+    },
+    (error: unknown) => {
+      if (pluginLifecycleState === stopping) {
+        pluginLifecycleState = { phase: "faulted", generation, error };
+      }
+      throw error;
+    },
+  );
+  return stopping.promise;
+}
+
+/** Reap every scope and optionally hold admission until registration retires. */
+export function shutdownSrtSandboxRuntime(
+  ...args: [options?: { finishTeardown?: () => void | Promise<void> }]
+): Promise<void> {
+  const options = typeof args[0] === "object" ? args[0] : undefined;
+  return stopSrtSandboxRuntime(options?.finishTeardown);
 }
 
 /** Dispose the live SRT scope backends for one scope (manager.removeRuntime). */
@@ -353,7 +468,10 @@ class SrtSandboxBackend {
 export function createSrtSandboxBackendFactory(
   deps: SrtBackendDependencies,
 ): SandboxBackendFactory {
+  let admissionGeneration = startSrtSandboxRuntime();
   return async (params) => {
+    const requestGeneration = assertSrtSandboxAdmission(admissionGeneration);
+    admissionGeneration ??= requestGeneration;
     if (process.platform === "win32") {
       // S6 Windows path: low-priv account + NTFS ACL + WFP + worker-RPC per-scope
       // (windows-backend.ts). Additive; the macOS/Linux path below is untouched.
@@ -365,30 +483,47 @@ export function createSrtSandboxBackendFactory(
       // Reserve the one supported Windows scope before the first await so two
       // concurrent factory calls cannot both pass the admission check.
       windowsScopeActive = true;
+      let backend: WindowsSrtSandboxBackend | undefined;
       try {
         const srtWin = resolveWindowsSrtWin(deps.pluginConfig.windows ?? {});
         await assertSrtSandboxAvailable(srtWin);
-        const backend = new WindowsSrtSandboxBackend(params, deps, windowsScopeCounter++);
+        assertSrtSandboxAdmission(requestGeneration);
+        backend = new WindowsSrtSandboxBackend(params, deps, windowsScopeCounter++);
+        const admittedBackend = backend;
         const entry: DisposableScopeBackend = {
-          scopeKey: backend.scopeKey,
+          scopeKey: admittedBackend.scopeKey,
           dispose: () => {
-            backend.dispose();
-            windowsScopeActive = false;
-            liveScopeBackends.delete(entry);
+            try {
+              admittedBackend.dispose();
+            } finally {
+              windowsScopeActive = false;
+              liveScopeBackends.delete(entry);
+            }
           },
         };
         liveScopeBackends.add(entry);
-        return backend.asHandle();
+        return admittedBackend.asHandle();
       } catch (error) {
-        windowsScopeActive = false;
+        try {
+          backend?.dispose();
+        } finally {
+          windowsScopeActive = false;
+        }
         throw error;
       }
     }
     await assertSrtSandboxAvailable();
+    assertSrtSandboxAdmission(requestGeneration);
     const backend = new SrtSandboxBackend(params, deps);
-    await backend.initialize();
-    liveScopeBackends.add(backend);
-    return backend.asHandle();
+    try {
+      await backend.initialize();
+      assertSrtSandboxAdmission(requestGeneration);
+      liveScopeBackends.add(backend);
+      return backend.asHandle();
+    } catch (error) {
+      await backend.dispose();
+      throw error;
+    }
   };
 }
 
