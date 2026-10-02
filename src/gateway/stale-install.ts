@@ -187,24 +187,48 @@ type GatewayStaleInstall = {
 export function classifyGatewayStaleInstall(error: unknown): GatewayStaleInstall | null {
   const observer = installationState.observer;
   const root = observer?.root ?? gatewayInstallRoot;
-  const missingRuntime = collectErrorGraphCandidates(error, readErrorCauses).some((candidate) =>
-    isMissingRuntimeChunk(candidate, root),
-  );
-  if (!missingRuntime) {
+  const candidates = collectErrorGraphCandidates(error, readErrorCauses);
+  const missingRuntime = candidates.some((candidate) => isMissingRuntimeChunk(candidate, root));
+  // A replaced installation breaks resolvable imports too: a chunk this process already
+  // loaded can link against a package whose exports moved. That failure names only the
+  // specifier, so it is attributable solely once the build-id check has recorded the
+  // replacement; without that fact it is indistinguishable from a source bug.
+  const replacedLink =
+    Boolean(observer?.replacement) &&
+    candidates.some((candidate) => isExportLinkFailure(candidate));
+  if (!missingRuntime && !replacedLink) {
     return null;
   }
   if (observer) {
     recordReplacement(observer);
   }
+  const replacement = observer?.replacement;
   const restartCommand = formatCliCommand("openclaw gateway restart");
   return {
     error: errorShape(
       ErrorCodes.UNAVAILABLE,
-      `The running Gateway can no longer load part of its OpenClaw installation. The installation may have changed while the Gateway was running. Restart it with: ${restartCommand}`,
-      { details: { code: "STALE_INSTALL", restartCommand }, retryable: false },
+      `The running Gateway can no longer load part of its OpenClaw installation. The installation may have changed while the Gateway was running.${replacement ? ` ${replacement.message}` : ""} Restart it with: ${restartCommand}`,
+      {
+        details: {
+          code: "STALE_INSTALL",
+          restartCommand,
+          ...(replacement
+            ? {
+                runningBuildId: replacement.running.buildId,
+                onDiskBuildId: replacement.onDisk?.buildId ?? null,
+              }
+            : {}),
+        },
+        retryable: false,
+      },
     ),
     restartCommand,
   };
+}
+
+/** Node reports an ESM export mismatch as a bare SyntaxError: no code, no url, no path. */
+function isExportLinkFailure(error: unknown): boolean {
+  return error instanceof SyntaxError && error.message.includes("does not provide an export named");
 }
 
 function isMissingRuntimeChunk(error: unknown, root: string | null): boolean {

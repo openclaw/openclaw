@@ -294,4 +294,51 @@ describe("running installation replacement", () => {
       );
     },
   );
+
+  it("attributes an export mismatch only after a replacement is recorded, and names both builds", async () => {
+    // Node reports this one as a bare SyntaxError with no code, url, or path: an
+    // already-loaded chunk linking against a package whose exports moved.
+    const exportMismatch = () =>
+      new SyntaxError(
+        "The requested module '@openclaw/fs-safe/advanced' does not provide an export named 'copyFileDescriptorSync'",
+      );
+    const handoff = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(handoff);
+    // Indistinguishable from a source bug while the installation still matches.
+    expect(owner.classifyGatewayStaleInstall(exportMismatch())).toBeNull();
+
+    await writeIdentity("2026.9.5", "build-after");
+    await owner.checkGatewayInstallationReplacement();
+    expect(handoff).toHaveBeenCalledOnce();
+
+    const classified = owner.classifyGatewayStaleInstall(
+      new Error("Runtime load failed", { cause: exportMismatch() }),
+    );
+    expect(classified?.error.details).toMatchObject({
+      code: "STALE_INSTALL",
+      runningBuildId: "build-before",
+      onDiskBuildId: "build-after",
+    });
+    expect(classified?.error.message).toContain(
+      "running 2026.9.4 build build-before; on-disk 2026.9.5 build build-after",
+    );
+    expect(classified?.error.message).toContain(classified?.restartCommand ?? "");
+  });
+
+  it("annotates a missing chunk with the running build even when the on-disk identity is unreadable", () => {
+    const handoff = vi.fn();
+    dispose = owner.registerGatewayInstallationReplacementHandler(handoff);
+    const classified = owner.classifyGatewayStaleInstall(
+      Object.assign(new Error("chunk unavailable"), {
+        code: "ENOENT",
+        path: path.join(fixture.root, "dist", "subagent-registry-old.mjs"),
+      }),
+    );
+    expect(classified?.error.details).toMatchObject({
+      code: "STALE_INSTALL",
+      runningBuildId: "build-before",
+      onDiskBuildId: null,
+    });
+    expect(classified?.error.message).toContain("on-disk runtime chunks unavailable");
+  });
 });
