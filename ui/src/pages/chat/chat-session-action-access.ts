@@ -28,6 +28,8 @@ export function readChatSessionActionAccess(
     fork: readSessionMethodAccess(snapshot, {
       method: "sessions.fork",
       requiredScope: "operator.write",
+      sessionScope: true,
+      session: options.session,
     }),
     reset: readSessionMethodAccess(snapshot, {
       method: "sessions.reset",

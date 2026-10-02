@@ -30,26 +30,27 @@ export function sessionMenuReasons(params: {
   const involvementReason = reason({
     method: "sessions.setInvolvement",
     requiredScope: "operator.read",
+    sessionScope: true,
   });
-  const patchReason = (patch: Record<string, unknown>, sessionScope = false) =>
+  const patchReason = (patch: Record<string, unknown>) =>
     reason({
       method: "sessions.patch",
       params: { key: session.key, ...patch },
-      sessionScope,
+      sessionScope: true,
       session,
     });
-  const renameReason = patchReason({ label: null }, true);
-  const pinReason = patchReason({ pinned: true }, true);
+  const renameReason = patchReason({ label: null });
+  const pinReason = patchReason({ pinned: true });
   const iconReason = patchReason({ icon: null });
   const colorReason = patchReason({ color: null });
   const batchSession = batchRows ? sessionAccessRowForBatch(batchRows) : session;
-  const batchPatchReason = (patch: Record<string, unknown>, sessionScope = false) => {
+  const batchPatchReason = (patch: Record<string, unknown>) => {
     if (!batchRows) {
-      return patchReason(patch, sessionScope);
+      return patchReason(patch);
     }
     return reason({
       method: "sessions.patchMany",
-      sessionScope,
+      sessionScope: true,
       session: batchSession,
       params: { patch },
     });
@@ -59,10 +60,10 @@ export function sessionMenuReasons(params: {
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? "Session lifecycle action requires a durable session identity."
-    : batchPatchReason({ archived: true }, true);
+    : batchPatchReason({ archived: true });
   const snoozeReason = !session.sessionId?.trim()
     ? "Session lifecycle action requires a durable session identity."
-    : patchReason({ snoozedUntil: null }, true);
+    : patchReason({ snoozedUntil: null });
   const groupReason = reason({
     method: "sessions.groups.put",
     requiredScope: "operator.write",
@@ -84,6 +85,8 @@ export function sessionMenuReasons(params: {
     : reason({
         method: "sessions.create",
         params: { parentSessionKey: session.key, fork: true },
+        sessionScope: true,
+        session,
       });
   const cloudWorkerStopReason = cloudWorkerStopAction ? reason(cloudWorkerStopAction) : undefined;
   return {

@@ -13,7 +13,6 @@ import {
   isSettingsNavigationRouteVisible,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "./app/native-device-settings.ts";
-import { readGatewayOperatorAccess } from "./app/operator-access.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
@@ -23,11 +22,12 @@ import {
   createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
 
-const settingsGroups = visibleSettingsNavigationGroups(true);
+const settingsGroups = visibleSettingsNavigationGroups(["operator.admin"]);
 const settingsRoutes = settingsGroups.flatMap((group) => group.routes);
 
 describe("sidebar entries", () => {
   it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
+    const operatorScopes = canAdmin ? ["operator.admin"] : ["operator.read"];
     const capability: NativeDeviceSettingsCapability = {
       snapshot: createNativeDeviceSettingsSnapshot(),
       subscribe: () => () => undefined,
@@ -46,7 +46,7 @@ describe("sidebar entries", () => {
         schema: null,
         value: null,
         uiHints: {},
-        canAdmin,
+        operatorScopes,
         nativeDeviceSettings,
       });
     expect(search("Dock icon", null)).toEqual([]);
@@ -57,17 +57,17 @@ describe("sidebar entries", () => {
     expect(search("System-wide presence detection", capability)).toContainEqual(
       expect.objectContaining({ routeId: "device-permissions" }),
     );
-    const browserGroups = visibleSettingsNavigationGroups(canAdmin);
-    const nativeGroups = visibleSettingsNavigationGroups(canAdmin, capability);
+    const browserGroups = visibleSettingsNavigationGroups(operatorScopes);
+    const nativeGroups = visibleSettingsNavigationGroups(operatorScopes, capability);
     expect(browserGroups.flatMap((group) => group.routes).includes("updates")).toBe(canAdmin);
     expect(nativeGroups.flatMap((group) => group.routes)).toContain("updates");
-    expect(isSettingsNavigationRouteVisible("updates", canAdmin)).toBe(canAdmin);
-    expect(isSettingsNavigationRouteVisible("updates", canAdmin, capability)).toBe(true);
+    expect(isSettingsNavigationRouteVisible("updates", operatorScopes)).toBe(canAdmin);
+    expect(isSettingsNavigationRouteVisible("updates", operatorScopes, capability)).toBe(true);
     expect(search("Check for updates", capability)).toContainEqual(
       expect.objectContaining({ routeId: "updates" }),
     );
     expect(
-      getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
+      getStaticCommandPaletteCatalogItems(operatorScopes, capability).some(
         (item) => item.action === "nav:updates",
       ),
     ).toBe(true);
@@ -81,7 +81,7 @@ describe("sidebar entries", () => {
         ...capability,
         snapshot: createTauriDeviceSettingsSnapshot(platform),
       };
-      expect(visibleSettingsNavigationGroups(canAdmin, desktopCapability)[1]).toEqual({
+      expect(visibleSettingsNavigationGroups(operatorScopes, desktopCapability)[1]).toEqual({
         labelKey: "nav.settingsGroupThisComputer",
         routes: ["device"],
       });
@@ -91,7 +91,8 @@ describe("sidebar entries", () => {
       expect(search("Precise location", desktopCapability)).toEqual([]);
     }
     expect(
-      visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: null })[1]?.labelKey,
+      visibleSettingsNavigationGroups(operatorScopes, { ...capability, snapshot: null })[1]
+        ?.labelKey,
     ).toBe("nav.settingsGroupThisDevice");
     const iosSnapshot = createIosNativeDeviceSettingsSnapshot();
     iosSnapshot.voice.speakerphoneEnabled = false;
@@ -103,7 +104,7 @@ describe("sidebar entries", () => {
     ] as const) {
       iosSnapshot.device.formFactor = formFactor;
       expect(
-        visibleSettingsNavigationGroups(canAdmin, { ...capability, snapshot: iosSnapshot })[1]
+        visibleSettingsNavigationGroups(operatorScopes, { ...capability, snapshot: iosSnapshot })[1]
           ?.labelKey,
       ).toBe(labelKey);
     }
@@ -141,16 +142,16 @@ describe("sidebar entries", () => {
       expect(search(query, { ...capability, snapshot: sparseIosSnapshot })).toEqual([]);
     }
     for (const route of ["device", "device-permissions"] as const) {
-      expect(isSettingsNavigationRouteVisible(route, canAdmin)).toBe(false);
-      expect(isSettingsNavigationRouteVisible(route, canAdmin, capability)).toBe(true);
+      expect(isSettingsNavigationRouteVisible(route, operatorScopes)).toBe(false);
+      expect(isSettingsNavigationRouteVisible(route, operatorScopes, capability)).toBe(true);
       expect(browserGroups.flatMap((group) => group.routes)).not.toContain(route);
       expect(
-        getStaticCommandPaletteCatalogItems(canAdmin).some(
+        getStaticCommandPaletteCatalogItems(operatorScopes).some(
           (item) => item.action === `nav:${route}`,
         ),
       ).toBe(false);
       expect(
-        getStaticCommandPaletteCatalogItems(canAdmin, capability).some(
+        getStaticCommandPaletteCatalogItems(operatorScopes, capability).some(
           (item) => item.action === `nav:${route}`,
         ),
       ).toBe(true);
@@ -209,29 +210,33 @@ describe("sidebar entries", () => {
   it.each(["plugin-settings", "skill-settings"] as const)(
     "keeps %s visible to admins and read-only operators",
     (routeId) => {
-      expect(visibleSettingsNavigationGroups(true).flatMap((group) => group.routes)).toContain(
-        routeId,
-      );
-      expect(visibleSettingsNavigationGroups(false).flatMap((group) => group.routes)).toContain(
-        routeId,
-      );
+      expect(
+        visibleSettingsNavigationGroups(["operator.admin"]).flatMap((group) => group.routes),
+      ).toContain(routeId);
+      expect(
+        visibleSettingsNavigationGroups(["operator.read"]).flatMap((group) => group.routes),
+      ).toContain(routeId);
     },
   );
 
-  it("filters admin-only settings while preserving legacy fail-open visibility", () => {
-    const nonAdminRoutes = visibleSettingsNavigationGroups(false).flatMap((group) => group.routes);
-    expect(nonAdminRoutes).toContain("approvals");
-    expect(nonAdminRoutes).toContain("channels");
-    expect(nonAdminRoutes).not.toContain("security");
-    expect(nonAdminRoutes).not.toContain("communications");
-
-    const legacyCanAdmin = readGatewayOperatorAccess({
-      hello: { auth: { role: "operator" } },
-    } as Parameters<typeof readGatewayOperatorAccess>[0]).canAdmin;
-    expect(legacyCanAdmin).toBe(true);
-    expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
-      visibleSettingsNavigationGroups(true),
-    );
+  it("keeps restricted settings personal and admits explicit management grants", () => {
+    const routes = (scopes: string[]) =>
+      visibleSettingsNavigationGroups(scopes).flatMap((group) => group.routes);
+    const personal = ["profile", "appearance", "notifications", "connection", "about"];
+    expect(routes(["operator.sessions.write"])).toEqual(personal);
+    expect(routes([])).toEqual(personal);
+    expect(routes(["operator.read"])).toContain("channels");
+    expect(routes(["operator.read"])).not.toContain("approvals");
+    expect(routes(["operator.approvals", "operator.pairing"])).toEqual([
+      "profile",
+      "appearance",
+      "notifications",
+      "connection",
+      "devices",
+      "approvals",
+      "about",
+    ]);
+    expect(routes(["operator.read"])).not.toContain("security");
   });
 
   it("round-trips route, Workboard, and session entries", () => {

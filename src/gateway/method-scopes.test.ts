@@ -374,7 +374,7 @@ describe("method scope resolution", () => {
         pinned: true,
         archived: false,
       }),
-    ).toEqual(["operator.write"]);
+    ).toEqual(["operator.write", "operator.sessions.archive"]);
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("sessions.patch", {
         key: "agent:main:ios-1",

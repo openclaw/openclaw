@@ -8,6 +8,7 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disposeSessionReadContexts } from "../server-methods/sessions-read-cache.test-support.js";
+import type { GatewayClient } from "../server-methods/types.js";
 import { testState } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -58,7 +59,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
     return await fs.realpath(workspace);
   }
 
-  async function createArchiveWorktreeFixture() {
+  async function createArchiveWorktreeFixture(createClient?: () => GatewayClient) {
     const state = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-archive-worktree-",
@@ -67,15 +68,13 @@ export function setupGatewaySessionsWorktreeTestHarness() {
     closeOpenClawStateDatabaseForTest();
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
+    // Create profile-backed callers only after this fixture selects its state DB.
+    const client = createClient?.() ?? ({ connect: { scopes: ["operator.admin"] } } as never);
     const created = await directSessionReq<{
       key: string;
       sessionId: string;
       worktree: { id: string; path: string; branch: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", worktree: true },
-      { client: { connect: { scopes: ["operator.admin"] } } as never },
-    );
+    }>("sessions.create", { agentId: "main", worktree: true }, { client });
     const worktreeId = created.payload?.worktree.id;
     onTestFinished(async () => {
       const record = worktreeId ? getRegistryWorktree(process.env, worktreeId) : undefined;
@@ -97,7 +96,7 @@ export function setupGatewaySessionsWorktreeTestHarness() {
       ...transcriptScope,
       contents: ["Preserve this conversation."],
     });
-    return { key, sessionId, storePath, transcriptScope, worktree, workspace };
+    return { key, sessionId, storePath, transcriptScope, worktree, workspace, client };
   }
 
   return {

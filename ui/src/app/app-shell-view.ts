@@ -1,6 +1,10 @@
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
-import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation.ts";
+import {
+  isNavigationRouteVisible,
+  isSettingsNavigationRoute,
+  isSettingsTakeover,
+} from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import { renderGatewayStatus } from "../components/gateway-status.ts";
@@ -238,7 +242,13 @@ export function renderApplicationShell(host: ShellViewHost) {
       activeRouteId: activeRoute,
       router: host.runtime.router,
       activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-      enabledRouteIds: APP_ROUTE_IDS,
+      enabledRouteIds: APP_ROUTE_IDS.filter((routeId) =>
+        isNavigationRouteVisible(
+          routeId,
+          gatewaySnapshot.hello?.auth?.scopes ?? [],
+          context.nativeDeviceSettings,
+        ),
+      ),
       sessionKey: host.activeSessionKey,
       connected: gatewayConnected,
       connectionStatus,
@@ -317,7 +327,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             multipleProfiles:
               gatewaySnapshot.hello?.policy?.hasMultipleSessionSharingIdentities === true,
             basePath: context.basePath,
-            canAdmin: operatorAccess.canAdmin,
+            operatorScopes: gatewaySnapshot.hello?.auth?.scopes ?? [],
             nativeDeviceSettings: context.nativeDeviceSettings,
           },
           onExit: () => {
@@ -354,7 +364,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             onReload: () => void context.runtimeConfig.discardDraft(),
             onApply: () => void context.runtimeConfig.apply(),
           },
-          canAdmin: operatorAccess.canAdmin,
+          operatorScopes: gatewaySnapshot.hello?.auth?.scopes ?? [],
           nativeDeviceSettings: context.nativeDeviceSettings,
         })
       : host.navigationSidebar;

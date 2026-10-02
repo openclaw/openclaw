@@ -13,7 +13,7 @@ const sourceKey = "agent:main:main";
 const destinationKey = "agent:main:dashboard:12345678-1111-4222-8333-abcdefabcdef";
 const destinationText = "The linked conversation recovered after reconnect.";
 const destinationPath = "/chat/main/linked-conversation-12345678";
-const sidebarConfig = { ui: { prefs: { sidebarEntries: ["route:activity"] } } };
+const sidebarConfig = { ui: { prefs: { sidebarEntries: ["route:apps"] } } };
 
 type TestApp = HTMLElement & { runtime?: { context: ApplicationContext } };
 
@@ -64,9 +64,7 @@ suite.define(() => {
           `.chat-thread a.markdown-session-link[href="${destinationPath}"]`,
         );
         await link.waitFor({ state: "visible" });
-        await page
-          .locator('openclaw-app-sidebar a[href="/activity"]')
-          .waitFor({ state: "visible" });
+        await page.locator('openclaw-app-sidebar a[href="/apps"]').waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const resolutionMatch = { shortId: "12345678", agentId: "main" };
         await gateway.deferNext("sessions.resolve", resolutionMatch);
@@ -82,8 +80,14 @@ suite.define(() => {
         await gateway.closeLatest(4000, "session subscription recovery failed");
         await gateway.waitForRequest("connect", { after: previousConnects });
         if (navigateAway) {
-          await page.locator('openclaw-app-sidebar a[href="/activity"]').click();
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
+          // Apps remains available while hello is held; management routes need fresh grants.
+          await page.locator('openclaw-app-sidebar a[href="/apps"]').click();
+          await expect.poll(() => new URL(page.url()).pathname).toBe("/apps");
+          await page.locator("openclaw-apps-page").waitFor({ state: "visible" });
+          expect(await gateway.getRequests("connect")).toHaveLength(previousConnects + 1);
+          expect(await gateway.getRequests("chat.startup", { sessionKey: destinationKey })).toEqual(
+            [],
+          );
         }
         await gateway.resolveDeferred("connect");
         await page.waitForFunction(
@@ -95,7 +99,7 @@ suite.define(() => {
         await gateway.resolveDeferred("sessions.resolve");
 
         if (navigateAway) {
-          await page.locator("openclaw-activity-page").waitFor({ state: "visible" });
+          await page.locator("openclaw-apps-page").waitFor({ state: "visible" });
         } else {
           await page
             .locator('openclaw-chat-pane[aria-hidden="false"]')
@@ -108,7 +112,7 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.history", { sessionKey: destinationKey })).toEqual(
           [],
         );
-        expect(new URL(page.url()).pathname).toBe(navigateAway ? "/activity" : destinationPath);
+        expect(new URL(page.url()).pathname).toBe(navigateAway ? "/apps" : destinationPath);
         expect(await page.evaluate(() => history.length)).toBe(
           initialHistoryLength + (navigateAway ? 2 : 1),
         );

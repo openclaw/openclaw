@@ -56,11 +56,27 @@ async function openArchivedPage(operatorScopes: string[]) {
 
 suite.define(() => {
   it.each([
-    { scope: "operator.sessions.read", name: "SESSION_READ", canOrganize: false },
-    { scope: "operator.sessions.write", name: "SESSION_WRITE", canOrganize: true },
+    {
+      scopes: ["operator.sessions.read"],
+      name: "SESSION_READ",
+      canOrganize: false,
+      canArchive: false,
+    },
+    {
+      scopes: ["operator.sessions.write"],
+      name: "SESSION_WRITE",
+      canOrganize: true,
+      canArchive: false,
+    },
+    {
+      scopes: ["operator.sessions.write", "operator.sessions.archive"],
+      name: "SESSION_ARCHIVE",
+      canOrganize: true,
+      canArchive: true,
+    },
   ])(
     "$name reads shared history and limits organization to existing owned sessions",
-    async ({ scope, name, canOrganize }) => {
+    async ({ scopes, name, canOrganize, canArchive }) => {
       const viewport = { width: 1280, height: 900 };
       const context = await suite.browser.newContext({
         ...createControlUiE2eContextOptions(),
@@ -81,7 +97,7 @@ suite.define(() => {
         visibility: "shared",
       });
       const gateway = await installMockGateway(page, {
-        operatorScopes: [scope],
+        operatorScopes: scopes,
         sessionKey: shared.key,
         sessions: [shared, own],
         sessionArchiveFiltering: true,
@@ -195,17 +211,24 @@ suite.define(() => {
         await ownRow.click({ button: "right" });
         await rename.waitFor();
         expect((await rename.getAttribute("disabled")) === null).toBe(canOrganize);
-        expect((await archive.getAttribute("disabled")) === null).toBe(canOrganize);
-        expect(await fork.getAttribute("disabled")).not.toBeNull();
+        expect((await archive.getAttribute("disabled")) === null).toBe(canArchive);
+        expect((await fork.getAttribute("disabled")) === null).toBe(canOrganize);
         for (const action of [
           menu.getByRole("menuitem", { name: "Icon & color" }),
           menu.locator('wa-dropdown-item[value="toggle-unread"]'),
           menu.getByRole("menuitem", { name: "Move to group" }),
         ]) {
-          expect(await action.getAttribute("disabled")).not.toBeNull();
-          await action.click({ force: true });
+          expect((await action.getAttribute("disabled")) === null).toBe(canOrganize);
+          if (!canOrganize) {
+            await action.click({ force: true });
+          }
         }
         if (canOrganize) {
+          await activateSelfRemovingControl(
+            menu.locator('wa-dropdown-item[value="toggle-unread"]'),
+          );
+          await waitForPatch(gateway, (params) => params.key === own.key && params.unread === true);
+          await ownRow.click({ button: "right" });
           await rename.click();
           await submitInputDialog(page, "Organized workspace");
           await waitForPatch(
@@ -217,46 +240,58 @@ suite.define(() => {
           await ownRow.getByRole("button", { name: "Pin session", exact: true }).click();
           await waitForPatch(gateway, (params) => params.key === own.key && params.pinned === true);
           await ownRow.click({ button: "right" });
-          await activateSelfRemovingControl(archive);
-          await waitForPatch(
-            gateway,
-            (params) => params.key === own.key && params.archived === true,
-          );
-          await page.getByRole("button", { name: "Undo", exact: true }).waitFor();
-          await captureUiProof(suite, page, `${name}-owned-archived.png`);
-          await page.evaluate((url) => {
-            history.pushState(null, "", url);
-            dispatchEvent(new PopStateEvent("popstate"));
-          }, `${suite.server.baseUrl}sessions?status=archived`);
-          await waitForControlUiRoute(page, { pathname: "/sessions", routeId: "sessions" });
-          const archivedRow = page
-            .locator(".session-data-row")
-            .filter({ hasText: "Organized workspace" });
-          await archivedRow.waitFor();
-          await archivedRow.getByRole("button", { name: "Open session menu", exact: true }).click();
-          const remove = menu.locator('wa-dropdown-item[value="delete"]');
-          await remove.waitFor();
-          expect(await remove.getAttribute("disabled")).not.toBeNull();
-          await remove.click({ force: true });
-          await captureUiProof(
-            suite,
-            page,
-            `${name}-archived-controls.png`,
-            menu.locator('[part="menu"]'),
-            [remove, archive],
-          );
-          await activateSelfRemovingControl(archive);
-          await waitForPatch(
-            gateway,
-            (params) => params.key === own.key && params.archived === false,
-          );
-          await archivedRow.waitFor({ state: "detached" });
-          await navigateToControlUiSession(page, own.key);
-          await historyText.waitFor();
-          await expect.poll(() => ownRow.textContent()).toContain("Organized workspace");
-          await captureUiProof(suite, page, `${name}-owned-restored.png`, activePane, [
-            historyText,
-          ]);
+          if (canArchive) {
+            await activateSelfRemovingControl(archive);
+            await waitForPatch(
+              gateway,
+              (params) => params.key === own.key && params.archived === true,
+            );
+            await page.getByRole("button", { name: "Undo", exact: true }).waitFor();
+            await captureUiProof(suite, page, `${name}-owned-archived.png`);
+            await page.evaluate((url) => {
+              history.pushState(null, "", url);
+              dispatchEvent(new PopStateEvent("popstate"));
+            }, `${suite.server.baseUrl}sessions?status=archived`);
+            await waitForControlUiRoute(page, { pathname: "/sessions", routeId: "sessions" });
+            const archivedRow = page
+              .locator(".session-data-row")
+              .filter({ hasText: "Organized workspace" });
+            await archivedRow.waitFor();
+            await archivedRow
+              .getByRole("button", { name: "Open session menu", exact: true })
+              .click();
+            const remove = menu.locator('wa-dropdown-item[value="delete"]');
+            await remove.waitFor();
+            expect(await remove.getAttribute("disabled")).not.toBeNull();
+            await remove.click({ force: true });
+            await captureUiProof(
+              suite,
+              page,
+              `${name}-archived-controls.png`,
+              menu.locator('[part="menu"]'),
+              [remove, archive],
+            );
+            await activateSelfRemovingControl(archive);
+            await waitForPatch(
+              gateway,
+              (params) => params.key === own.key && params.archived === false,
+            );
+            await archivedRow.waitFor({ state: "detached" });
+            await navigateToControlUiSession(page, own.key);
+            await historyText.waitFor();
+            await expect.poll(() => ownRow.textContent()).toContain("Organized workspace");
+            await captureUiProof(suite, page, `${name}-owned-restored.png`, activePane, [
+              historyText,
+            ]);
+          } else {
+            await archive.click({ force: true });
+            await page.keyboard.press("Escape");
+            expect(
+              (await gateway.getRequests("sessions.patch")).some(
+                (request) => requireRecord(request.params).archived !== undefined,
+              ),
+            ).toBe(false);
+          }
         } else {
           await rename.click({ force: true });
           await archive.click({ force: true });
@@ -294,13 +329,36 @@ suite.define(() => {
           canOrganize
             ? [
                 { key: own.key, label: "List workspace" },
+                { key: own.key, unread: true },
                 { key: own.key, label: "Organized workspace" },
                 { key: own.key, pinned: true },
-                { key: own.key, archived: true },
-                { key: own.key, archived: false },
+                ...(canArchive
+                  ? [
+                      { key: own.key, archived: true },
+                      { key: own.key, archived: false },
+                    ]
+                  : []),
               ]
             : [],
         );
+        await page.evaluate((url) => {
+          history.pushState(null, "", url);
+          dispatchEvent(new PopStateEvent("popstate"));
+        }, `${suite.server.baseUrl}settings/appearance`);
+        await waitForControlUiRoute(page, {
+          pathname: "/settings/appearance",
+          routeId: "appearance",
+        });
+        const settings = page.locator(".settings-sidebar");
+        await settings.locator('a[href="/settings/profile"]').waitFor();
+        expect(
+          await settings
+            .locator(
+              'a[href="/settings/security"], a[href="/settings/channels"], a[href="/settings/model-providers"]',
+            )
+            .count(),
+        ).toBe(0);
+        await captureUiProof(suite, page, `${name}-personal-settings.png`, settings);
       } catch (error) {
         await captureControlUiE2eFailureDiagnostics(page, {
           error: error instanceof Error ? error : new Error(String(error)),

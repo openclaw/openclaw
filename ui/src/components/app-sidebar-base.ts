@@ -35,7 +35,15 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   >;
   @state() contextualSidebar?: ContextualSidebar;
   @property({ attribute: false }) activePluginTabId = "";
-  @property({ attribute: false }) enabledRouteIds?: readonly NavigationRouteId[];
+  @property({
+    attribute: false,
+    // The shell derives a fresh list per render; only route changes invalidate
+    // navigation. Undefined permits all routes and differs from an empty list.
+    hasChanged: (next?: readonly NavigationRouteId[], previous?: readonly NavigationRouteId[]) =>
+      next?.length !== previous?.length ||
+      Boolean(next?.some((route, index) => route !== previous?.[index])),
+  })
+  enabledRouteIds?: readonly NavigationRouteId[];
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) connectionStatus: GatewayStatus | null = null;
   @property({ attribute: false }) lastError: string | null = null;

@@ -62,7 +62,7 @@ type SettingsSidebarProps = {
   onSearchQueryChange: (query: string) => void;
   preloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   saveIndicator: SettingsSaveIndicatorProps;
-  canAdmin?: boolean;
+  operatorScopes?: readonly string[];
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 };
 
@@ -89,12 +89,12 @@ function isRedundantRouteBlock(routeId: RouteId, block: SettingsSearchBlock): bo
 function filterSettingsNavigationGroups(
   searchQuery: string,
   blockMatches: readonly SettingsSearchBlock[],
-  canAdmin: boolean,
+  operatorScopes: readonly string[],
   nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ): readonly SettingsNavigationGroupView[] {
-  const navigationGroups = visibleSettingsNavigationGroups(canAdmin, nativeDeviceSettings);
+  const navigationGroups = visibleSettingsNavigationGroups(operatorScopes, nativeDeviceSettings);
   const visibleBlockMatches = blockMatches.filter((block) =>
-    isSettingsNavigationRouteVisible(block.routeId, canAdmin, nativeDeviceSettings),
+    isSettingsNavigationRouteVisible(block.routeId, operatorScopes, nativeDeviceSettings),
   );
   const query = normalizeLowercaseStringOrEmpty(searchQuery);
   if (!query) {
@@ -108,7 +108,7 @@ function filterSettingsNavigationGroups(
     ...new Set([
       ...sidebarRoutes,
       ...SETTINGS_SEARCHABLE_SUBPAGE_ROUTES.filter((routeId) =>
-        isSettingsNavigationRouteVisible(routeId, canAdmin, nativeDeviceSettings),
+        isSettingsNavigationRouteVisible(routeId, operatorScopes, nativeDeviceSettings),
       ),
       ...visibleBlockMatches.map((block) => block.routeId),
     ]),
@@ -355,7 +355,7 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
   const navigationGroups = filterSettingsNavigationGroups(
     props.searchQuery,
     searchBlockMatches,
-    props.canAdmin !== false,
+    props.operatorScopes ?? [],
     props.nativeDeviceSettings ?? null,
   );
   const navigation = html` <nav

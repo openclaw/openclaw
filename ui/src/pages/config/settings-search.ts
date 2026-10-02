@@ -99,7 +99,7 @@ export function findSettingsSearchBlocks(params: {
   identityAvailable?: boolean;
   multipleProfiles?: boolean;
   basePath?: string;
-  canAdmin?: boolean;
+  operatorScopes?: readonly string[];
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
 }): SettingsSearchBlock[] {
   if (!params.query.trim()) {
@@ -115,7 +115,7 @@ export function findSettingsSearchBlocks(params: {
             (params.nativeDeviceSettings || !block.requiresNativeDeviceSettings) &&
             isSettingsNavigationRouteVisible(
               block.routeId,
-              params.canAdmin !== false,
+              params.operatorScopes ?? [],
               params.nativeDeviceSettings,
             ),
         )
@@ -141,7 +141,7 @@ export function findSettingsSearchBlocks(params: {
     if (
       !isSettingsNavigationRouteVisible(
         routeId,
-        params.canAdmin !== false,
+        params.operatorScopes ?? [],
         params.nativeDeviceSettings,
       )
     ) {

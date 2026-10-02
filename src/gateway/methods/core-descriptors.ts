@@ -440,8 +440,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Spends utility-model tokens on cache misses when the opt-in is enabled, so
   // it needs write scope despite being a read-shaped lookup.
   ["chat.toolTitles", "chat", "operator.write", "<=2026.7"],
-  // Session checkout diff reads the session's own git worktree, matching the
-  // sessions.files.* trusted-operator read domain.
+  // Broad reads retain the trusted-operator workspace domain. Narrow session reads
+  // require the creator's recorded managed worktree or repository-workspace owner.
   ["sessions.diff", "sessions-diff", "operator.read", "<=2026.7"],
   ["openclaw.setup.verify", "system-agent", "operator.admin", "<=2026.7"],
   // Cloud-worker mutations depend on the loaded provider registry and owned

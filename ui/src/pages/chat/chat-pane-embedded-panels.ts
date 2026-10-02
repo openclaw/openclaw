@@ -31,7 +31,7 @@ import {
   selectSessionWorkspacePreview,
   closeSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
-import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
+import { resolveSessionReviewSidebarContent } from "./components/chat-session-workspace.ts";
 import type {
   SidebarPanelDefinition,
   SidebarPanelTemplates,
@@ -112,10 +112,13 @@ export function sidebarPanelDefinitions(
   params?: SidebarPanelDefinitionParams,
 ): SidebarPanelDefinition[] {
   const state = params?.state;
+  // Review and its shortcut share the same content gate, including retained previews.
+  const detailContent = state ? resolveSessionReviewSidebarContent(state) : null;
   // Metadata-only definitions have no pane context, so they describe types without offering tabs.
   const panelContext = params && {
     ...params,
     dashboardAvailable: () => params.dashboard !== nothing,
+    reviewAvailable: detailContent !== null,
   };
   const definePanel = (
     slot: Exclude<SidebarSlotId, `plugin:${string}`>,
@@ -241,10 +244,6 @@ export function sidebarPanelDefinitions(
       ></openclaw-portals-page>`
     : null;
   const workspace = state ? getSessionWorkspace(state) : null;
-  // The region owns mounting and visibility. Hidden Review tabs must keep the
-  // same cached diff loader so their live content and selection survive.
-  const detailContent =
-    state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
   const workspaceContent =
     state && params && workspace
       ? html`<openclaw-chat-files-panel

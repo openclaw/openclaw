@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.ts";
-import type { SessionWorkspaceListResult } from "../../../api/types.ts";
+import type { GatewaySessionRow, SessionWorkspaceListResult } from "../../../api/types.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import type { SessionCapability, SessionScopeHost } from "../../../lib/sessions/index.ts";
 import type { FileSidebarNavigation } from "./chat-sidebar-content-types.ts";
@@ -77,6 +77,7 @@ export type SessionWorkspaceHost = {
   sessionWorkspaceState?: SessionWorkspaceState;
   sessionWorkspaceDraftScope?: string;
   sessionWorkspaceDraftContext?: { sessionTitle?: string; paneLabel?: string };
+  sessionWorkspaceSession?: Pick<GatewaySessionRow, "sharingRole">;
   sidebarContent: SidebarSelection | null;
   requestUpdate?: () => void;
   handleOpenSidebar: (content: SidebarSelection | null) => void;

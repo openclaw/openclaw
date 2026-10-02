@@ -9,7 +9,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import * as execRunner from "../../process/exec-runner.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
 import { parseNumstatZ, splitPatchByFile } from "../../sessions/session-diff-parser.js";
-import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
+import { captureSessionDiffBaseline, loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -592,6 +592,53 @@ describe("loadSessionDiff", () => {
       expect(unknown.files).toEqual([]);
     },
   );
+
+  it("fences an explicit moving base to the checkout's own history", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "base.txt"), "base\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "base");
+    const base = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-qb", "session-work");
+    fs.writeFileSync(path.join(repoRoot, "own.txt"), "session change\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "session work");
+    const ownCommit = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-q", "main");
+    fs.writeFileSync(path.join(repoRoot, "upstream.txt"), "upstream-only content\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "upstream work");
+    const upstream = git(repoRoot, "rev-parse", "HEAD").trim();
+    git(repoRoot, "checkout", "-q", "session-work");
+    fs.appendFileSync(path.join(repoRoot, "own.txt"), "uncommitted work\n");
+
+    const input = { cwd: repoRoot, sessionKey: "agent:main:s1", baseRef: "main" };
+    const all = await loadCheckoutDiff(input);
+    expect(all.files.map((file) => file.path)).toEqual(["own.txt"]);
+    expect(all.files[0]?.patch).toContain("+uncommitted work");
+    expect(all.baseRef).toBe("main");
+    expect(all.mergeBase?.sha).toBe(git(repoRoot, "rev-parse", "--short", base).trim());
+    expect(all.commits).toHaveLength(1);
+    expect(JSON.stringify(all)).not.toContain("upstream-only content");
+
+    const committed = await loadCheckoutDiff({ ...input, scope: "commit", commit: ownCommit });
+    expect(committed.files.map((file) => file.path)).toEqual(["own.txt"]);
+    expect(committed.files[0]?.patch).not.toContain("uncommitted work");
+    for (const commit of [base, upstream]) {
+      const rejected = await loadCheckoutDiff({ ...input, scope: "commit", commit });
+      expect(rejected.unavailableReason).toBe("unknown_commit");
+      expect(rejected.files).toEqual([]);
+    }
+
+    // Neither a missing recorded ref nor unrelated history can select a fallback.
+    const orphan = git(repoRoot, "commit-tree", `${base}^{tree}`, "-m", "unrelated").trim();
+    git(repoRoot, "branch", "unrelated", orphan);
+    for (const baseRef of ["missing-ref", "unrelated"]) {
+      await expect(loadCheckoutDiff({ ...input, baseRef })).rejects.toThrow(
+        "The session worktree base revision is unavailable.",
+      );
+    }
+  });
 
   it("never executes configured textconv drivers from the read RPC", async () => {
     initRepo(repoRoot);

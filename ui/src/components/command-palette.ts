@@ -2,9 +2,9 @@
 import { consume } from "@lit/context";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { property, state } from "lit/decorators.js";
+import { operatorScopeSatisfied } from "../../../src/shared/operator-scope-compat.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
-import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { t } from "../i18n/index.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
@@ -408,7 +408,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       client,
       agentId,
       agents: () => context.agents?.ensureList?.() ?? Promise.resolve(null),
-      methodAvailable: (method) => Boolean(isGatewayMethodAdvertised(snapshot, method)),
+      methodAvailable: (method) =>
+        Boolean(isGatewayMethodAdvertised(snapshot, method)) &&
+        operatorScopeSatisfied(
+          method === "agents.list" ? "operator.sessions.read" : "operator.read",
+          snapshot.hello?.auth?.scopes ?? [],
+        ),
     }).then((items) => {
       if (
         this.catalogLoad?.promise === promise &&
@@ -630,9 +635,11 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       sessionItems: this.sessionItems,
       modelSearchError: this.modelReader.failed ? t("palette.modelSearchFailed") : null,
       primaryModelSearch: models.hasSnapshot && !models.modelSelectionPolicy?.restricted,
+      operatorScopes: this.context?.gateway.snapshot.hello?.auth.scopes ?? [],
+      nativeDeviceSettings: this.context?.nativeDeviceSettings,
       catalogItems: [
         ...getStaticCommandPaletteCatalogItems(
-          hasOperatorAdminAccess(this.context?.gateway.snapshot.hello?.auth ?? null),
+          this.context?.gateway.snapshot.hello?.auth.scopes ?? [],
           this.context?.nativeDeviceSettings,
         ),
         ...this.catalogItems,

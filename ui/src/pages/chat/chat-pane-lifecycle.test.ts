@@ -13,6 +13,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -44,6 +45,36 @@ function pendingSuggestion(sessionKey: string, id: string, text: string): Sessio
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
+
+describe("chat pane Review shortcut", () => {
+  it.each(["viewer", "owner", "preview", "staff"] as const)(
+    "uses the same scoped Review eligibility for %s",
+    (access) => {
+      const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
+      pane.active = true;
+      pane.presented = true;
+      state.hello = gatewayHelloForMethods(
+        ["sessions.diff"],
+        [access === "staff" ? "operator.read" : "operator.sessions.write"],
+      );
+      state.sessionWorkspaceSession = { sharingRole: access === "owner" ? "owner" : "viewer" };
+      if (access === "preview") {
+        state.sidebarContent = { kind: "markdown", content: "Visible transcript details" };
+      }
+      const event = new KeyboardEvent("keydown", {
+        key: "E",
+        code: "KeyE",
+        ctrlKey: true,
+        altKey: true,
+        shiftKey: true,
+        cancelable: true,
+      });
+      pane.handleDocumentKeydown(event);
+      expect(event.defaultPrevented).toBe(access !== "viewer");
+      expect(isSidebarSlotVisible(state.sidebarLayout, "detail")).toBe(access !== "viewer");
+    },
+  );
+});
 
 describe("chat pane composer prefill attention", () => {
   it.each([

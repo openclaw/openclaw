@@ -93,6 +93,30 @@ function createControlsFixture(
 }
 
 describe("chat pane model-setting permissions", () => {
+  it.each(["owner", "member", "viewer"] as const)(
+    "requires the archive grant and ownership to restore a %s session",
+    (sharingRole) => {
+      const { state, selectedSession, access } = createControlsFixture(
+        "operator.sessions.write",
+        sharingRole,
+      );
+      expect(access.unarchive.allowed).toBe(false);
+      state.hello = sessionMutationGatewayHello([
+        "operator.sessions.write",
+        "operator.sessions.archive",
+      ]);
+      const withArchive = readChatPaneMutationAccess(
+        {
+          client: state.client,
+          phase: "connected",
+          hello: state.hello,
+        } as ApplicationGatewaySnapshot,
+        state.sessionKey,
+        selectedSession,
+      );
+      expect(withArchive.unarchive.allowed).toBe(sharingRole === "owner");
+    },
+  );
   it.each([
     { sessionKey: "agent:work:main", rowAgentId: "work", sharingRole: "owner", allowed: true },
     { sessionKey: "agent:work:main", rowAgentId: "work", sharingRole: "viewer", allowed: false },
@@ -136,6 +160,7 @@ describe("chat pane model-setting permissions", () => {
     { scope: "operator.sessions.write", sharingRole: "owner", allowed: true },
     { scope: "operator.sessions.write", sharingRole: "member", allowed: false },
     { scope: "operator.sessions.write", sharingRole: "viewer", allowed: false },
+    { scope: "operator.write", sharingRole: "owner", allowed: true },
     { scope: "operator.write", sharingRole: "viewer", allowed: true },
     { scope: "operator.admin", sharingRole: "viewer", allowed: true },
   ] as const)(
@@ -146,7 +171,7 @@ describe("chat pane model-setting permissions", () => {
         sharingRole,
       );
       expect(access.unarchive.allowed).toBe(
-        allowed && (scope === "operator.admin" || sharingRole === "owner"),
+        scope === "operator.admin" || (scope === "operator.write" && sharingRole === "owner"),
       );
       const readOnly = !allowed;
       expect(

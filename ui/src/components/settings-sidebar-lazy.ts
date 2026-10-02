@@ -71,7 +71,7 @@ export function renderLazySettingsSidebar(
 // the module lands.
 function renderSettingsSidebarSkeleton(props: SettingsSidebarProps) {
   const groups = visibleSettingsNavigationGroups(
-    Boolean(props.canAdmin),
+    props.operatorScopes ?? [],
     props.nativeDeviceSettings ?? null,
   );
   return html`<div class="settings-sidebar__agent" aria-hidden="true">

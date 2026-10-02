@@ -3,7 +3,7 @@
 import { render, type LitElement, type TemplateResult } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { visibleSettingsNavigationGroups } from "../app-navigation.ts";
+import { visibleSettingsNavigationGroups, type NavigationRouteId } from "../app-navigation.ts";
 import { createApplicationRouter } from "../app-routes.ts";
 import "../components/app-sidebar.ts";
 import { settleLitElements } from "../test-helpers/lit-settle.ts";
@@ -35,6 +35,7 @@ type PairingShell = HTMLElement & {
 
 type PairingSidebar = LitElement & {
   render: () => TemplateResult;
+  enabledRouteIds?: readonly NavigationRouteId[];
   canPairDevice: boolean;
   onPairMobile?: () => void;
   onRetryConnect?: () => void;
@@ -191,8 +192,8 @@ describe("application shell pairing access", () => {
     "does not rerender navigation chrome for unrelated shell updates (outbox runtime: %s)",
     async (withOutboxes) => {
       vi.useFakeTimers();
-      const { shell, renderSidebar, container, overlaySnapshot } = createPairingShell({
-        auth: { role: "operator", scopes: ["operator.admin"] },
+      const { shell, renderSidebar, container, overlaySnapshot, snapshot } = createPairingShell({
+        auth: { role: "operator", scopes: ["operator.read"] },
       });
       let storedOutboxes = {
         total: 1,
@@ -246,6 +247,20 @@ describe("application shell pairing access", () => {
         expect(sidebar.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
         expect(sidebar.querySelector(".session-row-badge--draft")).toBeNull();
       }
+      renderSidebarChild.mockClear();
+      expect(sidebar.enabledRouteIds).toContain("worktrees");
+      snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+      render(shell.render(), container);
+      await settleLitElements([sidebar, topbar]);
+      expect(renderSidebarChild).toHaveBeenCalledOnce();
+      expect(sidebar.enabledRouteIds).toContain("sessions");
+      expect(sidebar.enabledRouteIds).not.toContain("worktrees");
+
+      snapshot.hello!.auth!.scopes = ["operator.read"];
+      render(shell.render(), container);
+      await settleLitElements([sidebar, topbar]);
+      expect(renderSidebarChild).toHaveBeenCalledTimes(2);
+      expect(sidebar.enabledRouteIds).toContain("worktrees");
     },
   );
 
@@ -439,9 +454,8 @@ describe("application shell pairing access", () => {
       '.settings-sidebar__loading[role="status"][aria-busy="true"]',
     );
     expect(loadingSkeleton?.getAttribute("aria-label")).toBe("Loading…");
-    // Legacy operator auth (no scopes) resolves to admin access, so the skeleton
-    // must draw the full admin navigation.
-    const expectedItems = visibleSettingsNavigationGroups(true).reduce(
+    // Unknown grants expose personal preferences while the connection negotiates.
+    const expectedItems = visibleSettingsNavigationGroups([]).reduce(
       (count, group) => count + group.routes.length,
       0,
     );

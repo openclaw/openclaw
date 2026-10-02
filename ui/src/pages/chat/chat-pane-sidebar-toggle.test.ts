@@ -120,6 +120,9 @@ describe("chat pane sidebar toggles", () => {
         client: createGatewayBrowserClientFixture(),
         sessions: createSessionCapabilityFixture(),
       });
+      if (slot === "detail") {
+        state.hello = gatewayHelloForMethods(["sessions.diff"], ["operator.read"]);
+      }
       pane.active = true;
       state.browserPanelAvailable = true;
       state.sidebarLayout = { columns: [] };
@@ -147,6 +150,9 @@ describe("chat pane sidebar toggles", () => {
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
+    if (slot === "detail") {
+      state.hello = gatewayHelloForMethods(["sessions.diff"], ["operator.read"]);
+    }
     pane.active = true;
     state.connected = true;
     state.browserPanelAvailable = true;

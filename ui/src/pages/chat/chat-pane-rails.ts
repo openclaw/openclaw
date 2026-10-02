@@ -76,6 +76,7 @@ export function createChatPaneRails(params: {
   const togglePanelSlot = (slot: SidebarSlotId) =>
     isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
+    session: selectedChatSessionRow(state) ?? undefined,
     draftScope: params.presentationId,
     draftContext: {
       sessionTitle: params.sessionTitle,

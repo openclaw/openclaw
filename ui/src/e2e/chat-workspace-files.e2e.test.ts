@@ -10,7 +10,7 @@ suite.define(() => {
     const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff"],
+      featureMethods: ["chat.metadata", "chat.startup", "sessions.diff", "artifacts.list"],
       methodResponses: {
         "artifacts.list": {
           artifacts: [

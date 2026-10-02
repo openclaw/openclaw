@@ -8,6 +8,7 @@ import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { operatorScopeSatisfied, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
+  resolveSessionMethodAdditionalScopes,
   resolveSessionMethodScope,
   type SessionOperatorScope,
 } from "../shared/session-method-scopes-base.js";
@@ -162,7 +163,10 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     method === "sessions.dispatch" ||
     method === "sessions.move"
   ) {
-    return [resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE];
+    return [
+      resolveDynamicSessionMutationRequiredScope(method, params) ?? WRITE_SCOPE,
+      ...resolveSessionMethodAdditionalScopes(method, params),
+    ];
   }
   if (method === "sessions.delete") {
     return [resolveDynamicSessionMutationRequiredScope(method, params) ?? ADMIN_SCOPE];
@@ -228,7 +232,19 @@ export function projectOperatorScopesForMethod(params: {
       sessionScope,
       params.method,
     );
-    return authorization.allowed && authorization.sessionScope ? [authorization.sessionScope] : [];
+    if (!authorization.allowed || !authorization.sessionScope) {
+      return [];
+    }
+    // Narrowing a broad request must carry each action grant needed by this call,
+    // but never mint a grant absent from either the source request or its ceiling.
+    return [
+      authorization.sessionScope,
+      ...resolveSessionMethodAdditionalScopes(params.method, params.requestParams).filter(
+        (scope) =>
+          operatorScopeSatisfied(scope, [requestedScope]) &&
+          operatorScopeSatisfied(scope, params.allowedScopes),
+      ),
+    ];
   });
 }
 
@@ -261,17 +277,24 @@ export function authorizeOperatorScopesForMethod(
       const missingScope = findMissingOperatorScope(registeredScopes ?? [WRITE_SCOPE], scopes);
       return missingScope ? { allowed: false, missingScope } : { allowed: true };
     }
-    const missingScope = findMissingOperatorScope(
-      resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params),
-      scopes,
-    );
-    return missingScope
-      ? authorizeOperatorScopesForRequiredScope(
-          missingScope,
-          scopes,
-          resolveSessionMethodScope(method, params),
-          method,
-        )
+    let admittedSessionScope: SessionOperatorScope | undefined;
+    for (const requiredScope of resolveDynamicLeastPrivilegeOperatorScopesForMethod(
+      method,
+      params,
+    )) {
+      const authorization = authorizeOperatorScopesForRequiredScope(
+        requiredScope,
+        scopes,
+        resolveSessionMethodScope(method, params),
+        method,
+      );
+      if (!authorization.allowed) {
+        return authorization;
+      }
+      admittedSessionScope ??= authorization.sessionScope;
+    }
+    return admittedSessionScope
+      ? { allowed: true, sessionScope: admittedSessionScope }
       : { allowed: true };
   }
   const requiredScope = resolveScopedMethod(method) ?? ADMIN_SCOPE;

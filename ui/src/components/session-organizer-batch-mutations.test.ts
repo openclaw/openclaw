@@ -190,6 +190,43 @@ function createHarness(
 }
 
 describe("patchSessionRows", () => {
+  it("lets scoped creators organize their work while keeping archive separately gated", async () => {
+    const harness = createHarness({ scopes: ["operator.sessions.write"] });
+    const own = sessionRow(0);
+    const reasons = sessionMenuReasons({ snapshot: harness.scope.gateway.snapshot, session: own });
+    for (const action of [
+      "rename",
+      "set-icon",
+      "set-color",
+      "toggle-unread",
+      "move-to-group",
+      "fork",
+    ] as const) {
+      expect(reasons[action]).toBeUndefined();
+    }
+    expect(reasons["toggle-archived"]).toContain("operator.sessions.archive");
+    await expect(
+      patchSession(harness.host, own, { icon: "note", color: "blue" }, harness.scope),
+    ).resolves.toBe("completed");
+    await expect(
+      patchSessionRows(harness.host, [own], { category: "Projects", unread: true }, harness.scope),
+    ).resolves.toEqual([own]);
+    harness.request.mockClear();
+    await expect(
+      patchSessionRows(harness.host, [own], { archived: true }, harness.scope),
+    ).resolves.toBeNull();
+    expect(harness.request).not.toHaveBeenCalled();
+    await expect(
+      patchSession(
+        harness.host,
+        { ...own, sharingRole: "viewer" },
+        { icon: "note" },
+        harness.scope,
+      ),
+    ).resolves.toBe("failed");
+    expect(harness.patch).toHaveBeenCalledOnce();
+  });
+
   it("binds Mark as read to the current session identity", async () => {
     const row = sessionRow(0);
     const harness = createHarness();
@@ -413,7 +450,7 @@ describe("patchSessionRows", () => {
     );
   });
 
-  it("sends no mutation when operator.write is missing", async () => {
+  it("sends no mutation when operator.sessions.write is missing", async () => {
     const harness = createHarness({ scopes: ["operator.read"] });
 
     await expect(
@@ -424,7 +461,7 @@ describe("patchSessionRows", () => {
     expect(harness.reconcileMutation).not.toHaveBeenCalled();
     expect(harness.publishSessionMutationError).toHaveBeenCalledWith(
       harness.scope,
-      "This action requires operator.write access.",
+      "This action requires operator.sessions.write access.",
     );
   });
 
@@ -435,7 +472,14 @@ describe("patchSessionRows", () => {
     { scope: "operator.write", archived: false },
   ])("keeps archive=$archived owner-only with $scope", async ({ scope, archived }) => {
     const harness = createHarness({
-      scopes: ["operator.read", scope, "operator.questions", "operator.approvals", "operator.talk"],
+      scopes: [
+        "operator.read",
+        scope,
+        "operator.sessions.archive",
+        "operator.questions",
+        "operator.approvals",
+        "operator.talk",
+      ],
     });
     const own = { ...sessionRow(0), archived: !archived, sharingRole: "owner" as const };
     const member = { ...sessionRow(1), archived: !archived, sharingRole: "member" as const };

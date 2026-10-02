@@ -3,6 +3,7 @@ import type { OperatorScope } from "../../../src/gateway/operator-scopes.js";
 import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
 import {
   resolveBaseSessionMutationRequiredScope,
+  resolveSessionMethodAdditionalScopes,
   resolveSessionMethodScope,
 } from "../../../src/shared/session-method-scopes-base.js";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -80,6 +81,11 @@ export function readSessionMethodScopeAccess(
   ) {
     return deniedAccess(requiredScope, "missing-scope");
   }
+  for (const scope of resolveSessionMethodAdditionalScopes(request.method, request.params)) {
+    if (!roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: scopes })) {
+      return deniedAccess(scope, "missing-scope");
+    }
+  }
   const patch =
     request.method === "sessions.patchMany" && isRecord(request.params)
       ? request.params.patch
@@ -92,12 +98,19 @@ export function readSessionMethodScopeAccess(
     isRecord(patch) &&
     typeof patch.archived === "boolean" &&
     !roleScopesAllow({ role, requestedScopes: ["operator.admin"], allowedScopes: scopes });
+  const createsNewSession =
+    request.method === "sessions.create" &&
+    !(isRecord(request.params) && request.params.parentSessionKey);
+  const diffNeedsOwner =
+    request.method === "sessions.diff" &&
+    !roleScopesAllow({ role, requestedScopes: ["operator.read"], allowedScopes: scopes });
   if (
     (archiveNeedsOwner ||
+      diffNeedsOwner ||
       (requiredScope === "operator.sessions.write" &&
         !roleScopesAllow({ role, requestedScopes: ["operator.write"], allowedScopes: scopes }) &&
         // Creation assigns its owner on the Gateway before a canonical row exists.
-        request.method !== "sessions.create")) &&
+        !createsNewSession)) &&
     request.session?.sharingRole !== "owner" &&
     request.session?.sharingRole !== "admin"
   ) {

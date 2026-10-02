@@ -11,6 +11,7 @@ import { t } from "../../../i18n/index.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
+import { readSessionMethodScopeAccess } from "../../../lib/session-method-access.ts";
 import { sessionWorkspaceFileKey } from "../../../lib/sessions/workspace.ts";
 import { openWorkspaceItem } from "./chat-session-workspace-preview.ts";
 import {
@@ -27,7 +28,11 @@ import type {
   SessionWorkspaceProps,
   SessionWorkspaceState,
 } from "./chat-session-workspace-types.ts";
-import { hasUniformLineEndings, type SidebarContent } from "./chat-sidebar.ts";
+import {
+  hasUniformLineEndings,
+  type SidebarContent,
+  type SidebarSelection,
+} from "./chat-sidebar.ts";
 
 export {
   clearSessionWorkspaceTimers,
@@ -451,12 +456,14 @@ function openArtifact(
 export function createSessionWorkspaceProps(
   state: SessionWorkspaceHost,
   options?: {
+    session?: SessionWorkspaceHost["sessionWorkspaceSession"];
     draftScope?: string;
     draftContext?: SessionWorkspaceHost["sessionWorkspaceDraftContext"];
     expanded?: boolean;
     presented?: boolean;
   },
 ): SessionWorkspaceProps {
+  state.sessionWorkspaceSession = options?.session;
   state.sessionWorkspaceDraftScope = options?.draftScope;
   state.sessionWorkspaceDraftContext = options?.draftContext;
   const workspace = getSessionWorkspace(state);
@@ -523,12 +530,27 @@ export function createSessionWorkspaceProps(
   };
 }
 
-export function resolveSessionDiffSidebarContent(
+/** Review can reopen an authorized detail preview without granting checkout access. */
+export function resolveSessionReviewSidebarContent(
   state: SessionWorkspaceHost,
-): SidebarContent | null {
+): SidebarSelection | null {
+  const diffContent = resolveSessionDiffSidebarContent(state);
+  return state.sidebarContent && state.sidebarContent.kind !== "session-diff"
+    ? state.sidebarContent
+    : diffContent;
+}
+
+function resolveSessionDiffSidebarContent(state: SessionWorkspaceHost): SidebarContent | null {
   const workspace = getSessionWorkspace(state);
   const canOpenDiff =
-    isGatewayMethodAdvertised(state, "sessions.diff") === true && Boolean(state.client);
+    isGatewayMethodAdvertised(state, "sessions.diff") === true &&
+    Boolean(state.client) &&
+    readSessionMethodScopeAccess(state.hello?.auth, {
+      method: "sessions.diff",
+      requiredScope: "operator.read",
+      sessionScope: true,
+      session: state.sessionWorkspaceSession,
+    }).allowed;
   if (!canOpenDiff) {
     return null;
   }
@@ -538,6 +560,24 @@ export function resolveSessionDiffSidebarContent(
   const sessionKey = state.sessionKey;
   const client = state.client;
   const agentId = workspace.agentId;
+  const assertCurrent = () => {
+    if (
+      state.client !== client ||
+      !state.connected ||
+      !isCurrentSessionWorkspace(state, workspace)
+    ) {
+      throw new Error(t("chat.sessionDiff.disconnected"));
+    }
+    const access = readSessionMethodScopeAccess(state.hello?.auth, {
+      method: "sessions.diff",
+      requiredScope: "operator.read",
+      sessionScope: true,
+      session: state.sessionWorkspaceSession,
+    });
+    if (!access.allowed) {
+      throw new Error(access.reason);
+    }
+  };
   const canLoadFileText =
     isGatewayMethodAdvertised(state, "sessions.files.get") === true && Boolean(state.client);
   const content: SidebarContent = {
@@ -545,21 +585,26 @@ export function resolveSessionDiffSidebarContent(
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
     load: async (scope) => {
+      assertCurrent();
       if (!client) {
         throw new Error(t("chat.sessionDiff.disconnected"));
       }
-      return await client.request<SessionsDiffResult>("sessions.diff", {
+      const result = await client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
       });
+      assertCurrent();
+      return result;
     },
     loadFileText: canLoadFileText
       ? async (path) => {
           try {
+            assertCurrent();
             const result = await state.sessions.getFile(sessionKey, path, {
               agentId,
             });
+            assertCurrent();
             const file = result?.file;
             if (
               !file ||
@@ -575,7 +620,10 @@ export function resolveSessionDiffSidebarContent(
           }
         }
       : undefined,
-    openFile: (path) => openFile(state, getSessionWorkspace(state), path),
+    openFile: (path) => {
+      assertCurrent();
+      openFile(state, workspace, path);
+    },
   };
   trackSessionCheckoutSidebar(content);
   workspace.diffContent = content;

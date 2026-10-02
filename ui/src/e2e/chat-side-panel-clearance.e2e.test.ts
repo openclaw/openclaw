@@ -220,7 +220,12 @@ suite.define(() => {
           await seedSettings(page, "light");
           await installMockGateway(page, {
             ...scenario(),
-            featureMethods: [...defaultControlUiFeatureMethods, "browser.request", "terminal.open"],
+            featureMethods: [
+              ...defaultControlUiFeatureMethods,
+              "browser.request",
+              "terminal.open",
+              "sessions.diff",
+            ],
             terminalEnabled: true,
           });
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

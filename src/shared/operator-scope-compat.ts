@@ -5,6 +5,7 @@ const OPERATOR_TALK_SCOPE = "operator.talk";
 const OPERATOR_WRITE_SCOPE = "operator.write";
 const OPERATOR_SESSION_READ_SCOPE = "operator.sessions.read";
 const OPERATOR_SESSION_WRITE_SCOPE = "operator.sessions.write";
+const OPERATOR_SESSION_ARCHIVE_SCOPE = "operator.sessions.archive";
 const OPERATOR_SCOPE_PREFIX = "operator.";
 
 export function operatorScopeSatisfied(
@@ -20,7 +21,8 @@ export function operatorScopeSatisfied(
     ((requestedScope === OPERATOR_READ_SCOPE ||
       requestedScope === OPERATOR_TALK_SCOPE ||
       requestedScope === OPERATOR_SESSION_READ_SCOPE ||
-      requestedScope === OPERATOR_SESSION_WRITE_SCOPE) &&
+      requestedScope === OPERATOR_SESSION_WRITE_SCOPE ||
+      requestedScope === OPERATOR_SESSION_ARCHIVE_SCOPE) &&
       granted.includes(OPERATOR_WRITE_SCOPE)) ||
     (requestedScope === OPERATOR_SESSION_READ_SCOPE &&
       (granted.includes(OPERATOR_READ_SCOPE) || granted.includes(OPERATOR_SESSION_WRITE_SCOPE)))

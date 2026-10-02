@@ -70,6 +70,24 @@ describe("VisitorAccessService", () => {
     },
   );
 
+  it("keeps invitations available when own-session archiving is explicitly granted", async () => {
+    const fixture = visitorFixture({
+      gatewayConfig: {
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: { ...guestRole, scopes: [...guestRole.scopes, "operator.sessions.archive"] },
+            },
+          },
+        },
+      },
+    });
+    await fixture.service.invite({ email: "visitor@example.com" }, fixture.authority);
+    expect(fixture.emails()).toEqual(["visitor@example.com"]);
+    expect(fixture.grants.size).toBe(1);
+  });
+
   it.each<{ reason: string; roles?: GatewayRoles }>([
     { reason: "roles are disabled" },
     { reason: "no default is configured", roles: { definitions: { guest: guestRole } } },

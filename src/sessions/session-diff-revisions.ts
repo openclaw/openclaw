@@ -10,10 +10,30 @@ type GitOutput = (
 /** Picks the merge base used for branch-relative session diffs. */
 export async function resolveSessionDiffBase(params: {
   branch: string | undefined;
+  baseRef?: string;
   head: string;
   gitOut: GitOutput;
   root: string;
 }): Promise<{ base: string; baseRef: string }> {
+  if (params.baseRef !== undefined) {
+    const revision = (
+      await params.gitOut(params.root, [
+        "rev-parse",
+        "--verify",
+        "--quiet",
+        "--end-of-options",
+        `${params.baseRef}^{commit}`,
+      ])
+    )?.trim();
+    const mergeBase = revision
+      ? (await params.gitOut(params.root, ["merge-base", revision, params.head]))?.trim()
+      : undefined;
+    // An explicit workspace boundary must not fall back to an unrelated default.
+    if (!mergeBase) {
+      throw new Error("The session worktree base revision is unavailable.");
+    }
+    return { base: mergeBase, baseRef: params.baseRef };
+  }
   const defaultRef = await params.gitOut(params.root, [
     "symbolic-ref",
     "--short",

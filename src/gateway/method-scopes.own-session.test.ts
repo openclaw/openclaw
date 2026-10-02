@@ -96,6 +96,77 @@ describe("session-scoped method admission", () => {
     ).toEqual(["operator.sessions.write"]);
   });
 
+  it.each(["sessions.patch", "sessions.patchMany"])(
+    "requires an additional archive grant for every %s patch",
+    (method) => {
+      for (const archived of [true, false]) {
+        const patch = { archived, label: "Organized work" };
+        const params =
+          method === "sessions.patch" ? { key: "agent:main:own", ...patch } : { patch };
+        expect(
+          authorizeOperatorScopesForMethod(method, ["operator.sessions.write"], params),
+        ).toEqual({
+          allowed: false,
+          missingScope: "operator.sessions.archive",
+        });
+        expect(
+          authorizeOperatorScopesForMethod(method, ["operator.sessions.archive"], params),
+        ).toEqual({
+          allowed: false,
+          missingScope: "operator.write",
+        });
+        expect(
+          authorizeOperatorScopesForMethod(
+            method,
+            ["operator.sessions.write", "operator.sessions.archive"],
+            params,
+          ),
+        ).toEqual({
+          allowed: true,
+          sessionScope: "operator.sessions.write",
+        });
+        expect(authorizeOperatorScopesForMethod(method, ["operator.write"], params)).toEqual({
+          allowed: true,
+        });
+      }
+    },
+  );
+
+  it("projects archive grants through both the request and the original ceiling", () => {
+    const request = {
+      method: "sessions.patch",
+      requestParams: { key: "agent:main:own", archived: true },
+    };
+    expect(
+      projectOperatorScopesForMethod({
+        ...request,
+        requestedScopes: ["operator.write"],
+        allowedScopes: ["operator.sessions.write", "operator.sessions.archive"],
+      }),
+    ).toEqual(["operator.sessions.write", "operator.sessions.archive"]);
+    expect(
+      projectOperatorScopesForMethod({
+        ...request,
+        requestedScopes: ["operator.write"],
+        allowedScopes: ["operator.sessions.write"],
+      }),
+    ).toEqual(["operator.sessions.write"]);
+    expect(
+      projectOperatorScopesForMethod({
+        ...request,
+        requestedScopes: ["operator.sessions.write"],
+        allowedScopes: ["operator.write"],
+      }),
+    ).toEqual(["operator.sessions.write"]);
+    expect(
+      projectOperatorScopesForMethod({
+        ...request,
+        requestedScopes: ["operator.sessions.archive"],
+        allowedScopes: ["operator.write"],
+      }),
+    ).toEqual(["operator.sessions.archive"]);
+  });
+
   it.each([
     ["sessions.create", { incognito: true }],
     ["sessions.create", { key: "agent:main:dashboard:incognito-secret" }],

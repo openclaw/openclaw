@@ -316,10 +316,13 @@ export async function collectCheckoutDiff(
   // Canonical root for the hardlink/escape guard: show-toplevel can contain
   // symlinked path segments, and containment is compared against realpaths.
   const realRoot = await fs.realpath(root).catch(() => root);
+  if (params.baseRef !== undefined && !head) {
+    throw new Error("The session worktree has no base revision.");
+  }
   const branchBase = params.baseCommit
     ? { base: params.baseCommit, baseRef: params.baseCommit }
     : head
-      ? await resolveSessionDiffBase({ branch, gitOut, head, root })
+      ? await resolveSessionDiffBase({ branch, baseRef: params.baseRef, gitOut, head, root })
       : await resolveSessionDiffEmptyTree(root, objectFormat);
   const metadata =
     head && branchBase

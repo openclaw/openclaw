@@ -23,6 +23,7 @@ const saveIndicator = () => ({
 });
 
 const sidebarAgentProps = () => ({
+  operatorScopes: ["operator.admin"],
   agents: [
     { id: "main", name: "Main" },
     { id: "research", name: "Research" },
@@ -317,7 +318,7 @@ describe("settings sidebar search", () => {
         connectionStatus: null,
         lastError: null,
         gatewayVersion: "",
-        canAdmin: false,
+        operatorScopes: ["operator.read", "operator.approvals"],
         searchQuery: "security",
         searchBlockMatches: [
           {

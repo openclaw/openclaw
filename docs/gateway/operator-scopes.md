@@ -29,18 +29,19 @@ require the `node` role.
 
 ## Scope levels
 
-| Scope                     | Meaning                                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`           | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
-| `operator.sessions.read`  | Read visible sessions, history, and session metadata without general Gateway read access.                                                                     |
-| `operator.sessions.write` | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                    |
-| `operator.write`          | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
-| `operator.admin`          | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
-| `operator.pairing`        | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
-| `operator.approvals`      | Exec and plugin approval APIs.                                                                                                                                |
-| `operator.questions`      | Listing, reading, answering, and resolving interactive questions.                                                                                             |
-| `operator.talk`           | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
-| `operator.talk.secrets`   | Reading Talk configuration with secrets included.                                                                                                             |
+| Scope                       | Meaning                                                                                                                                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`             | Read-only status, lists, catalog, logs, session reads, retained audit and execution-identity diagnostics, and other non-mutating calls.                       |
+| `operator.sessions.read`    | Read visible sessions, history, and session metadata without general Gateway read access.                                                                     |
+| `operator.sessions.write`   | Read visible sessions, organize owned sessions, and start or continue the authenticated person's own work.                                                    |
+| `operator.sessions.archive` | Archive or restore owned sessions when combined with session write access. Does not grant read or write access by itself.                                     |
+| `operator.write`            | Mutating operator actions: sending messages, invoking tools, updating talk/voice settings, node command relay. Also satisfies `operator.read`.                |
+| `operator.admin`            | Administrative access. Satisfies every `operator.*` scope. Required for config mutation, updates, native hooks, reserved namespaces, and high-risk approvals. |
+| `operator.pairing`          | Device and node pairing management: list, approve, reject, remove, rotate, revoke.                                                                            |
+| `operator.approvals`        | Exec and plugin approval APIs.                                                                                                                                |
+| `operator.questions`        | Listing, reading, answering, and resolving interactive questions.                                                                                             |
+| `operator.talk`             | Creating, steering, and closing Talk sessions without general Gateway write access. `operator.write` also satisfies this scope.                               |
+| `operator.talk.secrets`     | Reading Talk configuration with secrets included.                                                                                                             |
 
 Personal GitHub connection management is a narrowly self-scoped exception to
 read-only behavior: `users.github.*` requires `operator.read` plus the exact
@@ -71,17 +72,24 @@ already holds `operator.admin`.
 
 `operator.sessions.write` includes `operator.sessions.read`. Broad
 `operator.read` also includes session reads, and `operator.write` includes both
-session scopes. The session scopes do not grant general diagnostics,
+session scopes and `operator.sessions.archive`. The session scopes do not grant general diagnostics,
 configuration changes, Gateway-wide tool invocation, or publication outside
 the own-session shared-account path described above.
 
 Session readers can browse visible conversations and receive their updates.
 The Control UI can copy visible history as Markdown. Session writers can rename,
-pin, archive, or restore their own existing conversations. Other people's visible
+pin, change icons and colors, mark unread, categorize, or fork their own existing
+conversations. Archiving and restoring also require `operator.sessions.archive`;
+ordinary session write access does not grant this capability. Other people's visible
 sessions remain read-only under these grants, including shared sessions.
 Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
+
+To permit archiving for a restricted role, add `operator.sessions.archive` to its
+scope ceiling and the person's granted scopes. Both archive and restore require
+that grant, including when combined with other metadata changes in a batch.
+Broad `operator.write` and `operator.admin` retain their existing archive access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,
@@ -89,6 +97,18 @@ fast-mode, and non-full permission choices use the same session grant and the
 Gateway's allowed model catalog. Full permission mode, sandbox changes, and
 changes to an existing session's context window still require administrator access.
 Reconnecting rechecks current permission before replaying a Stop for its original run.
+
+**Review** accepts session read access for the creator's own managed worktree or
+repository workspace. It checks the durable workspace owner and current session
+before returning changes. It does not fall back to a shared agent checkout or
+expose the host workspace path. A session without its own checkout shows an
+explanation directing the person to create a session with a worktree.
+
+Control UI navigation shows personal preferences and the destinations permitted
+by the negotiated scopes. Server configuration, diagnostics, automation, and
+device administration require their respective broader grants. This applies to
+the sidebar, settings search, and command palette; Gateway APIs enforce the same
+scope requirements independently.
 
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
@@ -382,8 +402,11 @@ together before a new session first runs, including chat, the OpenAI-compatible
 HTTP endpoints, Talk, recovery, forks, checkpoint branches, cron, outbound
 messages, and spawned children.
 Delegated child work inherits a required parent's original creator and sandbox
-policy, even after role changes. Recovery and branching requested by another
-person use that person's own role rather than the source session's policy.
+policy, even after role changes. When the source requires a sandbox, recovery and
+checkpoint forks retain that requirement and its original creator. Recovery also
+retains the original creator of required-workspace sessions. Recorded workspace
+and foreground execution restrictions survive both operations. The requesting
+person's current role may further restrict these operations.
 
 Required creation provenance is immutable. Role changes, sharing, participation,
 `sessions.patch`, whole-entry replacement, legacy imports, and canonical-key
@@ -540,6 +563,10 @@ dispatch so authorization failures have one canonical structured response:
   require `operator.admin`. Runtime availability and sandbox checks still
   apply. Persisting a selected model as the configured agent default is
   admin-only.
+- `sessions.patch` and `sessions.patchMany` also require
+  `operator.sessions.archive` when the patch includes `archived`. A session writer
+  can archive and restore only owned sessions; the additional scope does not
+  authorize other session mutations by itself.
 - `sessions.delete` requires `operator.write` for an archived-only request
   with the supported fields, and `operator.admin` otherwise. Neither session
   scope authorizes deletion.

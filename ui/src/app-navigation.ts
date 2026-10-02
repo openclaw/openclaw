@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
+import { operatorScopeSatisfied } from "../../src/shared/operator-scope-compat.js";
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -219,30 +220,23 @@ const SETTINGS_NAVIGATION_GROUPS = [
   },
 ] as const satisfies readonly SettingsNavigationGroup[];
 
-const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
-  "profile",
-  "appearance",
-  "notifications",
-  "connection",
+const READ_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "channels",
   "talk",
-  "devices",
   "agents",
   "model-providers",
   "search",
   "plugin-settings",
   "skill-settings",
   "memory",
-  "approvals",
   "advanced",
   "debug",
   "logs",
-  "about",
 ]);
 
 export function isSettingsNavigationRouteVisible(
   routeId: NavigationRouteId,
-  canAdmin: boolean,
+  scopes: readonly string[],
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): boolean {
   if (routeId === "device") {
@@ -257,10 +251,25 @@ export function isSettingsNavigationRouteVisible(
         snapshot.capabilities?.activeComputerPresenceEnabled !== undefined),
     );
   }
-  if (routeId === "updates") {
-    return canAdmin || nativeDeviceSettings !== null;
+  if (
+    ["profile", "appearance", "notifications", "connection", "about", "lobsterdex"].includes(
+      routeId,
+    )
+  ) {
+    return true;
   }
-  return canAdmin || NON_ADMIN_SETTINGS_ROUTES.has(routeId);
+  if ((routeId === "updates" || routeId === "talk") && nativeDeviceSettings !== null) {
+    return true;
+  }
+  const requiredScope =
+    routeId === "devices"
+      ? "operator.pairing"
+      : routeId === "approvals"
+        ? "operator.approvals"
+        : READ_SETTINGS_ROUTES.has(settingsNavigationOwnerRoute(routeId))
+          ? "operator.read"
+          : "operator.admin";
+  return operatorScopeSatisfied(requiredScope, scopes);
 }
 
 export function deviceSettingsGroupLabelKey(
@@ -285,7 +294,7 @@ export function deviceSettingsGroupLabelKey(
 }
 
 export function visibleSettingsNavigationGroups(
-  canAdmin: boolean,
+  scopes: readonly string[],
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): readonly SettingsNavigationGroup[] {
   return SETTINGS_NAVIGATION_GROUPS.map((group) => ({
@@ -294,7 +303,7 @@ export function visibleSettingsNavigationGroups(
         ? deviceSettingsGroupLabelKey(nativeDeviceSettings?.snapshot)
         : group.labelKey,
     routes: group.routes.filter((route) =>
-      isSettingsNavigationRouteVisible(route, canAdmin, nativeDeviceSettings),
+      isSettingsNavigationRouteVisible(route, scopes, nativeDeviceSettings),
     ),
   })).filter((group) => group.routes.length > 0);
 }
@@ -387,6 +396,30 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
 
 export function isSettingsNavigationRoute(routeId: NavigationRouteId): boolean {
   return SETTINGS_NAVIGATION_ROUTES.has(routeId);
+}
+
+/** Navigation reflects usable destinations; each page and Gateway still owns its actions. */
+export function isNavigationRouteVisible(
+  routeId: NavigationRouteId,
+  scopes: readonly string[],
+  nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
+): boolean {
+  if (isSettingsNavigationRoute(routeId)) {
+    return isSettingsNavigationRouteVisible(routeId, scopes, nativeDeviceSettings);
+  }
+  if (routeId === "sessions") {
+    return operatorScopeSatisfied("operator.sessions.read", scopes);
+  }
+  if (
+    routeId !== "apps" &&
+    (isPersistedSidebarRoute(routeId) ||
+      routeId === "skills" ||
+      routeId === "skill-workshop" ||
+      routeId === "worktrees")
+  ) {
+    return operatorScopeSatisfied("operator.read", scopes);
+  }
+  return true;
 }
 
 export function isSettingsTakeover(routeId: RouteId | undefined): boolean {

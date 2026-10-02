@@ -27,7 +27,10 @@ export function isRestrictedVisitorRole(role: GatewayRole): boolean {
     (role.agents === "*" || role.agents.length > 0) &&
     role.scopes.includes("operator.sessions.write") &&
     role.scopes.every(
-      (scope) => scope === "operator.sessions.read" || scope === "operator.sessions.write",
+      (scope) =>
+        scope === "operator.sessions.read" ||
+        scope === "operator.sessions.write" ||
+        scope === "operator.sessions.archive",
     )
   );
 }
@@ -40,7 +43,7 @@ export function resolveVisitorRole(config: VisitorRuntimeConfig): string {
     name && roles && Object.hasOwn(roles.definitions, name) ? roles.definitions[name] : undefined;
   if (!name || !role || !isRestrictedVisitorRole(role)) {
     throw new VisitorAccessError(
-      'Visitor Access requires gateway.roles.default to allow isolated own-session work and shared-session viewing with only operator.sessions.write and optional operator.sessions.read scopes, accessPolicyPlugin: "visitor-access", and an explicit modelPolicy. Use modelPolicy: {} for the source agent\'s primary and fallbacks, and configure exclusions before enabling guest access.',
+      'Visitor Access requires gateway.roles.default to allow isolated own-session work and shared-session viewing with operator.sessions.write, optional operator.sessions.read and operator.sessions.archive scopes, accessPolicyPlugin: "visitor-access", and an explicit modelPolicy. Use modelPolicy: {} for the source agent\'s primary and fallbacks, and configure exclusions before enabling guest access.',
     );
   }
   return name;
