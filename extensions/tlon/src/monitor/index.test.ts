@@ -1,15 +1,12 @@
-import { writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
 import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker, withTempDir } from "openclaw/plugin-sdk/test-env";
-import { register } from "tsx/esm/api";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TLON_PENDING_APPROVAL_LIMIT, type PendingApproval } from "../settings.js";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
 
@@ -424,19 +421,6 @@ it("continues startup after an initial group invite write fails", async () => {
 });
 
 describe("monitorTlonProvider reply prefixes", () => {
-  beforeAll(async () => {
-    // TSX's first cache write schedules process housekeeping; keep it on the real clock.
-    await withTempDir("tlon-prefix-source-cache-", async (dir) => {
-      const sourcePath = join(dir, "initialize.mts");
-      await writeFile(sourcePath, "export enum CacheInitialization { Ready }\n");
-      const loader = register({ namespace: "tlon-prefix-source-cache", tsconfig: false });
-      try {
-        await loader.import(pathToFileURL(sourcePath).href, import.meta.url);
-      } finally {
-        await loader.unregister();
-      }
-    });
-  });
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       try {
@@ -477,7 +461,7 @@ describe("monitorTlonProvider reply prefixes", () => {
     realUrbitFixture.config = {
       session: { store: join(stateDir, "sessions.json") },
       agents: { list: [{ id: "main", identity: { name: "Test Bot" } }] },
-      messages: { responsePrefix: "[global]" },
+      messages: { responsePrefix: "[global]", visibleReplies: "automatic" },
       channels: {
         tlon: {
           code: "code",

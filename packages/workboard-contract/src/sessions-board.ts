@@ -89,6 +89,7 @@ export type WorkboardSessionsBoardRead = {
   >;
   people?: SessionPerson[];
   warning?: string;
+  classifying?: true;
   classifiedAt?: number;
 };
 

@@ -39,6 +39,7 @@ import {
   setSetupGraceTimeoutMsForTests,
 } from "./config.js";
 import plugin from "./index.js";
+import { registerActiveMemoryProviderTests } from "./index.memory-provider.test-support.js";
 import * as recallRun from "./recall-run.js";
 import {
   buildCacheKey,
@@ -78,6 +79,8 @@ const hoisted = vi.hoisted(() => {
   return {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
     getActiveMemorySearchManager: vi.fn(async () => ({ manager: null })),
+    getActiveMemoryProvider: vi.fn(async () => ({ provider: null })),
+    memoryCapability: {} as Record<string, unknown>,
     cleanupSessionLifecycleArtifacts: vi.fn(),
     patchSessionEntry: vi.fn(),
     rawDeltaReads: [] as Array<{ maxBytes?: number; maxEvents?: number; sessionId: string }>,
@@ -97,6 +100,7 @@ const hoisted = vi.hoisted(() => {
 vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
   closeActiveMemorySearchManager: hoisted.closeActiveMemorySearchManager,
   getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
+  getActiveMemoryProvider: hoisted.getActiveMemoryProvider,
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-host-core", async () => {
@@ -107,10 +111,7 @@ vi.mock("openclaw/plugin-sdk/memory-host-core", async () => {
     ...actual,
     getMemoryCapabilityRegistration: () => ({
       pluginId: "memory-core",
-      capability: {
-        deterministicRecallToolName: "memory_search",
-        supportsPrivateTranscriptRecall: true,
-      },
+      capability: hoisted.memoryCapability,
     }),
   };
 });
@@ -619,6 +620,17 @@ describe("active-memory plugin", () => {
     registerPluginConfig({ timeoutMs, logging: true, ...overrides });
   };
 
+  registerActiveMemoryProviderTests({
+    getActiveMemoryProvider: hoisted.getActiveMemoryProvider,
+    getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
+    useNativeProvider: () => {
+      hoisted.memoryCapability.providerRuntime = { open: vi.fn() };
+    },
+    runEmbeddedAgent,
+    registerPluginConfig,
+    runPromptBuild,
+  });
+
   let stateIndex = 0;
   beforeAll(async () => {
     // openclaw-temp-dir: allow suite-owned session stores drain once before removal
@@ -630,6 +642,11 @@ describe("active-memory plugin", () => {
 
   beforeEach(async () => {
     vi.resetAllMocks();
+    // Memory Core is the legacy slot owner unless a test selects a native provider.
+    hoisted.memoryCapability = {
+      deterministicRecallToolName: "memory_search",
+      supportsPrivateTranscriptRecall: true,
+    };
     api.pluginConfig = { agents: ["main"] };
     stateDir = path.join(fixtureRoot, `state-${++stateIndex}`);
     await fs.mkdir(stateDir, { recursive: true });
@@ -1059,54 +1076,6 @@ describe("active-memory plugin", () => {
     } finally {
       clock.mockRestore();
     }
-  });
-
-  it.each([" \n "])(
-    "does not recall historical text for an explicit empty request %j",
-    async (currentUserMessage) => {
-      registerPluginConfig({ mode: "always" });
-      const search = vi.fn(async () => []);
-      hoisted.getActiveMemorySearchManager.mockResolvedValue({
-        manager: { search, listTriggerCandidates: vi.fn(async () => []) },
-      } as never);
-      await runPromptBuild({
-        prompt: "What do you remember about my preferences?",
-        currentUserMessage,
-        currentUserMessageId: "empty-admission",
-        messages: [{ role: "user", content: "What do you remember about my preferences?" }],
-      });
-      expect(search).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).not.toHaveBeenCalled();
-    },
-  );
-
-  it("reuses one trigger admission across history changes and keeps authority separate", async () => {
-    registerPluginConfig({ mode: "escalate" });
-    const search = vi.fn(async () => []);
-    hoisted.getActiveMemorySearchManager.mockResolvedValue({
-      manager: { search, listTriggerCandidates: vi.fn(async () => []) },
-    } as never);
-    for (const [history, fingerprint, admission] of [
-      ["old history", "authority-a", "same-admission"],
-      ["rebuilt history", "authority-a", "same-admission"],
-      ["rebuilt history", "authority-b", "same-admission"],
-      ["rebuilt history", "authority-b", "new-admission"],
-    ] as const) {
-      await runPromptBuild(
-        {
-          prompt: history,
-          currentUserMessage: "ok",
-          currentUserMessageId: admission,
-          messages: [{ role: "user", content: history }],
-        },
-        {
-          runId: "trigger-rebuild",
-          toolAuthority: { fingerprint, allows: () => true, assertActive: () => undefined },
-        },
-      );
-    }
-    expect(search).toHaveBeenCalledTimes(3);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("does not invent model-recall identity when the producer has no admission ID", async () => {

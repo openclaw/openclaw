@@ -1,25 +1,30 @@
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable } from "kysely";
-import type {
-  WorkerTranscriptCommitErrorReason,
-  WorkerTranscriptCommitResult,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../../infra/sqlite-worker-operation-admission.js";
 import type {
   DB as StateDatabase,
   WorkerTranscriptCommitHeads,
   WorkerTranscriptCommits,
 } from "../../state/openclaw-state-db.generated.js";
 import {
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import {
+  isWorkerTranscriptCommitOutcome,
+  type WorkerTranscriptCommitInput,
+  type WorkerTranscriptCommitOutcome,
+  type WorkerTranscriptCommitBeginResult,
+} from "./transcript-commit-store.worker-contract.js";
 
 type TranscriptCommitDb = Pick<
   StateDatabase,
@@ -29,25 +34,6 @@ type HeadRow = Selectable<WorkerTranscriptCommitHeads>;
 type HeadInsert = Insertable<WorkerTranscriptCommitHeads>;
 type CommitRow = Selectable<WorkerTranscriptCommits>;
 type CommitInsert = Insertable<WorkerTranscriptCommits>;
-
-export type WorkerTranscriptCommitInput = {
-  environmentId: string;
-  sessionId: string;
-  runEpoch: number;
-  seq: number;
-  requestHash: string;
-};
-
-export type WorkerTranscriptCommitOutcome =
-  | { ok: true; result: WorkerTranscriptCommitResult }
-  | { ok: false; reason: WorkerTranscriptCommitErrorReason };
-
-type WorkerTranscriptCommitBeginResult =
-  | { kind: "claimed" }
-  | { kind: "recover" }
-  | { kind: "replay"; outcome: WorkerTranscriptCommitOutcome }
-  | { kind: "rejected"; reason: "conflict" }
-  | { kind: "rejected"; reason: "out-of-order"; expectedSeq: number };
 
 type NormalizedCommitInput = WorkerTranscriptCommitInput & { nowMs: number };
 type ExistingCommitResult = Extract<
@@ -85,26 +71,6 @@ function normalizeRequestHash(value: unknown): string {
   return value;
 }
 
-function isCommitResult(value: unknown): value is WorkerTranscriptCommitResult {
-  return (
-    isRecord(value) &&
-    Array.isArray(value.entryIds) &&
-    value.entryIds.length > 0 &&
-    value.entryIds.every((entry: unknown) => typeof entry === "string" && entry.length > 0) &&
-    typeof value.newLeafId === "string" &&
-    value.newLeafId.length > 0
-  );
-}
-
-function isCommitErrorReason(value: unknown): value is WorkerTranscriptCommitErrorReason {
-  return (
-    value === "stale-base-leaf" ||
-    value === "epoch-mismatch" ||
-    value === "invalid-batch" ||
-    value === "session-not-attached"
-  );
-}
-
 function parseOutcomeJson(value: string): WorkerTranscriptCommitOutcome {
   let parsed: unknown;
   try {
@@ -112,14 +78,8 @@ function parseOutcomeJson(value: string): WorkerTranscriptCommitOutcome {
   } catch (error) {
     throw new Error("Worker transcript commit cached outcome is invalid", { cause: error });
   }
-  if (!isRecord(parsed)) {
-    throw new Error("Worker transcript commit cached outcome is invalid");
-  }
-  if (parsed.ok === true && isCommitResult(parsed.result)) {
-    return { ok: true, result: parsed.result };
-  }
-  if (parsed.ok === false && isCommitErrorReason(parsed.reason)) {
-    return { ok: false, reason: parsed.reason };
+  if (isWorkerTranscriptCommitOutcome(parsed)) {
+    return parsed.ok ? { ok: true, result: parsed.result } : { ok: false, reason: parsed.reason };
   }
   throw new Error("Worker transcript commit cached outcome is invalid");
 }
@@ -211,16 +171,26 @@ function insertPendingCommit(db: DatabaseSync, input: NormalizedCommitInput): vo
   executeSqliteQuerySync(db, query(db).insertInto("worker_transcript_commits").values(commit));
 }
 
-export function createWorkerTranscriptCommitStore(
-  options: { database?: OpenClawStateDatabase; now?: () => number } = {},
+function createWorkerTranscriptCommitKernel(
+  database: OpenClawStateDatabase,
+  nowMs: number,
+  operationLabel: string,
 ) {
-  const path = (options.database ?? openOpenClawStateDatabase()).path;
-  const now = options.now ?? Date.now;
   const write = <T>(operation: (db: DatabaseSync) => T): T =>
-    runOpenClawStateWriteTransaction(({ db }) => operation(db), { path });
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result = operation(db);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: result });
+        deferSqliteWorkerCommitReceipt(db, result);
+        return result;
+      },
+      { database },
+      { operationLabel },
+    );
 
   const begin = (rawInput: WorkerTranscriptCommitInput): WorkerTranscriptCommitBeginResult => {
-    const input = normalizeInput(rawInput, now());
+    const input = normalizeInput(rawInput, nowMs);
     return write<WorkerTranscriptCommitBeginResult>((db) => {
       const head = findHead(db, input);
       const existing = classifyExistingCommit({ head, commit: findCommit(db, input), input });
@@ -245,7 +215,7 @@ export function createWorkerTranscriptCommitStore(
   const complete = (
     rawInput: WorkerTranscriptCommitInput & { outcome: WorkerTranscriptCommitOutcome },
   ): WorkerTranscriptCommitOutcome => {
-    const input = normalizeInput(rawInput, now());
+    const input = normalizeInput(rawInput, nowMs);
     const resultJson = JSON.stringify(rawInput.outcome);
     return write<WorkerTranscriptCommitOutcome>((db) => {
       const head = findHead(db, input);
@@ -304,9 +274,9 @@ export function createWorkerTranscriptCommitStore(
 
   // Only the invocation that freshly claimed this row may discard it after a
   // known rollback. Recovered reservations can describe an already committed batch.
-  const discardUncommitted = (rawInput: WorkerTranscriptCommitInput): void => {
-    const input = normalizeInput(rawInput, now());
-    write((db) =>
+  const discardUncommitted = (rawInput: WorkerTranscriptCommitInput): true => {
+    const input = normalizeInput(rawInput, nowMs);
+    return write<true>((db) => {
       executeSqliteQuerySync(
         db,
         query(db)
@@ -327,11 +297,35 @@ export function createWorkerTranscriptCommitStore(
                 .where("next_seq", "=", input.seq),
             ),
           ),
-      ),
-    );
+      );
+      return true;
+    });
   };
 
   return { begin, complete, discardUncommitted };
 }
 
-export type WorkerTranscriptCommitStore = ReturnType<typeof createWorkerTranscriptCommitStore>;
+export const workerTranscriptCommitOperations = {
+  "placementTranscript.begin": (input: WorkerTranscriptCommitInput & { nowMs: number }, { open }) =>
+    createWorkerTranscriptCommitKernel(open(), input.nowMs, "placementTranscript.begin").begin(
+      input,
+    ),
+  "placementTranscript.complete": (
+    input: WorkerTranscriptCommitInput & { outcome: WorkerTranscriptCommitOutcome; nowMs: number },
+    { open },
+  ) =>
+    createWorkerTranscriptCommitKernel(
+      open(),
+      input.nowMs,
+      "placementTranscript.complete",
+    ).complete(input),
+  "placementTranscript.discard": (
+    input: WorkerTranscriptCommitInput & { nowMs: number },
+    { open },
+  ) =>
+    createWorkerTranscriptCommitKernel(
+      open(),
+      input.nowMs,
+      "placementTranscript.discard",
+    ).discardUncommitted(input),
+} satisfies WorkerOperationHandlers;

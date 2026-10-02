@@ -354,6 +354,6 @@ extension ControlUIDocumentHost {
 
     private func openExternal(_ url: URL) {
         guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
-        NSWorkspace.shared.open(url)
+        AppActivation.shared.open(url)
     }
 }

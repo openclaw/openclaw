@@ -206,6 +206,11 @@ final class QuickChatWindowPicker {
     }
 
     private func requestScreenRecordingPermission(mode: QuickChatCapturePickerMode) async {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            PermissionManager.reportDeferredRequest()
+            self.model.setCaptureFailure()
+            return
+        }
         let alert = NSAlert()
         alert.messageText = mode == .window
             ? String(localized: "Allow OpenClaw to capture windows")
@@ -214,7 +219,7 @@ final class QuickChatWindowPicker {
         alert.addButton(withTitle: String(localized: "Grant Access"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         // This alert is user-initiated; only its affirmative action may trigger TCC.
-        if alert.runModal() == .alertFirstButtonReturn {
+        if await AppActivation.shared.response(to: alert) == .alertFirstButtonReturn {
             await self.permissionGrantProvider()
         }
     }
@@ -295,7 +300,7 @@ final class QuickChatWindowPicker {
                 onSelect: { [weak self] candidate in self?.select(candidate) },
                 onCancel: { [weak self] in self?.cancel() }))
             self.panels.append(panel)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
 
         self.installEscapeMonitor()
@@ -330,7 +335,7 @@ final class QuickChatWindowPicker {
                 },
                 onCancel: { [weak self] in self?.cancel() })
             self.panels.append(panel)
-            panel.makeKeyAndOrderFront(nil)
+            AppActivation.shared.makeKeyAndOrderFront(window: panel)
         }
 
         self.installEscapeMonitor()

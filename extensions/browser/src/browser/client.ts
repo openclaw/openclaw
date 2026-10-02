@@ -62,19 +62,6 @@ async function sendProfilePost(
   });
 }
 
-async function sendTabCloseRequest(
-  baseUrl: BrowserClientTarget,
-  path: string,
-  opts: BrowserClientProfileOptions | undefined,
-): Promise<{ ok: true; targetId?: string }> {
-  return await requestBrowserJson(baseUrl, path, {
-    profile: opts?.profile,
-    method: "DELETE",
-    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
-    signal: opts?.signal,
-  });
-}
-
 export type BrowserResetProfileResult = {
   ok: true;
   moved: boolean;
@@ -298,17 +285,12 @@ export async function browserCloseTab(
   opts?: BrowserClientProfileOptions,
 ): Promise<{ ok: true; targetId?: string }> {
   const path = `/tabs/${encodeURIComponent(targetId)}`;
-  return await sendTabCloseRequest(baseUrl, path, opts);
-}
-
-/** Close a canonical raw target id selected by OpenClaw's internal tab bookkeeping. */
-export async function browserCloseTabByRawTargetId(
-  baseUrl: BrowserClientTarget,
-  targetId: string,
-  opts?: BrowserClientProfileOptions,
-): Promise<void> {
-  const path = `/tabs/${encodeURIComponent(targetId)}?targetIdMode=raw`;
-  await sendTabCloseRequest(baseUrl, path, opts);
+  return await requestBrowserJson(baseUrl, path, {
+    profile: opts?.profile,
+    method: "DELETE",
+    timeoutMs: browserClientTimeout(baseUrl, opts?.timeoutMs, 5000),
+    signal: opts?.signal,
+  });
 }
 
 export async function browserSnapshot(

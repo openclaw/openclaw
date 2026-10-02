@@ -1,6 +1,5 @@
 import type { SlackCommandMiddlewareArgs } from "@slack/bolt";
 import type {
-  AppContextChangedEvent,
   AppHomeOpenedEvent,
   ChannelIDChangedEvent,
   ChannelRenameEvent,
@@ -79,10 +78,6 @@ export type SlackChannelIdChangedEvent = LooseSlackEvent<ChannelIDChangedEvent>;
 export type SlackAppHomeOpenedEvent = Omit<LooseSlackEvent<AppHomeOpenedEvent>, "context"> & {
   context?: SlackAppContext;
 };
-export type SlackAppContextChangedEvent = Omit<
-  LooseSlackEvent<AppContextChangedEvent>,
-  "context"
-> & { context?: SlackAppContext };
 export type SlackPinEvent = LooseSlackEvent<PinAddedEvent | PinRemovedEvent>;
 
 type SlackMessageSubtypeMessage = Pick<

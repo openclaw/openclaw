@@ -154,6 +154,14 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
   {
     id: "memory-wiki-compiled-cache-file-cleanup",
     label: "Memory Wiki compiled cache files",
+    collectBackupResources(params) {
+      return resolveConfiguredVaultRoots(params).flatMap((vaultRoot) =>
+        LEGACY_MEMORY_WIKI_COMPILED_CACHE_PATHS.map((relativePath) => ({
+          path: path.join(vaultRoot, relativePath),
+          kind: "file" as const,
+        })),
+      );
+    },
     async detectLegacyState(params) {
       const previews: string[] = [];
       for (const vaultRoot of resolveConfiguredVaultRoots(params)) {

@@ -414,7 +414,7 @@ extension StatusMenuSessions {
         self.performSessionAction(
             errorTitle: String(localized: "Reset failed"),
             confirm: {
-                SessionActions.confirmDestructiveAction(
+                await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Reset session?"),
                     message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
                     action: String(localized: "Reset"))
@@ -429,7 +429,7 @@ extension StatusMenuSessions {
         self.performSessionAction(
             errorTitle: String(localized: "Compact failed"),
             confirm: {
-                SessionActions.confirmDestructiveAction(
+                await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Compact session log?"),
                     message: String(localized: "Keeps the last 400 lines and archives the old file."),
                     action: String(localized: "Compact"))
@@ -448,7 +448,7 @@ extension StatusMenuSessions {
         self.performSessionAction(
             errorTitle: String(localized: "Delete failed"),
             confirm: {
-                SessionActions.confirmDestructiveAction(
+                await SessionActions.confirmDestructiveAction(
                     title: String(localized: "Delete session?"),
                     message: String(
                         format: String(localized: "Deletes the “%@” entry and archives its transcript."),
@@ -462,11 +462,11 @@ extension StatusMenuSessions {
 
     private func performSessionAction(
         errorTitle: String,
-        confirm: @escaping @MainActor () -> Bool = { true },
+        confirm: @escaping @MainActor () async -> Bool = { true },
         action: @escaping @MainActor () async throws -> Void)
     {
         Task {
-            guard confirm() else { return }
+            guard await confirm() else { return }
             do {
                 try await action()
                 await self.refresh(force: true)

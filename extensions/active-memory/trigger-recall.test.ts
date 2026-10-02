@@ -1,43 +1,71 @@
-import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type { MemoryCallerContext, MemorySearchHit } from "openclaw/plugin-sdk/memory-host-search";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildTriggerRecallContext,
   MAX_TRIGGER_CONTEXT_CHARS,
+  resetTriggerRecallRunsForTests,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
 } from "./trigger-recall.js";
 
 const hoisted = vi.hoisted(() => ({
-  getManager: vi.fn(),
+  open: vi.fn(),
   search: vi.fn(),
+  candidates: vi.fn(),
+  close: vi.fn(),
+  getManager: vi.fn(),
+  managerSearch: vi.fn(),
   listTriggerCandidates: vi.fn(),
 }));
-
 vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
+  getActiveMemoryProvider: (...args: unknown[]) => hoisted.open(...args),
   getActiveMemorySearchManager: (...args: unknown[]) => hoisted.getManager(...args),
 }));
-
-function result(overrides: Partial<MemorySearchResult> = {}): MemorySearchResult {
+function result(overrides: Partial<MemorySearchHit> = {}): MemorySearchHit {
   return {
-    path: "MEMORY.md",
-    startLine: 1,
-    endLine: 2,
+    reference: { providerId: "records", id: "travel" },
+    excerpt: "User prefers aisle seats and extra connection time.",
     score: 0.8,
-    snippet: "User prefers aisle seats and extra connection time.",
-    source: "memory",
-    triggers: "when booking a flight; seat preferences",
-    provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
+    automaticRecall: { eligible: true, triggers: "when booking a flight; seat preferences" },
     ...overrides,
   };
 }
-
-describe("active-memory trigger recall", () => {
+function context() {
+  return {
+    authority: { kind: "host", operation: "trigger-test" },
+    assertCurrent: vi.fn(),
+  } satisfies MemoryCallerContext;
+}
+function request() {
+  const callerContext = context();
+  return {
+    cfg: {},
+    agentId: "main",
+    query: "flight booking",
+    message: "Help when booking a flight",
+    context: callerContext,
+    source: { kind: "native" as const, context: callerContext },
+  };
+}
+describe("active-memory provider-neutral trigger recall", () => {
   beforeEach(() => {
-    hoisted.getManager.mockReset().mockResolvedValue({
-      manager: { search: hoisted.search, listTriggerCandidates: hoisted.listTriggerCandidates },
+    resetTriggerRecallRunsForTests();
+    hoisted.search.mockReset().mockResolvedValue({ hits: [] });
+    hoisted.candidates.mockReset().mockResolvedValue({ hits: [result()] });
+    hoisted.close.mockReset();
+    hoisted.open.mockReset().mockResolvedValue({
+      provider: {
+        capabilities: {
+          sources: ["memory"],
+          pagination: false,
+          candidates: ["trigger"],
+          projectFilter: true,
+        },
+        search: hoisted.search,
+        candidates: hoisted.candidates,
+        close: hoisted.close,
+      },
     });
-    hoisted.search.mockReset();
-    hoisted.listTriggerCandidates.mockReset();
   });
 
   it.each([
@@ -49,12 +77,12 @@ describe("active-memory trigger recall", () => {
     ["upper relevance clamp", "flight booking", "flight booking", 9, 1],
     ["lower relevance clamp", "flight booking", "flight booking", -1, 0.8],
   ] as const)(
-    "selects deterministic trigger scores for %s",
+    "preserves deterministic trigger scores for %s",
     (_label, message, triggers, score, expected) => {
-      const entry = result({ triggers, score });
-      const selected = selectStrongTriggerMatches(message, [entry]);
+      const selected = selectStrongTriggerMatches(message, [
+        result({ score, automaticRecall: { eligible: true, triggers } }),
+      ]);
       expect(selected).toHaveLength(1);
-      expect(selected[0]).toMatchObject(entry);
       expect(selected[0]?.matchScore).toBeCloseTo(expected);
     },
   );
@@ -63,11 +91,15 @@ describe("active-memory trigger recall", () => {
     ["insufficient overlap", "booking", "booking flight", 1],
     ["whole words", "This party starts at eight", "art", 0.2],
     ["unrelated message", "Explain SQLite indexes", "flight booking", 0.8],
-  ] as const)("rejects weak trigger matches for %s", (_label, message, triggers, score) => {
-    expect(selectStrongTriggerMatches(message, [result({ triggers, score })])).toEqual([]);
+  ] as const)("rejects weak matches for %s", (_label, message, triggers, score) => {
+    expect(
+      selectStrongTriggerMatches(message, [
+        result({ score, automaticRecall: { eligible: true, triggers } }),
+      ]),
+    ).toEqual([]);
   });
 
-  it("prepares the message once across trigger candidates without reusing another message", () => {
+  it("prepares the message once across trigger candidates", () => {
     const phrases = [
       "flight booking; booking flight; flight flight booking; flight booking booking",
       "connection time; time connection; connection connection time; connection time time",
@@ -75,29 +107,28 @@ describe("active-memory trigger recall", () => {
     const phraseValues = new Set(phrases.flatMap((value) => value.split("; ")));
     const entries = Array.from({ length: 512 }, (_, index) =>
       result({
-        path: `memory/${String(index).padStart(3, "0")}.md`,
+        reference: { providerId: "records", id: "travel", fragment: String(index) },
         score: 1,
-        triggers: phrases[index % 2],
-        snippet: `Travel guidance ${String(index)}.`,
+        excerpt: `Travel guidance ${String(index)}.`,
+        automaticRecall: { eligible: true, triggers: phrases[index % 2] },
       }),
     );
     const before = structuredClone(entries);
     const padding = " filler".repeat(4094);
     const messages = [`flight booking${padding}`, `connection time${padding}`] as const;
-    const work: Array<{ message: number; phrases: number }> = [];
     for (const group of [0, 1, 0] as const) {
       const message = messages[group];
       const spy = vi.spyOn(String.prototype, "toLowerCase");
       let selected: ReturnType<typeof selectStrongTriggerMatches>;
+      let messagePreparations: number;
+      let phrasePreparations: number;
       try {
         selected = selectStrongTriggerMatches(message, entries);
       } finally {
-        work.push({
-          message: spy.mock.contexts.filter((receiver) => receiver === message).length,
-          phrases: spy.mock.contexts.filter(
-            (receiver) => typeof receiver === "string" && phraseValues.has(receiver),
-          ).length,
-        });
+        messagePreparations = spy.mock.contexts.filter((receiver) => receiver === message).length;
+        phrasePreparations = spy.mock.contexts.filter(
+          (receiver) => typeof receiver === "string" && phraseValues.has(receiver),
+        ).length;
         spy.mockRestore();
       }
       expect(selected).toEqual(
@@ -105,22 +136,23 @@ describe("active-memory trigger recall", () => {
           Object.assign({}, entries[index], { matchScore: 1 }),
         ),
       );
-      const context = buildTriggerRecallContext(selected);
-      expect(context).toContain(`Travel guidance ${String(group)}.`);
-      expect(context?.length).toBeLessThanOrEqual(MAX_TRIGGER_CONTEXT_CHARS + 80);
+      const rendered = buildTriggerRecallContext(selected);
+      expect(rendered).toContain(`Travel guidance ${String(group)}.`);
+      expect(rendered?.length).toBeLessThanOrEqual(MAX_TRIGGER_CONTEXT_CHARS + 80);
+      expect(messagePreparations).toBeLessThanOrEqual(1);
+      expect(phrasePreparations).toBe(2048);
     }
     expect(entries).toEqual(before);
-    for (const counts of work) {
-      expect(counts.phrases).toBe(2048);
-      expect(counts.message).toBeLessThanOrEqual(1);
-    }
   });
 
   it.each([
-    ["absent triggers", [result({ triggers: undefined })]],
-    ["ineligible entries", [result({ source: "sessions" }), result({ provenance: undefined })]],
-    ["empty phrases", [result({ triggers: "; |\n" })]],
-    ["no usable words", [result({ triggers: "a !; b ?" })]],
+    ["absent metadata", [result({ automaticRecall: undefined })]],
+    [
+      "ineligible entries",
+      [result({ automaticRecall: { eligible: false, triggers: "flight booking" } })],
+    ],
+    ["empty phrases", [result({ automaticRecall: { eligible: true, triggers: "; |\n" } })]],
+    ["no usable words", [result({ automaticRecall: { eligible: true, triggers: "a !; b ?" } })]],
   ] as const)("skips message preparation for %s", (_label, entries) => {
     const message = "Flight booking preferences";
     const spy = vi.spyOn(String.prototype, "toLowerCase");
@@ -136,365 +168,277 @@ describe("active-memory trigger recall", () => {
     expect(preparations).toBe(0);
   });
 
-  it("limits automatic injection to curated or trusted-origin entries", () => {
-    const matches = selectStrongTriggerMatches("when booking a flight", [
-      result(),
-      result({ path: "USER.md", startLine: 3 }),
-      result({ path: "memory/2026-07-27.md", startLine: 4, provenance: undefined }),
-      result({ source: "sessions", path: "session.jsonl", startLine: 5 }),
-    ]);
-    expect(matches.map((entry) => entry.path)).toEqual(["MEMORY.md", "USER.md"]);
-
-    const provenanceMatches = selectStrongTriggerMatches("when booking a flight", [
+  it("requires explicit provider eligibility and every project key to match", () => {
+    const candidates = [
+      result({ automaticRecall: undefined }),
+      result({ automaticRecall: { eligible: false, triggers: "flight booking" } }),
       result({
-        path: "memory/untrusted.md",
-        provenance: { originClass: "untrusted", sessionKind: "interactive", observedAt: 1 },
-        score: 1,
+        automaticRecall: {
+          eligible: true,
+          triggers: "flight booking",
+          projectKeys: ["alpha", "beta"],
+        },
       }),
-      result({ path: "memory/missing.md", provenance: undefined, score: 1 }),
-      result({
-        path: "memory/agent.md",
-        provenance: { originClass: "agent", sessionKind: "interactive", observedAt: 1 },
-        score: 1,
-      }),
-      result({
-        path: "memory/owner.md",
-        provenance: { originClass: "owner", sessionKind: "interactive", observedAt: 1 },
-        score: 1,
-      }),
-    ]);
-    expect(provenanceMatches.map((entry) => entry.path)).toEqual([
-      "memory/agent.md",
-      "memory/owner.md",
-    ]);
-  });
-
-  it("gates tagged entries to the active project while leaving global entries unchanged", () => {
-    const activeKey = "github.com/OpenClaw/OpenClaw";
-    const sameProject = result({ projectKey: activeKey, startLine: 1 });
-    const foreignProject = result({ projectKey: "github.com/example/other", startLine: 2 });
-    const global = result({ startLine: 3 });
-
+    ];
+    expect(selectStrongTriggerMatches("flight booking", candidates, ["alpha"])).toEqual([]);
     expect(
-      selectStrongTriggerMatches(
-        "when booking a flight",
-        [sameProject, foreignProject, global],
-        [activeKey],
-      ).map((entry) => entry.startLine),
-    ).toEqual([1, 3]);
-    expect(
-      selectStrongTriggerMatches(
-        "when booking a flight",
-        [sameProject, foreignProject, global],
-        [],
-      ),
+      selectStrongTriggerMatches("flight booking", candidates, ["alpha", "beta"]),
     ).toHaveLength(1);
   });
 
-  it("excludes annotation carriers from injected trigger context", () => {
-    const matches = selectStrongTriggerMatches(
-      "Review the alpha deployment",
-      [
+  it("injects pathless records with provider citations and stable ordering", () => {
+    const matches = selectStrongTriggerMatches("when booking a flight", [
+      result({ reference: { providerId: "records", id: "z" } }),
+      result({
+        reference: { providerId: "records", id: "a" },
+        citations: [{ label: "Travel preference", url: "https://example.test/record/a" }],
+      }),
+    ]);
+    expect(matches.map((hit) => hit.reference.id)).toEqual(["a", "z"]);
+    const rendered = buildTriggerRecallContext(matches);
+    expect(rendered).toContain("(Source: Travel preference)");
+    expect(rendered).toContain("(Source: records:z)");
+  });
+
+  it("searches locally without embeddings, deduplicates references, and closes its lease", async () => {
+    hoisted.search.mockResolvedValue({ hits: [result()] });
+    const recalled = await resolveTriggerRecall({ ...request(), activeProjectKeys: ["alpha"] });
+    expect(recalled.injectedCount).toBe(1);
+    expect(hoisted.search).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "flight booking", lexicalOnly: true, sources: ["memory"] }),
+    );
+    expect(hoisted.candidates).toHaveBeenCalledWith({
+      kind: "trigger",
+      activeProjectKeys: ["alpha"],
+    });
+    expect(hoisted.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not mix records from different providers or revisions", async () => {
+    hoisted.search.mockResolvedValue({
+      hits: [
+        result({ reference: { providerId: "records", id: "travel", revision: "2" } }),
+        result({ reference: { providerId: "other", id: "travel" } }),
+      ],
+    });
+    expect((await resolveTriggerRecall(request())).injectedCount).toBe(3);
+  });
+
+  it("prefers eligible candidate facts for the same provider, id, fragment, and revision", async () => {
+    hoisted.search.mockResolvedValue({
+      hits: [
         result({
-          snippet:
-            "Alpha-only deployment guidance. <!-- trigger: alpha deployment --> <!-- importance: 8 --> <!-- project: alpha-key -->",
-          triggers: "alpha deployment",
-          projectKey: "alpha-key",
+          reference: { providerId: "records", id: "travel", revision: "1", fragment: "L1-L3" },
+          excerpt: "untrusted search facts",
+          automaticRecall: { eligible: false, triggers: "flight booking" },
         }),
       ],
-      ["alpha-key"],
-    );
-
-    const context = buildTriggerRecallContext(matches);
-    expect(context).toContain("Alpha-only deployment guidance.");
-    expect(context).not.toContain("<!--");
-  });
-
-  it("honors every project retained in the session active set", () => {
-    const entries = [
-      result({ startLine: 1, triggers: "shared deploy", projectKey: "alpha-key" }),
-      result({ startLine: 2, triggers: "shared deploy", projectKey: "beta-key" }),
-      result({ startLine: 3, triggers: "shared deploy", projectKey: "gamma-key" }),
-    ];
-    expect(
-      selectStrongTriggerMatches("shared deploy", entries, ["beta-key", "alpha-key"]).map(
-        (entry) => entry.startLine,
-      ),
-    ).toEqual([1, 2]);
-  });
-
-  it("requires every project on a mixed chunk to be active before trigger injection", () => {
-    const mixed = result({
-      projectKey: "github.com/openclaw/openclaw; github.com/example/other",
     });
-    expect(
-      selectStrongTriggerMatches(
-        "when booking a flight",
-        [mixed],
-        ["github.com/openclaw/openclaw"],
-      ),
-    ).toEqual([]);
-    expect(
-      selectStrongTriggerMatches(
-        "when booking a flight",
-        [mixed],
-        ["github.com/openclaw/openclaw", "github.com/example/other"],
-      ),
-    ).toHaveLength(1);
-  });
-
-  it("searches lexical-only so the reply path never embeds the query", async () => {
-    hoisted.search.mockResolvedValue([result()]);
-    hoisted.listTriggerCandidates.mockResolvedValue([]);
-    await resolveTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-    });
-    expect(hoisted.search).toHaveBeenCalledWith(
-      "flight booking",
-      expect.objectContaining({ lexicalOnly: true }),
-    );
-    expect(hoisted.listTriggerCandidates).toHaveBeenCalledWith({
-      activeProjectKeys: ["github.com/openclaw/openclaw"],
-    });
-  });
-
-  it("shares one in-flight lane-1 lookup for the same run authority", async () => {
-    let releaseLookup: () => void = () => {
-      throw new Error("lookup gate was not initialized");
-    };
-    const lookupGate = new Promise<void>((resolve) => {
-      releaseLookup = resolve;
-    });
-    hoisted.search.mockImplementation(async () => {
-      await lookupGate;
-      return [];
-    });
-    hoisted.listTriggerCandidates.mockImplementation(async () => {
-      await lookupGate;
-      return [result()];
-    });
-    const cfg = {} as never;
-
-    const first = resolveTriggerRecall({
-      cfg,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      runId: "run-shared-lookup",
-      authorityFingerprint: "authority-a",
-    });
-    const second = resolveTriggerRecall({
-      cfg,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      runId: "run-shared-lookup",
-      authorityFingerprint: "authority-a",
-    });
-    await vi.waitFor(() => expect(hoisted.search).toHaveBeenCalledTimes(1));
-    releaseLookup();
-
-    await expect(first).resolves.toEqual(
-      expect.objectContaining({ hasStrongHit: true, injectedCount: 1 }),
-    );
-    await expect(second).resolves.toEqual(
-      expect.objectContaining({ hasStrongHit: true, injectedCount: 1 }),
-    );
-    expect(hoisted.search).toHaveBeenCalledTimes(1);
-    expect(hoisted.listTriggerCandidates).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not share lane-1 results across turn authorities", async () => {
-    hoisted.search.mockResolvedValue([]);
-    hoisted.listTriggerCandidates.mockResolvedValue([result()]);
-    const params = {
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      runId: "run-authority-scope",
-    };
-
-    await resolveTriggerRecall({ ...params, authorityFingerprint: "authority-a" });
-    await resolveTriggerRecall({ ...params, authorityFingerprint: "authority-b" });
-
-    expect(hoisted.search).toHaveBeenCalledTimes(2);
-    expect(hoisted.listTriggerCandidates).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps each lane-1 abort deadline while shared lookup work continues", async () => {
-    let releaseLookup: () => void = () => {
-      throw new Error("lookup gate was not initialized");
-    };
-    const lookupGate = new Promise<void>((resolve) => {
-      releaseLookup = resolve;
-    });
-    hoisted.search.mockImplementation(async () => {
-      await lookupGate;
-      return [];
-    });
-    hoisted.listTriggerCandidates.mockImplementation(async () => {
-      await lookupGate;
-      return [];
-    });
-    const first = resolveTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      runId: "run-aborted-shared-lookup",
-      authorityFingerprint: "authority-a",
-    });
-    const controller = new AbortController();
-    const recall = resolveTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      runId: "run-aborted-shared-lookup",
-      authorityFingerprint: "authority-a",
-      signal: controller.signal,
+    hoisted.candidates.mockResolvedValue({
+      hits: [
+        result({
+          reference: {
+            providerId: "records",
+            id: "travel",
+            revision: "1",
+            fragment: "L1-L3",
+          },
+          excerpt: "trusted candidate facts",
+        }),
+      ],
     });
 
-    controller.abort(new Error("lane-1 budget expired"));
-    await expect(recall).rejects.toThrow("lane-1 budget expired");
-    releaseLookup();
-    await expect(first).resolves.toEqual(
-      expect.objectContaining({ hasStrongHit: false, injectedCount: 0 }),
-    );
-  });
+    const recalled = await resolveTriggerRecall(request());
 
-  it("does not reuse an unscoped run lookup for a project-scoped lookup", async () => {
-    const global = result({ startLine: 1 });
-    const project = result({ startLine: 2, projectKey: "alpha-key" });
-    hoisted.search.mockResolvedValue([]);
-    hoisted.listTriggerCandidates
-      .mockResolvedValueOnce([global])
-      .mockResolvedValueOnce([global, project]);
-    const cfg = {} as never;
-
-    await resolveTriggerRecall({
-      cfg,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      runId: "run-project-scope",
-      authorityFingerprint: "authority-a",
-    });
-    const recall = await resolveTriggerRecall({
-      cfg,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      activeProjectKeys: ["alpha-key"],
-      runId: "run-project-scope",
-      authorityFingerprint: "authority-a",
-    });
-
-    expect(hoisted.listTriggerCandidates).toHaveBeenCalledTimes(2);
-    expect(recall.injectedCount).toBe(2);
-  });
-
-  it("skips backends that cannot enumerate curated trigger candidates", async () => {
-    hoisted.getManager.mockResolvedValueOnce({ manager: { search: hoisted.search } });
-    await expect(
-      resolveTriggerRecall({
-        cfg: {} as never,
-        agentId: "main",
-        query: "flight booking",
-        message: "Help when booking a flight",
-      }),
-    ).resolves.toEqual({ hasStrongHit: false, injectedCount: 0 });
-    expect(hoisted.search).not.toHaveBeenCalled();
-  });
-
-  it("matches curated trigger candidates even when text retrieval fails", async () => {
-    hoisted.search.mockRejectedValue(new Error("embedding unavailable"));
-    hoisted.listTriggerCandidates.mockResolvedValue([result({ score: 0 })]);
-    const recalled = await resolveTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-    });
-    expect(recalled.hasStrongHit).toBe(true);
     expect(recalled.injectedCount).toBe(1);
-    expect(recalled.context).toContain("aisle seats");
+    expect(recalled.context).toContain("trusted candidate facts");
+    expect(recalled.context).not.toContain("untrusted search facts");
   });
 
-  it("aborts when trigger-candidate enumeration does not settle", async () => {
-    hoisted.search.mockResolvedValue([]);
-    hoisted.listTriggerCandidates.mockImplementation(() => new Promise(() => {}));
-    const controller = new AbortController();
-    const recalled = resolveTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      signal: controller.signal,
+  it("keeps relevance from the scored copy when both copies are eligible", async () => {
+    const reference = { providerId: "records", id: "hall", fragment: "L4-L4" };
+    const automaticRecall = { eligible: true, triggers: "riverside hall booking" };
+    hoisted.search.mockResolvedValue({
+      hits: [result({ reference, score: 0.5, automaticRecall })],
+    });
+    hoisted.candidates.mockResolvedValue({
+      hits: [result({ reference, score: 0, automaticRecall })],
     });
 
-    controller.abort(new Error("deadline reached"));
+    const recalled = await resolveTriggerRecall({
+      ...request(),
+      message: "Is the riverside hall confirmed yet?",
+    });
 
-    await expect(recalled).rejects.toThrow("deadline reached");
+    expect(recalled).toMatchObject({ hasStrongHit: true, injectedCount: 1 });
   });
 
-  it("aborts when memory-manager acquisition does not settle", async () => {
-    hoisted.getManager.mockImplementation(() => new Promise(() => {}));
-    const controller = new AbortController();
-    const recalled = resolveTriggerRecall({
-      cfg: {} as never,
-      agentId: "main",
-      query: "flight booking",
-      message: "Help when booking a flight",
-      signal: controller.signal,
+  it("shares lookup only inside one request authority and active project set", async () => {
+    const params = { ...request(), runId: "run", authorityFingerprint: "authority-a" };
+    await Promise.all([resolveTriggerRecall(params), resolveTriggerRecall(params)]);
+    expect(hoisted.search).toHaveBeenCalledTimes(1);
+    await resolveTriggerRecall({ ...params, authorityFingerprint: "authority-b" });
+    await resolveTriggerRecall({ ...params, activeProjectKeys: ["alpha"] });
+    expect(hoisted.search).toHaveBeenCalledTimes(3);
+  });
+
+  it("revalidates authority before releasing cached results", async () => {
+    const params = { ...request(), runId: "run", authorityFingerprint: "authority-a" };
+    await resolveTriggerRecall(params);
+    vi.mocked(params.context.assertCurrent).mockImplementation(() => {
+      throw new Error("revoked");
     });
+    await expect(resolveTriggerRecall(params)).rejects.toThrow("revoked");
+    expect(hoisted.search).toHaveBeenCalledOnce();
+  });
 
-    controller.abort(new Error("manager deadline reached"));
+  it("does not publish results if authority expires during lookup", async () => {
+    const params = request();
+    hoisted.candidates.mockImplementation(async () => {
+      vi.mocked(params.context.assertCurrent).mockImplementation(() => {
+        throw new Error("revoked");
+      });
+      return { hits: [result()] };
+    });
+    await expect(resolveTriggerRecall(params)).rejects.toThrow("revoked");
+    expect(hoisted.close).toHaveBeenCalledOnce();
+  });
 
-    await expect(recalled).rejects.toThrow("manager deadline reached");
+  it("skips providers without candidates instead of inventing automatic eligibility", async () => {
+    hoisted.open.mockResolvedValue({ provider: { search: hoisted.search, close: hoisted.close } });
+    expect(await resolveTriggerRecall(request())).toEqual({
+      hasStrongHit: false,
+      injectedCount: 0,
+    });
     expect(hoisted.search).not.toHaveBeenCalled();
-    expect(hoisted.listTriggerCandidates).not.toHaveBeenCalled();
+    expect(hoisted.close).toHaveBeenCalledOnce();
   });
 
-  it("does not start lookup work when the deadline already expired", async () => {
+  it("uses candidates when lexical retrieval fails", async () => {
+    hoisted.search.mockRejectedValue(new Error("search unavailable"));
+    expect((await resolveTriggerRecall(request())).hasStrongHit).toBe(true);
+  });
+
+  it("aborts when acquisition does not settle", async () => {
+    hoisted.open.mockImplementation(() => new Promise(() => {}));
+    const controller = new AbortController();
+    const recalled = resolveTriggerRecall({ ...request(), signal: controller.signal });
+    controller.abort(new Error("deadline reached"));
+    await expect(recalled).rejects.toThrow("deadline reached");
+    expect(hoisted.search).not.toHaveBeenCalled();
+  });
+
+  it("does not begin lookup after the request has expired", async () => {
     const controller = new AbortController();
     controller.abort(new Error("already expired"));
-
-    await expect(
-      resolveTriggerRecall({
-        cfg: {} as never,
-        agentId: "main",
-        query: "flight booking",
-        message: "Help when booking a flight",
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("already expired");
-    expect(hoisted.getManager).not.toHaveBeenCalled();
-    expect(hoisted.search).not.toHaveBeenCalled();
-    expect(hoisted.listTriggerCandidates).not.toHaveBeenCalled();
+    await expect(resolveTriggerRecall({ ...request(), signal: controller.signal })).rejects.toThrow(
+      "already expired",
+    );
+    expect(hoisted.open).not.toHaveBeenCalled();
   });
 
-  it("injects at most three matches inside the bounded active-memory wrapper", () => {
+  it("injects at most three matches inside the bounded wrapper", () => {
     const matches = selectStrongTriggerMatches(
       "when booking a flight",
       Array.from({ length: 5 }, (_, index) =>
         result({
-          path: index % 2 === 0 ? "MEMORY.md" : "USER.md",
-          startLine: index + 1,
-          snippet: `${String(index)} ${"x".repeat(900)}`,
+          reference: { providerId: "records", id: String(index) },
+          excerpt: `${index} ${"x".repeat(900)}`,
         }),
       ),
     );
-    const context = buildTriggerRecallContext(matches);
+    const rendered = buildTriggerRecallContext(matches);
     expect(matches).toHaveLength(3);
-    expect(context).toContain("<active_memory_plugin>");
-    expect(context).toContain("</active_memory_plugin>");
-    expect(context?.length).toBeLessThanOrEqual(MAX_TRIGGER_CONTEXT_CHARS + 80);
-    expect(context).not.toContain("3 x");
+    expect(rendered).toContain("<active_memory_plugin>");
+    expect(rendered).toContain("</active_memory_plugin>");
+    expect(rendered?.length).toBeLessThanOrEqual(MAX_TRIGGER_CONTEXT_CHARS + 80);
+    expect(rendered).not.toContain("3 x");
+  });
+});
+
+describe("active-memory legacy trigger recall", () => {
+  const hall = {
+    path: "MEMORY.md",
+    startLine: 4,
+    endLine: 4,
+    snippet:
+      "- the riverside hall booking is pending a deposit. <!-- trigger: riverside hall booking -->",
+    source: "memory" as const,
+    triggers: "riverside hall booking",
+    provenance: { originClass: "owner" as const, sessionKind: "interactive" as const },
+  };
+  const legacyRequest = (message: string, activeProjectKeys?: string[]) =>
+    resolveTriggerRecall({
+      cfg: {},
+      agentId: "main",
+      source: { kind: "legacy" },
+      query: message,
+      message,
+      ...(activeProjectKeys ? { activeProjectKeys } : {}),
+    });
+
+  beforeEach(() => {
+    resetTriggerRecallRunsForTests();
+    hoisted.open.mockReset();
+    hoisted.managerSearch.mockReset().mockResolvedValue([]);
+    hoisted.listTriggerCandidates.mockReset().mockResolvedValue([]);
+    hoisted.getManager.mockReset().mockResolvedValue({
+      manager: {
+        search: hoisted.managerSearch,
+        listTriggerCandidates: hoisted.listTriggerCandidates,
+      },
+    });
+  });
+
+  it("keeps the manager calls and cites the chunk start line without annotations", async () => {
+    hoisted.listTriggerCandidates.mockResolvedValue([{ ...hall, score: 0 }]);
+    hoisted.managerSearch.mockResolvedValue([{ ...hall, score: 0.9 }]);
+
+    const recalled = await legacyRequest("riverside hall booking status?", ["alpha"]);
+
+    expect(hoisted.open).not.toHaveBeenCalled();
+    expect(hoisted.getManager).toHaveBeenCalledWith({ cfg: {}, agentId: "main" });
+    expect(hoisted.managerSearch).toHaveBeenCalledWith("riverside hall booking status?", {
+      maxResults: 24,
+      minScore: 0,
+      sources: ["memory"],
+      signal: undefined,
+      lexicalOnly: true,
+      activeProjectKeys: ["alpha"],
+    });
+    expect(hoisted.listTriggerCandidates).toHaveBeenCalledWith({ activeProjectKeys: ["alpha"] });
+    expect(recalled.context).toContain(
+      "- - the riverside hall booking is pending a deposit. (Source: MEMORY.md#L4)",
+    );
+  });
+
+  it("scores a partial trigger match with the retrieved copy's relevance", async () => {
+    hoisted.listTriggerCandidates.mockResolvedValue([{ ...hall, score: 0 }]);
+    hoisted.managerSearch.mockResolvedValue([{ ...hall, score: 0.5 }]);
+
+    const recalled = await legacyRequest("Is the riverside hall confirmed yet?");
+
+    expect(recalled).toMatchObject({ hasStrongHit: true, injectedCount: 1 });
+  });
+
+  it.each([
+    ["a separator-only project annotation", ";", ["alpha"]],
+    ["a mixed chunk with an inactive project", "alpha;beta", ["alpha"]],
+  ])("never injects %s", async (_label, projectKey, activeProjectKeys) => {
+    hoisted.listTriggerCandidates.mockResolvedValue([{ ...hall, score: 1, projectKey }]);
+
+    const recalled = await legacyRequest("riverside hall booking status?", activeProjectKeys);
+
+    expect(recalled).toEqual({ hasStrongHit: false, injectedCount: 0 });
+  });
+
+  it("skips managers that cannot enumerate trigger candidates", async () => {
+    hoisted.getManager.mockResolvedValue({ manager: { search: hoisted.managerSearch } });
+
+    expect(await legacyRequest("riverside hall booking status?")).toEqual({
+      hasStrongHit: false,
+      injectedCount: 0,
+    });
+    expect(hoisted.managerSearch).not.toHaveBeenCalled();
   });
 });

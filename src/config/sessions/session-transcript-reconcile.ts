@@ -69,6 +69,7 @@ import type {
   SessionTranscriptReconcileWorkerInput,
   SessionTranscriptReconcileWorkerMessage,
 } from "./session-transcript-reconcile.worker.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const log = createSubsystemLogger("sessions/transcript-index");
 const PROJECTION_READY_POLL_MS = 10;
@@ -178,8 +179,6 @@ async function reconcilePreparedTranscriptIndexes(
   let memorySessionIds: string[] = [];
   try {
     if (execution) {
-      const { withSessionHistoryWorkerDatabase } =
-        await import("./session-transcript-worker-runtime.js");
       execution.assertCurrent();
       const pending = await runExclusiveSqliteSessionWrite(
         databaseOptions,
@@ -668,7 +667,6 @@ export async function waitForSessionTranscriptProjection(
   }
   let needsReconcile: () => Promise<boolean>;
   if (supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
-    let runtime: Promise<typeof import("./session-transcript-worker-runtime.js")> | undefined;
     needsReconcile = async () => {
       const closing = captureAgentDatabaseCloseFence({
         agentId: databaseOptions.agentId,
@@ -682,8 +680,6 @@ export async function waitForSessionTranscriptProjection(
       }
       const execution = captureOpenClawAgentDatabaseExecution(databaseOptions);
       try {
-        const { withSessionHistoryWorkerDatabase } = await (runtime ??=
-          import("./session-transcript-worker-runtime.js"));
         execution.assertCurrent();
         return await withSessionHistoryWorkerDatabase(databaseOptions, (owner) =>
           owner.readProjectionStatus(

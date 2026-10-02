@@ -5,15 +5,24 @@ import {
   stripMemoryAnnotationCarriers,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isAutomaticMemoryEntryEligible,
   type MemorySearchResult,
 } from "../memory-host-sdk/host/types.js";
-import { getMemoryRuntime } from "../plugins/memory-state.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
+import type {
+  MemoryCallerContext,
+  MemorySearchHit,
+  MemoryProviderHandle,
+} from "../plugins/memory-provider-types.js";
+import { getMemoryRuntime, resolveLoadedMemoryProviderKind } from "../plugins/memory-state.js";
+import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 
 const PROJECT_MEMORY_BOOTSTRAP_MAX_CHARS = 2_000;
 const PROJECT_MEMORY_ENTRY_MAX_CHARS = 600;
+const log = createSubsystemLogger("agents/project-memory-bootstrap");
 
 function isCuratedProjectContextPath(value: unknown): boolean {
   if (typeof value !== "string" || !value.trim()) {
@@ -63,7 +72,7 @@ function truncateEntry(value: string, maxChars: number): string {
 }
 
 function buildProjectMemoryBootstrap(params: {
-  entries: MemorySearchResult[];
+  entries: MemorySearchHit[];
   activeProjectKeys: readonly string[];
   maxChars?: number;
 }): string[] {
@@ -74,23 +83,22 @@ function buildProjectMemoryBootstrap(params: {
   const active = new Set(params.activeProjectKeys);
   const candidates = params.entries
     .filter((entry) => {
-      const storedProjectKeys = entry.projectKey
-        ?.split(";")
-        .map((key) => key.trim())
-        .filter(Boolean);
+      const storedProjectKeys = entry.automaticRecall?.projectKeys;
       return (
-        isAutomaticMemoryEntryEligible(entry) &&
+        entry.automaticRecall?.eligible === true &&
         storedProjectKeys !== undefined &&
         storedProjectKeys.length > 0 &&
-        storedProjectKeys.every((key) => active.has(key)) &&
-        entry.path.replaceAll("\\", "/").replace(/^\.\//u, "").toUpperCase() === "MEMORY.MD"
+        storedProjectKeys.every((key) => active.has(key))
       );
     })
     .toSorted(
       (left, right) =>
-        (right.importance ?? 0) - (left.importance ?? 0) ||
-        left.path.localeCompare(right.path) ||
-        left.startLine - right.startLine,
+        (right.automaticRecall?.importance ?? 0) - (left.automaticRecall?.importance ?? 0) ||
+        left.reference.providerId.localeCompare(right.reference.providerId) ||
+        left.reference.id.localeCompare(right.reference.id) ||
+        (left.reference.fragment ?? "").localeCompare(right.reference.fragment ?? "", undefined, {
+          numeric: true,
+        }),
     );
   if (candidates.length === 0 || maxChars === 0) {
     return [];
@@ -106,13 +114,16 @@ function buildProjectMemoryBootstrap(params: {
   }
   for (const entry of candidates) {
     const snippet = truncateEntry(
-      stripMemoryAnnotationCarriers(entry.snippet).replace(/\s+/gu, " ").trim(),
+      entry.excerpt.replace(/\s+/gu, " ").trim(),
       PROJECT_MEMORY_ENTRY_MAX_CHARS,
     );
     if (!snippet) {
       continue;
     }
-    const line = `- ${snippet} (Source: ${entry.path}#L${String(entry.startLine)})`;
+    const citation =
+      entry.citations?.map((source) => source.label).join(", ") ||
+      `${entry.reference.providerId}:${entry.reference.id}`;
+    const line = `- ${snippet} (Source: ${citation})`;
     const candidateChars = renderedChars + line.length + 1;
     if (candidateChars <= maxChars) {
       lines.push(line);
@@ -122,18 +133,30 @@ function buildProjectMemoryBootstrap(params: {
   return lines.length > 2 ? [...lines, ""] : [];
 }
 
-export async function prepareProjectMemoryBootstrap(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  activeProjectKeys: readonly string[];
-}): Promise<string[]> {
-  if (params.activeProjectKeys.length === 0) {
-    return [];
-  }
-  const runtime = getMemoryRuntime();
-  if (!runtime) {
-    return [];
-  }
+/** Project recall's view of a legacy result: curated MEMORY.md entries and `path#L<start>` citations. */
+function toLegacyProjectMemoryHit(entry: MemorySearchResult, providerId: string): MemorySearchHit {
+  return {
+    reference: { providerId, id: entry.path, fragment: `L${String(entry.startLine)}` },
+    excerpt: stripMemoryAnnotationCarriers(entry.snippet),
+    citations: [{ label: `${entry.path}#L${String(entry.startLine)}` }],
+    automaticRecall: {
+      eligible:
+        isAutomaticMemoryEntryEligible(entry) &&
+        entry.path.replaceAll("\\", "/").replace(/^\.\//u, "").toUpperCase() === "MEMORY.MD",
+      projectKeys: entry.projectKey
+        ?.split(";")
+        .map((key) => key.trim())
+        .filter(Boolean),
+      importance: entry.importance,
+    },
+  };
+}
+
+// Legacy runtimes keep the already-loaded manager path; recall never loads the slot plugin.
+async function prepareLegacyProjectMemoryBootstrap(
+  params: { cfg: OpenClawConfig; agentId: string; activeProjectKeys: readonly string[] },
+  runtime: MemoryPluginRuntime,
+): Promise<string[]> {
   try {
     const lookup = await runtime.getMemorySearchManager({
       cfg: params.cfg,
@@ -147,10 +170,85 @@ export async function prepareProjectMemoryBootstrap(params: {
       activeProjectKeys: [...params.activeProjectKeys],
       limit: 48,
     });
+    const providerId = normalizePluginsConfig(params.cfg.plugins).slots.memory ?? "memory";
     return buildProjectMemoryBootstrap({
-      entries: results,
+      entries: results.map((entry) => toLegacyProjectMemoryHit(entry, providerId)),
       activeProjectKeys: params.activeProjectKeys,
     });
+  } catch {
+    return [];
+  }
+}
+
+export async function prepareProjectMemoryBootstrap(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  activeProjectKeys: readonly string[];
+  context?: MemoryCallerContext;
+}): Promise<string[]> {
+  if (params.activeProjectKeys.length === 0) {
+    return [];
+  }
+  // Only a native slot owner serves recall under caller authority. Classification reads
+  // owners this process already loaded; legacy owners keep the loaded-runtime path.
+  if (resolveLoadedMemoryProviderKind(params.cfg) !== "native") {
+    const runtime = getMemoryRuntime();
+    return runtime ? await prepareLegacyProjectMemoryBootstrap(params, runtime) : [];
+  }
+  let active = true;
+  const context: MemoryCallerContext = {
+    authority: params.context?.authority ?? { kind: "host", operation: "project-memory-bootstrap" },
+    signal: params.context?.signal,
+    assertCurrent() {
+      if (!active) {
+        throw new Error("project memory request has ended");
+      }
+      params.context?.signal?.throwIfAborted();
+      params.context?.assertCurrent();
+    },
+  };
+  let provider: MemoryProviderHandle | null = null;
+  let lines: string[] = [];
+  try {
+    const { getActiveMemoryProviderCore } = await import("../plugins/memory-runtime.js");
+    const lookup = await getActiveMemoryProviderCore({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      context,
+    });
+    provider = lookup.provider;
+    if (
+      lookup.provider?.candidates &&
+      lookup.provider.capabilities.candidates.includes("project")
+    ) {
+      const results = await lookup.provider.candidates({
+        kind: "project",
+        activeProjectKeys: [...params.activeProjectKeys],
+        limit: 48,
+      });
+      context.assertCurrent();
+      lines = buildProjectMemoryBootstrap({
+        entries: results.hits,
+        activeProjectKeys: params.activeProjectKeys,
+      });
+    }
+  } catch {
+    lines = [];
+  } finally {
+    active = false;
+    try {
+      await provider?.close();
+    } catch (error) {
+      // Project recall is optional: a failed lease release omits recall, never the attempt.
+      log.debug(`project memory cleanup failed: ${String(error)}`);
+      lines = [];
+    }
+  }
+  try {
+    // Cleanup may yield after selection; the owning run still controls release.
+    params.context?.signal?.throwIfAborted();
+    params.context?.assertCurrent();
+    return lines;
   } catch {
     return [];
   }

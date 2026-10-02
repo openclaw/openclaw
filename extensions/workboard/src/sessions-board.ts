@@ -5,7 +5,6 @@ import type {
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardView,
 } from "@openclaw/workboard-contract";
-import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -46,6 +45,7 @@ type BoardState = {
   specHash?: string;
   warning?: string;
   failed: boolean;
+  emptyRosterWarned: boolean;
   classifiedAt?: number;
   lastModelAt: number;
   forceRequested: boolean;
@@ -166,6 +166,7 @@ function createOwner(
   const runAsService = AsyncLocalStorage.snapshot();
   const lifetime = new AbortController();
   const boards = new Map<string, BoardState>();
+  let ownerSwapLogged = false;
   const now = params.now ?? Date.now;
   const complete = params.complete ?? createSessionsBoardCompletion();
   const assertCurrent = () => {
@@ -187,6 +188,7 @@ function createOwner(
         lastReadAt: -Infinity,
         lastModelAt: -Infinity,
         failed: false,
+        emptyRosterWarned: false,
         forceRequested: false,
         forced: new Set(),
         modelQueue: [],
@@ -213,6 +215,19 @@ function createOwner(
     assertCurrent();
     const board = await params.store.getSessionsBoard(id);
     const { sessions: roster } = await listSessions(params.gateway, board);
+    assertCurrent();
+    const scope = board.sessions.scope;
+    const emptyDefaultRoster =
+      roster.size === 0 &&
+      !scope?.agentIds?.length &&
+      scope?.includeArchived !== true &&
+      (scope?.maxAgeHours ?? 72) === 72;
+    if (emptyDefaultRoster && !state.emptyRosterWarned) {
+      context.logger.warn(
+        `Sessions board ${id} sessions.list returned 0 sessions for the default scope.`,
+      );
+    }
+    state.emptyRosterWarned = emptyDefaultRoster;
     const facts: WorkboardSessionFacts[] = [];
     const keys = [...roster.keys()];
     for (let offset = 0; offset < keys.length; offset += SESSIONS_BOARD_BATCH_SIZE) {
@@ -304,6 +319,17 @@ function createOwner(
         }
       }
     }
+    const classificationFailed = (error: unknown) => {
+      assertCurrent();
+      state.warning =
+        "Utility-model classification is unavailable. Previous placements are retained; check the agent's utility model and refresh.";
+      if (!state.failed) {
+        context.logger.warn(
+          `Sessions board ${id} classification failed: ${redactToolPayloadText(String(error)).slice(0, 300)}`,
+        );
+      }
+      state.failed = true;
+    };
     try {
       if (writes.length) {
         if (
@@ -335,66 +361,85 @@ function createOwner(
         (left, right) =>
           (queued.get(left.key) ?? queued.size) - (queued.get(right.key) ?? queued.size),
       );
-      const batch = needsModel.slice(0, SESSIONS_BOARD_MODEL_BATCH_SIZE);
+      const groups = new Map<string, WorkboardSessionFacts[]>();
+      for (const session of needsModel) {
+        const group = groups.get(session.agentId);
+        if (group) {
+          group.push(session);
+        } else {
+          groups.set(session.agentId, [session]);
+        }
+      }
+      const batches = [...groups].map(([agentId, sessions]) => ({
+        agentId,
+        sessions: sessions.slice(0, SESSIONS_BOARD_MODEL_BATCH_SIZE),
+      }));
+      const batch = batches.flatMap(({ sessions }) => sessions);
+      const selected = new Set(batch.map((session) => session.key));
       // Repeatedly changing runs return to the tail instead of starving later sessions.
-      state.modelQueue = [...needsModel.slice(batch.length), ...batch].map(
-        (session) => session.key,
-      );
+      state.modelQueue = [
+        ...needsModel.filter((session) => !selected.has(session.key)),
+        ...batch,
+      ].map((session) => session.key);
       const cfg = params.getConfig?.() ?? context.config;
-      const agentId = board.orchestration?.defaultAssignee ?? resolveDefaultAgentId(cfg);
       state.lastModelAt = now();
-      const output = parseSessionPlacements(
-        await complete({
-          board,
-          sessions: batch,
-          cfg,
-          agentId,
-          signal: lifetime.signal,
-          assertCurrent,
-        }),
-        board,
-        batch,
-      );
-      assertCurrent();
-      const modelWrites = batch.map((session): WorkboardSessionPlacementWrite => {
-        const result = output.get(session.key) ?? { columnId: fallback.id, reason: "unresolved" };
-        return {
-          sessionKey: session.key,
-          ...result,
-          source: "model",
-          factsHash: `${state.specHash}:${sessionFactsHash(session)}`,
-          updatedAt: now(),
-          expectedUpdatedAt: cached.get(session.key)?.updatedAt,
-        };
-      });
-      if (
-        !(await params.store.writeSessionPlacements(id, modelWrites, {
-          expectedSpec: board.sessions,
-          assertCurrent,
-        }))
-      ) {
-        state.again = true;
-        return;
+      let groupFailed = false;
+      for (const { agentId: sessionAgentId, sessions } of batches) {
+        try {
+          const output = parseSessionPlacements(
+            await complete({
+              board,
+              sessions,
+              cfg,
+              agentId: board.orchestration?.defaultAssignee ?? sessionAgentId,
+              signal: lifetime.signal,
+              assertCurrent,
+            }),
+            board,
+            sessions,
+          );
+          assertCurrent();
+          const modelWrites = sessions.map((session): WorkboardSessionPlacementWrite => {
+            const result = output.get(session.key) ?? {
+              columnId: fallback.id,
+              reason: "unresolved",
+            };
+            return {
+              sessionKey: session.key,
+              ...result,
+              source: "model",
+              factsHash: `${state.specHash}:${sessionFactsHash(session)}`,
+              updatedAt: now(),
+              expectedUpdatedAt: cached.get(session.key)?.updatedAt,
+            };
+          });
+          if (
+            !(await params.store.writeSessionPlacements(id, modelWrites, {
+              expectedSpec: board.sessions,
+              assertCurrent,
+            }))
+          ) {
+            state.again = true;
+            return;
+          }
+          for (const session of sessions) {
+            state.forced.delete(session.key);
+          }
+          state.classifiedAt = now();
+        } catch (error) {
+          groupFailed = true;
+          classificationFailed(error);
+        }
       }
-      for (const session of batch) {
-        state.forced.delete(session.key);
+      if (!groupFailed) {
+        state.failed = false;
+        state.warning = prWarning;
       }
-      state.classifiedAt = now();
-      state.failed = false;
-      state.warning = prWarning;
       if (needsModel.length > batch.length) {
         deferModel(id, state);
       }
     } catch (error) {
-      assertCurrent();
-      state.warning =
-        "Utility-model classification is unavailable. Previous placements are retained; check the agent's utility model and refresh.";
-      if (!state.failed) {
-        context.logger.warn(
-          `Sessions board ${id} classification failed: ${redactToolPayloadText(String(error)).slice(0, 300)}`,
-        );
-      }
-      state.failed = true;
+      classificationFailed(error);
     } finally {
       if (
         isCurrent() &&
@@ -420,7 +465,16 @@ function createOwner(
       const pending = params.store
         .runOperation(() => classify(id, state))
         .catch((error: unknown) => {
-          if (!isCurrent() || lifetime.signal.aborted) {
+          if (!isCurrent()) {
+            if (!ownerSwapLogged) {
+              context.logger.info(
+                `Sessions board ${id} classification stopped after the service owner changed.`,
+              );
+              ownerSwapLogged = true;
+            }
+            return;
+          }
+          if (lifetime.signal.aborted) {
             return;
           }
           state.warning = "Session facts are unavailable. Refresh to retry.";
@@ -436,6 +490,10 @@ function createOwner(
         .finally(() => {
           if (state.pending === pending) {
             state.pending = undefined;
+            // Empty results still need an epoch so clients can retire the initial status line.
+            if (!state.facts.length && isCurrent() && !lifetime.signal.aborted) {
+              params.store.announceChangeEpoch();
+            }
           }
           if (state.again && isCurrent() && !lifetime.signal.aborted) {
             state.again = false;
@@ -482,6 +540,9 @@ function createOwner(
       board,
       columns: board.sessions.columns,
       sessions,
+      ...(state.checkedAt === -Infinity || (state.pending && state.facts.length === 0)
+        ? { classifying: true as const }
+        : {}),
       ...(people !== undefined ? { people } : {}),
       ...(state.warning ? { warning: state.warning } : {}),
       ...(state.classifiedAt !== undefined ? { classifiedAt: state.classifiedAt } : {}),

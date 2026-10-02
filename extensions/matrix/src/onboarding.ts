@@ -390,14 +390,7 @@ async function runMatrixConfigure(params: {
   let next = params.cfg;
   const promptText = async (options: Parameters<WizardPrompter["text"]>[0]) =>
     normalizeStringifiedOptionalString(await params.prompter.text(options)) ?? "";
-  await ensureMatrixSdkInstalled({
-    runtime: params.runtime,
-    confirm: async (message) =>
-      await params.prompter.confirm({
-        message,
-        initialValue: true,
-      }),
-  });
+  await ensureMatrixSdkInstalled();
   const defaultAccountId = resolveDefaultMatrixAccountId(next);
   let accountId = defaultAccountId || DEFAULT_ACCOUNT_ID;
   if (params.intent === "add-account") {

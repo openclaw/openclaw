@@ -39,7 +39,7 @@ import {
 } from "../gateway/worker-environments/placement-worker-gate.js";
 import * as workerEnv from "../gateway/worker-environments/service.js";
 import * as envStore from "../gateway/worker-environments/store.js";
-import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
 import { onAgentRuntimeEvent } from "../infra/agent-events.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
@@ -374,7 +374,6 @@ export class ComposedGatewayHarness {
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
-      requestTimeoutMs: 2_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
     return {

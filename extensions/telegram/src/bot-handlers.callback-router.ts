@@ -116,26 +116,17 @@ export function createTelegramCallbackRouter({
         fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
     };
-    if (shouldSkipUpdate(ctx)) {
-      const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
-      if (earlyAnswerPromise) {
-        await earlyAnswerPromise.catch(async () => await answerCallbackQuery());
-      } else {
-        await answerCallbackQuery();
-      }
-      return;
-    }
+    const skipUpdate = shouldSkipUpdate(ctx);
     const data = (callback.data ?? "").trim();
     const typedQuestionCallback = parseTelegramQuestionCallbackData(data);
     const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
     if (earlyAnswerPromise) {
-      try {
-        await earlyAnswerPromise;
-      } catch {
-        await answerCallbackQuery();
-      }
+      await earlyAnswerPromise.catch(answerCallbackQuery);
     } else {
       await answerCallbackQuery();
+    }
+    if (skipUpdate) {
+      return;
     }
 
     try {

@@ -11,6 +11,13 @@ import SwiftUI
 enum OpenClawProcessMain {
     static func main() {
         if let status = OpenClawProcessEntrypoint.run(arguments: CommandLine.arguments, launchApplication: {
+            guard GatewayKeychainAccess.configure(launchPlan: .current) == 0 else {
+                fputs(
+                    "OpenClaw could not disable Keychain interaction for --no-activate. Relaunch without the flag.\n",
+                    stderr)
+                Darwin.exit(2)
+            }
+            AppActivation.shared.configureLaunch()
             OpenClawApp.main()
         }) {
             Darwin.exit(status)
@@ -55,7 +62,11 @@ struct OpenClawApp: App {
             alert.alertStyle = .critical
             alert.messageText = "OpenClaw profile is invalid"
             alert.informativeText = error.localizedDescription
-            alert.runModal()
+            if launchPlan.allowsActivation {
+                AppActivation.shared.presentAlert(alert)
+            } else {
+                Self.logger.error("OpenClaw profile is invalid: \(error.localizedDescription, privacy: .public)")
+            }
             Darwin.exit(2)
         }
         if AppProfile.current.isActive,
@@ -76,7 +87,11 @@ struct OpenClawApp: App {
         // Register before any window is opened, including connection recovery from the dashboard.
         let openSettings = self.openSettings
         ConnectionWindowOpener.shared.register {
-            openSettings()
+            if AppLaunchRuntimePlan.current.allowsActivation {
+                openSettings()
+            } else {
+                ConnectionWindowOpener.shared.openInBackground(state: self.state)
+            }
         }
         // The native Connection window is a standard macOS Settings window: toolbar tabs, fixed width,
         // content-sized height per tab. Cmd-, still opens Dashboard settings via the replaced command.
@@ -231,7 +246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.alertStyle = .critical
             alert.messageText = "OpenClaw could not claim its instance lock"
             alert.informativeText = instanceOwnershipFailure
-            alert.runModal()
+            if AppLaunchRuntimePlan.current.allowsActivation {
+                AppActivation.shared.presentAlert(alert)
+            } else {
+                fputs("OpenClaw could not claim its instance lock: \(instanceOwnershipFailure)\n", stderr)
+            }
             Darwin.exit(2)
         }
     }

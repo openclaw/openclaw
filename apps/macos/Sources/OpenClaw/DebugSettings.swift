@@ -281,7 +281,7 @@ struct DebugSettings: View {
 
                         HStack(spacing: 8) {
                             Button("Open folder") {
-                                NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
+                                AppActivation.shared.open(DiagnosticsFileLog.logDirectoryURL())
                             }
                             .buttonStyle(.bordered)
                             Button("Clear") {
@@ -683,7 +683,7 @@ struct DebugSettings: View {
 
     private func revealApp() {
         let url = Bundle.main.bundleURL
-        NSWorkspace.shared.activateFileViewerSelecting([url])
+        AppActivation.shared.revealFiles([url])
     }
 
     private func saveRelayRoot() {

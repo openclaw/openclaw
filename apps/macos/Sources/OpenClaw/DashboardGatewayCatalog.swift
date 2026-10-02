@@ -227,11 +227,11 @@ struct DashboardPrimaryGatewayAdapter {
 @MainActor
 struct DashboardGatewaySetupCoordinator {
     let adapter: DashboardPrimaryGatewayAdapter
-    let confirm: (_ title: String, _ message: String) -> Bool
+    let confirm: (_ title: String, _ message: String) async -> Bool
     let presentError: (_ title: String, _ message: String) -> Void
     let openConnectionSettings: () -> Void
 
-    func handle(_ link: GatewayConnectDeepLink) {
+    func handle(_ link: GatewayConnectDeepLink) async {
         guard link.isValidEndpoint else {
             self.presentError(
                 "Could Not Change Primary Gateway",
@@ -241,7 +241,7 @@ struct DashboardGatewaySetupCoordinator {
         let snapshot = self.adapter.state.primaryGatewaySnapshot()
         let endpoint = "\(link.host):\(link.port)"
         let transport = link.tls ? "TLS" : "an unencrypted private-network connection"
-        guard self.confirm(
+        guard await self.confirm(
             "Change the primary Gateway?",
             "Connect the Mac app directly to \(endpoint) using \(transport)?")
         else { return }

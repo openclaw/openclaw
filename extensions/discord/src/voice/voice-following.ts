@@ -54,12 +54,11 @@ export function normalizeVoiceChannelResidencies(
 function normalizeDiscordUserIds(entries: string[] | undefined): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries ?? []) {
-    const trimmed = entry.trim();
-    const withoutDiscordPrefix = trimmed.startsWith("discord:") ? trimmed.slice(8) : trimmed;
-    const withoutUserPrefix = withoutDiscordPrefix.startsWith("user:")
-      ? withoutDiscordPrefix.slice(5)
-      : withoutDiscordPrefix;
-    const id = withoutUserPrefix.trim();
+    const id = entry
+      .trim()
+      .replace(/^discord:/, "")
+      .replace(/^user:/, "")
+      .trim();
     if (id) {
       ids.add(id);
     }
@@ -184,32 +183,27 @@ export class DiscordVoiceFollowing {
     const existing = this.params.getSession(guildId);
     const wasFollowedVoiceSession =
       this.followedUserChannels.has(followKey) || this.followedVoiceGuilds.has(guildId);
-    if (!channelId) {
+    if (!channelId || !this.params.isAllowedVoiceChannel({ guildId, channelId })) {
       this.followedUserChannels.delete(followKey);
-      if (existing && wasFollowedVoiceSession && !this.hasFollowedUserInChannel(existing)) {
-        await this.handoffToAnotherFollowedUserOrLeave({
-          guildId,
-          userId,
-          existing,
-          reason: "disconnected",
-        });
-      } else if (!existing && wasFollowedVoiceSession && this.params.hasVoiceLifecycle(guildId)) {
-        await this.params.leave({ guildId });
+      if (channelId) {
+        logger.warn(
+          `discord voice: followed user joined non-allowed channel guild=${guildId} user=${userId} channel=${channelId}; ignoring`,
+        );
       }
-      return;
-    }
-    if (!this.params.isAllowedVoiceChannel({ guildId, channelId })) {
-      this.followedUserChannels.delete(followKey);
-      logger.warn(
-        `discord voice: followed user joined non-allowed channel guild=${guildId} user=${userId} channel=${channelId}; ignoring`,
-      );
       if (existing && wasFollowedVoiceSession && !this.hasFollowedUserInChannel(existing)) {
         await this.handoffToAnotherFollowedUserOrLeave({
           guildId,
           userId,
           existing,
-          reason: "joined non-allowed channel",
+          reason: channelId ? "joined non-allowed channel" : "disconnected",
         });
+      } else if (
+        !channelId &&
+        !existing &&
+        wasFollowedVoiceSession &&
+        this.params.hasVoiceLifecycle(guildId)
+      ) {
+        await this.params.leave({ guildId });
       }
       return;
     }
@@ -401,10 +395,10 @@ export class DiscordVoiceFollowing {
         guildIds[(start + offset) % guildIds.length],
         "voice reconciliation guild index",
       );
-      const userLimit = this.resolveFollowUserReconcileUserLookupLimit(
-        followedUserIds.length,
-        remainingLookups,
-      );
+      let userLimit = Math.min(followedUserIds.length, remainingLookups);
+      if (this.params.botUserId() && followedUserIds.length > userLimit && remainingLookups > 1) {
+        userLimit = remainingLookups - 1;
+      }
       if (userLimit <= 0) {
         break;
       }
@@ -456,17 +450,6 @@ export class DiscordVoiceFollowing {
       assigned += 1;
     }
     this.followUsersReconcileBotGuildCursor = (start + scanned) % guildIds.length;
-  }
-
-  private resolveFollowUserReconcileUserLookupLimit(
-    followedUserCount: number,
-    remainingLookups: number,
-  ): number {
-    const userLimit = Math.min(followedUserCount, remainingLookups);
-    if (this.params.botUserId() && followedUserCount > userLimit && remainingLookups > 1) {
-      return remainingLookups - 1;
-    }
-    return userLimit;
   }
 
   private selectFollowUserReconcileUserIds(

@@ -6,6 +6,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { resolveCliArgvInvocation } from "./cli/argv-invocation.js";
 import { tryRunUpdateAdmissionBeforeStartup } from "./cli/run-main-update-admission.js";
+import {
+  configureGatewayStartupTraceConsoleFormatting,
+  createGatewayDispatchStartupTrace,
+} from "./cli/startup-trace.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { isMainModule } from "./infra/is-main.js";
 
@@ -67,8 +71,13 @@ export let runCommandWithTimeout: LibraryExports["runCommandWithTimeout"];
 export let runExec: LibraryExports["runExec"];
 export let waitForever: LibraryExports["waitForever"];
 
-async function loadLegacyCliDeps(): Promise<LegacyCliDeps> {
-  const { runCli } = await import("./cli/run-main.js");
+async function loadLegacyCliDeps(argv: string[]): Promise<LegacyCliDeps> {
+  const startupTrace = createGatewayDispatchStartupTrace(argv, "entry");
+  await configureGatewayStartupTraceConsoleFormatting(startupTrace);
+  const { runCli } = await startupTrace.measure(
+    "run-main-import",
+    () => import("./cli/run-main.js"),
+  );
   return { runCli };
 }
 
@@ -80,7 +89,7 @@ export async function runLegacyCliEntry(
     retainConsoleRoutingUntilProcessExit?: boolean;
   },
 ): Promise<void> {
-  const { runCli } = deps ?? (await loadLegacyCliDeps());
+  const { runCli } = deps ?? (await loadLegacyCliDeps(argv));
   await runCli(argv, options);
 }
 
