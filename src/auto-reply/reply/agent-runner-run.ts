@@ -388,6 +388,7 @@ export async function runReplyAgent(
 
   if (activeRunQueueAction === "enqueue-followup") {
     bindQueueDisposition();
+    followupRun.typing = typing;
     // The queued item, not this dispatch, ends the wait: settlement covers
     // execution, cancellation, and removal from the queue.
     const queuedLifecycle = followupRun.turnAdoptionLifecycle;

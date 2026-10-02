@@ -85,6 +85,7 @@ export function registerQueuedTypingCases({
     if (!queued) {
       throw new Error("expected an enqueued follow-up");
     }
+    expect(queued.typing).toBe(typing);
     completeFollowupRunLifecycle(queued);
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
     active.complete();
