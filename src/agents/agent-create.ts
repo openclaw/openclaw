@@ -48,6 +48,7 @@ import {
   mergeIdentityMarkdownContent,
   sanitizeAgentIdentityLine,
 } from "./identity-file.js";
+import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
@@ -277,6 +278,7 @@ async function writeIdentityFile(params: {
   identity: NonNullable<ReturnType<typeof createAgentIdentityConfig>>;
   guard?: WorkspaceStateGuard;
 }): Promise<void> {
+  const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
   const workspaceRoot = await root(params.workspaceDir);
   let existing: string | undefined;
   try {
@@ -290,11 +292,11 @@ async function writeIdentityFile(params: {
     }
   }
   const content = mergeIdentityMarkdownContent(existing, params.identity);
-  params.guard?.assertHost?.();
+  beforeFileMutation?.();
   // Root.write rechecks after its own async preparation and before each mutation.
   await workspaceRoot.write(DEFAULT_IDENTITY_FILENAME, content, {
     encoding: "utf8",
-    assertBeforeMutation: params.guard?.assertHost,
+    assertBeforeMutation: beforeFileMutation,
   });
 }
 

@@ -9,6 +9,25 @@ sidebarTitle: "How to migrate"
 
 The ordered migration steps. Work through them in order; each step is self-contained. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+## Workspace mutation guards
+
+Await `api.runtime.agent.ensureAgentWorkspace({ dir, guard: { assertHost } })`.
+Prepare database-derived inputs asynchronously before calling it; `assertHost`
+must synchronously check current caller authority without accessing SQLite.
+Core-owned recovery predicates execute on the worker's transaction connection.
+
+The released `beforePersistentApply: () => void` option remains supported for
+TypeScript and JavaScript plugins until the next Plugin SDK major. It runs on the
+host immediately before persistent applies, including the worker commit grant;
+throwing refuses that apply. Supplying both guards runs `assertHost` first and
+then the legacy callback. A deprecation warning is emitted once per process.
+
+The only mutation-guard behavior delta, explicitly subject to maintainer veto,
+is reentrant synchronous OpenClaw shared-state database access from the legacy
+callback: it is refused with an error naming `beforePersistentApply`, awaited
+database preparation, and `guard.assertHost`. Other callback errors propagate
+unchanged. No schema, retention, durability, or update migration is required.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from

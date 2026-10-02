@@ -34,6 +34,7 @@ import {
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+import { assertStateDatabaseWorkerAccessAllowed } from "./state-database-worker-access.js";
 
 export type StateDatabaseSchemaLease = {
   readonly path: string;
@@ -584,6 +585,7 @@ function hasRecentVerification(verifiedAt: number | undefined, now: number): boo
 
 /** Only explicit reads reuse recent physical verification; mutations always check freshly. */
 export function assertStateDatabaseReadAllowed(databasePath: string): void {
+  assertStateDatabaseWorkerAccessAllowed();
   if (owners.size === 0) {
     assertStateDatabaseAccessAllowed(databasePath);
     return;
@@ -636,6 +638,7 @@ export function assertStateDatabaseAccessAllowed(
     schemaLease?: StateDatabaseSchemaLease;
   },
 ): void {
+  assertStateDatabaseWorkerAccessAllowed();
   const assertMaintenance = () => {
     const schemaLease = captured ? captured.schemaLease : getStateDatabaseSchemaLease(databasePath);
     if (schemaLease) {

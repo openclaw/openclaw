@@ -13,7 +13,6 @@ import {
   resolveEffectiveAgentRuntime,
 } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import * as session from "../../config/sessions/lifecycle.js";
@@ -44,6 +43,7 @@ import {
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import { resolveAgentCatalogCreateTarget } from "./runtime-agent-session-catalog.js";
+import { ensurePluginAgentWorkspace } from "./runtime-agent-workspace.js";
 import { defineCachedValue } from "./runtime-cache.js";
 import type { PluginRuntime } from "./types.js";
 
@@ -666,7 +666,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     },
     resolveAgentTimeoutMs,
     resolveCliBackendDispatchEligibility: resolveEmbeddedCliBackendDispatchEligibility,
-    ensureAgentWorkspace,
+    ensureAgentWorkspace: ensurePluginAgentWorkspace,
   } satisfies Omit<
     PluginRuntime["agent"],
     "runCommandFromIngress" | "runEmbeddedAgent" | "session"

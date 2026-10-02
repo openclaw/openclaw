@@ -491,6 +491,9 @@ Workspace guards separate SQL-free host authority from a serialized recovery-hol
 predicate. The shared recovery reader evaluates that predicate on the worker's
 transaction connection before commit; refusal preserves the caller's duplicate-agent
 error. Creation guards never recursively read that database from a host grant.
+Host filesystem mutations retain a separate recovery-aware callback after awaited
+preparation and immediately before each effect. It uses the same recovery kernel
+through the existing current read-only connection, outside all worker grants.
 Expiry rereads current setup and attestation rows, preserving the 24-hour and
 future-timestamp protections. Native commit receipts retire the stored workspace's
 file cache even if ordinary result delivery fails; uncertain writes are never

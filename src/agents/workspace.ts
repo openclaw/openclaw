@@ -43,6 +43,7 @@ import {
 } from "./workspace-bootstrap-publish.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
+import { createWorkspaceFileMutationGuard } from "./workspace-file-mutation-guard.js";
 import {
   isTransientWorkspaceReadError,
   readWorkspaceFileWithGuards,
@@ -347,6 +348,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   guard?: WorkspaceStateGuard;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const assertEvidence = captureWorkspaceStateFilesystemGuard(params.dir);
+  const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
   const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
   if (
     typeof params.state.setupCompletedAt === "string" &&
@@ -382,7 +384,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   if (!bootstrapExists) {
     return { repaired: true, bootstrapExists: false, state: persistedState };
   }
-  params.guard?.assertHost?.();
+  beforeFileMutation?.();
   try {
     await fs.rm(params.bootstrapPath, { force: true });
     return { repaired: true, bootstrapExists: false, state: persistedState };
@@ -411,19 +413,19 @@ async function maybeWriteWorkspaceAttestation(
   dir: string,
   guard?: WorkspaceStateGuard,
 ): Promise<void> {
-  const beforePersistentApply = guard?.assertHost;
+  const assertHost = guard?.assertHost;
   // Order snapshots by when their filesystem observation starts. The store
   // compares against a separate lock-time clock, so a newer committed scan
   // wins when this async collection finishes later.
   const attestedAtMs = Date.now();
   const generatedHashes = await collectGeneratedBootstrapHashes(dir);
-  beforePersistentApply?.();
+  assertHost?.();
   try {
     await replaceWorkspaceAttestation({
       workspaceDir: dir,
       attestedAtMs,
       generatedHashes,
-      assertCurrent: beforePersistentApply,
+      assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
     });
   } catch (error) {
@@ -433,7 +435,7 @@ async function maybeWriteWorkspaceAttestation(
     // Attestation is a lifecycle guard; setup should not fail solely because
     // the auxiliary disappearance evidence could not be refreshed.
   }
-  beforePersistentApply?.();
+  assertHost?.();
 }
 
 async function workspaceAttestationHasSurvivalEvidence(params: {
@@ -690,22 +692,23 @@ export async function ensureAgentWorkspace(params?: {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
   const guard = params?.guard;
-  const beforePersistentApply = guard?.assertHost;
+  const assertHost = guard?.assertHost;
+  const beforeFileMutation = createWorkspaceFileMutationGuard(guard);
   let assertExpiryEvidence: () => void;
   const clearExpiredState = async () => {
-    beforePersistentApply?.();
+    assertHost?.();
     if (
       !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
         recoveryHoldPredicate: guard?.recoveryHoldPredicate,
         assertCurrent: () => {
-          beforePersistentApply?.();
+          assertHost?.();
           assertExpiryEvidence();
         },
       }))
     ) {
       throw new WorkspaceVanishedError({ workspaceDir: dir });
     }
-    beforePersistentApply?.();
+    assertHost?.();
     assertExpiryEvidence();
   };
   const purpose = params?.purpose?.trim();
@@ -723,7 +726,7 @@ export async function ensureAgentWorkspace(params?: {
     // The workspace belongs to a runtime-managed agent with a distinct cwd.
     // Provision the directory (cwd fallback, media staging) without scaffolding
     // bootstrap files, setup state, or a nested git repository (#92015).
-    beforePersistentApply?.();
+    beforeFileMutation?.();
     await fs.mkdir(dir, { recursive: true });
     return { dir, bootstrapPending: false };
   }
@@ -744,7 +747,7 @@ export async function ensureAgentWorkspace(params?: {
     await clearExpiredState();
   }
 
-  beforePersistentApply?.();
+  beforeFileMutation?.();
   await fs.mkdir(dir, { recursive: true });
   assertExpiryEvidence = captureWorkspaceStateFilesystemGuard(dir);
 
@@ -774,7 +777,7 @@ export async function ensureAgentWorkspace(params?: {
         path.join(dir, DEFAULT_AGENTS_FILENAME),
         await loadTemplate(DEFAULT_AGENTS_FILENAME),
         purpose,
-        beforePersistentApply,
+        beforeFileMutation,
       );
     }
     if (hasContentEvidence || purpose) {
@@ -866,15 +869,15 @@ export async function ensureAgentWorkspace(params?: {
       skipOptionalBootstrapFiles.add(filename);
     }
   }
-  await publishAgentInstructions(agentsPath, defaultAgentsTemplate, purpose, beforePersistentApply);
+  await publishAgentInstructions(agentsPath, defaultAgentsTemplate, purpose, beforeFileMutation);
   if (!skipOptionalBootstrapFiles.has(DEFAULT_SOUL_FILENAME)) {
-    await publishBootstrapFile(soulPath, soulTemplate, beforePersistentApply);
+    await publishBootstrapFile(soulPath, soulTemplate, beforeFileMutation);
   }
   const identityPathCreated = !skipOptionalBootstrapFiles.has(DEFAULT_IDENTITY_FILENAME)
-    ? await publishBootstrapFile(identityPath, identityTemplate, beforePersistentApply)
+    ? await publishBootstrapFile(identityPath, identityTemplate, beforeFileMutation)
     : false;
   if (!skipOptionalBootstrapFiles.has(DEFAULT_USER_FILENAME)) {
-    await publishBootstrapFile(userPath, userTemplate, beforePersistentApply);
+    await publishBootstrapFile(userPath, userTemplate, beforeFileMutation);
   }
 
   let state = (await readCanonicalWorkspaceStateSnapshot(dir, undefined, guard)).setup;
@@ -928,7 +931,7 @@ export async function ensureAgentWorkspace(params?: {
       const wroteBootstrap = await publishBootstrapFile(
         bootstrapPath,
         bootstrapTemplate,
-        beforePersistentApply,
+        beforeFileMutation,
       );
       bootstrapExists = wroteBootstrap || (await pathExists(bootstrapPath));
       if (bootstrapExists && !state.bootstrapSeededAt) {
@@ -938,13 +941,13 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
-    beforePersistentApply?.();
+    assertHost?.();
     state = await mergeWorkspaceSetupState(dir, state, undefined, {
-      assertCurrent: beforePersistentApply,
+      assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
     });
   }
-  await ensureGitRepo(dir, isBrandNewWorkspace, beforePersistentApply);
+  await ensureGitRepo(dir, isBrandNewWorkspace, beforeFileMutation);
   await maybeWriteWorkspaceAttestation(dir, guard);
 
   return {

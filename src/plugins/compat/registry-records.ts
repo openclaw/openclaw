@@ -6,6 +6,7 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import type { PluginCompatRecord } from "./types.js";
+import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
 
 const ACTIVATION_HINT_METADATA = {
   status: "active",
@@ -17,6 +18,7 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
   {
     code: "memory-session-sync-inventory",
