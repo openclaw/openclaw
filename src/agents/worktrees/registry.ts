@@ -43,12 +43,10 @@ export {
 
 type WorktreesTable = OpenClawStateKyselyDatabase["worktrees"];
 type WorktreeRow = Selectable<WorktreesTable>;
-type WorktreeRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "worktrees">;
-type WorktreeProvisionedDatabase = Pick<
+type WorktreeRegistryDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "worktree_provisioned_file_chunks"
+  "worktrees" | "worktree_provisioned_file_chunks" | "state_leases"
 >;
-type WorktreeLeaseDatabase = Pick<OpenClawStateKyselyDatabase, "worktrees" | "state_leases">;
 
 function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
   return openOpenClawStateDatabase({ env }).db;
@@ -56,14 +54,6 @@ function dbFor(env: NodeJS.ProcessEnv): DatabaseSync {
 
 function kyselyFor(db: DatabaseSync) {
   return getNodeSqliteKysely<WorktreeRegistryDatabase>(db);
-}
-
-function kyselyProvisionedFor(db: DatabaseSync) {
-  return getNodeSqliteKysely<WorktreeProvisionedDatabase>(db);
-}
-
-function kyselyLeaseFor(db: DatabaseSync) {
-  return getNodeSqliteKysely<WorktreeLeaseDatabase>(db);
 }
 
 function recordToRow(
@@ -209,7 +199,7 @@ export function clearRegistryWorktreeProvisionedChunks(
     ({ db }) => {
       executeSqliteQuerySync(
         db,
-        kyselyProvisionedFor(db)
+        kyselyFor(db)
           .deleteFrom("worktree_provisioned_file_chunks")
           .where("worktree_id", "=", worktreeId),
       );
@@ -231,7 +221,7 @@ export function insertRegistryWorktreeProvisionedChunk(
     ({ db }) => {
       executeSqliteQuerySync(
         db,
-        kyselyProvisionedFor(db).insertInto("worktree_provisioned_file_chunks").values({
+        kyselyFor(db).insertInto("worktree_provisioned_file_chunks").values({
           worktree_id: params.worktreeId,
           path: params.path,
           chunk_index: params.chunkIndex,
@@ -337,7 +327,7 @@ export function updateRegistryWorktree(
     ({ db }) => {
       // Revalidate under the immediate write transaction, excluding cross-process lifecycle writers.
       options.assertCurrent?.();
-      assertRegistryMutationCustody(db, kyselyLeaseFor(db), id, options.removalToken);
+      assertRegistryMutationCustody(db, kyselyFor(db), id, options.removalToken);
       let update = kyselyFor(db).updateTable("worktrees").set(values).where("id", "=", id);
       // Busy/retained/failed outcomes are authoritative only for the lifecycle the
       // writer observed: the live condition blocks post-finalization overwrites, and
@@ -374,7 +364,7 @@ function assertSnapshotRetirementInDatabase(
   const provisioned = getRegistryWorktreeProvisionedStateInDatabase(db, observed.id);
   const chunk = executeSqliteQuerySync(
     db,
-    kyselyProvisionedFor(db)
+    kyselyFor(db)
       .selectFrom("worktree_provisioned_file_chunks")
       .select("worktree_id")
       .where("worktree_id", "=", observed.id)
@@ -383,12 +373,7 @@ function assertSnapshotRetirementInDatabase(
   if (provisioned === undefined || provisioned.length !== 0 || chunk) {
     throw new Error("Worktree snapshot retains provisioned data; retain its custody");
   }
-  const leases = collectLiveRunLeases(
-    db,
-    kyselyLeaseFor(db),
-    worktreeRunLeaseScope(observed.id),
-    {},
-  );
+  const leases = collectLiveRunLeases(db, kyselyFor(db), worktreeRunLeaseScope(observed.id), {});
   if (leases.liveCount !== 0 || leases.removingToken !== undefined) {
     throw new Error("Worktree snapshot has an active or unresolved run/removal consumer");
   }
@@ -422,12 +407,10 @@ export function deleteRegistryWorktree(
         }
         assertSnapshotRetirementInDatabase(db, options.expectedRetired);
       }
-      assertRegistryMutationCustody(db, kyselyLeaseFor(db), id, options.removalToken);
+      assertRegistryMutationCustody(db, kyselyFor(db), id, options.removalToken);
       executeSqliteQuerySync(
         db,
-        kyselyProvisionedFor(db)
-          .deleteFrom("worktree_provisioned_file_chunks")
-          .where("worktree_id", "=", id),
+        kyselyFor(db).deleteFrom("worktree_provisioned_file_chunks").where("worktree_id", "=", id),
       );
       executeSqliteQuerySync(db, kyselyFor(db).deleteFrom("worktrees").where("id", "=", id));
     },
@@ -453,7 +436,7 @@ export function claimWorktreeRemovalRow(
     (database) => {
       params.assertCurrent?.();
       const db = database.db;
-      const k = kyselyLeaseFor(db);
+      const k = kyselyFor(db);
       const scope = worktreeRunLeaseScope(params.worktreeId);
       const record = executeSqliteQuerySync(
         db,
@@ -529,7 +512,7 @@ export function assertWorktreeRemovalClaim(
   const db = dbFor(env);
   const row = executeSqliteQuerySync(
     db,
-    kyselyLeaseFor(db)
+    kyselyFor(db)
       .selectFrom("state_leases")
       .select("owner")
       .where("scope", "=", worktreeRunLeaseScope(worktreeId))
@@ -562,7 +545,7 @@ export function finalizeWorktreeRemovalRows(env: NodeJS.ProcessEnv, worktreeId: 
     () => {
       executeSqliteQuerySync(
         db,
-        kyselyLeaseFor(db)
+        kyselyFor(db)
           .deleteFrom("state_leases")
           .where("scope", "=", worktreeRunLeaseScope(worktreeId)),
       );
@@ -583,7 +566,7 @@ export function abortWorktreeRemovalRow(
       // remover cannot delete a marker a newer remover established after replacing it.
       executeSqliteQuerySync(
         db,
-        kyselyLeaseFor(db)
+        kyselyFor(db)
           .deleteFrom("state_leases")
           .where("scope", "=", worktreeRunLeaseScope(worktreeId))
           .where("lease_key", "=", WORKTREE_REMOVING_LEASE_KEY)
@@ -604,7 +587,7 @@ export function hasLiveWorktreeRunLeaseRow(
       ({ db }) =>
         collectLiveRunLeases(
           db,
-          kyselyLeaseFor(db),
+          kyselyFor(db),
           worktreeRunLeaseScope(worktreeId),
           checks ?? {},
           false,

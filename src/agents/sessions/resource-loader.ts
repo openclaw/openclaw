@@ -497,17 +497,12 @@ export class DefaultResourceLoader implements ResourceLoader {
     skillPaths: string[],
     metadataByPath?: Map<string, PathMetadata>,
   ): void {
-    let skillsResult: { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
-    if (this.noSkills && skillPaths.length === 0) {
-      skillsResult = { skills: [], diagnostics: [] };
-    } else {
-      skillsResult = loadSkills({
-        cwd: this.cwd,
-        agentDir: this.agentDir,
-        skillPaths,
-        includeDefaults: false,
-      });
-    }
+    const skillsResult = loadSkills({
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      skillPaths,
+      includeDefaults: false,
+    });
     const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
     this.skills = resolvedSkills.skills.map((skill) => ({
       ...skill,
@@ -525,24 +520,19 @@ export class DefaultResourceLoader implements ResourceLoader {
     promptPaths: string[],
     metadataByPath?: Map<string, PathMetadata>,
   ): void {
-    let promptsResult: { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
-    if (this.noPromptTemplates && promptPaths.length === 0) {
-      promptsResult = { prompts: [], diagnostics: [] };
-    } else {
-      const allPrompts = loadPromptTemplates({
-        cwd: this.cwd,
-        agentDir: this.agentDir,
-        promptPaths,
-        includeDefaults: false,
-      });
-      const { resources, diagnostics } = this.dedupeResources(
-        allPrompts,
-        "prompt",
-        (prompt) => prompt.name,
-        (prompt) => prompt.filePath,
-      );
-      promptsResult = { prompts: resources, diagnostics };
-    }
+    const allPrompts = loadPromptTemplates({
+      cwd: this.cwd,
+      agentDir: this.agentDir,
+      promptPaths,
+      includeDefaults: false,
+    });
+    const { resources, diagnostics } = this.dedupeResources(
+      allPrompts,
+      "prompt",
+      (prompt) => prompt.name,
+      (prompt) => prompt.filePath,
+    );
+    const promptsResult = { prompts: resources, diagnostics };
     const resolvedPrompts = this.promptsOverride
       ? this.promptsOverride(promptsResult)
       : promptsResult;
@@ -562,22 +552,17 @@ export class DefaultResourceLoader implements ResourceLoader {
     themePaths: string[],
     metadataByPath?: Map<string, PathMetadata>,
   ): void {
-    let themesResult: { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
-    if (this.noThemes && themePaths.length === 0) {
-      themesResult = { themes: [], diagnostics: [] };
-    } else {
-      const loaded = this.loadThemes(themePaths);
-      const deduped = this.dedupeResources(
-        loaded.themes,
-        "theme",
-        (theme) => theme.name ?? "unnamed",
-        (theme) => theme.sourcePath,
-      );
-      themesResult = {
-        themes: deduped.resources,
-        diagnostics: [...loaded.diagnostics, ...deduped.diagnostics],
-      };
-    }
+    const loaded = this.loadThemes(themePaths);
+    const deduped = this.dedupeResources(
+      loaded.themes,
+      "theme",
+      (theme) => theme.name ?? "unnamed",
+      (theme) => theme.sourcePath,
+    );
+    const themesResult = {
+      themes: deduped.resources,
+      diagnostics: [...loaded.diagnostics, ...deduped.diagnostics],
+    };
     const resolvedThemes = this.themesOverride ? this.themesOverride(themesResult) : themesResult;
     this.themes = resolvedThemes.themes.map((theme) => {
       const sourcePath = theme.sourcePath;

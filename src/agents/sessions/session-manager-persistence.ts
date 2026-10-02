@@ -372,20 +372,6 @@ export class SessionManagerPersistence extends SessionManagerCore {
     );
   }
 
-  protected persistRecord(
-    entry: unknown,
-    options?: PersistRecordOptions,
-    preparedMessage?: PreparedTranscriptMessageAppend<AgentMessage>,
-  ): PersistRecordResult {
-    if (this.persistenceTarget) {
-      return this.persistSqliteRecord(entry, options, preparedMessage);
-    }
-    if (getSessionCompactionPersistence(this)) {
-      throw new Error("Compaction boundary validation failed");
-    }
-    return undefined;
-  }
-
   /** @deprecated Await persistAsync. Removal: next Plugin SDK major. */
   public persist(entry: SessionEntry, options?: PersistRecordOptions): PersistRecordResult {
     warnSessionPersistenceDeprecation("SessionManager.persist", "persistAsync");
@@ -474,12 +460,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
     });
   }
 
-  private persistSqliteRecord(
+  protected persistRecord(
     entry: unknown,
     options?: PersistRecordOptions,
     preparedMessage?: PreparedTranscriptMessageAppend<AgentMessage>,
   ): PersistRecordResult {
     if (!this.persistenceTarget) {
+      if (getSessionCompactionPersistence(this)) {
+        throw new Error("Compaction boundary validation failed");
+      }
       return undefined;
     }
     this.assertTranscriptWriteActive();
@@ -513,6 +502,19 @@ export class SessionManagerPersistence extends SessionManagerCore {
         }
       },
       onPendingTransaction,
+    };
+    const appendEvent = (
+      event: unknown,
+      appendOptions: Parameters<typeof appendTranscriptEventSnapshotSync>[2],
+      errorMessage: string,
+    ) => {
+      const committed = requireTranscriptEventAppendSnapshot(
+        appendTranscriptEventSnapshotSync(scope, event, appendOptions, undefined, viewGuard),
+        errorMessage,
+      );
+      this.transcriptVersion = committed.after;
+      this.transcriptMutationAt = committed.after.updatedAt;
+      return committed;
     };
     if (persistCompaction && isIndexedSessionEntry(entry) && entry.type === "compaction") {
       // Atomic accounting accepts exactly one boundary, never lazy transcript initialization.
@@ -563,21 +565,15 @@ export class SessionManagerPersistence extends SessionManagerCore {
       if (!header || header.type !== "session") {
         throw new Error("Session transcript header was not persisted");
       }
-      this.transcriptVersion = requireTranscriptEventAppendSnapshot(
-        appendTranscriptEventSnapshotSync(
-          scope,
-          header,
-          options?.expectedMutationAt !== undefined
-            ? { expectedMutationAt: options.expectedMutationAt }
-            : this.transcriptMutationAt !== undefined
-              ? { expectedMutationAt: this.transcriptMutationAt }
-              : {},
-          undefined,
-          viewGuard,
-        ),
+      appendEvent(
+        header,
+        options?.expectedMutationAt !== undefined
+          ? { expectedMutationAt: options.expectedMutationAt }
+          : this.transcriptMutationAt !== undefined
+            ? { expectedMutationAt: this.transcriptMutationAt }
+            : {},
         "Session transcript header was not persisted",
-      ).after;
-      this.transcriptMutationAt = this.transcriptVersion.updatedAt;
+      );
       this.persistenceHeaderPending = false;
     }
     const expectedMutationAt = persistedHeader
@@ -587,17 +583,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
         : this.transcriptMutationAt;
     const leafEntry = parseOpaqueLeafEntry(entry);
     if (leafEntry) {
-      this.transcriptVersion = requireTranscriptEventAppendSnapshot(
-        appendTranscriptEventSnapshotSync(
-          scope,
-          entry,
-          expectedMutationAt !== undefined ? { expectedMutationAt } : {},
-          undefined,
-          viewGuard,
-        ),
+      appendEvent(
+        entry,
+        expectedMutationAt !== undefined ? { expectedMutationAt } : {},
         `Session transcript leaf control was not persisted: ${leafEntry.id}`,
-      ).after;
-      this.transcriptMutationAt = this.transcriptVersion.updatedAt;
+      );
       return undefined;
     }
     if (!isIndexedSessionEntry(entry)) {
@@ -605,8 +595,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
     }
     if (entry.type !== "message") {
       const loadedVersion = this.transcriptVersion;
-      const outcome = appendTranscriptEventSnapshotSync(
-        scope,
+      const committed = appendEvent(
         entry,
         {
           ...(options?.appendIntent === "active-branch"
@@ -614,19 +603,12 @@ export class SessionManagerPersistence extends SessionManagerCore {
             : {}),
           ...(expectedMutationAt !== undefined ? { expectedMutationAt } : {}),
         },
-        undefined,
-        viewGuard,
-      );
-      const committed = requireTranscriptEventAppendSnapshot(
-        outcome,
         `Session transcript entry was not persisted: ${entry.id}`,
       );
       const effectiveParentId =
         committed.result.effectiveParentId !== undefined
           ? committed.result.effectiveParentId
           : entry.parentId;
-      this.transcriptVersion = committed.after;
-      this.transcriptMutationAt = this.transcriptVersion.updatedAt;
       const reloadAfterAppend = transcriptAppendNeedsReload(committed.before, loadedVersion);
       return effectiveParentId === entry.parentId && !reloadAfterAppend
         ? undefined

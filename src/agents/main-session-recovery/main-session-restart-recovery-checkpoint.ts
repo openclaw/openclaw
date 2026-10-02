@@ -87,10 +87,8 @@ function findSourceTurnRange(params: {
   const startIndex = params.messages.findLastIndex(
     (message) =>
       getMessageRole(message) === "user" &&
-      Boolean(message) &&
-      typeof message === "object" &&
       sourceTurnIds.has(
-        normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey) ?? "",
+        normalizeOptionalString(asOptionalObjectRecord(message)?.idempotencyKey) ?? "",
       ),
   );
   if (startIndex === -1) {
@@ -100,10 +98,7 @@ function findSourceTurnRange(params: {
     if (index <= startIndex || getMessageRole(message) !== "user") {
       return false;
     }
-    const idempotencyKey =
-      message && typeof message === "object"
-        ? normalizeOptionalString((message as { idempotencyKey?: unknown }).idempotencyKey)
-        : undefined;
+    const idempotencyKey = normalizeOptionalString(asOptionalObjectRecord(message)?.idempotencyKey);
     // Late media and the exact restart continuation extend the same logical source turn.
     return !(
       idempotencyKey === `${params.sourceTurnId}:late-media` ||
@@ -143,11 +138,10 @@ function readAssistantToolCalls(message: unknown): Record<string, unknown>[] | u
 
 function isSuccessfulMessageToolResult(message: unknown, toolCallId: string): boolean {
   const role = getMessageRole(message);
-  if (!message || typeof message !== "object" || (role !== "tool" && role !== "toolResult")) {
-    return false;
-  }
-  const record = message as Record<string, unknown>;
+  const record = asOptionalObjectRecord(message);
   return (
+    record !== undefined &&
+    (role === "tool" || role === "toolResult") &&
     readToolCallId(record) === toolCallId &&
     normalizeOptionalString(record.toolName) === "message" &&
     record.isError !== true

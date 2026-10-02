@@ -302,10 +302,7 @@ export function scheduleRequesterSettleWake(
   if (publishedAtAdmission && !isSameSubagentRunOwner(publishedAtAdmission, observedEntry)) {
     return;
   }
-  let entry =
-    publishedAtAdmission && isSameSubagentRunOwner(publishedAtAdmission, observedEntry)
-      ? publishedAtAdmission
-      : observedEntry;
+  let entry = publishedAtAdmission ?? observedEntry;
   if (context.cancelledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
     return;
   }
