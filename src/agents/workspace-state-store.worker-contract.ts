@@ -8,6 +8,8 @@ export type WorkspaceStateGuard = {
   /** Host lifecycle and filesystem authority only; never reads SQLite. */
   assertHost?: () => void;
   recoveryHoldPredicate?: AgentDeletionRecoveryHoldPredicate;
+  /** Released SDK compatibility: before worker dispatch or host file mutation, never a grant. */
+  beforeLegacyApply?: () => void;
 };
 
 type WorkspaceStateInput = {

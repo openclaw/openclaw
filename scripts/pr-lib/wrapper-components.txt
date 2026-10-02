@@ -747,6 +747,7 @@ src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
 src/infra/gateway-scheduler.ts
@@ -920,7 +921,6 @@ src/infra/stale-lock-file.ts
 src/infra/startup-maintenance-required.ts
 src/infra/startup-migration-checkpoint.ts
 src/infra/state-database-maintenance.ts
-src/infra/state-database-worker-access.ts
 src/infra/state-lease-process-owner.ts
 src/infra/state-migrations.agent-owner-guidance.ts
 src/infra/state-migrations.cron-run-logs.ts

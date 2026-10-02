@@ -64,7 +64,7 @@ export {
 
 type WorkspaceStateOperationOptions = { assertCurrent?: () => void } & Pick<
   WorkspaceStateGuard,
-  "recoveryHoldPredicate"
+  "recoveryHoldPredicate" | "beforeLegacyApply"
 >;
 
 type WorkspaceStateDeletionPlan = {
@@ -105,6 +105,7 @@ async function runWorkspaceStateOperation<K extends keyof WorkspaceStateWorkerOp
       context,
       async (scope) => {
         try {
+          options.beforeLegacyApply?.();
           return await scope.execute(capturedCommand);
         } finally {
           // Native settlement and cache retirement stay inside the writer's FIFO interval.
@@ -214,7 +215,10 @@ export async function replaceWorkspaceAttestation(
   };
   return runOpenClawStateWorkerOperation(
     context,
-    (scope) => scope.execute({ type: "workspace.replaceAttestation", input }),
+    (scope) => {
+      params.beforeLegacyApply?.();
+      return scope.execute({ type: "workspace.replaceAttestation", input });
+    },
     {
       assertCurrent,
       createAdmission: () => ({

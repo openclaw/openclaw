@@ -18,15 +18,16 @@ Core-owned recovery predicates execute on the worker's transaction connection.
 
 The released `beforePersistentApply: () => void` option remains supported for
 TypeScript and JavaScript plugins until the next Plugin SDK major. It runs on the
-host immediately before persistent applies, including the worker commit grant;
-throwing refuses that apply. Supplying both guards runs `assertHost` first and
-then the legacy callback. A deprecation warning is emitted once per process.
+host once immediately before each worker mutation dispatch, outside admission
+grants, and at host filesystem mutation boundaries. Throwing stops that apply.
+Synchronous OpenClaw database access in the callback is allowed and deprecated;
+a warning explains the timing and typed replacement once per process.
 
-The only mutation-guard behavior delta, explicitly subject to maintainer veto,
-is reentrant synchronous OpenClaw shared-state database access from the legacy
-callback: it is refused with an error naming `beforePersistentApply`, awaited
-database preparation, and `guard.assertHost`. Other callback errors propagate
-unchanged. No schema, retention, durability, or update migration is required.
+There is no compatibility break for legacy callbacks or their database reads.
+The timing nuance is that the legacy check runs just before dispatch, while
+`guard.assertHost` is also rechecked inside transaction and commit grants.
+Prefer the typed guard for live revocation at commit. Callback errors continue
+to propagate. No schema, retention, durability, or update migration is required.
 
 ## Await session transcript persistence
 

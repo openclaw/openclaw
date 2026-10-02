@@ -18,7 +18,6 @@ import type {
   SqliteWorkerNativeSettlement,
   SqliteWorkerNativeSettlementOwner,
 } from "./sqlite-worker-operation-settlement.js";
-import { withStateDatabaseWorkerGrant } from "./state-database-worker-access.js";
 
 const REQUESTED = 0;
 const GRANTED = 1;
@@ -227,7 +226,7 @@ export function createSqliteWorkerOperationAdmission(
         });
       } else {
         source = "domain";
-        inOwnerContext(() => withStateDatabaseWorkerGrant(() => admit(request, grant)));
+        inOwnerContext(admit, request, grant);
       }
     } catch (error) {
       refuse(decision, error, source);

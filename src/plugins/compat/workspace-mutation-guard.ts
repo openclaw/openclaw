@@ -14,12 +14,12 @@ export const WORKSPACE_MUTATION_GUARD_COMPAT_RECORD = {
   surfaces: ["api.runtime.agent.ensureAgentWorkspace.beforePersistentApply"],
   diagnostics: [
     "@deprecated JSDoc and one DEP_WORKSPACE_MUTATION_GUARD warning per process",
-    "Actionable beforePersistentApply error for refused synchronous OpenClaw shared-state access",
+    "Warning explains before-dispatch timing and deprecated but allowed synchronous OpenClaw DB access",
   ],
   tests: [
     "src/plugins/runtime/runtime-agent.workspace.test.ts",
     "src/plugins/compat/registry.test.ts",
   ],
   releaseNote:
-    "The released callback still guards each persistent apply, including worker commit admission. Only behavior delta, subject to maintainer veto: reentrant synchronous shared-state DB access in beforePersistentApply is refused with async/typed migration guidance. Removal requires the next Plugin SDK major.",
+    "Released callbacks and their synchronous OpenClaw DB access remain supported. The legacy check runs once before worker dispatch, outside admission grants; use the typed guard for live revocation at commit. Removal requires the next Plugin SDK major.",
 } as const satisfies PluginCompatRecord;

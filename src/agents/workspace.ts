@@ -374,6 +374,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   params.guard?.assertHost?.();
   const persistedState = await mergeWorkspaceSetupState(params.dir, repairedState, undefined, {
     recoveryHoldPredicate: params.guard?.recoveryHoldPredicate,
+    beforeLegacyApply: params.guard?.beforeLegacyApply,
     assertCurrent: () => {
       params.guard?.assertHost?.();
       assertEvidence();
@@ -427,6 +428,7 @@ async function maybeWriteWorkspaceAttestation(
       generatedHashes,
       assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
+      beforeLegacyApply: guard?.beforeLegacyApply,
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
@@ -499,6 +501,7 @@ async function readCanonicalWorkspaceStateSnapshot(
     ...options,
     assertCurrent: guard?.assertHost,
     recoveryHoldPredicate: guard?.recoveryHoldPredicate,
+    beforeLegacyApply: guard?.beforeLegacyApply,
   });
   guard?.assertHost?.();
   assertNoUnmigratedWorkspaceState({
@@ -700,6 +703,7 @@ export async function ensureAgentWorkspace(params?: {
     if (
       !(await clearExpiredWorkspaceStateForVanishedWorkspace(dir, undefined, {
         recoveryHoldPredicate: guard?.recoveryHoldPredicate,
+        beforeLegacyApply: guard?.beforeLegacyApply,
         assertCurrent: () => {
           assertHost?.();
           assertExpiryEvidence();
@@ -945,6 +949,7 @@ export async function ensureAgentWorkspace(params?: {
     state = await mergeWorkspaceSetupState(dir, state, undefined, {
       assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
+      beforeLegacyApply: guard?.beforeLegacyApply,
     });
   }
   await ensureGitRepo(dir, isBrandNewWorkspace, beforeFileMutation);

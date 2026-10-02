@@ -11,6 +11,7 @@ export function createWorkspaceFileMutationGuard(
   }
   return () => {
     guard.assertHost?.();
+    guard.beforeLegacyApply?.();
     const predicate = guard.recoveryHoldPredicate;
     if (predicate?.applies) {
       withExistingOpenClawStateDatabaseCurrentReadOnly((database) =>
