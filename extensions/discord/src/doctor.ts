@@ -31,57 +31,37 @@ function collectDiscordIdLists(
   account: Record<string, unknown>,
   userAllowlistsOnly = false,
 ): DiscordIdListRef[] {
-  const refs: DiscordIdListRef[] = [
-    { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
-  ];
+  const refs: DiscordIdListRef[] = [];
+  const addLists = (holder: Record<string, unknown>, path: string, keys: string[]) => {
+    for (const key of keys) {
+      refs.push({ pathLabel: `${path}.${key}`, holder, key });
+    }
+  };
+  addLists(account, prefix, ["allowFrom"]);
   const dm = asObjectRecord(account.dm);
   if (dm) {
-    refs.push({ pathLabel: `${prefix}.dm.allowFrom`, holder: dm, key: "allowFrom" });
-    if (!userAllowlistsOnly) {
-      refs.push({ pathLabel: `${prefix}.dm.groupChannels`, holder: dm, key: "groupChannels" });
-    }
+    addLists(
+      dm,
+      `${prefix}.dm`,
+      userAllowlistsOnly ? ["allowFrom"] : ["allowFrom", "groupChannels"],
+    );
   }
   const execApprovals = asObjectRecord(account.execApprovals);
   if (execApprovals && !userAllowlistsOnly) {
-    refs.push({
-      pathLabel: `${prefix}.execApprovals.approvers`,
-      holder: execApprovals,
-      key: "approvers",
-    });
+    addLists(execApprovals, `${prefix}.execApprovals`, ["approvers"]);
   }
-  const guilds = asObjectRecord(account.guilds);
-  if (!guilds) {
-    return refs;
-  }
-  for (const guildId of Object.keys(guilds)) {
-    const guild = asObjectRecord(guilds[guildId]);
+  const memberKeys = userAllowlistsOnly ? ["users"] : ["users", "roles"];
+  for (const [guildId, value] of Object.entries(asObjectRecord(account.guilds) ?? {})) {
+    const guild = asObjectRecord(value);
     if (!guild) {
       continue;
     }
-    refs.push({ pathLabel: `${prefix}.guilds.${guildId}.users`, holder: guild, key: "users" });
-    if (!userAllowlistsOnly) {
-      refs.push({ pathLabel: `${prefix}.guilds.${guildId}.roles`, holder: guild, key: "roles" });
-    }
-    const channels = asObjectRecord(guild.channels);
-    if (!channels) {
-      continue;
-    }
-    for (const channelId of Object.keys(channels)) {
-      const channel = asObjectRecord(channels[channelId]);
-      if (!channel) {
-        continue;
-      }
-      refs.push({
-        pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.users`,
-        holder: channel,
-        key: "users",
-      });
-      if (!userAllowlistsOnly) {
-        refs.push({
-          pathLabel: `${prefix}.guilds.${guildId}.channels.${channelId}.roles`,
-          holder: channel,
-          key: "roles",
-        });
+    const guildPath = `${prefix}.guilds.${guildId}`;
+    addLists(guild, guildPath, memberKeys);
+    for (const [channelId, value] of Object.entries(asObjectRecord(guild.channels) ?? {})) {
+      const channel = asObjectRecord(value);
+      if (channel) {
+        addLists(channel, `${guildPath}.channels.${channelId}`, memberKeys);
       }
     }
   }
@@ -121,16 +101,7 @@ export function collectDiscordNumericIdWarnings(params: {
   if (params.hits.length === 0) {
     return [];
   }
-  const hitsByListPath = new Map<string, DiscordNumericIdHit[]>();
-  for (const hit of params.hits) {
-    const listPath = hit.path.replace(/\[\d+\]$/, "");
-    const existing = hitsByListPath.get(listPath);
-    if (existing) {
-      existing.push(hit);
-    } else {
-      hitsByListPath.set(listPath, [hit]);
-    }
-  }
+  const hitsByListPath = Map.groupBy(params.hits, (hit) => hit.path.replace(/\[\d+\]$/, ""));
 
   const repairableHits: DiscordNumericIdHit[] = [];
   const blockedHits: DiscordNumericIdHit[] = [];

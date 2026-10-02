@@ -234,86 +234,42 @@ describe("discord doctor", () => {
     ]);
   });
 
-  it("does not move unsupported root and account tts provider aliases", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
+  it.each([
+    ...["openai", "elevenlabs", "microsoft", "edge"].map((provider) => ({
+      path: `voice.tts.${provider}`,
+      entry: { voice: { tts: { [provider]: { voice: "retained-voice" } } } },
+    })),
+    ...["allow", "agentId"].map((key) => ({
+      path: `guilds.100.channels.200.${key}`,
+      entry: { guilds: { "100": { channels: { "200": { [key]: "retained-value" } } } } },
+    })),
+  ])("preserves retired $path and names the bridge release", ({ path, entry }) => {
+    for (const accountScope of [false, true]) {
+      const cfg = {
         channels: {
-          discord: {
-            tts: {
-              edge: {
-                voice: "en-US-RootNeural",
-              },
-            },
-            voice: {
-              tts: {
-                edge: {
-                  voice: "en-US-VoiceNeural",
-                },
-              },
-            },
-            accounts: {
-              main: {
-                tts: {
-                  edge: {
-                    voice: "en-US-AccountNeural",
-                  },
-                },
-                voice: {
-                  tts: {
-                    edge: {
-                      voice: "en-US-AccountVoiceNeural",
-                    },
-                  },
-                },
-              },
-            },
-          },
+          discord: accountScope ? { accounts: { work: entry } } : entry,
         },
-      } as never,
-    });
+      } as OpenClawConfig;
+      const before = structuredClone(cfg);
+      const prefix = accountScope ? "channels.discord.accounts.work" : "channels.discord";
+      expect(() => getDiscordCompatibilityNormalizer()({ cfg })).toThrow(
+        `${prefix}.${path}: Discord settings retired before July 2026 require an intermediate upgrade. Install OpenClaw 2026.9.7`,
+      );
+      expect(cfg).toEqual(before);
+    }
+  });
 
-    expect(result.changes).toEqual([
-      "Moved channels.discord.accounts.main.voice.tts.edge → channels.discord.accounts.main.voice.tts.providers.microsoft.",
-      "Moved channels.discord.voice.tts.edge → channels.discord.voice.tts.providers.microsoft.",
-    ]);
-    const discordConfig = result.config.channels?.discord as
-      | {
-          tts?: Record<string, unknown>;
-          voice?: { tts?: Record<string, unknown> };
-          accounts?: {
-            main?: {
-              tts?: Record<string, unknown>;
-              voice?: { tts?: Record<string, unknown> };
-            };
-          };
-        }
-      | undefined;
-    expect(discordConfig?.tts).toEqual({
-      edge: {
-        voice: "en-US-RootNeural",
-      },
-    });
-    expect(discordConfig?.accounts?.main?.tts).toEqual({
-      edge: {
-        voice: "en-US-AccountNeural",
-      },
-    });
-    expect(discordConfig?.voice?.tts).toEqual({
-      providers: {
-        microsoft: {
-          voice: "en-US-VoiceNeural",
+  it("preserves supported provider maps and channel bindings", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          voice: { tts: { providers: { openai: { voice: "alloy" } } } },
+          guilds: { agentId: { channels: { allow: { enabled: false } } } },
         },
       },
-    });
-    expect(discordConfig?.accounts?.main?.voice?.tts).toEqual({
-      providers: {
-        microsoft: {
-          voice: "en-US-AccountVoiceNeural",
-        },
-      },
-    });
+      bindings: [{ agentId: "main", match: { channel: "discord" } }],
+    };
+    expect(getDiscordCompatibilityNormalizer()({ cfg })).toEqual({ config: cfg, changes: [] });
   });
 
   it("removes unsupported Discord realtime wake names", () => {
@@ -376,177 +332,6 @@ describe("discord doctor", () => {
     expect(result.config.channels?.discord?.accounts?.empty?.voice?.realtime?.wakeNames).toBe(
       undefined,
     );
-  });
-
-  it("moves legacy guild channel allow toggles into enabled", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  general: {
-                    allow: false,
-                  },
-                },
-              },
-            },
-            accounts: {
-              work: {
-                guilds: {
-                  "200": {
-                    channels: {
-                      help: {
-                        allow: true,
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.guilds.100.channels.general.allow → channels.discord.guilds.100.channels.general.enabled.",
-      "Moved channels.discord.accounts.work.guilds.200.channels.help.allow → channels.discord.accounts.work.guilds.200.channels.help.enabled.",
-    ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.general).toEqual({
-      enabled: false,
-    });
-    expect(
-      result.config.channels?.discord?.accounts?.work?.guilds?.["200"]?.channels?.help,
-    ).toEqual({
-      enabled: true,
-    });
-  });
-
-  it("moves legacy guild channel agentId into a top-level route binding", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  "200": {
-                    requireMention: false,
-                    agentId: "video",
-                  },
-                },
-              },
-            },
-          },
-        },
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.guilds.100.channels.200.agentId → top-level bindings[] route for Discord channel 200.",
-    ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({
-      requireMention: false,
-    });
-    expect(result.config.bindings).toEqual([
-      {
-        agentId: "video",
-        match: {
-          channel: "discord",
-          guildId: "100",
-          peer: { kind: "channel", id: "200" },
-        },
-      },
-    ]);
-  });
-
-  it("moves account-scoped guild channel agentId into an account-scoped route binding", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            accounts: {
-              work: {
-                guilds: {
-                  "100": {
-                    channels: {
-                      "200": {
-                        agentId: "support",
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-        bindings: [{ agentId: "main", match: { channel: "discord" } }],
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Moved channels.discord.accounts.work.guilds.100.channels.200.agentId → top-level bindings[] route for Discord channel 200.",
-    ]);
-    expect(
-      result.config.channels?.discord?.accounts?.work?.guilds?.["100"]?.channels?.["200"],
-    ).toStrictEqual({});
-    expect(result.config.bindings).toEqual([
-      { agentId: "main", match: { channel: "discord" } },
-      {
-        agentId: "support",
-        match: {
-          channel: "discord",
-          accountId: "work",
-          guildId: "100",
-          peer: { kind: "channel", id: "200" },
-        },
-      },
-    ]);
-  });
-
-  it("removes legacy guild channel agentId when a matching route binding already exists", () => {
-    const normalize = getDiscordCompatibilityNormalizer();
-
-    const existingBinding = {
-      agentId: "video",
-      match: {
-        channel: "discord",
-        guildId: "100",
-        peer: { kind: "channel", id: "200" },
-      },
-    };
-    const result = normalize({
-      cfg: {
-        channels: {
-          discord: {
-            guilds: {
-              "100": {
-                channels: {
-                  "200": {
-                    agentId: "video",
-                  },
-                },
-              },
-            },
-          },
-        },
-        bindings: [existingBinding],
-      } as never,
-    });
-
-    expect(result.changes).toEqual([
-      "Removed channels.discord.guilds.100.channels.200.agentId; a matching top-level bindings[] route already exists for Discord channel 200.",
-    ]);
-    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toStrictEqual({});
-    expect(result.config.bindings).toEqual([existingBinding]);
   });
 
   it("finds numeric id entries across discord scopes", () => {
