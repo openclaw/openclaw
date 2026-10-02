@@ -1,4 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { isMainThread } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -13,8 +14,10 @@ import {
 import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { updateSessionEntry } from "../config/sessions/session-accessor.entry-mutation.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
@@ -199,7 +202,32 @@ it.each([
               ...(resetsIdentity ? { lifecycleRevision: "after-reset" } : {}),
             };
             if (kind.startsWith("worker")) {
-              await updateSessionEntry(target, () => entry);
+              expect(isMainThread).toBe(true);
+              const publications: Array<ReturnType<typeof readPreparedSessionEntryChange>> = [];
+              const stop = onSessionIdentityMutation((mutation) => {
+                if ("current" in mutation && mutation.current.sessionKeys.includes(key)) {
+                  publications.push(readPreparedSessionEntryChange(mutation, key));
+                }
+              });
+              try {
+                await applySessionEntryExactReplacements({
+                  agentId: target.agentId,
+                  storePath: captured!.storeTarget.storePath,
+                  sessionKeys: [key],
+                  update: ([row]) => ({
+                    result: undefined,
+                    replacements: [{ sessionKey: key, entry: { ...row!.entry, ...entry } }],
+                  }),
+                });
+                expect(publications).toEqual([
+                  expect.objectContaining({
+                    entry: expect.objectContaining(entry),
+                    source: expect.objectContaining({ revision: expect.any(Number) }),
+                  }),
+                ]);
+              } finally {
+                stop();
+              }
             } else {
               replaceSessionEntrySync(target, entry);
             }
