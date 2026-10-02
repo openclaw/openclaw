@@ -116,8 +116,8 @@ describe("gateway node MCP fixture ownership", () => {
     signal,
     onTestFinished,
   }) => {
-    const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
-    const root = tempDirs.make("mcp-fixture-startup-failure-");
+    const fixtureDirs = useAutoCleanupTempDirTracker(onTestFinished);
+    const root = fixtureDirs.make("mcp-fixture-startup-failure-");
     const fixturePath = path.join(root, "invalid-fixture.mjs");
     const pidPath = path.join(root, "fixture.pid");
     await fs.writeFile(
@@ -156,8 +156,8 @@ describe("gateway node MCP fixture ownership", () => {
     signal,
     onTestFinished,
   }) => {
-    const tempDirs = useAutoCleanupTempDirTracker(onTestFinished);
-    const root = tempDirs.make("mcp-fixture-descendant-cleanup-");
+    const fixtureDirs = useAutoCleanupTempDirTracker(onTestFinished);
+    const root = fixtureDirs.make("mcp-fixture-descendant-cleanup-");
     const fixturePath = path.join(root, "fixture.mjs");
     const descendantPidPath = path.join(root, "descendant.pid");
     await fs.writeFile(
