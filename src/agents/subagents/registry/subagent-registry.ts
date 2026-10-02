@@ -491,39 +491,28 @@ function retireSupersededSubagentRun(runId: string, expected: SubagentRunRecord)
   if (!entry || !isSameSubagentRunOwner(entry, expected)) {
     return Promise.resolve();
   }
-  if (
-    entry.execution.status === "terminal" &&
+  const wake = entry.requesterSettleWake;
+  const owesCompletion =
     entry.expectsCompletionMessage === true &&
     entry.suppressCompletionDelivery !== true &&
     !entry.killIntent &&
-    !entry.killReconciliation &&
+    !entry.killReconciliation;
+  if (
+    owesCompletion &&
+    entry.execution.status === "terminal" &&
     !entry.requesterTurnRunId &&
-    !entry.requesterSettleWake &&
+    !wake &&
     !entry.cleanupCompletedAt
   ) {
     startSubagentAnnounceCleanupFlow(runId, entry);
     return Promise.resolve();
   }
-  const wake = entry.requesterSettleWake;
-  const cohort = [
-    ...getSubagentRunsForChildSession(entry.childSessionKey, entry.childAgentId),
-  ].filter((candidate) =>
-    entry.requesterTurnRunId
-      ? candidate.requesterTurnRunId === entry.requesterTurnRunId
-      : wake?.batchRunIds?.includes(candidate.runId) &&
-        candidate.requesterSettleWake?.rearmGeneration === wake.rearmGeneration,
-  );
   const isCurrent = () =>
     isSameSubagentRunOwner(subagentRuns.get(runId), entry) &&
     isRequesterCompletionCohortCurrent(entry, getLatestLiveSubagentRunByChildSessionKey);
-  if (
-    isCurrent() &&
-    entry.expectsCompletionMessage === true &&
-    entry.suppressCompletionDelivery !== true &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
-    cohort.includes(entry)
-  ) {
+  const inRequesterCohort =
+    Boolean(entry.requesterTurnRunId) || wake?.batchRunIds?.includes(entry.runId) === true;
+  if (owesCompletion && inRequesterCohort && isCurrent()) {
     // A newer task owns session effects, but this cohort still owes the older result.
     if (entry.cleanupCompletedAt !== undefined) {
       resumeRequesterSettleWake(runId, entry);
