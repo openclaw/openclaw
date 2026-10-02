@@ -13,6 +13,17 @@ const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executab
 const browserAvailable = canRunPlaywrightChromium(executablePath);
 const capture = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
 const pluginIntegrity = `sha256-${"A".repeat(43)}=`;
+const auditUrl =
+  "https://clawhub.ai/@openclaw/workflow-operator/versions/1.2.0/security-audit?review=pending-analysis";
+const auditWarning = [
+  "╭─ ClawHub Security Audit ──────────────────────────────────────────────╮",
+  "│ @openclaw/workflow-operator@1.2.0                                   │",
+  "│ Outcome: Review                                                      │",
+  "│ Overview:                                                            │",
+  "│ Analysis pending; review this release before installation.          │",
+  `│ Details: ${auditUrl} │`,
+  "╰─────────────────────────────────────────────────────────────────────╯",
+].join("\n");
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
   { name: "tablet", width: 768, height: 1024 },
@@ -173,11 +184,19 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
                   allowConversationAccess: { effective: true },
                 },
               },
+              capabilityGrantsByPluginId: {
+                "workflow-tools": {
+                  hooks: {
+                    allowPromptInjection: { effective: false },
+                    allowConversationAccess: { effective: true },
+                  },
+                },
+              },
               reviewToken: "review-workflow-tools",
             },
           ],
           riskAcknowledgementRequired: false,
-          trustWarning: `ClawHub security audit ${"-".repeat(160)} review the release before Add.`,
+          trustWarning: auditWarning,
           configuredAccess: {
             coverage: "configuration-only",
             desired: {
@@ -263,6 +282,11 @@ describe.skipIf(!browserAvailable)("Claws catalog in Agents", () => {
       await dialog.getByText("sha256:starter-soul", { exact: true }).waitFor();
       await dialog.getByText(pluginIntegrity, { exact: true }).waitFor();
       await dialog.getByText("Install actions", { exact: true }).waitFor();
+      const audit = dialog.locator(".claws-trust-warning");
+      await audit.getByRole("link", { name: auditUrl }).waitFor();
+      expect(await audit.textContent()).toContain("Outcome: Review");
+      expect(await audit.textContent()).toContain("Analysis pending");
+      expect(await audit.textContent()).not.toMatch(/[╭╮│╰╯]/u);
       expect(
         await dialog.locator(".claws-catalog__body").evaluate((body) => body.scrollWidth),
       ).toBeLessThanOrEqual(

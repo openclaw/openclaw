@@ -481,6 +481,7 @@ describe("applyClawUpdatePlan", () => {
           prerequisites: undefined,
           declaredCapabilities: undefined,
           capabilityGrants: undefined,
+          capabilityGrantsByPluginId: undefined,
           extension: undefined,
         }),
       )

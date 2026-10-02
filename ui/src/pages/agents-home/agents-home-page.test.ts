@@ -14,6 +14,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
+import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import { createSessionCapability } from "../../lib/sessions/index.ts";
 import { createContext } from "../../test-helpers/app-sidebar.ts";
 import {
@@ -85,8 +86,28 @@ const workflowPluginReview: ClawPluginReview = {
       allowConversationAccess: { effective: true, configured: true },
     },
   },
+  capabilityGrantsByPluginId: {
+    "workflow-tools": {
+      hooks: {
+        allowPromptInjection: { effective: false },
+        allowConversationAccess: { effective: true, configured: true },
+      },
+    },
+  },
   reviewToken: "review-workflow-tools",
 };
+
+const auditUrl =
+  "https://clawhub.ai/@openclaw/workflow-tools/versions/1.2.0/security-audit?review=pending-analysis";
+const auditWarning = [
+  "╭─ ClawHub Security Audit ──────────────────────────────────────────────╮",
+  "│ @openclaw/workflow-tools@1.2.0                                      │",
+  "│ Outcome: Review                                                      │",
+  "│ Overview:                                                            │",
+  "│ Analysis pending; review this release before installation.          │",
+  `│ Details: ${auditUrl} │`,
+  "╰─────────────────────────────────────────────────────────────────────╯",
+].join("\n");
 
 const reviewedAccess = {
   coverage: "configuration-only",
@@ -529,6 +550,12 @@ function createPage(
         listener();
       }
     },
+    markConfigStale: () => {
+      invalidateConfigConnection(runtimeConfig.state);
+      for (const listener of runtimeConfigListeners) {
+        listener();
+      }
+    },
   };
 }
 
@@ -830,6 +857,19 @@ describe("AgentsHomePage", () => {
     expect(page.querySelector("openclaw-claws-catalog-dialog")).toBeNull();
   });
 
+  it("hides Explore and closes its review while the Labs config belongs to a prior Gateway", async () => {
+    const { page, markConfigStale } = createPage({ clawsEnabled: true });
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-entry] button")).not.toBeNull());
+    page.querySelector<HTMLElement>("[data-claws-entry] button")?.click();
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-confirm]")).not.toBeNull());
+
+    markConfigStale();
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-explore]")).toBeNull());
+    expect(page.querySelector("[data-claws-open-catalog]")).toBeNull();
+    expect(page.querySelector("[data-claws-confirm]")).toBeNull();
+    expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2);
+  });
+
   it("opens the searchable catalog from the header and keeps the installed roster", async () => {
     const { page, request } = createPage({ clawsEnabled: true });
     await vi.waitFor(() => expect(page.querySelectorAll("[data-claws-entry]")).toHaveLength(1));
@@ -939,6 +979,7 @@ describe("AgentsHomePage", () => {
             pluginId: "workflow-tools",
             reviewToken: "review-workflow-tools",
             capabilityGrants: workflowPluginReview.capabilityGrants,
+            capabilityGrantsByPluginId: workflowPluginReview.capabilityGrantsByPluginId,
           },
         ],
       }),
@@ -990,6 +1031,44 @@ describe("AgentsHomePage", () => {
         }),
       ),
     );
+  });
+
+  it("presents the ClawHub audit in the Add review without terminal borders", async () => {
+    const { page, request } = createPage({
+      clawsEnabled: true,
+      pluginRiskWarning: auditWarning,
+    });
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-entry] button")).not.toBeNull());
+    page.querySelector<HTMLElement>("[data-claws-entry] button")?.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector(".claws-plugin-review__entry .claws-trust-warning")).not.toBeNull(),
+    );
+
+    const warning = page.querySelector<HTMLElement>(
+      ".claws-plugin-review__entry .claws-trust-warning",
+    );
+    expect(warning?.textContent).toContain("ClawHub Security Audit");
+    expect(warning?.textContent).toContain("Outcome: Review");
+    expect(warning?.textContent).toContain("Analysis pending");
+    expect(warning?.textContent).not.toMatch(/[╭╮│╰╯]/u);
+    expect(warning?.querySelector<HTMLAnchorElement>("a")?.href).toBe(auditUrl);
+    expect(page.querySelector<HTMLButtonElement>("[data-claws-confirm]")?.disabled).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "claws.add.apply")).toBe(false);
+  });
+
+  it("does not link to a non-HTTP audit destination", async () => {
+    const { page } = createPage({
+      clawsEnabled: true,
+      pluginRiskWarning: auditWarning.replace(auditUrl, "javascript:alert(1)"),
+    });
+    await vi.waitFor(() => expect(page.querySelector("[data-claws-entry] button")).not.toBeNull());
+    page.querySelector<HTMLElement>("[data-claws-entry] button")?.click();
+    await vi.waitFor(() => expect(page.querySelector(".claws-trust-warning")).not.toBeNull());
+
+    const warning = page.querySelector<HTMLElement>(".claws-trust-warning");
+    expect(warning?.textContent).toContain("javascript:alert(1)");
+    expect(warning?.querySelector("a")).toBeNull();
+    expect(page.querySelector<HTMLButtonElement>("[data-claws-confirm]")?.disabled).toBe(true);
   });
 
   it("requires explicit review of a warned skill before Add", async () => {

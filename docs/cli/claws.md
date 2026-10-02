@@ -16,11 +16,12 @@ package profile. Adding a Claw creates a separate agent; `claws migrate` can
 enroll an existing agent without replacing it or moving its workspace.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
-The CLI commands are available without a process flag or Labs setting. Enable
-**Claws** in **Settings → Labs** to show ClawHub discovery and Add in the Control
-UI. Turning it off hides those UI affordances; installed agents keep running and
-all CLI and Gateway Claw lifecycle methods remain available. On a headless
-installation, no Labs setting is needed for the CLI.
+No process environment flag is required. Enable **Claws** in **Settings → Labs**
+before using catalog discovery, Add, Update, or existing-agent migration. On a
+headless installation, set `gateway.controlUi.experimental.claws` to `true` in
+the OpenClaw config. Turning it off leaves installed agents running and keeps
+status, export, and safe removal available. Creating, validating, building, and
+inspecting local Claw packages also remain available while it is off.
 
 For human-readable `claws add`, OpenClaw prints the experimental warning before
 changing state. JSON mode keeps stdout machine-readable and identifies the

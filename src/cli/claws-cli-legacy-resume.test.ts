@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
     writeJson: vi.fn((value: unknown) => mocks.logs.push(JSON.stringify(value))),
     writeStdout: vi.fn(),
     exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
+      throw new Error(`__exit__:${code}: ${mocks.logs.at(-1) ?? "no output"}`);
     }),
   },
   loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
@@ -46,6 +46,12 @@ vi.mock("../claws/add.js", async () => ({
 vi.mock("../claws/packages.js", async () => ({
   ...(await vi.importActual<typeof import("../claws/packages.js")>("../claws/packages.js")),
   preflightClawPackage: mocks.preflightClawPackage,
+}));
+vi.mock("../state/openclaw-state-lease.js", () => ({
+  withOpenClawStateLease: async (
+    _options: unknown,
+    run: (lease: { assertOwned: () => void }) => Promise<unknown>,
+  ) => await run({ assertOwned: () => undefined }),
 }));
 
 const { runClawsAddCommand } = await import("./claws-cli.runtime.js");
@@ -75,7 +81,10 @@ describe("claws add legacy v1 resume", () => {
     async (toolProfile) => {
       const root = tempDirs.make("openclaw-claws-v1-profile-resume-");
       const workspace = join(root, "workspace");
-      vi.stubEnv("OPENCLAW_STATE_DIR", join(tempDirs.make("openclaw-state-"), "state"));
+      const stateDir = join(tempDirs.make("openclaw-state-"), "state");
+      const configPath = join(stateDir, "openclaw.json");
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       await mkdir(join(root, "profiles"));
       const manifestPath = join(root, "openclaw.claw.json");
       await writeFile(
@@ -111,6 +120,8 @@ describe("claws add legacy v1 resume", () => {
         gateway: { controlUi: { experimental: { claws: true } } },
         agents: { list: [legacyPlan.agent.config] },
       };
+      await mkdir(stateDir, { recursive: true });
+      await writeFile(configPath, JSON.stringify(config));
       mocks.loadConfig.mockImplementation(() => config);
       mocks.applyClawAddPlan.mockImplementationOnce(async (boundedPlan) => {
         config = { ...config, agents: { list: [boundedPlan.agent.config] } };

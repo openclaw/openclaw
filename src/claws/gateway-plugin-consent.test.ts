@@ -32,6 +32,13 @@ const review: ClawPluginReview = {
   integrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
   declaredCapabilities: declared,
   capabilityGrants: grants,
+  capabilityGrantsByPluginId: {
+    "lobster/index": grants,
+    "lobster/child": {
+      ...grants,
+      hooks: { ...grants.hooks, allowConversationAccess: { effective: true } },
+    },
+  },
   reviewToken: "reviewed-surface",
   riskWarning: "This plugin can run workflows.",
 };
@@ -40,6 +47,7 @@ const acknowledgement: ClawPluginAcknowledgement = {
   pluginId: review.pluginId,
   reviewToken: review.reviewToken,
   capabilityGrants: grants,
+  capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
   acknowledgeRiskWarning: true,
 };
 
@@ -64,6 +72,13 @@ describe("Gateway Claw plugin consent", () => {
       { ...acknowledgement, pluginId: "different" },
       { ...acknowledgement, reviewToken: "changed" },
       { ...acknowledgement, capabilityGrants: { ...grants, llm: { allowModelOverride: true } } },
+      {
+        ...acknowledgement,
+        capabilityGrantsByPluginId: {
+          ...review.capabilityGrantsByPluginId,
+          "lobster/child": grants,
+        },
+      },
       { ...acknowledgement, acknowledgeRiskWarning: undefined },
     ]) {
       expect(() => bindClawPluginInstallConsent([review], [changed], assertCurrent)).toThrow(
@@ -107,6 +122,7 @@ describe("Gateway Claw plugin consent", () => {
       pluginId: review.pluginId,
       reviewToken: review.reviewToken,
       capabilityGrants: grants,
+      capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
     };
     const consent = bindClawPluginInstallConsent([cleanReview], [cleanAcknowledgement], () => {});
     expect(await consent?.confirmInstall?.(review.pluginId, undefined)).toBe(true);

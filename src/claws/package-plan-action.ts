@@ -1,7 +1,11 @@
 import type { PluginAcceptedDeclaredSurface } from "../config/types.plugins.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import type { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
-import type { ClawAddPlanAction, ResolvedClawPackage } from "./types.js";
+import type {
+  ClawAddPlanAction,
+  ClawPluginCapabilityGrantsById,
+  ResolvedClawPackage,
+} from "./types.js";
 
 export type PlannedClawPackage = ResolvedClawPackage & {
   ownerAction: "install" | "reuse";
@@ -9,6 +13,7 @@ export type PlannedClawPackage = ResolvedClawPackage & {
   riskWarning?: string;
   declaredCapabilities?: PluginAcceptedDeclaredSurface;
   capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
+  capabilityGrantsByPluginId?: ClawPluginCapabilityGrantsById;
 };
 
 export function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage {
@@ -19,6 +24,7 @@ export function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage
         riskWarning?: string;
         declaredCapabilities?: PluginAcceptedDeclaredSurface;
         capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
+        capabilityGrantsByPluginId?: ClawPluginCapabilityGrantsById;
       })
     | undefined;
   if (details?.kind !== "skill" && details?.kind !== "plugin") {
@@ -53,5 +59,8 @@ export function packageFromAction(action: ClawAddPlanAction): PlannedClawPackage
     ...(details.riskWarning ? { riskWarning: details.riskWarning } : {}),
     ...(details.declaredCapabilities ? { declaredCapabilities: details.declaredCapabilities } : {}),
     ...(details.capabilityGrants ? { capabilityGrants: details.capabilityGrants } : {}),
+    ...(details.capabilityGrantsByPluginId
+      ? { capabilityGrantsByPluginId: details.capabilityGrantsByPluginId }
+      : {}),
   };
 }

@@ -4,6 +4,12 @@ import {
   readMatchingCachedClawHubSource,
   withResolvedClawHubSource,
 } from "../claws/clawhub-source.js";
+import {
+  assertClawsLabsEnabled,
+  CLAWS_LABS_DISABLED_MESSAGE,
+  ClawsLabsDisabledError,
+  isClawsLabsEnabled,
+} from "../claws/labs-gate.js";
 import { readClawStatus } from "../claws/lifecycle-state.js";
 import { withAuthoredAgentRoster } from "../claws/migrate-validation.js";
 import { preflightClawPackage } from "../claws/packages.js";
@@ -20,7 +26,10 @@ import {
   ClawUpdateMutationError,
 } from "../claws/update-apply.js";
 import { buildClawUpdatePlan, CLAW_UPDATE_PLAN_SCHEMA_VERSION } from "../claws/update-plan.js";
+import { getRuntimeConfig } from "../config/config.js";
+import { readCurrentConfigForPolicyCheck } from "../config/io.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
@@ -46,6 +55,15 @@ export async function runClawsUpdateCommand(
   opts: ClawsUpdateOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  if (!isClawsLabsEnabled(getRuntimeConfig())) {
+    emitClawFailure(runtime, opts.json, CLAWS_LABS_DISABLED_MESSAGE, {
+      schemaVersion: CLAW_UPDATE_PLAN_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      error: { code: "claws_labs_disabled", message: CLAWS_LABS_DISABLED_MESSAGE },
+    });
+    return;
+  }
   if (!opts.dryRun && (!opts.yes || !opts.planIntegrity)) {
     const message =
       "Claw update requires explicit consent; pass --dry-run to preview or --yes with --plan-integrity to apply supported actions.";
@@ -244,6 +262,11 @@ export async function runClawsUpdateCommand(
   const skillConsent = consentToClawSkillWarnings(skillWarnings);
 
   try {
+    const configPath = resolveConfigPath();
+    const configEnv = process.env;
+    const assertCurrentLab = () =>
+      assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+    assertCurrentLab();
     const result = await withOpenClawStateLease(
       {
         scope: "core:agent-deletion",
@@ -255,8 +278,9 @@ export async function runClawsUpdateCommand(
         leaseLabel: "Claw update",
         operationLabel: "claw.update.lease",
       },
-      async (lease) =>
-        await applyClawUpdatePlan(
+      async (lease) => {
+        assertCurrentLab();
+        return await applyClawUpdatePlan(
           plan,
           {
             targetManifest: loaded.manifest,
@@ -281,7 +305,8 @@ export async function runClawsUpdateCommand(
               remove: async (id) => await callGatewayFromCli("cron.remove", {}, { id }),
             },
           },
-        ),
+        );
+      },
     );
     if (opts.json) {
       writeRuntimeJson(runtime, result);
@@ -291,7 +316,12 @@ export async function runClawsUpdateCommand(
     runtime.log(`Updated agent: ${result.agentId}`);
     runtime.log(`Claw version: ${result.previousClaw.version} -> ${result.targetClaw.version}`);
   } catch (error) {
-    const code = error instanceof ClawUpdateMutationError ? error.code : "update_failed";
+    const code =
+      error instanceof ClawsLabsDisabledError
+        ? "claws_labs_disabled"
+        : error instanceof ClawUpdateMutationError
+          ? error.code
+          : "update_failed";
     const message = error instanceof Error ? error.message : String(error);
     emitClawFailure(runtime, opts.json, message, {
       schemaVersion: CLAW_UPDATE_RESULT_SCHEMA_VERSION,

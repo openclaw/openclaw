@@ -94,6 +94,7 @@ function extensionCapabilityChange(params: {
     adapterIdentity: params.preflight.adapterIdentity ?? "unresolved",
     declaredCapabilities: params.preflight.declaredCapabilities ?? {},
     capabilityGrants: params.preflight.capabilityGrants ?? {},
+    capabilityGrantsByPluginId: params.preflight.capabilityGrantsByPluginId ?? {},
     ...(params.preflight.installId ? { installId: params.preflight.installId } : {}),
     ...(params.preflight.warning ? { riskWarning: params.preflight.warning } : {}),
   };
@@ -153,7 +154,8 @@ export async function planClawExtensions(params: {
         preflight.detectedFormat &&
         preflight.adapterIdentity &&
         preflight.declaredCapabilities &&
-        preflight.capabilityGrants,
+        preflight.capabilityGrants &&
+        preflight.capabilityGrantsByPluginId,
       );
     const incompleteProvenance =
       preflight.ok && !completeProvenance
@@ -201,6 +203,9 @@ export async function planClawExtensions(params: {
         ? { declaredCapabilities: preflight.declaredCapabilities }
         : {}),
       ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+      ...(preflight.capabilityGrantsByPluginId
+        ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+        : {}),
       requirementState,
       mapped: preflight.mapped ?? [],
       unavailable: preflight.unavailable ?? [],
@@ -226,6 +231,9 @@ export async function planClawExtensions(params: {
           ? { declaredCapabilities: preflight.declaredCapabilities }
           : {}),
         ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+        ...(preflight.capabilityGrantsByPluginId
+          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+          : {}),
         requirementState,
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         ...(completeProvenance

@@ -30,7 +30,7 @@ export function inspectClawPluginCapabilities(
   config: OpenClawConfig = {},
   currentArtifactDir?: string,
 ) {
-  const { declared, manifest } = inspectPluginCapabilityArtifact(rootDir, env, {
+  const { declared, manifest, manifests } = inspectPluginCapabilityArtifact(rootDir, env, {
     config,
     currentArtifactDir,
   });
@@ -41,6 +41,18 @@ export function inspectClawPluginCapabilities(
       origin: "global",
       entryConfig: config.plugins?.entries?.[pluginId],
     }).grants,
+    grantsByPluginId: Object.fromEntries(
+      manifests
+        .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+        .map((ownedManifest) => [
+          ownedManifest.id,
+          buildPluginCapabilitySummary({
+            manifest: ownedManifest,
+            origin: "global",
+            entryConfig: config.plugins?.entries?.[ownedManifest.id],
+          }).grants,
+        ]),
+    ),
   };
 }
 
@@ -100,6 +112,9 @@ export async function probeClawPluginArtifact(
   Awaited<ReturnType<typeof installPluginFromClawHub>> & {
     declaredCapabilities?: PluginAcceptedDeclaredSurface;
     capabilityGrants?: ReturnType<typeof buildPluginCapabilitySummary>["grants"];
+    capabilityGrantsByPluginId?: ReturnType<
+      typeof inspectClawPluginCapabilities
+    >["grantsByPluginId"];
   }
 > {
   const probePlugin = deps.probePlugin ?? installPluginFromClawHub;
@@ -155,6 +170,7 @@ export async function probeClawPluginArtifact(
     ...probe,
     declaredCapabilities: inspected.declared,
     capabilityGrants: inspected.grants,
+    capabilityGrantsByPluginId: inspected.grantsByPluginId,
   };
 }
 
@@ -223,6 +239,7 @@ export async function preflightClawPluginPackage(
     ...(probe.warning ? { warning: probe.warning } : {}),
     declaredCapabilities: probe.declaredCapabilities,
     capabilityGrants: probe.capabilityGrants,
+    capabilityGrantsByPluginId: probe.capabilityGrantsByPluginId,
   };
   const sourceHostConflict = sourceHostPluginConflict(pkg, probe.pluginId, options);
   if (sourceHostConflict) {

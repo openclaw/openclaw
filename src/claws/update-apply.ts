@@ -140,6 +140,7 @@ export async function applyClawUpdatePlan(
       phase?: "after-agent-commit",
     ) => void;
     sourceMcpServers: Record<string, Record<string, unknown>>;
+    clawHubBaseUrl?: string;
     planPackageDeps?: PackageRemovalDeps;
     consentPlanIntegrity: string | undefined;
     packagePreflight?: ClawAddPlanContext["packagePreflight"];
@@ -285,6 +286,9 @@ export async function applyClawUpdatePlan(
               ...(preflight.capabilityGrants
                 ? { capabilityGrants: preflight.capabilityGrants }
                 : {}),
+              ...(preflight.capabilityGrantsByPluginId
+                ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+                : {}),
               ...(preflight.requirements ? { requirements: preflight.requirements } : {}),
               ...(preflight.detectedFormat ? { detectedFormat: preflight.detectedFormat } : {}),
               ...(preflight.mapped ? { mapped: preflight.mapped } : {}),
@@ -347,6 +351,7 @@ export async function applyClawUpdatePlan(
           prerequisites: details?.prerequisites,
           declaredCapabilities: details?.declaredCapabilities,
           capabilityGrants: details?.capabilityGrants,
+          capabilityGrantsByPluginId: details?.capabilityGrantsByPluginId,
           extension: details?.extension,
         })
     ) {
@@ -731,7 +736,7 @@ export async function applyClawUpdatePlan(
     throw new ClawUpdateMutationError("provenance_update_failed", coerceErrorMessage(error));
   }
   try {
-    await packageExecution.commit?.();
+    await packageExecution.commit?.(() => assertForwardCurrent(postCommitPhase));
   } catch (error) {
     throw await partialMutation(
       `Claw update committed, but skill backup cleanup failed: ${coerceErrorMessage(error)}`,

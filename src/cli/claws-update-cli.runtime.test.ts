@@ -91,7 +91,9 @@ describe("default Claw CLI update after ClawHub Add", () => {
     await cp(cacheRoot, extractedRoot, { recursive: true });
     const installedSource = await readVerifiedSource(cacheRoot, integrity);
     const extractedSource = await readVerifiedSource(extractedRoot, integrity);
-    let config: OpenClawConfig = {};
+    let config: OpenClawConfig = {
+      gateway: { controlUi: { experimental: { claws: true } } },
+    };
     const addPlan = await buildClawAddPlan({
       manifest: installedSource.manifest,
       source: installedSource.source,

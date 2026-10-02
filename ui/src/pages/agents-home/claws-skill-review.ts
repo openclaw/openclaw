@@ -4,6 +4,7 @@ import type {
   ClawSkillReview,
 } from "../../../../packages/gateway-protocol/src/schema/claws.js";
 import { t } from "../../i18n/index.ts";
+import { renderClawTrustWarning } from "./claws-trust-warning.ts";
 import "../../styles/claws-plugin-review.css";
 
 export type { ClawSkillAcknowledgement };
@@ -60,7 +61,7 @@ export function renderClawSkillReviews(params: {
           <span>${t("clawsCatalog.version", { version: review.version })}</span>
         </div>
         <p class="claws-plugin-review__source">${review.integrity}</p>
-        <div class="callout warn" role="alert">${review.riskWarning}</div>
+        ${renderClawTrustWarning(review.riskWarning)}
         <label class="claws-plugin-review__risk">
           <input
             type="checkbox"

@@ -13,6 +13,7 @@ import type {
 import { hasCompleteClawActionEffects, renderClawActionEffect } from "./claws-effect-review.ts";
 import { pluginAcknowledgements, renderClawPluginReviews } from "./claws-plugin-review.ts";
 import { skillAcknowledgements, renderClawSkillReviews } from "./claws-skill-review.ts";
+import { renderClawTrustWarning } from "./claws-trust-warning.ts";
 import "../../styles/claws-catalog.css";
 
 export type ClawsCatalogViewProps = {
@@ -257,11 +258,7 @@ function renderReview(props: ClawsCatalogViewProps) {
                     </div>`
                   : nothing
               }
-              ${
-                plan.trustWarning
-                  ? html`<div class="callout warn" role="alert">${plan.trustWarning}</div>`
-                  : nothing
-              }
+              ${plan.trustWarning ? renderClawTrustWarning(plan.trustWarning) : nothing}
               ${
                 plan.riskAcknowledgementRequired
                   ? html`<label class="claws-catalog__risk">

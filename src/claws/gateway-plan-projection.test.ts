@@ -632,6 +632,14 @@ describe("Claw Gateway plan consent", () => {
           allowConversationAccess: { effective: false },
         },
       },
+      capabilityGrantsByPluginId: {
+        "workflow-operator": {
+          hooks: {
+            allowPromptInjection: { effective: false },
+            allowConversationAccess: { effective: false },
+          },
+        },
+      },
       reviewToken: "sha256:reviewed-plugin",
     };
     const reviewed = projectClawUpdatePlan(plan, root, {

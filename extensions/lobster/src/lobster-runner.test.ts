@@ -191,6 +191,28 @@ describe("createEmbeddedLobsterRunner", () => {
     });
   });
 
+  it("checks host authority after runtime loading and before an approved resume", async () => {
+    const { runtime, runner } = createRunner();
+    const assertInvocationCurrent = vi.fn(() => {
+      throw new Error("host invocation retired");
+    });
+
+    await expect(
+      runner.run(
+        runParams({
+          action: "resume",
+          pipeline: undefined,
+          token: "private-resume-token",
+          approve: true,
+          assertInvocationCurrent,
+        }),
+      ),
+    ).rejects.toThrow("host invocation retired");
+
+    expect(assertInvocationCurrent).toHaveBeenCalledOnce();
+    expect(runtime.resumeToolRequest).not.toHaveBeenCalled();
+  });
+
   it("passes approvalId through the normalized needs_approval envelope", async () => {
     const { runtime, runner } = createRunner();
     const approval = { prompt: "ok?", items: [], resumeToken: "eyJ...", approvalId: "dbc98d05" };

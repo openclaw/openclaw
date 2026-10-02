@@ -1,13 +1,18 @@
 import { buildPluginCapabilitySummary } from "../plugins/capability-summary.js";
 import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
 
-export const emptyPluginCapabilityEvidence = buildPluginCapabilitySummary({
+const emptyCapabilitySummary = buildPluginCapabilitySummary({
   manifest: {},
   origin: "global",
 });
+export const emptyPluginCapabilityEvidence = {
+  ...emptyCapabilitySummary,
+  grantsByPluginId: { audit: emptyCapabilitySummary.grants },
+};
 export const emptyPluginPlanEvidence = {
   declaredCapabilities: emptyPluginCapabilityEvidence.declared,
   capabilityGrants: emptyPluginCapabilityEvidence.grants,
+  capabilityGrantsByPluginId: emptyPluginCapabilityEvidence.grantsByPluginId,
 };
 
 export function packageInstallPlan(
@@ -60,6 +65,9 @@ export function packageInstallPlan(
           ? {
               installId: pkg.ref.split("/").at(-1),
               ...emptyPluginPlanEvidence,
+              capabilityGrantsByPluginId: {
+                [pkg.ref.split("/").at(-1) ?? "unknown"]: emptyPluginCapabilityEvidence.grants,
+              },
             }
           : {}),
       },

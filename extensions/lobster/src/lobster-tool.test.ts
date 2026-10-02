@@ -53,7 +53,11 @@ function resumeToken(details: unknown, field = "requiresInput") {
 describe("lobster plugin tool", () => {
   it("resumes real pipeline input, preserves invalid answers, and still handles approvals", async () => {
     vi.stubEnv("LOBSTER_STATE_DIR", tempDirs.make("openclaw-lobster-input-"));
-    const tool = createLobsterTool(fakeApi());
+    const request = vi.fn(async () => ({ decision: "allow-once" }));
+    const tool = createLobsterTool(
+      fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+      { context: fakeCtx({ assertInvocationCurrent: vi.fn() }) },
+    );
     const first = await tool.execute("run", {
       action: "run",
       pipeline: 'ask --prompt "Review draft?" | approve --prompt "Publish?"',
@@ -71,17 +75,13 @@ describe("lobster plugin tool", () => {
       token,
       responseJson: '{"decision":"approve","feedback":"Looks good"}',
     });
-    expect(second.details).toMatchObject({ status: "needs_approval" });
-    const approvalToken = resumeToken(second.details, "requiresApproval");
-    const approved = await tool.execute("approve", {
-      action: "resume",
-      token: approvalToken,
-      approve: true,
-    });
-    expect(approved.details).toMatchObject({
+    expect(second.details).toMatchObject({
       status: "ok",
       output: [{ decision: "approve", feedback: "Looks good" }],
     });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(second)).not.toContain("resumeToken");
+    expect(JSON.stringify(second)).not.toContain("approvalId");
     await expect(
       tool.execute("replay", { action: "resume", token, responseJson: '{"decision":"reject"}' }),
     ).rejects.toThrow(/not found/i);
@@ -146,6 +146,64 @@ describe("lobster plugin tool", () => {
     expect(finished.details).toMatchObject({ status: "ok", output: [{ draft: "original" }] });
   });
 
+  it.each(["allow-once", "deny"] as const)(
+    "keeps a real workflow side effect behind the operator's %s decision",
+    async (operatorDecision) => {
+      const dir = tempDirs.make("openclaw-lobster-approval-effect-");
+      vi.stubEnv("LOBSTER_STATE_DIR", dir);
+      let resolveDecision!: (value: { decision: typeof operatorDecision }) => void;
+      const decision = new Promise<{ decision: typeof operatorDecision }>((resolve) => {
+        resolveDecision = resolve;
+      });
+      let requestStarted!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        requestStarted = resolve;
+      });
+      const request = vi.fn(() => {
+        requestStarted();
+        return decision;
+      });
+      const tool = createLobsterTool(
+        fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+        { context: fakeCtx({ assertInvocationCurrent: vi.fn() }) },
+      );
+      const effect = path.join(dir, "committed.json");
+
+      const first = await tool.execute("prepare", {
+        action: "run",
+        pipeline: 'ask --prompt "Value?" | approve --prompt "Write?" | state.set committed',
+      });
+      const pending = tool.execute("write-after-approval", {
+        action: "resume",
+        token: resumeToken(first.details),
+        responseJson: '{"decision":"approve","approved":true}',
+      });
+      await Promise.race([
+        requested,
+        pending.then(() => {
+          throw new Error("workflow returned before requesting operator approval");
+        }),
+      ]);
+      await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
+      resolveDecision({ decision: operatorDecision });
+      const result = await pending;
+
+      expect(result.details).toMatchObject({
+        status: operatorDecision === "allow-once" ? "ok" : "cancelled",
+      });
+      if (operatorDecision === "allow-once") {
+        expect(JSON.parse(await fs.readFile(effect, "utf8"))).toEqual({
+          decision: "approve",
+          approved: true,
+        });
+      } else {
+        await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(JSON.stringify(result)).not.toContain("resumeToken");
+      expect(JSON.stringify(result)).not.toContain("approvalId");
+    },
+  );
+
   it("cancels a real input checkpoint without executing its remaining steps", async () => {
     const dir = tempDirs.make("openclaw-lobster-input-cancel-");
     vi.stubEnv("LOBSTER_STATE_DIR", dir);
@@ -180,7 +238,254 @@ describe("lobster plugin tool", () => {
     expect(factory(fakeCtx({ sandboxed: true }))).toBeNull();
   });
 
-  it("returns approval envelopes for ordinary runs", async () => {
+  it("fails closed when no operator approval route is available", async () => {
+    const runner = {
+      run: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "needs_approval",
+          output: [],
+          requiresApproval: {
+            type: "approval_request",
+            prompt: "Continue?",
+            items: [],
+            resumeToken: "resume-token-1",
+            approvalId: "approval-id-1",
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "cancelled",
+          output: [],
+          requiresApproval: null,
+        }),
+    };
+    const request = vi.fn(async () => {
+      throw new Error("unavailable");
+    });
+    const tool = createLobsterTool(
+      fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+      { runner, context: fakeCtx({ assertInvocationCurrent: vi.fn() }) },
+    );
+    await expect(
+      tool.execute("call-ordinary-run", { action: "run", pipeline: "noop" }),
+    ).rejects.toThrow("Lobster approval route unavailable; workflow was not approved");
+
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "run",
+      pipeline: "noop",
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(runner.run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: "resume", token: "resume-token-1", approve: false }),
+    );
+  });
+
+  it.each([
+    {
+      field: "prompt",
+      prompt: "p".repeat(513),
+      items: [],
+      error:
+        "Lobster approval prompt exceeds the Gateway's 512-character review limit; shorten the approval prompt and rerun the workflow",
+    },
+    {
+      field: "preview",
+      prompt: "Publish?",
+      items: ["x".repeat(16_381)],
+      error:
+        "Lobster approval preview exceeds the Gateway's 16,384-character review limit; reduce the approval items and rerun the workflow",
+    },
+    {
+      field: "preview with 9,000 emoji",
+      prompt: "Publish?",
+      items: ["\u{1F600}".repeat(9_000)],
+      error:
+        "Lobster approval preview exceeds the Gateway's 16,384-character review limit; reduce the approval items and rerun the workflow",
+    },
+    {
+      field: "preview with 3,000 zero-width characters",
+      prompt: "Publish?",
+      items: ["\u200B".repeat(3_000)],
+      error:
+        "Lobster approval preview exceeds the Gateway's 16,384-character review limit; reduce the approval items and rerun the workflow",
+    },
+  ])(
+    "denies an oversized approval $field with an actionable error",
+    async ({ prompt, items, error }) => {
+      const runner = {
+        run: vi
+          .fn()
+          .mockResolvedValueOnce({
+            ok: true,
+            status: "needs_approval",
+            output: [],
+            requiresApproval: {
+              type: "approval_request",
+              prompt,
+              items,
+              resumeToken: "private-resume-token",
+            },
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            status: "cancelled",
+            output: [],
+            requiresApproval: null,
+          }),
+      };
+      const request = vi.fn(async () => ({ decision: "allow-once" }));
+      const tool = createLobsterTool(
+        fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+        { runner, context: fakeCtx({ assertInvocationCurrent: vi.fn() }) },
+      );
+
+      await expect(
+        tool.execute("oversized-approval", { action: "run", pipeline: "publish" }),
+      ).rejects.toMatchObject({ message: error });
+      expect(request).not.toHaveBeenCalled();
+      expect(runner.run).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          action: "resume",
+          token: "private-resume-token",
+          approve: false,
+        }),
+      );
+    },
+  );
+
+  it("keeps approval credentials off the tool result until an operator decides", async () => {
+    let resolveDecision!: (value: { decision: "allow-once" }) => void;
+    const decision = new Promise<{ decision: "allow-once" }>((resolve) => {
+      resolveDecision = resolve;
+    });
+    let requestStarted!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      requestStarted = resolve;
+    });
+    const request = vi.fn(() => {
+      requestStarted();
+      return decision;
+    });
+    const runner = {
+      run: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "needs_approval",
+          output: [],
+          requiresApproval: {
+            type: "approval_request",
+            prompt: "Publish the draft?",
+            items: [{ action: "publish" }],
+            resumeToken: "private-resume-token",
+            approvalId: "private-approval-id",
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "ok",
+          output: [{ published: true }],
+          requiresApproval: null,
+        }),
+    };
+    const assertInvocationCurrent = vi.fn();
+    const tool = createLobsterTool(
+      fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+      {
+        runner,
+        context: fakeCtx({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          assertInvocationCurrent,
+        }),
+      },
+    );
+
+    const pendingResult = tool.execute("operator-gated", { action: "run", pipeline: "publish" });
+    const firstSettled = await Promise.race([
+      requested.then(() => "operator-requested"),
+      pendingResult.then(() => "tool-returned"),
+    ]);
+    expect(firstSettled).toBe("operator-requested");
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    resolveDecision({ decision: "allow-once" });
+    const result = await pendingResult;
+
+    expect(request).toHaveBeenCalledWith(
+      "plugin.approval.request",
+      expect.objectContaining({
+        title: "Lobster workflow approval",
+        description: "Publish the draft?",
+        allowedDecisions: ["allow-once", "deny"],
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        toolCallId: "operator-gated",
+      }),
+      expect.anything(),
+    );
+    expect(JSON.stringify(request.mock.calls)).not.toContain("private-resume-token");
+    expect(JSON.stringify(request.mock.calls)).not.toContain("private-approval-id");
+    expect(assertInvocationCurrent).toHaveBeenCalledTimes(2);
+    expect(runner.run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        action: "resume",
+        token: "private-resume-token",
+        approve: true,
+      }),
+    );
+    expect(result.details).toMatchObject({ status: "ok", output: [{ published: true }] });
+    expect(JSON.stringify(result)).not.toContain("private-resume-token");
+    expect(JSON.stringify(result)).not.toContain("private-approval-id");
+  });
+
+  it("denies an approval checkpoint when the operator declines", async () => {
+    const request = vi.fn(async () => ({ decision: "deny" }));
+    const runner = {
+      run: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "needs_approval",
+          output: [],
+          requiresApproval: {
+            type: "approval_request",
+            prompt: "Publish?",
+            items: [],
+            resumeToken: "private-resume-token",
+          },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: "cancelled",
+          output: [],
+          requiresApproval: null,
+        }),
+    };
+    const tool = createLobsterTool(
+      fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+      { runner, context: fakeCtx({ assertInvocationCurrent: vi.fn() }) },
+    );
+
+    const result = await tool.execute("declined", { action: "run", pipeline: "publish" });
+
+    expect(runner.run).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ action: "resume", token: "private-resume-token", approve: false }),
+    );
+    expect(result.details).toMatchObject({ status: "cancelled" });
+    expect(JSON.stringify(result)).not.toContain("private-resume-token");
+  });
+
+  it("cannot request approval without live host invocation authority", async () => {
+    const request = vi.fn(async () => ({ decision: "allow-once" }));
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -188,73 +493,93 @@ describe("lobster plugin tool", () => {
         output: [],
         requiresApproval: {
           type: "approval_request",
-          prompt: "Continue?",
+          prompt: "Publish?",
           items: [],
-          resumeToken: "resume-token-1",
+          resumeToken: "private-resume-token",
         },
       }),
     };
+    const tool = createLobsterTool(
+      fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+      { runner },
+    );
 
-    const tool = createLobsterTool(fakeApi(), { runner });
-    const res = await tool.execute("call-ordinary-run", {
-      action: "run",
-      pipeline: "noop",
-    });
-
-    expect(runner.run).toHaveBeenCalledWith({
-      action: "run",
-      pipeline: "noop",
-      cwd: process.cwd(),
-      timeoutMs: 20_000,
-      maxStdoutBytes: 512_000,
-    });
-    const details = requireRecord(res.details, "ordinary run details");
-    expect(details).toEqual({
-      ok: true,
-      status: "needs_approval",
-      output: [],
-      requiresApproval: {
-        type: "approval_request",
-        prompt: "Continue?",
-        items: [],
-        resumeToken: "resume-token-1",
-      },
-    });
+    await expect(tool.execute("no-host", { action: "run", pipeline: "publish" })).rejects.toThrow(
+      "Lobster approval requires an active host invocation",
+    );
+    expect(request).not.toHaveBeenCalled();
+    expect(runner.run).toHaveBeenCalledTimes(1);
   });
 
-  it("resumes ordinary workflows with approval credentials", async () => {
+  it("does not continue an approved checkpoint after its host invocation retires", async () => {
+    let resolveDecision!: (value: { decision: "allow-once" }) => void;
+    const decision = new Promise<{ decision: "allow-once" }>((resolve) => {
+      resolveDecision = resolve;
+    });
+    let requestStarted!: () => void;
+    const requested = new Promise<void>((resolve) => {
+      requestStarted = resolve;
+    });
+    const request = vi.fn(() => {
+      requestStarted();
+      return decision;
+    });
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
-        status: "ok",
-        output: [{ approved: true }],
-        requiresApproval: null,
+        status: "needs_approval",
+        output: [],
+        requiresApproval: {
+          type: "approval_request",
+          prompt: "Publish?",
+          items: [],
+          resumeToken: "private-resume-token",
+        },
       }),
+    };
+    let current = true;
+    const assertInvocationCurrent = vi.fn(() => {
+      if (!current) {
+        throw new Error("host invocation retired");
+      }
+    });
+    const tool = createLobsterTool(
+      fakeApi({ runtime: { version: "test", gateway: { request } } as never }),
+      { runner, context: fakeCtx({ assertInvocationCurrent }) },
+    );
+
+    const pending = tool.execute("retired", { action: "run", pipeline: "publish" });
+    await requested;
+    current = false;
+    resolveDecision({ decision: "allow-once" });
+
+    await expect(pending).rejects.toThrow("host invocation retired");
+    expect(runner.run).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects model-supplied approval credentials or decisions", async () => {
+    const runner = {
+      run: vi.fn(),
     };
 
     const tool = createLobsterTool(fakeApi(), { runner });
-    const res = await tool.execute("call-ordinary-resume", {
-      action: "resume",
-      token: "resume-token-1",
-      approve: true,
-    });
-
-    expect(runner.run).toHaveBeenCalledWith({
-      action: "resume",
-      token: "resume-token-1",
-      approve: true,
-      cwd: process.cwd(),
-      timeoutMs: 20_000,
-      maxStdoutBytes: 512_000,
-    });
-    const details = requireRecord(res.details, "ordinary resume details");
-    expect(details.ok).toBe(true);
-    expect(details).toEqual({
-      ok: true,
-      status: "ok",
-      output: [{ approved: true }],
-      requiresApproval: null,
-    });
+    await expect(
+      tool.execute("call-ordinary-resume", {
+        action: "resume",
+        token: "resume-token-1",
+        approve: true,
+      }),
+    ).rejects.toThrow("operator-only");
+    await expect(
+      tool.execute("call-ordinary-resume", {
+        action: "resume",
+        approvalId: "approval-id-1",
+        responseJson: "true",
+      }),
+    ).rejects.toThrow("operator-only");
+    expect(tool.parameters.properties).not.toHaveProperty("approve");
+    expect(tool.parameters.properties).not.toHaveProperty("approvalId");
+    expect(runner.run).not.toHaveBeenCalled();
   });
 
   it("normalizes numeric string run limits before invoking the runner", async () => {

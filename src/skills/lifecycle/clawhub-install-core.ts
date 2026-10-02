@@ -69,6 +69,7 @@ export type ClawHubInstallParams = ClawHubSkillRef & {
   /** True when a Claw lifecycle caller already owns package coordination. */
   clawManaged?: boolean;
   beforePersistentApply?: () => void;
+  assertOwned?: () => void;
   expectedClawHubState?: ClawHubSkillFileState | null;
   deferCommit?: boolean;
 };
@@ -309,6 +310,7 @@ async function installDownloadedResolution(
           : rootDir,
         mode: params.force ? "update" : "install",
         beforePersistentApply: params.beforePersistentApply,
+        assertOwned: params.assertOwned,
         logger: params.logger,
         expectedClawHubState: params.expectedClawHubState,
         deferCommit: params.deferCommit,
@@ -413,7 +415,7 @@ export async function performClawHubSkillInstall(
     normalizeExpectedArtifactIntegrity(params.expectedIntegrity);
     if (
       params.deferCommit &&
-      (!params.clawManaged || !params.force || !params.expectedClawHubState)
+      (!params.clawManaged || !params.force || !params.expectedClawHubState || !params.assertOwned)
     ) {
       throw new Error("Deferred skill replacement requires a guarded Claw-managed update.");
     }
@@ -638,8 +640,8 @@ export async function performClawHubSkillInstall(
           ...(directoryTransaction && previousLockEntry && installedLockEntry
             ? {
                 transaction: {
-                  commit: () => directoryTransaction.commit(),
-                  rollback: () =>
+                  commit: (assertCurrent) => directoryTransaction.commit(assertCurrent),
+                  rollback: (assertCurrent) =>
                     rollbackDeferredSkillInstall({
                       workspaceDir: params.workspaceDir,
                       slug: params.slug,
@@ -649,6 +651,7 @@ export async function performClawHubSkillInstall(
                       installed: installedLockEntry,
                       transaction: directoryTransaction,
                       verifyInstalled: true,
+                      assertCurrent: assertCurrent ?? params.assertOwned,
                     }),
                 } satisfies PackageDirInstallTransaction,
               }
@@ -666,6 +669,7 @@ export async function performClawHubSkillInstall(
               installed: installedLockEntry,
               transaction: directoryTransaction,
               verifyInstalled: false,
+              assertCurrent: params.assertOwned,
             });
           } catch (recoveryError) {
             throw new ClawHubSkillRecoveryError(

@@ -114,14 +114,13 @@ describe("ClawHub Claw catalog Gateway methods", () => {
     updatedAtMs: 1,
   };
 
-  it("registers read-scoped catalog methods and serves them with Labs off", async () => {
+  it("registers read-scoped catalog methods but rejects discovery with Labs off", async () => {
     for (const method of ["claws.catalog.search", "claws.catalog.detail"] as const) {
       expect(coreGatewayHandlers[method]).toBeDefined();
       expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
         allowed: true,
       });
     }
-    listClawHubClaws.mockResolvedValue([entry]);
     const replies: Parameters<RespondFn>[] = [];
     await expectDefined(
       clawsHandlers["claws.catalog.search"],
@@ -134,8 +133,8 @@ describe("ClawHub Claw catalog Gateway methods", () => {
       client: null,
       isWebchatConnect: () => false,
     });
-    expect(replies).toEqual([[true, { entries: [entry] }]]);
-    expect(listClawHubClaws).toHaveBeenCalledOnce();
+    expect(replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(listClawHubClaws).not.toHaveBeenCalled();
   });
 
   it("lists starters and reads one exact official release with Labs on", async () => {
@@ -185,7 +184,7 @@ describe("ClawHub Claw catalog Gateway methods", () => {
   });
 
   it.each(["claws.catalog.search", "claws.catalog.detail"] as const)(
-    "finishes %s when Labs turns off during the ClawHub request",
+    "drops %s when Labs turns off during the ClawHub request",
     async (method) => {
       let resolveSource: (value: unknown) => void = () => {};
       const source = new Promise<unknown>((resolve) => {
@@ -220,12 +219,7 @@ describe("ClawHub Claw catalog Gateway methods", () => {
       await request;
 
       expect(replies).toHaveLength(1);
-      expect(replies[0]?.[0]).toBe(true);
-      expect(replies[0]?.[1]).toMatchObject(
-        method === "claws.catalog.search"
-          ? { entries: [entry] }
-          : { detail: { ...entry, version: "1.0.0" } },
-      );
+      expect(replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
     },
   );
 });

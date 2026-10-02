@@ -53,7 +53,10 @@ async function fixture() {
   }
   await mkdir(workspace);
   await writeFile(join(workspace, "AGENTS.md"), "Keep this agent as-is.\n", "utf8");
-  const config: OpenClawConfig = { agents: { entries: { worker: { workspace } } } };
+  const config: OpenClawConfig = {
+    gateway: { controlUi: { experimental: { claws: true } } },
+    agents: { entries: { worker: { workspace } } },
+  };
   await writeFile(configPath, JSON.stringify(config));
   setRuntimeConfigSnapshot(config);
   const runtime = {
@@ -71,6 +74,44 @@ describe("claws migrate interactive consent", () => {
     vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "");
     mocks.confirm.mockReset();
     mocks.isCancel.mockClear();
+  });
+
+  it("does not enroll an existing agent with Claws Labs off", async () => {
+    const { configPath, config, env, runtime } = await fixture();
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...config,
+        gateway: { controlUi: { experimental: { claws: false } } },
+      }),
+    );
+
+    await runClawsMigrateCommand("worker", { dryRun: true }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Settings > Labs"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.confirm).not.toHaveBeenCalled();
+    expect(readClawInstallRecord("worker", { env })).toBeUndefined();
+  });
+
+  it("does not enroll after Claws Labs is switched off during consent", async () => {
+    const { configPath, config, env, runtime } = await fixture();
+    mocks.confirm.mockImplementation(async () => {
+      await writeFile(
+        configPath,
+        JSON.stringify({
+          ...config,
+          gateway: { controlUi: { experimental: { claws: false } } },
+        }),
+      );
+      return true;
+    });
+
+    await runClawsMigrateCommand("worker", {}, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Settings > Labs"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(readClawInstallRecord("worker", { env })).toBeUndefined();
   });
 
   it("defaults to no and leaves the existing agent untouched when cancelled", async () => {

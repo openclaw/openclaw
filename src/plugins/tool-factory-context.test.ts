@@ -156,6 +156,82 @@ describe("plugin tool declaration membership", () => {
 });
 
 describe("versioned plugin tool authority", () => {
+  it("omits a V1 host assertion when absent while ordinary callbacks keep working", async () => {
+    const effect = vi.fn();
+    const { entry, registry } = register(() => ({
+      name: "probe",
+      label: "Probe",
+      description: "Legacy tool",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        effect();
+        return { content: [], details: {} };
+      },
+    }));
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: {
+        // Input context fields cannot manufacture a host assertion.
+        assertInvocationCurrent: () => {
+          throw new Error("untrusted input assertion");
+        },
+      },
+    });
+    expect(context.assertInvocationCurrent).toBeUndefined();
+    const raw = entry.factory(context);
+    if (!raw || Array.isArray(raw)) {
+      throw new Error("expected one legacy tool");
+    }
+    const tool = bindPluginToolCallbacks(entry, registry, raw, context.assertInvocationCurrent);
+
+    await expect(tool.execute("ordinary", {})).resolves.toMatchObject({ details: {} });
+    expect(effect).toHaveBeenCalledOnce();
+    markPluginRegistryRetired(registry);
+    await expect(tool.execute("retired", {})).rejects.toThrow("no longer active");
+    expect(effect).toHaveBeenCalledOnce();
+  });
+
+  it("passes a live host assertion into V1 factories and callbacks", async () => {
+    const effect = vi.fn();
+    let hostCurrent = true;
+    const assertHostCurrent = vi.fn(() => {
+      if (!hostCurrent) {
+        throw new Error("host invocation retired");
+      }
+    });
+    const { entry, registry } = register((context) => ({
+      name: "probe",
+      label: "Probe",
+      description: "Host-bound legacy tool",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        context.assertInvocationCurrent?.();
+        effect();
+        return { content: [], details: {} };
+      },
+    }));
+    const context = createPluginToolFactoryContext({
+      entry,
+      registry,
+      context: {},
+      assertInvocationCurrent: assertHostCurrent,
+    });
+    expect(context.assertInvocationCurrent).toBeTypeOf("function");
+    const raw = entry.factory(context);
+    if (!raw || Array.isArray(raw)) {
+      throw new Error("expected one legacy tool");
+    }
+    const tool = bindPluginToolCallbacks(entry, registry, raw, context.assertInvocationCurrent);
+
+    await expect(tool.execute("ordinary", {})).resolves.toMatchObject({ details: {} });
+    expect(assertHostCurrent).toHaveBeenCalled();
+    expect(effect).toHaveBeenCalledOnce();
+    hostCurrent = false;
+    await expect(tool.execute("retired", {})).rejects.toThrow("host invocation retired");
+    expect(effect).toHaveBeenCalledOnce();
+  });
+
   it("requires a final-effect assertion in the versioned context type", () => {
     expectTypeOf<OpenClawPluginToolContext<2>["assertInvocationCurrent"]>().toEqualTypeOf<
       () => void
@@ -212,7 +288,7 @@ describe("versioned plugin tool authority", () => {
           context: {},
           assertInvocationCurrent: captureGatewayToolCallerAssertion(),
         });
-        expect(() => context.assertInvocationCurrent()).toThrow(
+        expect(() => context.assertInvocationCurrent?.()).toThrow(
           "caller authority is no longer active",
         );
       },

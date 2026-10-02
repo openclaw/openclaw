@@ -135,6 +135,7 @@ export type ClawSkillInstallConsent = {
 type InstallClawPackagesOptions = ClawPluginRuntimeOptions &
   ClawAddStateOptions & {
     config?: OpenClawConfig;
+    clawHubBaseUrl?: string;
     pluginConsent?: ClawPluginInstallConsent;
     skillConsent?: ClawSkillInstallConsent;
     deps?: PackageInstallerDeps;
@@ -330,6 +331,7 @@ async function installClawPackagesUnlocked(
               options.onExternalMutation?.(pkg);
             }
           },
+          ...(upgrade ? { assertOwned: assertCurrent } : {}),
           confirmInstall: (warning) => {
             assertCurrent();
             return warning === pkg.riskWarning;
@@ -432,6 +434,9 @@ async function installClawPackagesUnlocked(
         stableStringify(probe.declaredCapabilities) !== stableStringify(pkg.declaredCapabilities) ||
         !pkg.capabilityGrants ||
         stableStringify(probe.capabilityGrants) !== stableStringify(pkg.capabilityGrants) ||
+        !pkg.capabilityGrantsByPluginId ||
+        stableStringify(probe.capabilityGrantsByPluginId) !==
+          stableStringify(pkg.capabilityGrantsByPluginId) ||
         (plannedExtensionInspection &&
           stableStringify(probedExtensionInspection) !==
             stableStringify(plannedExtensionInspection))
@@ -519,6 +524,7 @@ async function installClawPackagesUnlocked(
       installedPackages.push(packageRef);
 
       assertForwardCurrent();
+      const beforePluginCommit = bindClawPluginBeforeCommit(options, pkg, assertForwardCurrent);
       await installPlugin({
         request: {
           source: "clawhub",
@@ -528,9 +534,28 @@ async function installClawPackagesUnlocked(
           expectedIntegrity: pkg.integrity,
           expectedPluginId: probe.pluginId,
         },
-        env: options.env,
+        env: options.clawHubBaseUrl
+          ? { ...options.env, OPENCLAW_CLAWHUB_URL: options.clawHubBaseUrl }
+          : options.env,
         beforePersistentApply: assertForwardCurrent,
-        beforePersistentEffect: bindClawPluginBeforeCommit(options, pkg, assertForwardCurrent),
+        onBeforePluginArtifactCommit: (artifact, config) => {
+          const current = inspectClawPluginCapabilities(
+            artifact.stagedArtifactDir,
+            artifact.pluginId,
+            options.env,
+            config,
+            artifact.currentArtifactDir,
+          );
+          if (
+            stableStringify(current.grantsByPluginId) !==
+            stableStringify(pkg.capabilityGrantsByPluginId)
+          ) {
+            throw new Error(
+              `Plugin ${pkg.ref}@${pkg.version} effective capability grants changed after planning; run add --dry-run again.`,
+            );
+          }
+        },
+        beforePersistentEffect: beforePluginCommit,
         logger: createPluginInstallLogger(runtime),
         confirmInstall: async (warning) => {
           assertCurrent();

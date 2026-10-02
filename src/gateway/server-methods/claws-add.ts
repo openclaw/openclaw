@@ -13,6 +13,7 @@ import {
 import { planClawAddForGateway } from "../../claws/gateway-add-plan.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
+import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs-gate.js";
 import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
 import { listConfiguredMcpServers } from "../../config/mcp-config.js";
 import { resolveConfigPath } from "../../config/paths.js";
@@ -34,6 +35,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
     }
     const config = context.getRuntimeConfig();
     try {
+      assertClawsLabsEnabled(config);
       const listedMcp = await listConfiguredMcpServers();
       if (!listedMcp.ok) {
         throw new Error(listedMcp.error);
@@ -44,8 +46,13 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         config,
         sourceMcpServers: listedMcp.mcpServers,
       });
+      assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
     } catch (error) {
+      if (error instanceof ClawsLabsDisabledError) {
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+        return;
+      }
       log.error(`claws.add.plan failed: ${error instanceof Error ? error.message : String(error)}`);
       const message =
         error instanceof ClawHubSourceError
@@ -66,6 +73,8 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateClawsAddApplyParams, "claws.add.apply", respond)) {
       return;
     }
+    const configPath = resolveConfigPath();
+    const configEnv = process.env;
     const assertCurrent = () => {
       signal?.throwIfAborted();
       sessionMutationCommitGuard?.();
@@ -81,9 +90,9 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
       }
     };
     try {
+      assertClawsLabsEnabled(context.getRuntimeConfig());
+      assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
       assertCurrent();
-      const configPath = resolveConfigPath();
-      const configEnv = process.env;
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
         ? async (plugins, options) => {
@@ -167,7 +176,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
         `claws.add.apply failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       const code =
-        error instanceof ClawGatewayAuthorityError
+        error instanceof ClawGatewayAuthorityError || error instanceof ClawsLabsDisabledError
           ? ErrorCodes.FORBIDDEN
           : error instanceof ClawGatewayPlanChangedError ||
               error instanceof ClawGatewayConsentError ||
@@ -178,6 +187,7 @@ export const clawsAddHandlers: GatewayRequestHandlers = {
             : ErrorCodes.UNAVAILABLE;
       const message =
         error instanceof ClawGatewayAuthorityError ||
+        error instanceof ClawsLabsDisabledError ||
         error instanceof ClawGatewayConsentError ||
         error instanceof ClawSkillConsentError ||
         error instanceof ClawGatewayPlanChangedError ||

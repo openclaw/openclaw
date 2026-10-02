@@ -2,9 +2,12 @@ import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { AgentConfig } from "../config/types.agents.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import {
   readClawHubSkillOrigin,
@@ -13,6 +16,8 @@ import {
 import { planClawHubSkillUninstall } from "../skills/lifecycle/clawhub-uninstall.js";
 import { installSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { digestClawValue } from "./digest.js";
+import { projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { digestClawPackageRef } from "./package-update-provenance.js";
 import { applyClawPackageUpdate } from "./package-update.js";
 import { preflightClawPackage } from "./packages.js";
@@ -26,8 +31,8 @@ import {
 } from "./provenance.js";
 import { createClawUpdatePlanFixture } from "./resource-update.test-helpers.js";
 import { parseClawManifest } from "./schema.js";
-import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "./types.js";
-import { applyClawUpdatePlan } from "./update-apply.js";
+import { CLAW_OUTPUT_STABILITY, type ClawAddPlan, type ClawOpenClawProfile } from "./types.js";
+import { applyClawUpdatePlan, ClawUpdateMutationError } from "./update-apply.js";
 import { buildClawUpdatePlan } from "./update-plan.js";
 
 const registry = vi.hoisted(() => ({
@@ -277,6 +282,7 @@ async function setupInstalledClaw() {
 
 describe("owned ClawHub skill upgrade", () => {
   afterEach(() => {
+    __setFsSafeTestHooksForTest(undefined);
     registry.detail.mockReset();
     registry.download.mockReset();
     registry.verify.mockReset();
@@ -332,6 +338,45 @@ describe("owned ClawHub skill upgrade", () => {
     expect((await readClawHubSkillsLockfile(current.workspace)).skills.triage?.version).toBe(
       "operator-version",
     );
+  });
+
+  it("keeps the upgraded skill and lockfile when the rollback lease closes during planning", async () => {
+    const current = await setup();
+    const readRefs = current.options.readRefs;
+    let leaseCount = 0;
+    let rollbackLeaseCurrent = true;
+    current.options.packageDeps.acquirePackageLease = vi.fn(() => {
+      const rollbackLease = ++leaseCount === 2;
+      return {
+        heartbeat: vi.fn(() => {
+          if (rollbackLease && !rollbackLeaseCurrent) {
+            throw new Error("rollback lease lost");
+          }
+        }),
+        release: vi.fn(),
+      };
+    });
+    current.options.readRefs = async (query) => {
+      const refs = await readRefs(query);
+      if (leaseCount === 2) {
+        rollbackLeaseCurrent = false;
+      }
+      return refs;
+    };
+    const execution = await applyClawPackageUpdate(
+      createClawUpdatePlanFixture([current.action]),
+      current.targetAddPlan,
+      current.options,
+    );
+    const upgradedLock = await readClawHubSkillsLockfile(current.workspace);
+
+    await expect(execution.rollback()).rejects.toMatchObject({ partial: true });
+    expect(leaseCount).toBe(2);
+    expect(current.current()).toMatchObject({ version: "2.0.0" });
+    expect(await fs.readFile(path.join(current.skillDir, "SKILL.md"), "utf8")).toBe(
+      current.v2.content,
+    );
+    expect(await readClawHubSkillsLockfile(current.workspace)).toEqual(upgradedLock);
   });
 
   it("does not touch bytes or ownership when the old tracked tree drifted", async () => {
@@ -481,6 +526,7 @@ describe("owned ClawHub skill upgrade", () => {
       clawManaged: true,
       deferCommit: true,
       expectedClawHubState: planned.plan,
+      assertOwned: () => undefined,
       beforePersistentApply: () => {
         try {
           if (
@@ -508,6 +554,61 @@ describe("owned ClawHub skill upgrade", () => {
     );
     expect(await readClawHubSkillsLockfile(current.workspace)).toEqual(current.oldLock);
     expect(await readClawHubSkillOrigin(current.skillDir)).toEqual(current.oldOrigin);
+  });
+
+  it("does not rewrite the lockfile after rollback loses its owner", async () => {
+    const current = await setup();
+    const planned = await planClawHubSkillUninstall({
+      workspaceDir: current.workspace,
+      slug: "triage",
+      expectedVersion: "1.0.0",
+    });
+    if (!planned.ok) {
+      throw new Error(planned.error);
+    }
+    const upgraded = await installSkillFromClawHub({
+      workspaceDir: current.workspace,
+      slug: "triage",
+      version: "2.0.0",
+      expectedIntegrity: current.v2.integrity,
+      force: true,
+      clawManaged: true,
+      deferCommit: true,
+      expectedClawHubState: planned.plan,
+      assertOwned: () => undefined,
+    });
+    if (!upgraded.ok || !upgraded.transaction) {
+      throw new Error("expected deferred skill upgrade");
+    }
+    const upgradedLock = await readClawHubSkillsLockfile(current.workspace);
+    const lost = new Error("rollback lease lost before lockfile restore");
+    let rollbackLeaseCurrent = true;
+    let sawRestoredDir = false;
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation(operation, target) {
+        if (
+          operation === "remove" &&
+          path.basename(target).startsWith(".openclaw-install-rollback-")
+        ) {
+          sawRestoredDir =
+            fsSync.readFileSync(path.join(current.skillDir, "SKILL.md"), "utf8") ===
+            current.v1.content;
+          rollbackLeaseCurrent = false;
+        }
+      },
+    });
+    const assertCurrent = () => {
+      if (!rollbackLeaseCurrent) {
+        throw lost;
+      }
+    };
+
+    await expect(upgraded.transaction.rollback(assertCurrent)).rejects.toBe(lost);
+    expect(sawRestoredDir).toBe(true);
+    expect(await fs.readFile(path.join(current.skillDir, "SKILL.md"), "utf8")).toBe(
+      current.v1.content,
+    );
+    expect(await readClawHubSkillsLockfile(current.workspace)).toEqual(upgradedLock);
   });
 
   it("rolls back a fully planned skill upgrade when a later Claw stage fails", async () => {
@@ -585,6 +686,120 @@ describe("owned ClawHub skill upgrade", () => {
     });
     expect(nextPlan.actions).toContainEqual(
       expect.objectContaining({ kind: "package", id: "skill:triage", action: "unchanged" }),
+    );
+  });
+
+  it("commits a skill upgrade after the reviewed agent access changes", async () => {
+    const current = await setupInstalledClaw();
+    const targetOpenClawProfile: ClawOpenClawProfile = {
+      schemaVersion: 1,
+      agent: { tools: { deny: ["web_fetch"] } },
+    };
+    const updatePlan = await buildClawUpdatePlan({
+      agentId: "worker",
+      targetManifest: current.manifest,
+      targetOpenClawProfile,
+      targetSource: current.targetAddPlan.claw,
+      config: current.config,
+      sourceMcpServers: {},
+      stateOptions: { env: current.env },
+      packagePreflight: current.packagePreflight,
+    });
+    expect(updatePlan.blockers).toEqual([]);
+    expect(updatePlan.actions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: "agent", action: "change" }),
+        expect.objectContaining({ kind: "package", id: "skill:triage", action: "change" }),
+      ]),
+    );
+    let config: OpenClawConfig = current.config;
+    let reviewedAccess: ReturnType<typeof projectClawConfiguredAccess> | undefined;
+    const assertReviewedConfig = vi.fn(
+      (runtime: OpenClawConfig, desiredAgent: AgentConfig, phase?: "after-agent-commit") => {
+        const actual = projectClawConfiguredAccess({
+          config: runtime,
+          agentId: "worker",
+          desiredAgent,
+          operation: "update",
+        });
+        reviewedAccess ??= actual;
+        const matches =
+          phase === "after-agent-commit"
+            ? digestClawValue(actual.current) === digestClawValue(reviewedAccess.desired) &&
+              digestClawValue(actual.desired) === digestClawValue(reviewedAccess.desired)
+            : digestClawValue(actual) === digestClawValue(reviewedAccess);
+        if (!matches) {
+          throw new ClawUpdateMutationError(
+            "reviewed_access_changed",
+            "The effective Claw access changed since review. Preview it again.",
+          );
+        }
+      },
+    );
+
+    const result = await applyClawUpdatePlan(
+      updatePlan,
+      {
+        targetManifest: current.manifest,
+        targetOpenClawProfile,
+        targetSource: current.targetAddPlan.claw,
+      },
+      {
+        env: current.env,
+        config: current.config,
+        getCurrentConfig: () => config,
+        assertReviewedConfig,
+        sourceMcpServers: {},
+        consentPlanIntegrity: updatePlan.planIntegrity,
+        packagePreflight: current.packagePreflight,
+        commitConfig: async (transform, beforeCommit) => {
+          const next = transform(config, config);
+          beforeCommit?.();
+          config = next;
+        },
+      },
+    );
+
+    expect(result.status).toBe("complete");
+    expect(config.agents?.entries?.worker?.tools?.deny).toEqual(["web_fetch"]);
+    expect(assertReviewedConfig).toHaveBeenCalledWith(
+      config,
+      expect.anything(),
+      "after-agent-commit",
+    );
+    expect(
+      await fs.readdir(path.join(current.workspace, "skills", ".openclaw-install-backups")),
+    ).toEqual([]);
+  });
+
+  it("retains the previous skill backup when the commit lease is lost", async () => {
+    const current = await setup();
+    let leaseCount = 0;
+    current.options.packageDeps.acquirePackageLease = vi.fn(() => {
+      const commitLease = ++leaseCount === 2;
+      return {
+        heartbeat: vi.fn(() => {
+          if (commitLease) {
+            throw new Error("commit lease lost");
+          }
+        }),
+        release: vi.fn(),
+      };
+    });
+    const execution = await applyClawPackageUpdate(
+      createClawUpdatePlanFixture([current.action]),
+      current.targetAddPlan,
+      current.options,
+    );
+    const backupRoot = path.join(current.workspace, "skills", ".openclaw-install-backups");
+    const backups = await fs.readdir(backupRoot);
+    expect(backups).toHaveLength(1);
+
+    await expect(execution.commit?.()).rejects.toThrow("commit lease lost");
+    expect(leaseCount).toBe(2);
+    expect(await fs.readdir(backupRoot)).toEqual(backups);
+    expect(await fs.readFile(path.join(current.skillDir, "SKILL.md"), "utf8")).toBe(
+      current.v2.content,
     );
   });
 

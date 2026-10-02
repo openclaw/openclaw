@@ -189,6 +189,7 @@ describe("skills-clawhub", () => {
       extractedRoot: "/tmp/extracted-skill",
       mode: "update",
       deferCommit: true,
+      assertOwned: () => undefined,
       expectedClawHubState: {
         slug: "agentreceipt",
         skillFilePath: "SKILL.md",
@@ -215,6 +216,7 @@ describe("skills-clawhub", () => {
       force: true,
       clawManaged: true,
       deferCommit: true,
+      assertOwned: () => undefined,
       expectedClawHubState: {
         slug: "agentreceipt",
         skillFilePath: "SKILL.md",

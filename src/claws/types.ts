@@ -45,6 +45,8 @@ export type ResolvedClawPackage = ClawPackage & {
   extension?: ClawAppliedExtension;
 };
 
+export type ClawPluginCapabilityGrantsById = Record<string, PluginOperatorGrants>;
+
 export type ClawPackagePreflightResult = {
   ok: boolean;
   action?: "install" | "reuse";
@@ -63,6 +65,7 @@ export type ClawPackagePreflightResult = {
   adapterIdentity?: string;
   declaredCapabilities?: PluginAcceptedDeclaredSurface;
   capabilityGrants?: PluginOperatorGrants;
+  capabilityGrantsByPluginId?: ClawPluginCapabilityGrantsById;
 };
 
 export type ClawPackagePreflight = (
@@ -145,6 +148,7 @@ export type ClawExtensionPlan = ClawOpenClawExtension & {
   adapterIdentity?: string;
   declaredCapabilities?: PluginAcceptedDeclaredSurface;
   capabilityGrants?: PluginOperatorGrants;
+  capabilityGrantsByPluginId?: ClawPluginCapabilityGrantsById;
   blocked: boolean;
 };
 

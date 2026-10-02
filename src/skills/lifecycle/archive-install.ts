@@ -172,11 +172,11 @@ export async function installExtractedSkillRoot(
         ? {
             transaction: captureChanges
               ? {
-                  commit: async () => {
-                    await transaction.commit();
+                  commit: async (assertCurrent) => {
+                    await transaction.commit(assertCurrent);
                     await dispatchChange();
                   },
-                  rollback: () => transaction.rollback(),
+                  rollback: (assertCurrent) => transaction.rollback(assertCurrent),
                 }
               : transaction,
           }
@@ -192,6 +192,12 @@ export async function applyExtractedSkillRoot(
   params: Parameters<WorkspaceSkillLifecycle["applyExtractedSkillRoot"]>[0],
 ): Promise<SkillRootApplyResult> {
   try {
+    if (params.deferCommit && !params.assertOwned) {
+      return installFailure(
+        "Deferred skill replacement requires a live owner guard.",
+        "invalid-request",
+      );
+    }
     if (
       !(await hasSkillArchiveRoot(
         params.extractedRoot,
@@ -264,7 +270,9 @@ export async function applyExtractedSkillRoot(
         : {}),
     };
     const install = await installPackageDir(
-      params.deferCommit ? requestDeferredPackageDirInstall(installParams) : installParams,
+      params.deferCommit
+        ? requestDeferredPackageDirInstall(installParams, params.assertOwned)
+        : installParams,
     );
     if (!install.ok) {
       return {

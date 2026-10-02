@@ -345,6 +345,7 @@ it("binds reviewed plugin grants during a worker-backed package Update", async (
     ownerAction: "install" as const,
     declaredCapabilities,
     capabilityGrants,
+    capabilityGrantsByPluginId: { "workflow-operator-plugin": capabilityGrants },
   };
   const packageAction = {
     kind: "package" as const,
@@ -368,6 +369,7 @@ it("binds reviewed plugin grants during a worker-backed package Update", async (
         pluginId: review.pluginId,
         reviewToken: review.reviewToken,
         capabilityGrants: review.capabilityGrants,
+        capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
       },
     ],
     () => {

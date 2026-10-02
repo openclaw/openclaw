@@ -7,8 +7,8 @@ read_when:
 ---
 
 Lobster runs multi-step tool pipelines as one deterministic tool call, with
-explicit approval/input checkpoints and resume tokens. Checkpoints belong
-to the Lobster runner, not a separate orchestration registry.
+operator-reviewed approval checkpoints and resumable input questions.
+Checkpoints belong to the Lobster runner, not a separate orchestration registry.
 
 ## Why
 
@@ -20,8 +20,8 @@ runtime:
   result for the whole pipeline.
 - **Approvals built in**: side effects (send, post, delete) halt the workflow
   until explicitly approved.
-- **Resumable**: a halted workflow returns a token; approve and resume without
-  re-running earlier steps.
+- **Resumable input**: a workflow waiting for an answer returns a token; answer
+  and resume without re-running earlier steps.
 
 Lobster is a small, constrained DSL rather than a general scripting language:
 approve/resume is a durable, built-in primitive; pipelines are data (easy to
@@ -44,35 +44,25 @@ User: "Check my email and draft replies"
 (repeat daily, no memory of what was triaged)
 ```
 
-With Lobster, the same job is one call that halts for approval and resumes:
+With Lobster, the same job is one call that waits for an operator approval:
 
 ```json
 { "action": "run", "pipeline": "email.triage --limit 20", "timeoutMs": 30000 }
 ```
 
-```json
-{
-  "ok": true,
-  "status": "needs_approval",
-  "output": [{ "summary": "5 need replies, 2 need action" }],
-  "requiresApproval": {
-    "type": "approval_request",
-    "prompt": "Send 2 draft replies?",
-    "items": [],
-    "resumeToken": "..."
-  }
-}
-```
+The Gateway presents the approval prompt to an operator. The tool returns its
+final `ok` or `cancelled` result after that decision; it never gives approval
+credentials to the agent.
 
 ## How it works
 
 The separately installed official `@openclaw/lobster` plugin runs Lobster
 workflows **in-process** using its embedded `@clawdbot/lobster` runtime. No
 external `lobster` subprocess is spawned; the tool call returns a JSON envelope
-directly. If the pipeline halts for approval or input, Lobster saves its
-continuation and returns a resume token. Approval requests can also carry a
-short approval ID. The call ends at the checkpoint; no process waits for the
-user's answer.
+directly. Input checkpoints return a token so the agent can ask the question in
+chat and resume with the answer. Approval checkpoints instead wait for a live
+Gateway operator decision in the same tool call. Their continuation token and
+approval ID remain private to the plugin.
 
 ## Enable
 
@@ -145,15 +135,9 @@ inbox apply --json
 }
 ```
 
-If the pipeline requests approval, resume with the token:
-
-```json
-{
-  "action": "resume",
-  "token": "<resumeToken>",
-  "approve": true
-}
-```
+If the pipeline requests approval, the Gateway displays the prompt in its
+operator approval UI. Allow once continues the workflow; deny or expiry cancels
+it. The agent does not call `resume` for approval.
 
 Example: map input items into tool calls:
 
@@ -206,7 +190,7 @@ For `openclaw.invoke` and `clawd.invoke`, ambient `OPENCLAW_TOKEN` or
 `[::1]` destinations. To send credentials to another HTTP(S) endpoint, pass
 `--token` explicitly. This rule also applies to embedded workflows that
 explicitly configure a remote connection. This command argument is the remote
-Gateway credential, not the Lobster tool's approval-resume `token` parameter.
+Gateway credential, not the Lobster tool's input-resume `token` parameter.
 If an invocation times out or fails after dispatch,
 Lobster does not retry it automatically, because the Gateway may already have
 performed the action.
@@ -324,15 +308,15 @@ Run a workflow file with args:
 ```json
 {
   "action": "resume",
-  "token": "<resumeToken>",
-  "approve": true
+  "token": "<input resumeToken>",
+  "responseJson": "\"Please shorten the introduction.\""
 }
 ```
 
-For approvals, use `token` or `approvalId` from `requiresApproval` and a boolean
-`approve`. For input, use `token` from `requiresInput` and `responseJson`.
-To cancel either kind of checkpoint, use `cancel: true` instead of a decision.
-Supply exactly one of `approve`, `responseJson`, or `cancel: true`.
+`resume` is only for input checkpoints: use the token from `requiresInput` and
+the user's answer as `responseJson`, or use `cancel: true` to cancel. Approval
+decisions are made in the operator UI, never with model-supplied `approve` or
+`approvalId` parameters.
 
 ### Structured input
 
@@ -365,39 +349,44 @@ The agent presents the question in chat, then sends the user's answer as JSON:
 `responseJson` can encode any value allowed by the returned schema, not just an
 object. Lobster validates the answer before continuing. Invalid JSON or an
 answer that does not match the schema leaves the checkpoint available for
-correction. A resume can return another question or approval request.
+correction. A resume can return another question or wait for operator approval.
 
 This is a chat/tool interaction, not an Inbox card or form. The plugin does not
-list pending checkpoints; retain the returned token to resume later. As with
-approval tokens, possession of an input token permits resume by a caller allowed
-to use the tool; tokens are not bound to an OpenClaw user or session.
+list pending input checkpoints; retain the returned token to resume later.
+Possession of an input token permits resume by a caller allowed to use the tool;
+input tokens are not bound to an OpenClaw user or session.
 
 ## Output envelope
 
-Lobster returns a JSON envelope with one of four statuses:
+The agent-facing Lobster tool returns a JSON envelope with one of three statuses:
 
 - `ok` - finished successfully
-- `needs_approval` - paused; `requiresApproval` carries a `resumeToken` and a
-  short `approvalId`, either of which can resume the run
 - `needs_input` - paused; `requiresInput` carries the question, answer schema
   and `resumeToken`
-- `cancelled` - explicitly denied or cancelled
+- `cancelled` - operator-denied, expired, or explicitly cancelled
 
 The tool surfaces the envelope in both `content` (pretty JSON) and `details`
-(raw object).
+(raw object). The embedded runtime's `needs_approval` envelope is internal to
+the plugin and is never surfaced to the agent.
 
 ## Approvals
 
-If `requiresApproval` is present, inspect the prompt and decide:
+An approval checkpoint creates a Gateway `plugin.approval.request` for a live
+operator. The operator reviews the workflow prompt and preview, then selects
+**Allow once** or **Deny**. The tool waits for that decision (up to two minutes)
+and resumes internally only on **Allow once**. If no approval route is available,
+the workflow cannot be approved.
 
-- `approve: true` - resume and continue side effects
-- `approve: false` - cancel and finalize the workflow
+The review prompt is limited to 512 characters and the serialized preview to
+16,384 characters. Lobster denies an oversized checkpoint and identifies which
+field to shorten before rerunning the workflow; it does not truncate review
+content.
 
 Use `approve --preview-from-stdin --limit N` to attach a JSON preview to
 approval requests without custom jq/heredoc glue. Resume state is stored as
 small JSON files under the Lobster state directory (`~/.lobster/state` by
-default, override with `LOBSTER_STATE_DIR`); the token itself only encodes a
-pointer to that state, not the full pipeline state.
+default, override with `LOBSTER_STATE_DIR`). Approval continuation credentials
+stay within the plugin and never enter the tool result or chat transcript.
 
 ## Safety
 

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
+import { invalidateConfigConnection } from "../../lib/config/config-state-model.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -67,8 +68,28 @@ const updatePluginReview = {
       allowConversationAccess: { effective: true },
     },
   },
+  capabilityGrantsByPluginId: {
+    "workflow-tools": {
+      hooks: {
+        allowPromptInjection: { effective: false },
+        allowConversationAccess: { effective: true },
+      },
+    },
+  },
   reviewToken: "review-workflow-tools-1.3.0",
 };
+
+const auditUrl =
+  "https://clawhub.ai/@openclaw/workflow-tools/versions/1.3.0/security-audit?review=pending-analysis";
+const auditWarning = [
+  "╭─ ClawHub Security Audit ──────────────────────────────────────────────╮",
+  "│ @openclaw/workflow-tools@1.3.0                                      │",
+  "│ Outcome: Review                                                      │",
+  "│ Overview:                                                            │",
+  "│ Analysis pending; review this release before installation.          │",
+  `│ Details: ${auditUrl} │`,
+  "╰─────────────────────────────────────────────────────────────────────╯",
+].join("\n");
 
 const updatePlan: ClawUpdatePlan = {
   schemaVersion: "openclaw.clawsGatewayPlan.v1",
@@ -351,6 +372,12 @@ function mount(
       clawsEnabled = enabled;
       runtimeConfig.state.configSnapshot.sourceConfig.gateway.controlUi.experimental.claws =
         enabled;
+      for (const listener of runtimeConfigListeners) {
+        listener();
+      }
+    },
+    markConfigStale: () => {
+      invalidateConfigConnection(runtimeConfig.state);
       for (const listener of runtimeConfigListeners) {
         listener();
       }
@@ -740,6 +767,7 @@ describe("Agent Claw lifecycle", () => {
             pluginId: "workflow-tools",
             reviewToken: "review-workflow-tools-1.3.0",
             capabilityGrants: updatePluginReview.capabilityGrants,
+            capabilityGrantsByPluginId: updatePluginReview.capabilityGrantsByPluginId,
           },
         ],
       }),
@@ -830,6 +858,33 @@ describe("Agent Claw lifecycle", () => {
     );
   });
 
+  it("presents the ClawHub audit in the Update review without terminal borders", async () => {
+    const plan: ClawUpdatePlan = {
+      ...updatePlan,
+      trustWarning: auditWarning,
+      riskAcknowledgementRequired: true,
+      pluginReviews: [{ ...updatePluginReview, riskWarning: auditWarning }],
+    };
+    const { panel, request } = mount({ clawsEnabled: true, updatePlan: plan });
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.disabled).toBe(false),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() => expect(panel.querySelectorAll(".claws-trust-warning")).toHaveLength(2));
+
+    for (const warning of panel.querySelectorAll<HTMLElement>(".claws-trust-warning")) {
+      expect(warning.textContent).toContain("ClawHub Security Audit");
+      expect(warning.textContent).toContain("Outcome: Review");
+      expect(warning.textContent).toContain("Analysis pending");
+      expect(warning.textContent).not.toMatch(/[╭╮│╰╯]/u);
+      expect(warning.querySelector<HTMLAnchorElement>("a")?.href).toBe(auditUrl);
+    }
+    expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+      true,
+    );
+    expect(request.mock.calls.some(([method]) => method === "claws.update.apply")).toBe(false);
+  });
+
   it("requires a warned skill receipt on Update", async () => {
     const plan: ClawUpdatePlan = {
       ...updatePlan,
@@ -918,6 +973,32 @@ describe("Agent Claw lifecycle", () => {
     expect(official.request.mock.calls.some(([method]) => method === "claws.update.apply")).toBe(
       false,
     );
+  });
+
+  it("hides Update while the Labs config belongs to a prior Gateway", async () => {
+    const { panel, request, markConfigStale } = mount({ clawsEnabled: true });
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.disabled).toBe(false),
+    );
+    panel.querySelector<HTMLButtonElement>("[data-claw-update]")?.click();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+        false,
+      ),
+    );
+
+    markConfigStale();
+    await vi.waitFor(() =>
+      expect(panel.querySelector<HTMLButtonElement>("[data-claw-update-confirm]")?.disabled).toBe(
+        true,
+      ),
+    );
+    panel.querySelector<HTMLButtonElement>(".claw-lifecycle-dialog__footer .btn")?.click();
+    await vi.waitFor(() => expect(panel.querySelector("[data-claw-update]")).toBeNull());
+    expect(panel.querySelector<HTMLButtonElement>(".settings-row .btn.danger")?.disabled).toBe(
+      false,
+    );
+    expect(request.mock.calls.some(([method]) => method === "claws.update.apply")).toBe(false);
   });
 
   it("keeps an ambiguous Update pending and never sends another apply", async () => {

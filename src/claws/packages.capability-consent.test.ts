@@ -67,6 +67,7 @@ describe("Claw plugin install consent", () => {
         integrity: `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`,
         declaredCapabilities: emptyPluginCapabilityEvidence.declared,
         capabilityGrants: emptyPluginCapabilityEvidence.grants,
+        capabilityGrantsByPluginId: { audit: emptyPluginCapabilityEvidence.grants },
         reviewToken: computeDeclaredSurfaceHash(emptyPluginCapabilityEvidence.declared),
         riskWarning: "Review this plugin.",
       }),

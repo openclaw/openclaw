@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClawHubSourceError } from "../../claws/clawhub-source.js";
 import { ClawGatewayPlanChangedError } from "../../claws/gateway-add-apply.js";
 import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
@@ -30,6 +30,12 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
   reloadManagedPlugin,
 }));
+
+const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
+
+beforeEach(() => {
+  readCurrentConfigForPolicyCheck.mockReturnValue(enabled);
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -98,27 +104,20 @@ function callAddApply(
 describe("claws.add.plan Gateway method", () => {
   const source = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
 
-  it("requires operator read scope and previews with Labs off", async () => {
+  it("requires operator read scope and blocks previews with Labs off", async () => {
     expect(coreGatewayHandlers["claws.add.plan"]).toBeDefined();
     expect(authorizeOperatorScopesForMethod("claws.add.plan", [])).toEqual({
       allowed: false,
       missingScope: "operator.read",
     });
-    listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
-    const plan = { operation: "add", planIntegrity: "sha256:reviewed" };
-    planClawAddForGateway.mockResolvedValue(plan);
     const request = callAddPlan({ source }, () => ({}));
     await request.run();
-    expect(request.replies).toEqual([[true, plan]]);
-    expect(planClawAddForGateway).toHaveBeenCalledWith({
-      source,
-      config: {},
-      sourceMcpServers: {},
-    });
+    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(planClawAddForGateway).not.toHaveBeenCalled();
   });
 
   it("passes a verified-source plan to the browser without mutating installed state", async () => {
-    const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+    const config = enabled;
     const plan = {
       schemaVersion: "openclaw.clawsGatewayPlan.v1",
       operation: "add",
@@ -142,22 +141,20 @@ describe("claws.add.plan Gateway method", () => {
     expect(request.replies).toEqual([[true, plan]]);
   });
 
-  it("returns a preview after Labs is switched off mid-request", async () => {
-    const on = { gateway: { controlUi: { experimental: { claws: true } } } };
+  it("drops a preview if Labs is switched off mid-request", async () => {
     let calls = 0;
     listConfiguredMcpServers.mockResolvedValue({ ok: true, mcpServers: {} });
     const plan = { operation: "add", planIntegrity: "sha256:reviewed" };
     planClawAddForGateway.mockResolvedValue(plan);
-    const request = callAddPlan({ source }, () => (calls++ === 0 ? on : {}));
+    const request = callAddPlan({ source }, () => (calls++ === 0 ? enabled : {}));
     await request.run();
-    expect(request.replies).toEqual([[true, plan]]);
+    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
   });
 });
 
 describe("claws.add.apply Gateway method", () => {
   const source = { packageName: "@openclaw/workflow-operator", version: "1.0.0" };
   const params = { source, planIntegrity: "sha256:reviewed", acknowledgeCapabilities: [] };
-  const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
   const schedule = {
     name: "daily-brief",
     declarationKey: "claw:workflow-operator:daily-brief",
@@ -171,18 +168,16 @@ describe("claws.add.apply Gateway method", () => {
     delivery: { mode: "none" },
   };
 
-  it("requires operator admin scope and applies with Labs off", async () => {
+  it("requires operator admin scope and blocks Add with Labs off", async () => {
     expect(coreGatewayHandlers["claws.add.apply"]).toBeDefined();
     expect(authorizeOperatorScopesForMethod("claws.add.apply", ["operator.read"])).toEqual({
       allowed: false,
       missingScope: "operator.admin",
     });
-    const result = { agentId: "workflow-operator", status: "complete" };
-    applyClawAddForGateway.mockResolvedValue(result);
     const request = callAddApply(params, () => ({}));
     await request.run();
-    expect(request.replies).toEqual([[true, result]]);
-    expect(applyClawAddForGateway).toHaveBeenCalledOnce();
+    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(applyClawAddForGateway).not.toHaveBeenCalled();
   });
 
   it("passes the reviewed coordinate to the canonical Add service", async () => {
@@ -217,8 +212,8 @@ describe("claws.add.apply Gateway method", () => {
   });
 
   it("checks persisted config after agent commit even before the Gateway cache refreshes", async () => {
-    const stale = { agents: { list: [] } };
-    const committed = { agents: { list: [{ id: "workflow-operator" }] } };
+    const stale = { ...enabled, agents: { list: [] } };
+    const committed = { ...enabled, agents: { list: [{ id: "workflow-operator" }] } };
     let persisted: typeof stale | typeof committed = stale;
     readCurrentConfigForPolicyCheck.mockImplementation(() => persisted);
     applyClawAddForGateway.mockImplementation(async (input) => {
@@ -231,11 +226,11 @@ describe("claws.add.apply Gateway method", () => {
     const request = callAddApply(params, () => stale);
     await request.run();
 
-    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(2);
+    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(3);
     expect(request.replies).toEqual([[true, { agentId: "workflow-operator", status: "complete" }]]);
   });
 
-  it("rejects revoked authority but continues when Labs changes during application", async () => {
+  it("rejects revoked authority but lets an admitted Add settle after Labs switches off", async () => {
     let authorized = true;
     applyClawAddForGateway.mockImplementation(async (input) => {
       authorized = false;
@@ -258,6 +253,16 @@ describe("claws.add.apply Gateway method", () => {
     expect(switchedOff.replies).toEqual([
       [true, { agentId: "workflow-operator", status: "complete" }],
     ]);
+  });
+
+  it("blocks Add when persisted Labs is off despite a stale Gateway cache", async () => {
+    readCurrentConfigForPolicyCheck.mockReturnValue({});
+
+    const request = callAddApply(params, () => enabled);
+    await request.run();
+
+    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(applyClawAddForGateway).not.toHaveBeenCalled();
   });
 
   it("returns review errors for a changed plan or missing plugin or skill acknowledgement", async () => {
@@ -308,7 +313,7 @@ describe("claws.add.apply Gateway method", () => {
 
   it("validates Claw schedule delivery before calling the scheduler", async () => {
     const cron = { add: vi.fn(), list: vi.fn().mockResolvedValue([]) };
-    const config = { cron: { failureAlert: { channel: "unconfigured" } } };
+    const config = { ...enabled, cron: { failureAlert: { channel: "unconfigured" } } };
     assertValidCronCreateDelivery.mockRejectedValueOnce(new Error("Unconfigured failure route"));
     applyClawAddForGateway.mockImplementation(async (input) => {
       await input.cronGateway.add(schedule);

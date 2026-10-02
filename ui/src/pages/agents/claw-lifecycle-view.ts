@@ -22,6 +22,7 @@ import {
   skillAcknowledgements,
   renderClawSkillReviews,
 } from "../agents-home/claws-skill-review.ts";
+import { renderClawTrustWarning } from "../agents-home/claws-trust-warning.ts";
 import "../../styles/claw-lifecycle.css";
 import "../../styles/settings.css";
 import type {
@@ -329,11 +330,7 @@ function renderUpdateReview(props: AgentClawPanelProps) {
                       </div>`
                     : nothing
                 }
-                ${
-                  plan.trustWarning
-                    ? html`<div class="callout warn" role="alert">${plan.trustWarning}</div>`
-                    : nothing
-                }
+                ${plan.trustWarning ? renderClawTrustWarning(plan.trustWarning) : nothing}
                 ${
                   plan.riskAcknowledgementRequired
                     ? html`<label class="claw-lifecycle-dialog__risk">
@@ -499,7 +496,7 @@ function renderReview(props: AgentClawPanelProps) {
                       </div>`
                     : nothing
                 }
-                ${plan.trustWarning ? html`<div class="callout warn" role="alert">${plan.trustWarning}</div>` : nothing}
+                ${plan.trustWarning ? renderClawTrustWarning(plan.trustWarning) : nothing}
               `
             : nothing
         }

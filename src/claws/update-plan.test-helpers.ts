@@ -19,6 +19,7 @@ export const packagePreflight = async (pkg: { kind: "skill" | "plugin"; ref: str
         installId: pkg.ref,
         declaredCapabilities: emptyPluginCapabilityEvidence.declared,
         capabilityGrants: emptyPluginCapabilityEvidence.grants,
+        capabilityGrantsByPluginId: { [pkg.ref]: emptyPluginCapabilityEvidence.grants },
       }
     : {}),
 });

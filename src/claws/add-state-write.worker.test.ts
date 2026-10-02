@@ -296,7 +296,10 @@ it("installs a plugin through the worker while holding its lifecycle lease", asy
       preflightPlugin: vi.fn().mockResolvedValue({ ok: true, action: "install" }),
       probePlugin,
       installPlugin,
-      inspectPluginCapabilities: vi.fn(() => emptyPluginCapabilityEvidence),
+      inspectPluginCapabilities: vi.fn((_rootDir, pluginId) => ({
+        ...emptyPluginCapabilityEvidence,
+        grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+      })),
     },
   });
   expect(installPlugin).toHaveBeenCalledOnce();

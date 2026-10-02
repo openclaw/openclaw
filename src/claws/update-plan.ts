@@ -462,6 +462,7 @@ export async function buildClawUpdatePlan(params: {
           prerequisites: preflight?.requirements,
           declaredCapabilities: preflight?.declaredCapabilities,
           capabilityGrants: preflight?.capabilityGrants,
+          capabilityGrantsByPluginId: preflight?.capabilityGrantsByPluginId,
           extension: targetAction?.details?.extension,
         }),
       });
@@ -475,6 +476,7 @@ export async function buildClawUpdatePlan(params: {
         riskWarning: preflight?.warning,
         desiredDeclaredCapabilities: preflight?.declaredCapabilities,
         desiredCapabilityGrants: preflight?.capabilityGrants,
+        desiredCapabilityGrantsByPluginId: preflight?.capabilityGrantsByPluginId,
         currentExtension: current?.extension,
         desiredExtension: targetAction?.details?.extension,
       });

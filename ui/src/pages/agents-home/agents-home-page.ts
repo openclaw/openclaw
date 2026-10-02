@@ -3,7 +3,7 @@ import { state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { AgentRosterElement } from "../../lib/agents/roster-element.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -82,10 +82,8 @@ export class AgentsHomePage extends AgentRosterElement {
   private clawsEnabled(): boolean {
     return Boolean(
       clawsLab &&
-      resolveLabFeatureState(
-        resolveEditableSnapshotConfig(this.context.runtimeConfig.state.configSnapshot),
-        clawsLab,
-      ).enabled,
+      resolveLabFeatureState(currentConfigObject(this.context.runtimeConfig.state), clawsLab)
+        .enabled,
     );
   }
 

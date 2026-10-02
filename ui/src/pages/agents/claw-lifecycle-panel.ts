@@ -4,7 +4,7 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
@@ -396,11 +396,11 @@ export class AgentClawPanel extends OpenClawLightDomElement {
   }
 
   private clawsEnabled(): boolean {
-    const snapshot = this.context?.runtimeConfig?.state.configSnapshot;
+    const runtimeConfig = this.context?.runtimeConfig;
     return Boolean(
       clawsLab &&
-      snapshot &&
-      resolveLabFeatureState(resolveEditableSnapshotConfig(snapshot), clawsLab).enabled,
+      runtimeConfig &&
+      resolveLabFeatureState(currentConfigObject(runtimeConfig.state), clawsLab).enabled,
     );
   }
 

@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
   clawCronGatewayInput,
@@ -38,6 +38,12 @@ vi.mock("../../plugins/management-mutations.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../plugins/management-mutations.js")>()),
   reloadManagedPlugin,
 }));
+
+beforeEach(() => {
+  readCurrentConfigForPolicyCheck.mockReturnValue({
+    gateway: { controlUi: { experimental: { claws: true } } },
+  });
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -150,7 +156,7 @@ describe("Claw Update and Remove Gateway previews", () => {
   const enabled = { gateway: { controlUi: { experimental: { claws: true } } } };
   const source = { packageName: "@openclaw/workflow-operator", version: "1.0.1" };
 
-  it("advertises read-scoped Update and Remove plans with Labs off", async () => {
+  it("advertises read-scoped plans but blocks Update with Labs off", async () => {
     expect(coreGatewayHandlers["claws.update.plan"]).toBeDefined();
     expect(coreGatewayHandlers["claws.remove.plan"]).toBeDefined();
     expect(authorizeOperatorScopesForMethod("claws.update.plan", [])).toEqual({
@@ -162,16 +168,10 @@ describe("Claw Update and Remove Gateway previews", () => {
       missingScope: "operator.read",
     });
 
-    const updatePlan = { operation: "update", planIntegrity: "sha256:update" };
-    planClawUpdateForGateway.mockResolvedValue(updatePlan);
     const update = callPlan("claws.update.plan", { agentId: "worker", source }, () => ({}));
     await update.run();
-    expect(update.replies).toEqual([[true, updatePlan]]);
-    expect(planClawUpdateForGateway).toHaveBeenCalledWith({
-      agentId: "worker",
-      source,
-      config: {},
-    });
+    expect(update.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(planClawUpdateForGateway).not.toHaveBeenCalled();
 
     const plan = { operation: "remove", planIntegrity: "sha256:remove" };
     planClawRemoveForGateway.mockResolvedValue(plan);
@@ -185,7 +185,7 @@ describe("Claw Update and Remove Gateway previews", () => {
     });
   });
 
-  it("uses the canonical Update planner regardless of the Labs UI preference", async () => {
+  it("uses the canonical Update planner only while Claws Labs is on", async () => {
     const plan = { operation: "update", planIntegrity: "sha256:update" };
     planClawUpdateForGateway.mockResolvedValue(plan);
     const update = callPlan("claws.update.plan", { agentId: "worker", source }, () => enabled);
@@ -199,7 +199,7 @@ describe("Claw Update and Remove Gateway previews", () => {
 
     const switchedOff = callPlan("claws.update.plan", { agentId: "worker", source }, () => ({}));
     await switchedOff.run();
-    expect(switchedOff.replies).toEqual([[true, plan]]);
+    expect(switchedOff.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
   });
 
   it("maps invalid ownership and unavailable read-worker facts without leaking internals", async () => {
@@ -312,7 +312,7 @@ describe("claws.update.apply Gateway method", () => {
     updatedAtMs: 1,
   } satisfies PersistedClawCronRef;
 
-  it("requires admin control-plane authority but works with the Labs UI switch off", async () => {
+  it("requires admin control-plane authority and blocks Update with Labs off", async () => {
     expect(coreGatewayHandlers["claws.update.apply"]).toBeDefined();
     expect(authorizeOperatorScopesForMethod("claws.update.apply", ["operator.read"])).toEqual({
       allowed: false,
@@ -325,15 +325,10 @@ describe("claws.update.apply Gateway method", () => {
     expect(denied.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
     expect(applyClawUpdateForGateway).not.toHaveBeenCalled();
 
-    const result = {
-      agentId: "worker",
-      status: "complete",
-      readiness: { ready: true, requirements: [] },
-    };
-    applyClawUpdateForGateway.mockResolvedValue(result);
     const labsOff = callUpdateApply(params, () => ({}));
     await labsOff.run();
-    expect(labsOff.replies).toEqual([[true, result]]);
+    expect(labsOff.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(applyClawUpdateForGateway).not.toHaveBeenCalled();
   });
 
   it("passes exact review and a live authority guard to the canonical Update service", async () => {
@@ -357,8 +352,8 @@ describe("claws.update.apply Gateway method", () => {
   });
 
   it("reads persisted policy after the agent write before the Gateway cache refreshes", async () => {
-    const stale = { agents: { list: [] } };
-    const committed = { agents: { list: [{ id: "worker" }] } };
+    const stale = { ...enabled, agents: { list: [] } };
+    const committed = { ...enabled, agents: { list: [{ id: "worker" }] } };
     let persisted: typeof stale | typeof committed = stale;
     readCurrentConfigForPolicyCheck.mockImplementation(() => persisted);
     applyClawUpdateForGateway.mockImplementation(async (input) => {
@@ -371,7 +366,7 @@ describe("claws.update.apply Gateway method", () => {
     const request = callUpdateApply(params, () => stale);
     await request.run();
 
-    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(2);
+    expect(readCurrentConfigForPolicyCheck).toHaveBeenCalledTimes(3);
     expect(request.replies).toEqual([[true, { agentId: "worker", status: "complete" }]]);
   });
 
@@ -564,7 +559,7 @@ describe("claws.update.apply Gateway method", () => {
       list: vi.fn(async () => []),
       remove: vi.fn(),
     };
-    const config = { cron: { failureAlert: { channel: "unconfigured" } } };
+    const config = { ...enabled, cron: { failureAlert: { channel: "unconfigured" } } };
     assertValidCronCreateDelivery.mockRejectedValueOnce(new Error("Unconfigured failure route"));
     applyClawUpdateForGateway.mockImplementation(async (input) => {
       await input.cronGateway.add(schedule);
@@ -643,7 +638,7 @@ describe("claws.update.apply Gateway method", () => {
     expect(partial.replies).toEqual([[true, partialResult]]);
   });
 
-  it("refuses revoked authority while allowing a Labs switch change during Update", async () => {
+  it("refuses revoked authority but lets an admitted Update settle after Labs switches off", async () => {
     let authorized = true;
     applyClawUpdateForGateway.mockImplementation(async (input) => {
       authorized = false;
@@ -667,6 +662,25 @@ describe("claws.update.apply Gateway method", () => {
     });
     const labsOff = callUpdateApply(params, () => (labsEnabled ? enabled : {}));
     await labsOff.run();
-    expect(labsOff.replies[0]?.[0]).toBe(true);
+    expect(labsOff.replies).toEqual([
+      [
+        true,
+        {
+          agentId: "worker",
+          status: "complete",
+          readiness: { ready: true, requirements: [] },
+        },
+      ],
+    ]);
+  });
+
+  it("blocks Update when persisted Labs is off despite a stale Gateway cache", async () => {
+    readCurrentConfigForPolicyCheck.mockReturnValue({});
+
+    const request = callUpdateApply(params, () => enabled);
+    await request.run();
+
+    expect(request.replies[0]?.[2]).toMatchObject({ code: "FORBIDDEN" });
+    expect(applyClawUpdateForGateway).not.toHaveBeenCalled();
   });
 });

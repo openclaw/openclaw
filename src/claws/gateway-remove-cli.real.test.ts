@@ -104,11 +104,17 @@ describe("Gateway-owned Claw Remove CLI child", () => {
       0,
     );
     const [monitor] = readAttachedCronJobs("worker", { env: current.env });
-    if (!monitor?.revision || monitor.ownerAgentId !== null || !monitor.declarationKey) {
+    if (
+      !monitor?.revision ||
+      monitor.agentId !== "worker" ||
+      monitor.ownerAgentId !== null ||
+      !monitor.declarationKey
+    ) {
       throw new Error("expected config-owned review monitor");
     }
     const inspected = {
       ...monitor,
+      agentId: monitor.agentId,
       ownerAgentId: null,
       declarationKey: monitor.declarationKey,
       revision: monitor.revision,

@@ -41,29 +41,10 @@ Returns structured result:
 
 ### Handle approval
 
-If the workflow needs approval:
-
-```json
-{
-  "status": "needs_approval",
-  "output": [],
-  "requiresApproval": {
-    "prompt": "Send 3 draft replies?",
-    "items": [...],
-    "resumeToken": "..."
-  }
-}
-```
-
-Present the prompt to the user. If they approve:
-
-```json
-{
-  "action": "resume",
-  "token": "<resumeToken>",
-  "approve": true
-}
-```
+Approval checkpoints go to the Gateway's operator approval UI while the tool
+call waits. The agent cannot approve or resume an approval checkpoint. After the
+operator allows the action once, the workflow continues in the same call; a
+denial or timeout cancels it. Do not ask for an approval token in chat.
 
 ## Example workflows
 
@@ -86,8 +67,8 @@ Same as above, but halts for approval before returning.
 ## Key behaviors
 
 - **Deterministic**: Same input → same output (no LLM variance in pipeline execution)
-- **Approval gates**: `approve` command halts execution, returns token
-- **Resumable**: Use `resume` action with token to continue
+- **Approval gates**: `approve` command pauses for an operator decision
+- **Resumable input**: Use `resume` with the returned input token and `responseJson`
 - **Structured output**: Always returns JSON envelope with `protocolVersion`
 
 ## Don't use Lobster for

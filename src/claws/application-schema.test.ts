@@ -60,6 +60,9 @@ function extensionPreflight(
     adapterIdentity: "openclaw/test",
     declaredCapabilities: emptyPluginCapabilityEvidence.declared,
     capabilityGrants: emptyPluginCapabilityEvidence.grants,
+    capabilityGrantsByPluginId: {
+      "market-data": emptyPluginCapabilityEvidence.grants,
+    },
     ...overrides,
   };
 }

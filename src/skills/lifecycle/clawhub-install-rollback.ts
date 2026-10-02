@@ -18,7 +18,12 @@ export async function rollbackDeferredSkillInstall(params: {
   installed?: ClawHubSkillLockEntry;
   transaction: PackageDirInstallTransaction;
   verifyInstalled: boolean;
+  assertCurrent?: () => void;
 }): Promise<void> {
+  if (!params.assertCurrent) {
+    throw new Error("Deferred skill rollback requires a live owner guard.");
+  }
+  params.assertCurrent();
   const current = (await readClawHubSkillsLockfile(params.workspaceDir)).skills[params.slug];
   const hasInstalledEntry =
     params.installed && stableStringify(current) === stableStringify(params.installed);
@@ -44,13 +49,14 @@ export async function rollbackDeferredSkillInstall(params: {
       throw new Error(`Skill ${JSON.stringify(params.slug)} changed after its Claw upgrade.`);
     }
   }
-  await params.transaction.rollback();
+  await params.transaction.rollback(params.assertCurrent);
   if (hasInstalledEntry && params.installed) {
     replaceClawHubSkillLockEntryExpected({
       workspaceDir: params.workspaceDir,
       slug: params.slug,
       expected: params.installed,
       replacement: params.previous,
+      assertCurrent: params.assertCurrent,
     });
   }
 }

@@ -43,6 +43,7 @@ export async function applyClawUpdateForGateway(
   },
 ): Promise<GatewayClawAddApplyResult> {
   input.assertCurrent();
+  const clawHubBaseUrl = process.env.OPENCLAW_CLAWHUB_URL ?? process.env.CLAWHUB_URL;
   const initialConfig = input.getRuntimeConfig();
   const initialPrepared = await prepareGatewayClawUpdatePlanning({
     agentId: input.agentId,
@@ -211,6 +212,7 @@ export async function applyClawUpdateForGateway(
                   }
                 },
                 config: persistedPlan.config,
+                ...(clawHubBaseUrl ? { clawHubBaseUrl } : {}),
                 sourceMcpServers: persistedPlan.sourceMcpServers,
                 packagePreflight: persistedPlan.packagePreflight,
                 planPackageDeps: persistedPlan.packageDeps,

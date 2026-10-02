@@ -140,6 +140,7 @@ const addPlan: ClawAddPlan = {
             installId: pkg.ref,
             declaredCapabilities: emptyPluginCapabilityEvidence.declared,
             capabilityGrants: emptyPluginCapabilityEvidence.grants,
+            capabilityGrantsByPluginId: { [pkg.ref]: emptyPluginCapabilityEvidence.grants },
           }
         : {}),
     },

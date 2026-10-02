@@ -13,6 +13,17 @@ const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executab
 const browserAvailable = canRunPlaywrightChromium(executablePath);
 const capture = process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1";
 const pluginIntegrity = `sha256-${"A".repeat(43)}=`;
+const auditUrl =
+  "https://clawhub.ai/@openclaw/workflow-tools/versions/1.3.0/security-audit?review=pending-analysis";
+const auditWarning = [
+  "╭─ ClawHub Security Audit ──────────────────────────────────────────────╮",
+  "│ @openclaw/workflow-tools@1.3.0                                      │",
+  "│ Outcome: Review                                                      │",
+  "│ Overview:                                                            │",
+  "│ Analysis pending; review this release before installation.          │",
+  `│ Details: ${auditUrl} │`,
+  "╰─────────────────────────────────────────────────────────────────────╯",
+].join("\n");
 const viewports = [
   { name: "mobile", width: 390, height: 844 },
   { name: "tablet", width: 768, height: 1024 },
@@ -288,7 +299,9 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
                 dangerousConfigFlags: [],
               },
               capabilityGrants,
+              capabilityGrantsByPluginId: { "workflow-tools": capabilityGrants },
               reviewToken: "review-workflow-tools-1.3.0",
+              riskWarning: auditWarning,
             },
           ],
           skillReviews: [],
@@ -362,6 +375,11 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
       const dialog = page.locator(".claw-lifecycle-dialog");
       await dialog.getByText("workflow.start", { exact: true }).waitFor();
       await dialog.getByText(pluginIntegrity, { exact: true }).waitFor();
+      const audit = dialog.locator(".claws-plugin-review__entry .claws-trust-warning");
+      await audit.getByRole("link", { name: auditUrl }).waitFor();
+      expect(await audit.textContent()).toContain("Outcome: Review");
+      expect(await audit.textContent()).toContain("Analysis pending");
+      expect(await audit.textContent()).not.toMatch(/[╭╮│╰╯]/u);
       expect((await gateway.waitForRequest("claws.catalog.search")).params).toEqual({
         query: "@openclaw/workflow-operator",
         limit: 100,
@@ -380,12 +398,19 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
       expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(viewport.width);
       const confirm = dialog.getByRole("button", { name: "Update Claw" });
       await confirm.scrollIntoViewIfNeeded();
-      expect(await confirm.isEnabled()).toBe(true);
+      expect(await confirm.isEnabled()).toBe(false);
+      expect(
+        await dialog.locator(".claw-lifecycle-dialog__body").evaluate((body) => body.scrollWidth),
+      ).toBeLessThanOrEqual(
+        await dialog.locator(".claw-lifecycle-dialog__body").evaluate((body) => body.clientWidth),
+      );
       if (capture) {
-        await dialog.getByText(pluginIntegrity, { exact: true }).scrollIntoViewIfNeeded();
+        await audit.getByRole("link", { name: auditUrl }).scrollIntoViewIfNeeded();
         const dir = createControlUiE2eArtifactDir(`claw-update-${viewport.name}`);
         await page.screenshot({ path: `${dir}/review.png`, animations: "disabled" });
       }
+      await dialog.locator("[data-claw-plugin-risk]").check();
+      expect(await confirm.isEnabled()).toBe(true);
       await confirm.click();
       expect((await gateway.waitForRequest("claws.update.apply")).params).toEqual({
         agentId: "workflow",
@@ -397,6 +422,8 @@ describe.skipIf(!browserAvailable)("Claw lifecycle on agent Overview", () => {
             pluginId: "workflow-tools",
             reviewToken: "review-workflow-tools-1.3.0",
             capabilityGrants,
+            capabilityGrantsByPluginId: { "workflow-tools": capabilityGrants },
+            acknowledgeRiskWarning: true,
           },
         ],
       });

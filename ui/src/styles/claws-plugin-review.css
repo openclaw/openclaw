@@ -50,6 +50,7 @@
 .claws-plugin-review__group h5 {
   margin-bottom: 5px;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .claws-plugin-review__group p {

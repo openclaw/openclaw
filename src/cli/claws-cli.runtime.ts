@@ -20,6 +20,12 @@ import {
   exportClawAgent,
 } from "../claws/export.js";
 import {
+  assertClawsLabsEnabled,
+  CLAWS_LABS_DISABLED_MESSAGE,
+  ClawsLabsDisabledError,
+  isClawsLabsEnabled,
+} from "../claws/labs-gate.js";
+import {
   applyClawRemovePlan,
   buildClawRemovePlan,
   CLAW_REMOVE_PLAN_SCHEMA_VERSION,
@@ -47,7 +53,9 @@ import {
   type ClawAddPlan,
 } from "../claws/types.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { readCurrentConfigForPolicyCheck } from "../config/io.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
+import { resolveConfigPath } from "../config/paths.js";
 import { redactSensitiveArgv } from "../config/redact-argv.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -243,6 +251,16 @@ export async function runClawsAddCommand(
   opts: ClawsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  const config = getRuntimeConfig();
+  if (!isClawsLabsEnabled(config)) {
+    emitClawFailure(runtime, opts.json, CLAWS_LABS_DISABLED_MESSAGE, {
+      schemaVersion: CLAW_ADD_PLAN_SCHEMA_VERSION,
+      stability: CLAW_OUTPUT_STABILITY,
+      ok: false,
+      error: { code: "claws_labs_disabled", message: CLAWS_LABS_DISABLED_MESSAGE },
+    });
+    return;
+  }
   if (requireClawPlanConsent("add", opts, runtime)) {
     return;
   }
@@ -263,7 +281,6 @@ export async function runClawsAddCommand(
     return;
   }
 
-  const config = getRuntimeConfig();
   const listedMcpServers = await listConfiguredMcpServers();
   if (!listedMcpServers.ok) {
     runtime.error(listedMcpServers.error);
@@ -444,6 +461,11 @@ export async function runClawsAddCommand(
     logClawExperimentalWarning(runtime);
   }
   try {
+    const configPath = resolveConfigPath();
+    const configEnv = process.env;
+    const assertCurrentLab = () =>
+      assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
+    assertCurrentLab();
     addResult = await withOpenClawStateLease(
       {
         scope: "core:agent-deletion",
@@ -455,8 +477,9 @@ export async function runClawsAddCommand(
         leaseLabel: "Claw add",
         operationLabel: "claw.add.lease",
       },
-      async (lease) =>
-        await applyClawAddPlan(plan, {
+      async (lease) => {
+        assertCurrentLab();
+        return await applyClawAddPlan(plan, {
           config,
           assertCurrent: () => lease.assertOwned(),
           pluginConsent: resolveClawPluginInstallConsent(runtime),
@@ -472,10 +495,16 @@ export async function runClawsAddCommand(
               await listCronJobsFromGateway({}, { agentId, includeDisabled: true }),
             waitUntilAgentAvailable: waitUntilGatewayAgentAvailable,
           },
-        }),
+        });
+      },
     );
   } catch (error) {
-    const code = error instanceof ClawAddMutationError ? error.code : "add_failed";
+    const code =
+      error instanceof ClawsLabsDisabledError
+        ? "claws_labs_disabled"
+        : error instanceof ClawAddMutationError
+          ? error.code
+          : "add_failed";
     const message = (error as Error).message;
     emitClawFailure(runtime, opts.json, message, {
       schemaVersion: CLAW_ADD_RESULT_SCHEMA_VERSION,

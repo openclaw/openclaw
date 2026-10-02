@@ -47,6 +47,8 @@ export type LobsterRunnerParams = {
   cwd: string;
   timeoutMs: number;
   maxStdoutBytes: number;
+  /** Host-owned liveness check, applied immediately before an approved continuation. */
+  assertInvocationCurrent?: () => void;
 };
 
 export type LobsterRunner = {
@@ -287,6 +289,9 @@ export function createEmbeddedLobsterRunner(options?: {
             } catch {
               throw new Error("responseJson must be valid JSON");
             }
+          }
+          if (params.approve === true) {
+            params.assertInvocationCurrent?.();
           }
           envelope = await runtime.resumeToolRequest({
             ...(token ? { token } : {}),

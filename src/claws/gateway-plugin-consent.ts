@@ -39,6 +39,8 @@ export function bindClawPluginInstallConsent(
       acknowledgement.reviewToken !== review.reviewToken ||
       stableStringify(acknowledgement.capabilityGrants) !==
         stableStringify(review.capabilityGrants) ||
+      stableStringify(acknowledgement.capabilityGrantsByPluginId) !==
+        stableStringify(review.capabilityGrantsByPluginId) ||
       Boolean(acknowledgement.acknowledgeRiskWarning) !== Boolean(review.riskWarning) ||
       byPluginId.has(review.pluginId)
     ) {

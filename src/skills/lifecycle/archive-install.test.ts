@@ -578,6 +578,7 @@ describe("skill archive install", () => {
         mode: "update",
         expectedClawHubState,
         deferCommit: true,
+        assertOwned: () => undefined,
         beforeInstall: async () => {
           if (when === "after target check") {
             await fs.rm(targetDir, { recursive: true });
@@ -744,6 +745,7 @@ describe("skill archive install", () => {
       extractedRoot,
       mode: "update",
       deferCommit: true,
+      assertOwned: () => undefined,
       policy: { origin: { type: "path", spec: "./skill" } },
     });
     expect(rolledBack.ok).toBe(true);
@@ -760,6 +762,7 @@ describe("skill archive install", () => {
       extractedRoot,
       mode: "update",
       deferCommit: true,
+      assertOwned: () => undefined,
       policy: { origin: { type: "path", spec: "./skill" } },
     });
     expect(committed.ok).toBe(true);
@@ -770,6 +773,34 @@ describe("skill archive install", () => {
     await committed.transaction.commit();
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler.mock.calls[0]?.[0]).toMatchObject({ action: "updated" });
+  });
+
+  it("refuses a deferred replacement without a live owner guard", async () => {
+    const root = await tempDirs.make("openclaw-skill-deferred-owner-");
+    const workspaceDir = path.join(root, "workspace");
+    const extractedRoot = path.join(root, "extracted");
+    const targetDir = path.join(workspaceDir, "skills", "guarded");
+    await fs.mkdir(targetDir, { recursive: true });
+    await fs.mkdir(extractedRoot, { recursive: true });
+    await fs.writeFile(path.join(targetDir, "SKILL.md"), skillFileContent("Before"));
+    await fs.writeFile(path.join(extractedRoot, "SKILL.md"), skillFileContent("After"));
+
+    const result = await installExtractedSkillRoot({
+      workspaceDir,
+      slug: "guarded",
+      extractedRoot,
+      mode: "update",
+      deferCommit: true,
+      policy: { origin: { type: "path", spec: "./skill" } },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: "Deferred skill replacement requires a live owner guard.",
+    });
+    expect(await fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).toBe(
+      skillFileContent("Before"),
+    );
   });
 
   it("does not emit when an archive mutation fails", async () => {

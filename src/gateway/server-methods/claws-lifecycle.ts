@@ -20,6 +20,7 @@ import { ClawGatewayConsentError } from "../../claws/gateway-plugin-consent.js";
 import { applyClawRemoveForGateway } from "../../claws/gateway-remove-apply.js";
 import { ClawSkillConsentError } from "../../claws/gateway-skill-consent.js";
 import { applyClawUpdateForGateway } from "../../claws/gateway-update-apply.js";
+import { assertClawsLabsEnabled, ClawsLabsDisabledError } from "../../claws/labs-gate.js";
 import { readCurrentConfigForPolicyCheck } from "../../config/io.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
@@ -36,6 +37,10 @@ import { assertValidParams } from "./validation.js";
 const log = createSubsystemLogger("gateway/claws-lifecycle");
 
 function respondPlanError(error: unknown, respond: RespondFn): void {
+  if (error instanceof ClawsLabsDisabledError) {
+    respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+    return;
+  }
   log.error(
     `Claw lifecycle preview failed: ${error instanceof Error ? error.message : String(error)}`,
   );
@@ -60,11 +65,14 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const config = context.getRuntimeConfig();
+      assertClawsLabsEnabled(config);
       const plan = await planClawUpdateForGateway({
         agentId: params.agentId,
         source: params.source,
-        config: context.getRuntimeConfig(),
+        config,
       });
+      assertClawsLabsEnabled(context.getRuntimeConfig());
       respond(true, plan);
     } catch (error) {
       respondPlanError(error, respond);
@@ -82,6 +90,8 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateClawsUpdateApplyParams, "claws.update.apply", respond)) {
       return;
     }
+    const configPath = resolveConfigPath();
+    const configEnv = process.env;
     const assertCurrent = () => {
       signal?.throwIfAborted();
       sessionMutationCommitGuard?.();
@@ -97,9 +107,9 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
       }
     };
     try {
+      assertClawsLabsEnabled(context.getRuntimeConfig());
+      assertClawsLabsEnabled(readCurrentConfigForPolicyCheck({ configPath, env: configEnv }));
       assertCurrent();
-      const configPath = resolveConfigPath();
-      const configEnv = process.env;
       const applyRuntime = context.applyPluginLifecycleChange;
       const reloadPlugins: PluginInstallBatchReload | undefined = applyRuntime
         ? async (plugins, options) => {
@@ -204,7 +214,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
         `claws.update.apply failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       const code =
-        error instanceof ClawGatewayAuthorityError
+        error instanceof ClawGatewayAuthorityError || error instanceof ClawsLabsDisabledError
           ? ErrorCodes.FORBIDDEN
           : error instanceof ClawGatewayPlanChangedError ||
               error instanceof ClawGatewayConsentError ||
@@ -218,6 +228,7 @@ export const clawsLifecycleHandlers: GatewayRequestHandlers = {
             : ErrorCodes.UNAVAILABLE;
       const message =
         error instanceof ClawGatewayAuthorityError ||
+        error instanceof ClawsLabsDisabledError ||
         error instanceof ClawGatewayPlanChangedError ||
         error instanceof ClawGatewayConsentError ||
         error instanceof ClawSkillConsentError ||

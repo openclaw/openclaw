@@ -209,7 +209,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.experimental.customPlugins":
     "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
   "gateway.controlUi.experimental.claws":
-    "Enable ClawHub discovery and Add/Update in the Control UI and CLI (default: false). Installed Claw agents keep running; status and removal remain available while this is off.",
+    "Enable ClawHub discovery and Add/Update through the Control UI and Gateway, plus local CLI Add/Update and migration (default: false). Installed Claw agents keep running; status and removal remain available while this is off.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":

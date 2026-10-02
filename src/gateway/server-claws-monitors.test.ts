@@ -45,6 +45,65 @@ import {
 const fixture = useClawMonitorFixture();
 
 describe("Claw serving monitor cleanup", () => {
+  it("removes a Claw after operator model and subagent settings change", async () => {
+    const current = await fixture(false);
+    const config = current.getConfig();
+    const worker = config.agents?.entries?.worker;
+    expect(worker).toBeDefined();
+    await current.writeConfig({
+      ...config,
+      agents: {
+        ...config.agents,
+        entries: {
+          ...config.agents?.entries,
+          worker: {
+            ...worker,
+            model: { primary: "provider/operator" },
+            subagents: { allowAgents: ["main"] },
+          },
+        },
+      },
+    });
+
+    expect(
+      (await readClawStatus("worker", { config: current.getConfig() })).records[0]?.agentState,
+    ).toBe("present");
+    const plan = await current.plan();
+    expect(plan.blockers).toEqual([]);
+    expect(await current.apply(plan)).toMatchObject({ status: "complete", agentRemoved: true });
+  });
+
+  it("refuses removal after Claw-owned agent config changes", async () => {
+    const current = await fixture(false);
+    const originalPlan = await current.plan();
+    expect(originalPlan.blockers).toEqual([]);
+    const config = current.getConfig();
+    const worker = config.agents?.entries?.worker;
+    expect(worker).toBeDefined();
+    await current.writeConfig({
+      ...config,
+      agents: {
+        ...config.agents,
+        entries: {
+          ...config.agents?.entries,
+          worker: { ...worker, name: "Operator renamed Worker" },
+        },
+      },
+    });
+
+    expect((await current.plan()).blockers).toContainEqual(
+      expect.objectContaining({ code: "agent_modified" }),
+    );
+    await expect(current.apply(originalPlan)).rejects.toThrow("changed after remove planning");
+    const monitors = await current.gateway.inspect("worker");
+    await current.withDeletion(async (deletion) => {
+      await expect(
+        current.gateway.quiesce("worker", deletion.entry.operationId, monitors),
+      ).rejects.toThrow("configuration changed");
+    });
+    await expect(fs.access(path.join(current.workspaceDir, "SOUL.md"))).resolves.toBeUndefined();
+  });
+
   it("keeps originating Remove authority through awaited monitor inventory", async () => {
     const current = await fixture(false);
     const monitors = await current.gateway.inspect("worker");

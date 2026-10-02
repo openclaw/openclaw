@@ -459,7 +459,10 @@ export async function buildClawAddPlan(params: {
           `$.packages[${index}]`,
           preflight.message ?? "Package preflight failed.",
         )
-      : pkg.kind === "plugin" && (!preflight.declaredCapabilities || !preflight.capabilityGrants)
+      : pkg.kind === "plugin" &&
+          (!preflight.declaredCapabilities ||
+            !preflight.capabilityGrants ||
+            !preflight.capabilityGrantsByPluginId)
         ? blocker(
             "plugin_capability_provenance_incomplete",
             `$.packages[${index}]`,
@@ -486,6 +489,9 @@ export async function buildClawAddPlan(params: {
           ? { declaredCapabilities: preflight.declaredCapabilities }
           : {}),
         ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+        ...(preflight.capabilityGrantsByPluginId
+          ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+          : {}),
         ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         ...(preflight.requirements ? { prerequisites: preflight.requirements } : {}),
         expectedState: diagnostic
@@ -526,6 +532,9 @@ export async function buildClawAddPlan(params: {
             ? { declaredCapabilities: preflight.declaredCapabilities }
             : {}),
           ...(preflight.capabilityGrants ? { capabilityGrants: preflight.capabilityGrants } : {}),
+          ...(preflight.capabilityGrantsByPluginId
+            ? { capabilityGrantsByPluginId: preflight.capabilityGrantsByPluginId }
+            : {}),
           ...(preflight.warning ? { riskWarning: preflight.warning } : {}),
         },
       }),

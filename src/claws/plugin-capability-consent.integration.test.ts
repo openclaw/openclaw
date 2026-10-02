@@ -46,17 +46,18 @@ afterEach(closeStateDatabaseForTest);
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const createClawHubArchive = createClawHubArchiveFactory(afterEach);
 
-async function revokeConversationAccess(configPath: string) {
+async function revokeConversationAccess(configPath: string, pluginId: string) {
   const current = JSON.parse(await fs.readFile(configPath, "utf8")) as {
-    plugins: { entries: { diffs: { hooks: { allowConversationAccess: boolean } } } };
+    plugins: { entries: Record<string, { hooks: { allowConversationAccess: boolean } }> };
   };
-  current.plugins.entries.diffs.hooks.allowConversationAccess = false;
+  current.plugins.entries[pluginId]!.hooks.allowConversationAccess = false;
   await fs.writeFile(configPath, JSON.stringify(current));
 }
 
 async function createPluginClawFixture(
   root: string,
   channel: "official" | "community" = "official",
+  withChild = false,
 ) {
   const packageName = channel === "official" ? "@openclaw/diffs" : "@audit/diffs";
   const configPath = path.join(root, "openclaw.json");
@@ -71,7 +72,16 @@ async function createPluginClawFixture(
   };
   const config = {
     agents: { entries: {} },
-    plugins: { entries: { diffs: { hooks: { allowConversationAccess: true } } } },
+    plugins: {
+      entries: {
+        ...(withChild
+          ? {
+              "diffs/index": { hooks: { allowConversationAccess: false } },
+              "diffs/child": { hooks: { allowConversationAccess: true } },
+            }
+          : { diffs: { hooks: { allowConversationAccess: true } } }),
+      },
+    },
   };
   await fs.writeFile(configPath, JSON.stringify(config));
   const clawDir = path.join(root, "claw");
@@ -96,7 +106,9 @@ async function createPluginClawFixture(
       "package.json": JSON.stringify({
         name: packageName,
         version,
-        openclaw: { extensions: ["./index.js"] },
+        openclaw: {
+          extensions: withChild ? ["./index.js", "./plugins/child/child.js"] : ["./index.js"],
+        },
       }),
       "openclaw.plugin.json": JSON.stringify({
         id: "diffs",
@@ -104,6 +116,16 @@ async function createPluginClawFixture(
         configSchema: { type: "object" },
       }),
       "index.js": `export const version = ${JSON.stringify(version)};\n`,
+      ...(withChild
+        ? {
+            "plugins/child/openclaw.plugin.json": JSON.stringify({
+              id: "diffs-child",
+              hooks: ["before_agent_reply"],
+              configSchema: { type: "object" },
+            }),
+            "plugins/child/child.js": `export const version = ${JSON.stringify(version)};\n`,
+          }
+        : {}),
     });
     archives.set(version, archive);
     latestVersion = version;
@@ -188,6 +210,7 @@ function consentForPluginPlan(plan: ClawAddPlan) {
         pluginId: review.pluginId,
         reviewToken: review.reviewToken,
         capabilityGrants: review.capabilityGrants,
+        capabilityGrantsByPluginId: review.capabilityGrantsByPluginId,
         ...(review.riskWarning ? { acknowledgeRiskWarning: true as const } : {}),
       },
     ],
@@ -246,6 +269,53 @@ function createPluginVersionUpdate(params: {
 }
 
 describe("Claw plugin capability consent through the managed installer", () => {
+  it("reviews and binds a child extension's conversation grant on Add", async () => {
+    const fixture = await createPluginClawFixture(
+      dirs.make("openclaw-claw-plugin-child-grant-add-"),
+      "official",
+      true,
+    );
+    const { config, configPath, env, manifestPath } = fixture;
+
+    await withEnvAsync(env, async () => {
+      const source = await readClawManifestFile(manifestPath);
+      expect(source.ok).toBe(true);
+      if (!source.ok) {
+        return;
+      }
+      const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
+      expect(plan.blockers).toEqual([]);
+      expect(
+        plan.actions.find((action) => action.id === `plugin:${fixture.packageName}`)?.details,
+      ).toMatchObject({
+        capabilityGrantsByPluginId: {
+          "diffs/index": { hooks: { allowConversationAccess: { effective: false } } },
+          "diffs/child": { hooks: { allowConversationAccess: { effective: true } } },
+        },
+      });
+      const review = projectClawPluginCapabilityReviews(plan)[0];
+      expect(review?.pluginId).toBe("diffs");
+      expect(Object.keys(review?.capabilityGrantsByPluginId ?? {}).toSorted()).toEqual([
+        "diffs/child",
+        "diffs/index",
+      ]);
+      expect(review?.capabilityGrantsByPluginId).toMatchObject({
+        "diffs/index": { hooks: { allowConversationAccess: { effective: false } } },
+        "diffs/child": { hooks: { allowConversationAccess: { effective: true } } },
+      });
+
+      const result = await applyClawAddPlan(plan, {
+        env,
+        config,
+        consentPlanIntegrity: plan.planIntegrity,
+        pluginConsent: consentForPluginPlan(plan),
+      });
+      expect(result.status).toBe("complete");
+      const installedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      expect(installedConfig.plugins?.entries?.["diffs/child"]?.enabled).toBe(true);
+    });
+  });
+
   it("blocks Add when an exact installed plugin is disabled by the host", async () => {
     const fixture = await createPluginClawFixture(dirs.make("openclaw-claw-disabled-plugin-"));
     const { config, configPath, env, manifestPath } = fixture;
@@ -453,7 +523,11 @@ describe("Claw plugin capability consent through the managed installer", () => {
   });
 
   it("rejects revoked grants before an official plugin artifact or install record is committed", async () => {
-    const fixture = await createPluginClawFixture(dirs.make("openclaw-claw-plugin-final-consent-"));
+    const fixture = await createPluginClawFixture(
+      dirs.make("openclaw-claw-plugin-final-consent-"),
+      "official",
+      true,
+    );
     const { config, configPath, env, manifestPath } = fixture;
 
     await withEnvAsync(env, async () => {
@@ -467,13 +541,15 @@ describe("Claw plugin capability consent through the managed installer", () => {
       expect(
         plan.actions.find((action) => action.id === "plugin:@openclaw/diffs")?.details,
       ).toMatchObject({
-        capabilityGrants: { hooks: { allowConversationAccess: { effective: true } } },
+        capabilityGrantsByPluginId: {
+          "diffs/child": { hooks: { allowConversationAccess: { effective: true } } },
+        },
       });
 
       let revoked = false;
       fixture.onNextDownload(async () => {
         revoked = true;
-        await revokeConversationAccess(configPath);
+        await revokeConversationAccess(configPath, "diffs/child");
       });
       const result = await applyClawAddPlan(plan, {
         env,
@@ -499,6 +575,8 @@ describe("Claw plugin capability consent through the managed installer", () => {
   it("preserves a prior accepted official plugin and its Claw reference when update consent is denied", async () => {
     const fixture = await createPluginClawFixture(
       dirs.make("openclaw-claw-plugin-update-consent-"),
+      "official",
+      true,
     );
     const { config, configPath, env, manifestPath } = fixture;
 
@@ -549,7 +627,7 @@ describe("Claw plugin capability consent through the managed installer", () => {
       let revoked = false;
       fixture.onNextDownload(async () => {
         revoked = true;
-        await revokeConversationAccess(configPath);
+        await revokeConversationAccess(configPath, "diffs/child");
       });
 
       await expect(

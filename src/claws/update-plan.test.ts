@@ -192,6 +192,7 @@ describe("buildClawUpdatePlan", () => {
         installId: "obsolete",
         declaredCapabilities: emptyPluginCapabilityEvidence.declared,
         capabilityGrants: emptyPluginCapabilityEvidence.grants,
+        capabilityGrantsByPluginId: { obsolete: emptyPluginCapabilityEvidence.grants },
         detectedFormat: "claude",
         mapped: ["skills"],
         unavailable: ["agents"],

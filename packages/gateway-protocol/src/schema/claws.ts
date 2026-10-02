@@ -112,6 +112,8 @@ export const ClawsStatusResultSchema = closedObject({
   }),
 });
 
+export const ClawPluginGrantsByIdSchema = Type.Record(NonEmptyString, PluginOperatorGrantsSchema);
+
 export const ClawPluginReviewSchema = closedObject({
   actionId: NonEmptyString,
   pluginId: NonEmptyString,
@@ -121,6 +123,7 @@ export const ClawPluginReviewSchema = closedObject({
   integrity: ClawArtifactIntegrity,
   declaredCapabilities: PluginDeclaredSurfaceSchema,
   capabilityGrants: PluginOperatorGrantsSchema,
+  capabilityGrantsByPluginId: ClawPluginGrantsByIdSchema,
   reviewToken: NonEmptyString,
   riskWarning: Type.Optional(NonEmptyString),
 });
@@ -130,6 +133,7 @@ export const ClawPluginAcknowledgementSchema = closedObject({
   pluginId: NonEmptyString,
   reviewToken: NonEmptyString,
   capabilityGrants: PluginOperatorGrantsSchema,
+  capabilityGrantsByPluginId: ClawPluginGrantsByIdSchema,
   acknowledgeRiskWarning: Type.Optional(Type.Literal(true)),
 });
 

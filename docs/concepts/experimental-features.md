@@ -50,10 +50,12 @@ Workboard, retain their native UI with the setting off. Backend APIs and
 ordinary plugins remain available, and installing or approving a plugin
 artifact does not enable the lab.
 
-Claws is off by default. Turning it on shows official starter discovery and
-Add in Agents. Turning it off hides those controls, but installed Claw agents
-continue running and their lifecycle remains available through agent settings
-and the CLI. The Labs switch does not authorize or block Gateway Claw methods.
+Claws is off by default. Turning it on permits official starter discovery and
+Add in Agents, Gateway catalog/Add/Update methods, and local CLI Add/Update or
+existing-agent migration. Turning it off blocks those new operations, but
+installed Claw agents continue running. Status, export, and safe removal remain
+available; local project authoring and inspection do not require the switch.
+An Add or Update already admitted before the switch changes can finish safely.
 
 Code Mode remains disabled until you turn on its Labs switch or explicitly set
 `tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it

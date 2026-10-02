@@ -236,6 +236,10 @@ type ManagedPluginSourceInstallParams = {
   applyRuntime?: PluginLifecycleRuntimeApply;
   deferRuntime?: PluginInstallRuntimeDeferral;
   beforePersistentApply?: () => void;
+  onBeforePluginArtifactCommit?: (
+    artifact: PluginInstallArtifactConsentRequest,
+    config: OpenClawConfig,
+  ) => void | Promise<void>;
   /** Revalidate the initiating owner after artifact review and before durable activation. */
   beforePersistentEffect?: () => void | Promise<void>;
 };
@@ -399,10 +403,11 @@ async function installResolvedManagedPluginSource(
       extensionsDir,
       logger: params.logger,
       beforePersistentApply: params.beforePersistentApply,
-      ...(capabilityConsent || params.beforePersistentEffect
+      ...(capabilityConsent || params.onBeforePluginArtifactCommit || params.beforePersistentEffect
         ? {
             onBeforePluginArtifactCommit: async (artifact: PluginInstallArtifactConsentRequest) => {
               await capabilityConsent?.onBeforePluginArtifactCommit(artifact);
+              await params.onBeforePluginArtifactCommit?.(artifact, params.snapshot.config);
               await params.beforePersistentEffect?.();
             },
           }

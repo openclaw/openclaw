@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => {
     errors,
     runtime,
     loadConfig: vi.fn<() => Record<string, unknown>>(() => ({})),
+    readCurrentConfigForPolicyCheck: vi.fn(),
     listConfiguredMcpServers: vi.fn(),
     closeReadOnlyDatabase: vi.fn(),
     stateTableGet: vi.fn(),
@@ -59,6 +60,11 @@ vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
+}));
+
+vi.mock("../config/io.js", async () => ({
+  ...(await vi.importActual<typeof import("../config/io.js")>("../config/io.js")),
+  readCurrentConfigForPolicyCheck: mocks.readCurrentConfigForPolicyCheck,
 }));
 
 vi.mock("../config/mcp-config.js", async () => ({
@@ -183,6 +189,8 @@ describe("claws cli", () => {
     mocks.runtime.exit.mockClear();
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue(enabledClawsLabsConfig);
+    mocks.readCurrentConfigForPolicyCheck.mockReset();
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue(enabledClawsLabsConfig);
     mocks.listConfiguredMcpServers.mockReset();
     mocks.listConfiguredMcpServers.mockResolvedValue({
       ok: true,
@@ -338,23 +346,23 @@ describe("claws cli", () => {
     expect(program.commands.map((command) => command.name())).toContain("claws");
   });
 
-  it("allows local add and update previews while Claws Labs is off", async () => {
+  it("blocks local Add and Update while Claws Labs is off", async () => {
     mocks.loadConfig.mockReturnValue({});
     const manifestPath = await writeManifest();
     await runCli(["claws", "add", manifestPath, "--dry-run", "--json"]);
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawAddPlan.v1",
-      dryRun: true,
+      ok: false,
+      error: { code: "claws_labs_disabled" },
     });
     expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
 
     mocks.logs.length = 0;
     await runCli(["claws", "update", "demo-agent", "--from", manifestPath, "--dry-run", "--json"]);
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
-      schemaVersion: "openclaw.clawUpdatePlan.v1",
-      dryRun: true,
+      ok: false,
+      error: { code: "claws_labs_disabled" },
     });
-    expect(mocks.buildClawUpdatePlan).toHaveBeenCalledOnce();
+    expect(mocks.buildClawUpdatePlan).not.toHaveBeenCalled();
   });
 
   it("keeps status and removal available while Claws Labs is off", async () => {
@@ -520,6 +528,30 @@ describe("claws cli", () => {
     await expect(
       options.cronGateway.waitUntilAgentAvailable(plan.agent.finalId),
     ).resolves.toBeUndefined();
+  });
+
+  it("does not Add when Labs was switched off after the local preview", async () => {
+    const manifestPath = await writeManifest();
+    await runCli(["claws", "add", manifestPath, "--dry-run", "--json"]);
+    const plan = JSON.parse(mocks.logs[0] ?? "{}");
+    mocks.logs.length = 0;
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+
+    await runCli([
+      "claws",
+      "add",
+      manifestPath,
+      "--yes",
+      "--plan-integrity",
+      plan.planIntegrity,
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      status: "failed",
+      error: { code: "claws_labs_disabled" },
+    });
+    expect(mocks.applyClawAddPlan).not.toHaveBeenCalled();
   });
 
   it("discloses a warned skill and binds local Add consent to its exact reviewed identity", async () => {
@@ -1108,6 +1140,29 @@ describe("claws cli", () => {
     await expect(
       options.cronGateway.waitUntilAgentAvailable(plan.agentId),
     ).resolves.toBeUndefined();
+  });
+
+  it("does not Update when Labs was switched off after review", async () => {
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    mocks.readCurrentConfigForPolicyCheck.mockReturnValue({});
+
+    await runCli([
+      "claws",
+      "update",
+      "demo-agent",
+      "--from",
+      root,
+      "--yes",
+      "--plan-integrity",
+      "sha256:update-plan",
+      "--json",
+    ]);
+
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      status: "failed",
+      error: { code: "claws_labs_disabled" },
+    });
+    expect(mocks.applyClawUpdatePlan).not.toHaveBeenCalled();
   });
 
   it("does not apply an update before owning the target agent's deletion lease", async () => {

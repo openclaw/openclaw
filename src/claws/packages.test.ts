@@ -89,7 +89,10 @@ function withStagedInspection(probe: typeof installPluginFromClawHub) {
     return result;
   };
 }
-const inspectPluginCapabilities = vi.fn(() => emptyPluginCapabilityEvidence);
+const inspectPluginCapabilities = vi.fn((_rootDir: string, pluginId: string) => ({
+  ...emptyPluginCapabilityEvidence,
+  grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+}));
 const pluginConsent = {
   onCapabilityConsent: vi.fn(async (review: { reviewToken: string }) => ({
     reviewToken: review.reviewToken,
@@ -605,8 +608,9 @@ describe("installClawPackages", () => {
     });
   });
 
-  it("installs plugins through the shared plugin surface", async () => {
+  it("installs plugins through the shared surface with the selected ClawHub source", async () => {
     probePlugin.mockClear();
+    const workerEnv = { OPENCLAW_STATE_DIR: "/tmp/openclaw-claws" };
     const installPlugin = vi.fn().mockResolvedValue(undefined);
     const persistPackageRef = vi.fn().mockReturnValue({
       kind: "plugin",
@@ -617,6 +621,8 @@ describe("installClawPackages", () => {
     const preflightPlugin = vi.fn().mockResolvedValue({ ok: true, action: "install" });
 
     await installClawPackages(plan([pluginPackage]), {
+      env: workerEnv,
+      clawHubBaseUrl: "http://127.0.0.1:3323",
       deps: {
         installPlugin,
         probePlugin,
@@ -640,8 +646,13 @@ describe("installClawPackages", () => {
         },
         invalidateRuntimeCache: false,
         clawManaged: true,
+        env: {
+          OPENCLAW_STATE_DIR: "/tmp/openclaw-claws",
+          OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:3323",
+        },
       }),
     );
+    expect(workerEnv).toEqual({ OPENCLAW_STATE_DIR: "/tmp/openclaw-claws" });
     expect(persistPackageRef).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({

@@ -55,7 +55,10 @@ function packageDeps(
         },
       };
     },
-    inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
+    inspectPluginCapabilities: (_rootDir, pluginId) => ({
+      ...emptyPluginCapabilityEvidence,
+      grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+    }),
     persistPackageRef: (plan, pkg, persistOptions) => ({
       schemaVersion: "openclaw.clawPackageRef.v1",
       agentId: plan.agent.finalId,
@@ -370,7 +373,10 @@ describe("Claw source-host plugin collision", () => {
           deps: {
             preflightPlugin,
             probePlugin,
-            inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
+            inspectPluginCapabilities: (_rootDir, pluginId) => ({
+              ...emptyPluginCapabilityEvidence,
+              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+            }),
           },
         }),
       ).resolves.toMatchObject({
@@ -395,7 +401,10 @@ describe("Claw source-host plugin collision", () => {
           deps: {
             preflightPlugin,
             probePlugin,
-            inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
+            inspectPluginCapabilities: (_rootDir, pluginId) => ({
+              ...emptyPluginCapabilityEvidence,
+              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+            }),
           },
         }),
       ).resolves.toMatchObject({ ok: true, action: "install" });
@@ -420,7 +429,10 @@ describe("Claw source-host plugin collision", () => {
               expectedVersion: pinnedLobster.version,
             }),
             probePlugin,
-            inspectPluginCapabilities: () => emptyPluginCapabilityEvidence,
+            inspectPluginCapabilities: (_rootDir, pluginId) => ({
+              ...emptyPluginCapabilityEvidence,
+              grantsByPluginId: { [pluginId]: emptyPluginCapabilityEvidence.grants },
+            }),
           },
         }),
       ).resolves.toMatchObject({ ok: false, code: "plugin_source_host_conflict" });

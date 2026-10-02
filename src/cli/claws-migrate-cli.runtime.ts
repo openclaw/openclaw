@@ -1,6 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { withAgentDeletion } from "../agents/agent-lifecycle-registry.js";
 import { digestClawValue } from "../claws/digest.js";
+import { CLAWS_LABS_DISABLED_MESSAGE, isClawsLabsEnabled } from "../claws/labs-gate.js";
 import { withAuthoredAgentRoster } from "../claws/migrate-validation.js";
 import {
   applyClawMigrationPlan,
@@ -22,6 +23,9 @@ async function readMigrationConfig() {
       "migration_config_unavailable",
       "Migration requires an existing valid local configuration. Repair the config before retrying.",
     );
+  }
+  if (!isClawsLabsEnabled(snapshot.runtimeConfig)) {
+    throw new ClawMigrationError("claws_labs_disabled", CLAWS_LABS_DISABLED_MESSAGE);
   }
   return {
     config: withAuthoredAgentRoster(snapshot.runtimeConfig, snapshot.sourceConfigBeforeMigrations),
