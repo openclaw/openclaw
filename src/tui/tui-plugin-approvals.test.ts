@@ -562,7 +562,7 @@ describe("TUI plugin approvals", () => {
   it("ignores a stale approval's refresh failure after disposal", async () => {
     const harness = createHarness();
     const pending = deferred<unknown[]>();
-    const started = deferred<void>();
+    const started = deferred();
     harness.resolvePluginApproval.mockResolvedValueOnce({ ok: false });
     harness.listPluginApprovals.mockImplementationOnce(() => {
       started.resolve();
