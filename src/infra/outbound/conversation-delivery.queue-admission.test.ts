@@ -27,7 +27,7 @@ import {
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import type { PluginHookHandlerMap } from "../../plugins/types.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
@@ -89,8 +89,8 @@ describe("conversation completion through the real delivery queue", () => {
     const stateDir = fixtures.tmpDir();
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-    onTestFinished(() => {
-      closeOpenClawAgentDatabaseByPath(scope.storePath);
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     });
     registerConversationAddresses(scope, [
       { ...conversation, deliveryTarget: conversation.target },
@@ -307,8 +307,8 @@ describe("conversation completion through the real delivery queue", () => {
       const legacyMarker = path.join(stateDir, "custom", "sessions.json");
       const config = locator === "legacy-marker" ? { session: { store: legacyMarker } } : {};
       const scope = resolveConversationRegistryScope({ agentId: "main", config });
-      onTestFinished(() => {
-        closeOpenClawAgentDatabaseByPath(scope.storePath);
+      onTestFinished(async () => {
+        await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
       });
       registerConversationAddresses(scope, [
         { ...conversation, deliveryTarget: conversation.target },
@@ -373,8 +373,8 @@ describe("conversation completion through the real delivery queue", () => {
     async (changed) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
       const scope = resolveConversationRegistryScope({ agentId: "main", config: {} });
-      onTestFinished(() => {
-        closeOpenClawAgentDatabaseByPath(scope.storePath);
+      onTestFinished(async () => {
+        await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
       });
       registerConversationAddresses(scope, [
         { ...conversation, deliveryTarget: conversation.target },
@@ -422,9 +422,9 @@ describe("conversation completion through the real delivery queue", () => {
       storePath: path.join(replacementRoot, "agents", "main", "agent", "openclaw-agent.sqlite"),
       env: { ...scope.env, OPENCLAW_STATE_DIR: replacementRoot },
     };
-    onTestFinished(() => {
-      closeOpenClawAgentDatabaseByPath(scope.storePath);
-      closeOpenClawAgentDatabaseByPath(replacementScope.storePath);
+    onTestFinished(async () => {
+      await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
+      await closeOpenClawAgentDatabaseByPathAsync(replacementScope.storePath);
     });
     const config = { agents: { entries: { main: {} } }, session: { store: scope.storePath } };
     const operationId = "real-queue-admission";

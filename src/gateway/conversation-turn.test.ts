@@ -144,7 +144,7 @@ describe("runGatewayConversationTurn", () => {
       expect(deps.runMessageAction).not.toHaveBeenCalled();
     } finally {
       inspectSource.mockRestore();
-      agentDatabase.closeOpenClawAgentDatabaseByPath(scope.storePath);
+      await agentDatabase.closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
     }
   });
 

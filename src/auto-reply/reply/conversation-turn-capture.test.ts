@@ -24,20 +24,27 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { recordAgentDatabaseAdmissions } from "../../state/agent-database-admission.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { capturePendingConversationTurnReply } from "./conversation-turn-capture.js";
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-  closeOpenClawAgentDatabasesForTest();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
+    await closeStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    cleanup();
+  });
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function setupReefConversation(options: { agentId?: string; storePath?: string } = {}) {
   const stateDir = tempDirs.make("openclaw-conversation-capture-");
@@ -431,6 +438,7 @@ describe("conversation turn capture", () => {
       ctx: inboundReply(setup, id),
     });
     try {
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       fs.renameSync(storePath, `${storePath}.retired`);
       unregisterOpenClawAgentDatabase({ agentId: "original-owner", path: storePath });

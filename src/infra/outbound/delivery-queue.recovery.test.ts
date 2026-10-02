@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
@@ -18,11 +18,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { buildConversationRef } from "../../routing/conversation-ref.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   OutboundDeliveryError,
@@ -126,6 +127,10 @@ async function runIf(condition: unknown, action: () => unknown) {
     await action();
   }
 }
+async function closeConversationAgentDatabases() {
+  await closeOpenClawAgentDatabasesAsync();
+  closeOpenClawAgentDatabasesForTest();
+}
 function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined {
   const { db } = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
@@ -137,6 +142,7 @@ function readOutboundQueueStatus(tmpDir: string, id: string): string | undefined
 }
 describe("delivery-queue recovery", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
+  afterEach(closeConversationAgentDatabases);
   const baseCfg = {};
   function enqueueRecoveryDelivery(params: Partial<Parameters<typeof enqueueDelivery>[0]> = {}) {
     return enqueueDelivery(
@@ -422,18 +428,14 @@ describe("delivery-queue recovery", () => {
       await params.onDeliveryResult?.(deliveryResult);
       return [deliveryResult];
     });
-    try {
-      const { result } = await runRecovery({ deliver });
-      expect(result.recovered).toBe(1);
-      expect(await getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
-        status: "sent",
-        queueId: "operation-recovery",
-        platformMessageId: "reef-platform",
-      });
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-    }
+    const { result } = await runRecovery({ deliver });
+    expect(result.recovered).toBe(1);
+    expect(await getConversationDeliveryOperation(scope, "operation-recovery")).toMatchObject({
+      status: "sent",
+      queueId: "operation-recovery",
+      platformMessageId: "reef-platform",
+    });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
   });
   it("settles an explicit recovered no-send as suppression without replay", async () => {
     const operationId = "operation-recovered-no-send";
@@ -472,8 +474,8 @@ describe("delivery-queue recovery", () => {
         },
       ]);
 
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await closeConversationAgentDatabases();
+      await closeStateDatabaseForTest();
       const second = await runRecovery({ deliver });
       expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
       expect(deliver).toHaveBeenCalledOnce();
@@ -483,7 +485,6 @@ describe("delivery-queue recovery", () => {
       expect(auditEvents).toHaveLength(1);
     } finally {
       unsubscribe();
-      closeOpenClawAgentDatabasesForTest();
     }
   });
   it.each([undefined, "adapter_returned_no_identity"] as const)(
@@ -633,8 +634,8 @@ describe("delivery-queue recovery", () => {
         markConversationDeliverySent(scope, operationId, "reef-platform"),
       );
       const deliver = vi.fn();
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
+      await closeConversationAgentDatabases();
+      await closeStateDatabaseForTest();
       const { auditEvents, unsubscribe } = captureAuditEvents();
       try {
         const { result } = await runRecovery({ deliver });
@@ -653,13 +654,12 @@ describe("delivery-queue recovery", () => {
               ? { outcome: "sent", resultCount: 1 }
               : { outcome: "suppressed", reasonCode: "no_visible_payload", resultCount: 0 },
         ]);
-        closeOpenClawAgentDatabasesForTest();
-        closeOpenClawStateDatabaseForTest();
+        await closeConversationAgentDatabases();
+        await closeStateDatabaseForTest();
         expect((await runRecovery({ deliver })).result).toEqual(RECOVERY_SUMMARY.empty);
         expect(auditEvents).toHaveLength(1);
       } finally {
         unsubscribe();
-        closeOpenClawAgentDatabasesForTest();
       }
     },
   );
@@ -752,14 +752,10 @@ describe("delivery-queue recovery", () => {
     });
     setQueuedEntryState(tmpDir(), id, { retryCount: MAX_RETRIES });
     const log = createRecoveryLog();
-    try {
-      const { result } = await runRecovery({ deliver: vi.fn(), log });
-      expect(result.skippedMaxRetries).toBe(1);
-      expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
-      expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-    }
+    const { result } = await runRecovery({ deliver: vi.fn(), log });
+    expect(result.skippedMaxRetries).toBe(1);
+    expect(readOutboundQueueStatus(tmpDir(), id)).toBe("failed");
+    expect(readQueuedEntry(tmpDir(), id)).not.toHaveProperty("settlement");
   });
   it("keeps a partially sent batch unknown when a later send has a permanent rejection", async () => {
     const id = await enqueueDemoRecoveryDelivery(["first", "second"]);
@@ -1136,30 +1132,26 @@ describe("delivery-queue recovery", () => {
       }),
     );
 
-    try {
-      const first = await runRecovery({ deliver });
-      expect(first.result).toEqual(RECOVERY_SUMMARY.failed);
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
-        status: "rejected",
-        rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
-      });
-      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
-      expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
+    const first = await runRecovery({ deliver });
+    expect(first.result).toEqual(RECOVERY_SUMMARY.failed);
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      status: "rejected",
+      rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
+    });
+    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
 
-      closeOpenClawAgentDatabasesForTest();
-      const replay = vi.fn();
-      const second = await runRecovery({ deliver: replay });
-      expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
-      expect(replay).not.toHaveBeenCalled();
-      expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
-        status: "rejected",
-        rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
-      });
-      expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
-    } finally {
-      closeOpenClawAgentDatabasesForTest();
-    }
+    await closeConversationAgentDatabases();
+    const replay = vi.fn();
+    const second = await runRecovery({ deliver: replay });
+    expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
+    expect(replay).not.toHaveBeenCalled();
+    expect(await getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+      status: "rejected",
+      rejectionError: "Slack chat.postMessage rejected: messages_tab_disabled",
+    });
+    expect(readOutboundQueueStatus(tmpDir(), operationId)).toBe("failed");
   });
   it("does not restore an acked entry when a recovered send commit hook fails", async () => {
     const id = await enqueueRecoveryDelivery();
@@ -1253,7 +1245,7 @@ describe("delivery-queue recovery", () => {
     if (mode === "zero-result-ack") {
       expect(recoveryStateAtAck).toBe("send_attempt_started");
       const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
-      closeOpenClawStateDatabaseForTest();
+      await closeStateDatabaseForTest();
       const { auditEvents, unsubscribe } = captureAuditEvents();
       try {
         const replay = await runRecovery({ deliver });
