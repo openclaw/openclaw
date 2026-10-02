@@ -403,11 +403,11 @@ async function connectRelay(isConnectionAllowed = () => true) {
     isCurrent: owner.isCurrent,
     attachDebugger: owner.attach,
     detachDebugger: owner.detach,
-    createTab: tabAccessPolicy.createTab,
+    createTab: (message, operation) => tabAccessPolicy.createTab(message, operation),
     focusWindowForTab,
     scheduleTabsSync,
     captureDebugger: owner.capture,
-    captureAccess: tabAccessPolicy.capture,
+    captureAccess: (tabId, method) => tabAccessPolicy.capture(tabId, method),
     requireAccessibleTab: owner.requireTab,
     requireNavigatedTab: (tabId, epoch) => owner.requireTab(tabId, epoch, true),
     navigateTab: (tabId, epoch, params, isCurrent, sendCommand) => {
@@ -580,7 +580,7 @@ const handlePopupMessage = createPopupMessageHandler({
   setBadge,
   detachDebugger,
   removeTabFromOpenClawGroup,
-  addTabToOpenClawGroup: tabAccessPolicy.addTabToGroup,
+  addTabToOpenClawGroup: (tabId) => tabAccessPolicy.addTabToGroup(tabId),
   scheduleTabsSync,
   pauseTab,
 });
