@@ -7,7 +7,6 @@ import { stripUserEnvelopeForDisplay } from "../auto-reply/reply/user-envelope-d
 import { isToolCallContentType } from "../chat/tool-content.js";
 import { isPrimarySessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   refreshCostUsageCacheForAgent,
@@ -16,7 +15,7 @@ import {
 import {
   readTranscriptRecords,
   readTranscriptRecordsBestEffort,
-  resolveExistingUsageSessionFile,
+  resolveUsageSessionSource,
 } from "./session-cost-usage-collection.js";
 import {
   createUsageCostResolver,
@@ -93,7 +92,6 @@ export async function discoverAllSessions(params: {
 
 export async function loadSessionCostSummary(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
@@ -108,10 +106,11 @@ export async function loadSessionCostSummary(params: {
   includeUntimestamped?: boolean;
   dayBucket?: UsageDailyBucket;
 }): Promise<SessionCostSummary | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
     return null;
   }
+  const { sessionFile } = source;
   const prepared = prepareUsageCostWorker({ ...params, sessionFiles: [sessionFile] });
   const inventory = await runUsageCostWorker(prepared, {
     kind: "inventory",
@@ -159,16 +158,16 @@ export async function loadSessionCostSummary(params: {
 
 export async function loadSessionUsageTimeSeries(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
   maxPoints?: number;
 }): Promise<SessionUsageTimeSeries | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
     return null;
   }
+  const { sessionFile } = source;
   if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }
@@ -252,16 +251,16 @@ export async function loadSessionUsageTimeSeries(params: {
 
 export async function loadSessionLogs(params: {
   sessionId?: string;
-  sessionEntry?: SessionEntry;
   sessionFile?: string;
   config?: OpenClawConfig;
   agentId: string;
   limit?: number;
 }): Promise<SessionLogEntry[] | null> {
-  const sessionFile = resolveExistingUsageSessionFile(params);
-  if (!sessionFile) {
+  const source = await resolveUsageSessionSource(params);
+  if (!source) {
     return null;
   }
+  const { sessionFile } = source;
   if (!parseSqliteSessionFileMarker(sessionFile) && !fs.existsSync(sessionFile)) {
     return null;
   }

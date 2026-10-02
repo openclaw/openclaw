@@ -4,6 +4,8 @@
  * Separates timer-safe delays from duration/deadline values because setTimeout has stricter bounds.
  */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentRunDeadlineRecord = Pick<
@@ -58,4 +60,11 @@ export function resolveSubagentRunEffectiveEndedAt(
 ): number {
   const deadlineMs = resolveSubagentRunDeadlineMs(entry, observedStartedAt);
   return deadlineMs !== undefined && endedAt > deadlineMs ? deadlineMs : endedAt;
+}
+
+export function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number) {
+  return resolveAgentTimeoutMs({
+    cfg,
+    overrideSeconds: runTimeoutSeconds ?? 0,
+  });
 }

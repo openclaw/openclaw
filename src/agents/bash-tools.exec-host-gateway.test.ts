@@ -215,6 +215,7 @@ vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
 
 vi.mock("./bash-tools.exec-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bash-tools.exec-runtime.js")>()),
+  createApprovalSlug: vi.fn(() => "slug"),
   runExecProcess: runExecProcessMock,
 }));
 

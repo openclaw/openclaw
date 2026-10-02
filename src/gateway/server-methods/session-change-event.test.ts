@@ -714,7 +714,7 @@ describe("sessions.changed coalescing", () => {
         prepared.resolve();
         await flushPendingSessionsChangedEvents(context);
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
       }
     });
@@ -865,7 +865,7 @@ describe("sessions.changed coalescing", () => {
     const config = retainLegacyDefaultAgentId(
       {
         agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      },
+      } satisfies OpenClawConfig,
       "ops",
     );
     const sessionId = "agent:research:shared-session-id";

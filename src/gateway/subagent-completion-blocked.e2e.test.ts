@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
-import { seedSubagentCompletionDelivery } from "../agents/subagents/completion/subagent-completion-admission.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import { observeRootWork } from "../agents/subagents/registry/subagent-registry.browser-cleanup.test-support.js";
 import {
@@ -76,8 +75,7 @@ describe("subagent completion blocked Gateway E2E", () => {
             },
           },
         });
-        addSubagentRunForTests(subagent);
-        seedSubagentCompletionDelivery({ subagent });
+        await addSubagentRunForTests(subagent);
 
         // Native suspension completes in detached work. Join its owner before
         // asserting or closing the Gateway, including cold worker startup.
@@ -95,7 +93,7 @@ describe("subagent completion blocked Gateway E2E", () => {
         });
       });
     } finally {
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
     }
   });

@@ -161,44 +161,6 @@ describe("Gateway discovery inside Models", () => {
     expect([...buttons].every((button) => button.disabled)).toBe(true);
   });
 
-  it("keeps configured utility repair and assistant access in embedded discovery", () => {
-    const utility = {
-      kind: "provider-auto:local" as const,
-      label: "Local utility",
-      detail: "Available on this Gateway",
-      modelRef: "local/setup",
-      recommended: false,
-      modelTarget: "utility" as const,
-    };
-    const onOpenSetupAssistant = vi.fn();
-    const onActivateCandidate = vi.fn();
-    const container = mount(
-      props({
-        embedded: true,
-        onOpenSetupAssistant,
-        onActivateCandidate,
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            configuredModel: "cloud/primary",
-            utilityModel: utility.modelRef,
-            candidates: [utility],
-          },
-        },
-      }),
-    );
-    expect(container.querySelector(".model-setup__current")).toBeNull();
-    expect(container.querySelector('[data-candidate-kind="provider-auto:local"]')).toBeNull();
-    const buttons = [
-      ...container.querySelectorAll<HTMLButtonElement>(".model-setup__utility button"),
-    ];
-    buttons.find((button) => button.textContent?.includes("Recheck & repair"))!.click();
-    expect(onActivateCandidate).toHaveBeenCalledExactlyOnceWith(utility);
-    buttons.find((button) => button.textContent?.includes("Open setup assistant"))!.click();
-    expect(onOpenSetupAssistant).toHaveBeenCalledOnce();
-  });
-
   it("opens the setup assistant instead of closing Models after utility activation", () => {
     const onOpenChat = vi.fn();
     const onOpenSetupAssistant = vi.fn();

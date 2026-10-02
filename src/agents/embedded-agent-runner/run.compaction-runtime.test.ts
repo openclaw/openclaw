@@ -503,12 +503,14 @@ describe("embedded compaction recovery authority", () => {
         const before = await fixture.snapshot();
         fixture.updates.mockClear();
         if (owner !== "active") {
-          const retainedWriter = fixture.openWriter();
+          const retainedWriter = await fixture.openWriter();
           await fixture.invalidate(owner);
           if (owner === "writer-replaced") {
             // The existing SQLite fence works for an explicitly fenced manager;
             // the retained capability must not reopen an unfenced replacement.
-            expect(() => retainedWriter.appendMessage(fixture.replacement.message)).toThrow();
+            await expect(
+              retainedWriter.appendMessageAsync(fixture.replacement.message),
+            ).rejects.toThrow();
           }
         }
 

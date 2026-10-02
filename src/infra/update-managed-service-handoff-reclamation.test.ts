@@ -15,7 +15,14 @@ import {
   writePrivateUpdateHandoffChildGuard,
 } from "../../test/helpers/private-update-handoff-store.js";
 import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import * as processGroups from "../process/child-process-tree.js";
+import * as processIdentity from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { executeSqliteQuerySync } from "./kysely-sync.js";
+import {
+  createManagedHandoffLeaseDatabase,
+  leaseQueries,
+} from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const roots: string[] = [];
@@ -219,5 +226,183 @@ it.each(["release", "releaseAll"] as const)(
       throw new Error("Next generation acquisition failed");
     }
     expect(store.release(next.lease)).toBe(true);
+  },
+);
+
+function retainedCommandFixture(
+  options: {
+    mirror?: boolean;
+    orphan?: boolean;
+    custody?: "reserved" | "bound";
+    helper?: "dead" | "live" | "unknown";
+    groupAlive?: boolean;
+  } = {},
+) {
+  const f = fixture();
+  const database = createManagedHandoffLeaseDatabase(f.handoff);
+  const rootIdentity = { pid: 777101, startIdentity: "1" };
+  const helper = { pid: 777102, startIdentity: "2" };
+  const executor = { pid: 777103, startIdentity: "3" };
+  const rootLease = {
+    version: 2,
+    helper: rootIdentity,
+    executor: rootIdentity,
+    action: {
+      kind: "update",
+      ...(options.mirror ? { mutationProtocol: "original-cancellation-v1" } : {}),
+    },
+  };
+  const rootPayload = JSON.stringify(rootLease);
+  const original = {
+    install_root: f.install,
+    owner: "previous-update",
+    payload_json: rootPayload,
+    updated_at: 1,
+  };
+  const parents = options.orphan ? [] : [original];
+  if (options.mirror) {
+    parents.push({
+      ...original,
+      install_root: f.slot,
+      payload_json: JSON.stringify({
+        ...rootLease,
+        mutationOriginal: {
+          key: f.install,
+          owner: original.owner,
+          payload: rootPayload,
+          updatedAt: original.updated_at,
+        },
+      }),
+    });
+  }
+  const commandKeys = [f.install, ...(options.mirror ? [f.slot] : [])].map(
+    (root) => `${root}/.openclaw-update-child-previous-doctor/.openclaw-update-child-command`,
+  );
+  database(true, (db) => {
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .insertInto("managed_update_handoffs")
+        .values([
+          ...parents,
+          ...commandKeys.map((install_root) => ({
+            install_root,
+            owner: "previous-doctor",
+            payload_json: JSON.stringify({
+              version: 2,
+              helper,
+              executor,
+              action: { kind: "update", custody: options.custody ?? "bound" },
+            }),
+            updated_at: 2,
+          })),
+        ]),
+    );
+  });
+  const isDead = processIdentity.isPidDefinitelyDead;
+  const readStart = processIdentity.getFileLockProcessStartTime;
+  vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) =>
+    pid === rootIdentity.pid || pid === executor.pid
+      ? true
+      : pid === helper.pid
+        ? !options.helper || options.helper === "dead"
+        : isDead(pid),
+  );
+  vi.spyOn(processIdentity, "getFileLockProcessStartTime").mockImplementation((pid, env) =>
+    pid === helper.pid ? (options.helper === "unknown" ? null : 2) : readStart(pid, env),
+  );
+  const groupAlive = processGroups.isChildProcessTreeAlive;
+  vi.spyOn(processGroups, "isChildProcessTreeAlive").mockImplementation((child) =>
+    child.pid === executor.pid ? (options.groupAlive ?? false) : groupAlive(child),
+  );
+  const rows = () =>
+    database(
+      false,
+      (db) =>
+        executeSqliteQuerySync(
+          db,
+          leaseQueries(db)
+            .selectFrom("managed_update_handoffs")
+            .selectAll()
+            .orderBy("install_root"),
+        ).rows,
+    );
+  return { ...f, database, rows, commandKeys, helper };
+}
+
+it.skipIf(process.platform === "win32").each([
+  { name: "ordinary root", mirror: false, orphan: false },
+  { name: "original and occupied slot", mirror: true, orphan: false },
+  { name: "orphaned command namespace", mirror: false, orphan: true },
+])("retires dead command claims when reopening $name", ({ mirror, orphan }) => {
+  const f = retainedCommandFixture({ mirror, orphan });
+  const before = f.rows();
+  expect(before.some((row) => f.commandKeys.includes(row.install_root))).toBe(true);
+  // Reads must not silently prune durable custody before a mutation owner admits repair.
+  f.store.read(f.install);
+  expect(f.rows()).toEqual(before);
+  const repaired = f.store.acquire(f.install, "repair", { kind: "update" });
+  expect(repaired.kind).toBe("acquired");
+  if (repaired.kind !== "acquired") {
+    throw new Error("Expected repaired installation admission");
+  }
+  expect(f.rows().map((row) => row.install_root)).toEqual([f.install]);
+  expect(f.store.release(repaired.lease)).toBe(true);
+  expect(f.rows()).toEqual([]);
+  const reopenedStore = createManagedHandoffLeaseStore({
+    databasePath: f.handoff,
+    serviceManagerEnv: f.env,
+  });
+  const reopened = reopenedStore.acquire(f.install, "next-update", { kind: "update" });
+  expect(reopened.kind).toBe("acquired");
+  if (reopened.kind === "acquired") {
+    expect(reopenedStore.release(reopened.lease)).toBe(true);
+  }
+});
+
+it.skipIf(process.platform === "win32").each([
+  { name: "pending reservation", custody: "reserved" as const },
+  { name: "live helper", helper: "live" as const },
+  { name: "unverified helper", helper: "unknown" as const },
+  { name: "surviving command group", groupAlive: true },
+])("preserves every retained row beside a $name", (options) => {
+  const f = retainedCommandFixture(options);
+  const before = f.rows();
+  expect(f.store.acquire(f.install, "repair", { kind: "update" }).kind).toBe("busy");
+  expect(f.rows()).toEqual(before);
+});
+
+it.skipIf(process.platform === "win32")(
+  "refuses reclamation when a command generation changes after observation",
+  () => {
+    const f = retainedCommandFixture();
+    const rootBefore = f.store.read(f.install);
+    const isDead = vi.mocked(processIdentity.isPidDefinitelyDead).getMockImplementation();
+    if (!isDead) {
+      throw new Error("Missing process observation fixture");
+    }
+    let replaced = false;
+    vi.spyOn(processIdentity, "isPidDefinitelyDead").mockImplementation((pid) => {
+      if (pid === f.helper.pid && !replaced) {
+        replaced = true;
+        f.database(true, (db) => {
+          executeSqliteQuerySync(
+            db,
+            leaseQueries(db)
+              .updateTable("managed_update_handoffs")
+              .set({ owner: "replacement-doctor", updated_at: 3 })
+              .where("install_root", "=", f.commandKeys[0]!),
+          );
+        });
+      }
+      return isDead(pid);
+    });
+    expect(f.store.acquire(f.install, "repair", { kind: "update" }).kind).toBe("busy");
+    expect(replaced).toBe(true);
+    expect(f.store.read(f.install)).toEqual(rootBefore);
+    expect(f.rows().find((row) => row.install_root === f.commandKeys[0])).toMatchObject({
+      owner: "replacement-doctor",
+      updated_at: 3,
+    });
   },
 );

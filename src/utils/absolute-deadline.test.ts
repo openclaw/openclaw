@@ -8,38 +8,28 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it("uses the selected elapsed clock when wall time changes", async () => {
-  let elapsed = 50;
-  const operation = createDeferred<string>();
-  const result = awaitWithinDeadline(
-    () => operation.promise,
-    60,
-    () => elapsed,
-  );
+it.each([
+  [59.5, "in time"],
+  [60, ABSOLUTE_DEADLINE_EXPIRED],
+] as const)(
+  "uses the selected clock at elapsed=%s when wall time changes",
+  async (settledAt, expected) => {
+    let elapsed = 50;
+    const operation = createDeferred<string>();
+    const result = awaitWithinDeadline(
+      () => operation.promise,
+      60,
+      () => elapsed,
+    );
 
-  vi.setSystemTime(10_000);
-  elapsed = 59.5;
-  operation.resolve("in time");
+    vi.setSystemTime(10_000);
+    elapsed = settledAt;
+    operation.resolve("in time");
 
-  await expect(result).resolves.toBe("in time");
-  expect(vi.getTimerCount()).toBe(0);
-});
-
-it("rejects a result at the selected deadline before its timer runs", async () => {
-  let elapsed = 50;
-  const operation = createDeferred<string>();
-  const result = awaitWithinDeadline(
-    () => operation.promise,
-    60,
-    () => elapsed,
-  );
-
-  elapsed = 60;
-  operation.resolve("late");
-
-  await expect(result).resolves.toBe(ABSOLUTE_DEADLINE_EXPIRED);
-  expect(vi.getTimerCount()).toBe(0);
-});
+    await expect(result).resolves.toBe(expected);
+    expect(vi.getTimerCount()).toBe(0);
+  },
+);
 
 it("retains wall-clock settlement when no clock is selected", async () => {
   const operation = createDeferred<string>();

@@ -50,7 +50,50 @@ For example, the official basic React demo can be configured as:
 }
 ```
 
-Behavior and security boundaries:
+## Plugin extensions
+
+The Control UI also recognizes [OpenAI MCP Plugin Extensions](https://developers.openai.com/plugins/build/extensions). These extend the same MCP Apps host; they do not install a second plugin runtime or grant access to ChatGPT accounts. Connect the plugin's MCP server and enable Apps using the setting above. Existing server enablement, session tool access, and account permissions still apply.
+
+Extensions let a server contribute:
+
+- **Apps and conversation panels:** open an advertised global or thread entrypoint directly, without asking the model to discover and call its tool first. Each conversation keeps its own app instance.
+- **Settings:** render server-provided fields and groups with native controls, or open an advertised settings action. The MCP server owns the saved values; these controls do not patch Gateway configuration.
+- **Composer resources:** search a plugin's files and other resources and attach a selected reference to the conversation. These are separate from mentions of people.
+- **Model context:** attach text, images, and resources from the current app selection. A later update replaces that app's earlier context. Removing an item updates the app as well. Presentation metadata stays out of model input, and app-supplied content remains conversation data rather than system instructions.
+- **File viewers and editors:** choose an advertised viewer for a supported workspace file. The app receives an opaque resource URI, not unrestricted filesystem access. The host checks the current session and requester on reads, subscriptions, and saves. Conditional saves report a conflict when the supplied version no longer matches.
+- **Onboarding:** explicitly run a packaged setup skill. Installing or discovering the plugin does not run that skill automatically.
+
+A server advertises entrypoints on its normal tool descriptor:
+
+```json
+{
+  "name": "parts.library",
+  "title": "Parts library",
+  "inputSchema": { "type": "object", "properties": {} },
+  "_meta": {
+    "ui": { "resourceUri": "ui://parts/library" },
+    "openai/ui": { "entrypoints": [{ "type": "global" }, { "type": "thread" }] }
+  }
+}
+```
+
+Global and thread entrypoint tools accept `{}`. File entrypoints declare extensions with a leading dot, such as `.stl`, and receive the selected file's name and host-issued resource URI. The host supplies the initial tool result to the app; the app should render that result instead of repeating the opening tool call.
+
+App resource metadata can declare supported and preferred display modes. Apps must inspect the actual host capabilities before using an extension: a standalone channel window does not have every capability of a connected Control UI conversation. Do not infer file, messaging, or model-context authority from a successful MCP connection alone.
+
+File saves follow the extension protocol’s optional `ifMatch` precondition. Sending the ETag from the last read prevents a stale save from replacing a newer edit; omitting `ifMatch` performs an unconditional save (last writer wins). App authors should send the ETag when protecting concurrent edits. Both forms still require a writable read, the host-issued file URI, and current session and requester authority.
+
+Native Codex Apps borrow the conversation’s existing MCP connection and retain
+its approval policy. Interactive forms require a native policy that allows
+prompting; see [Rich MCP forms](/plugins/codex-harness/native-features#rich-mcp-forms).
+Only one native App tool call per server and conversation can be active at a time;
+wait for it to finish before starting another. Each view also enforces limits of
+four simultaneous requests, 120 requests per minute, and 30 tool calls per minute.
+Background preview generation consumes the same limits as user-triggered calls.
+
+The extensions use the existing sandbox and permission boundaries below. Server-owned settings and plugin data remain with their existing owners. Raw app state is not a new durable Gateway store, and a reconstructed transcript preview is not a fresh grant to run tools.
+
+## Behavior and security boundaries
 
 - OpenClaw advertises the `io.modelcontextprotocol/ui` extension only when Apps are enabled.
 - Only `ui://` resources with the exact `text/html;profile=mcp-app` MIME type render.

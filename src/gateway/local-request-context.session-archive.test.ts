@@ -9,7 +9,7 @@ import {
   type EmbeddedAgentQueueHandle,
 } from "../agents/embedded-agent-runner/runs.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -89,7 +89,7 @@ describe("scoped session archive tools", () => {
       }
       const client = roleClient("write");
       const runId = "collector-session-controls";
-      addSubagentRunForTests({ runId, childSessionKey: TARGET, collect: true });
+      seedSubagentRunForReadTest({ runId, childSessionKey: TARGET, collect: true });
       try {
         await withPluginRuntimeGatewayRequestScope({ ...request, client }, () =>
           withOperatorToolGatewayAuthority(
@@ -130,7 +130,7 @@ describe("scoped session archive tools", () => {
           ),
         );
       } finally {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
       }
     });
   });
@@ -152,12 +152,18 @@ describe("scoped session archive tools", () => {
             "assignment-only tool",
           );
           expect(assignment.parameters).toMatchObject({
-            properties: { action: { enum: ["assign_owner"] } },
+            properties: {
+              action: {
+                enum: caller === "session-writer" ? ["patch", "assign_owner"] : ["assign_owner"],
+              },
+            },
           });
           expect(assignment.parameters).not.toHaveProperty("properties.archived");
           await expect(
             assignment.execute("no-archive", { action: "patch", archived: true }),
-          ).rejects.toThrow(/Only assign_owner/);
+          ).rejects.toThrow(
+            caller === "session-writer" ? /current operator write grant/ : /Only assign_owner/,
+          );
           expect(
             resolveGatewayScopedTools({ ...options, cfg, surface: "loopback" }).tools.some(
               (tool) => tool.name === "sessions",

@@ -1721,6 +1721,40 @@ AFTER_CD
     }
   });
 
+  it("lets a PR label disable both fail-fast owners", () => {
+    const workflow = readCiWorkflow();
+    const preflight = workflow.jobs.preflight;
+    const nodeStrategy = workflow.jobs["checks-node-core-test-nondist-shard"].strategy;
+    const monitor = workflow.jobs["pr-fail-fast"];
+
+    expect(preflight.outputs.disable_fail_fast).toBe(
+      "${{ github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:no-fail-fast') && 'true' || 'false' }}",
+    );
+
+    const foreignPr = {
+      eventName: "pull_request" as const,
+      repository: "contributor/openclaw",
+      runAttempt: 1,
+      preflightOutputs: { disable_fail_fast: "false", run_checks_node_core_nondist: "true" },
+    };
+    expect(evaluateWorkflowExpression(nodeStrategy["fail-fast"], foreignPr)).toBe(true);
+    expect(
+      evaluateWorkflowExpression(nodeStrategy["fail-fast"], {
+        ...foreignPr,
+        preflightOutputs: { ...foreignPr.preflightOutputs, disable_fail_fast: "true" },
+      }),
+    ).toBe(false);
+
+    const canonicalPr = { ...foreignPr, repository: "openclaw/openclaw" };
+    expect(evaluateWorkflowExpression(monitor.if, canonicalPr)).toBe(true);
+    expect(
+      evaluateWorkflowExpression(monitor.if, {
+        ...canonicalPr,
+        preflightOutputs: { ...canonicalPr.preflightOutputs, disable_fail_fast: "true" },
+      }),
+    ).toBe(false);
+  });
+
   it("runs the Docker seed tier with the published updater and a checked main/PR smoke package", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const jobs = readCiWorkflow().jobs;

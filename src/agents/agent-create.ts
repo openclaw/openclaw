@@ -280,7 +280,6 @@ async function writeIdentityFile(params: {
   try {
     const result = await workspaceRoot.read(DEFAULT_IDENTITY_FILENAME, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     existing = result.buffer.toString("utf-8");
   } catch (error) {

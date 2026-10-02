@@ -198,9 +198,15 @@ export interface ShouldStopAfterTurnContext {
 }
 
 /** Replacement runtime state used by the agent loop before starting another provider request. */
+export type AgentLoopContinuationUpdate = Pick<AgentContext, "systemPrompt" | "tools">;
+
 export interface AgentLoopTurnUpdate {
   /** Commit accepted steering and settle this invocation without another model request. */
   stop?: boolean;
+  /** Prepare only an admitted continuation, after its queued input has been emitted. */
+  prepareContinuation?: (
+    context: AgentContext,
+  ) => AgentLoopContinuationUpdate | Promise<AgentLoopContinuationUpdate>;
   /** Context for the next provider request. */
   context?: AgentContext;
   /** Model for the next provider request. */

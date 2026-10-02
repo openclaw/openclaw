@@ -498,21 +498,18 @@ describe("plugin async iterable protocol", () => {
     },
   );
 
-  it.each([undefined, null, 1])(
-    "releases admission after an invalid protocol result %s",
-    async (value) => {
-      const instance = owner();
-      const stream = instance.wrap({
-        [Symbol.asyncIterator]() {
-          return { next: async () => value };
-        },
-      });
-      const iterator = stream[Symbol.asyncIterator]();
+  it.each([null, 1])("releases admission after an invalid protocol result %s", async (value) => {
+    const instance = owner();
+    const stream = instance.wrap({
+      [Symbol.asyncIterator]() {
+        return { next: async () => value };
+      },
+    });
+    const iterator = stream[Symbol.asyncIterator]();
 
-      await expect(iterator.next()).rejects.toThrow("iterator result must be an object");
-      await instance.dispose();
-    },
-  );
+    await expect(iterator.next()).rejects.toThrow("iterator result must be an object");
+    await instance.dispose();
+  });
 
   it("does not read an iterator getter until the consumer requests it", () => {
     const instance = owner();

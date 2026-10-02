@@ -80,7 +80,6 @@ const loadInstalledPluginIndexInstallRecords = vi.fn<
 >(async (_params?) => ({}));
 const fetchNpmPackageTargetStatus = vi.fn(
   async (params: { packageName?: string; target: string }) => ({
-    target: params.target,
     version: params.target,
     nodeEngine: null,
   }),
@@ -466,7 +465,6 @@ describe("gatherDaemonStatus", () => {
     loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     fetchNpmPackageTargetStatus.mockClear();
     fetchNpmPackageTargetStatus.mockImplementation(async (params) => ({
-      target: params.target,
       version: params.target,
       nodeEngine: null,
     }));

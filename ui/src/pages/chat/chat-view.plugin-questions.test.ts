@@ -8,7 +8,10 @@ import type {
   ControlUiSurface,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
@@ -82,7 +85,8 @@ it.each([
       value: replacement,
     };
     const context = {
-      agentSelection: { state: { selectedId: "main" } },
+      gateway: createApplicationGateway().gateway,
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
       plugins: {
         registrations: () => [],
         selectedReplacement: (surface: ControlUiSurface) =>
@@ -190,7 +194,8 @@ it.each(["nondelegating", "delegated", "failing"] as const)(
       value: replacement,
     };
     const context = {
-      agentSelection: { state: { selectedId: "main" } },
+      gateway: createApplicationGateway().gateway,
+      agentSelection: { state: { selectedId: "main" }, subscribe: () => () => undefined },
       plugins: {
         registrations: () => [],
         selectedReplacement: (surface: ControlUiSurface) =>

@@ -269,7 +269,8 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `fetchUsageSnapshot`              | Custom usage endpoint                                                                       |
 | `createEmbeddingProvider`         | Provider-owned embedding adapter for memory/search                                          |
 | `buildReplayPolicy`               | Custom transcript replay/compaction policy                                                  |
-| `sanitizeReplayHistory`           | Provider-specific replay rewrites after generic cleanup                                     |
+| `sanitizeReplayHistoryAsync`      | Provider-specific replay rewrites with awaited transcript metadata after generic cleanup    |
+| `sanitizeReplayHistory`           | Deprecated third-party replay compatibility hook; migrate to `sanitizeReplayHistoryAsync`   |
 | `validateReplayTurns`             | Strict replay-turn validation before the embedded runner                                    |
 | `onModelSelected`                 | Post-selection callback (e.g. telemetry)                                                    |
 

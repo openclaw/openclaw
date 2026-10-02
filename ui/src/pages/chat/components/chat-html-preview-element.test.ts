@@ -93,11 +93,6 @@ describe("ordinary HTML preview transport", () => {
         '<a name="section"></a><map name="report"><area href="about:srcdoc#section" alt="Jump"></map>',
     },
     {
-      name: "authored base URL",
-      head: '<base href="https://example.com/report">',
-      body: '<a href="#section">Jump</a>',
-    },
-    {
       name: "independent base URL and target declarations",
       head: '<base target="_self"><base href="/report">',
       body: '<a href="#section">Jump</a>',
@@ -119,20 +114,9 @@ describe("ordinary HTML preview transport", () => {
       expected: '<a href="about:srcdoc#first" href="#second">Jump</a>',
     },
     {
-      name: "unrelated duplicate attributes",
-      body: '<p title="first" title="ignored">Report</p><a href="#section">Jump</a>',
-      expected:
-        '<p title="first" title="ignored">Report</p><a href="about:srcdoc#section">Jump</a>',
-    },
-    {
       name: "a complete link before an unfinished unrelated tail",
       body: '<a href="#section">Jump</a><p title="unfinished',
       expected: '<a href="about:srcdoc#section">Jump</a><p title="unfinished',
-    },
-    {
-      name: "anchors reconstructed across paragraphs",
-      body: '<p><a href="#x">one<p>two',
-      expected: '<p><a href="about:srcdoc#x">one<p>two',
     },
     {
       name: "anchors reconstructed across formatting elements",

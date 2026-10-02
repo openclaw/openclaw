@@ -103,7 +103,7 @@ describe("models auth login owner integration", () => {
       { label: "models-auth-login-owner", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });
@@ -142,7 +142,7 @@ describe("models auth login owner integration", () => {
       { label: "models-auth-login-order-busy", scenario: "minimal" },
       async (state) => {
         await state.writeConfig({
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           auth: { order: { openai: [STALE_PROFILE_ID] } },
         });
         writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env: state.env });

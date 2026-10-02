@@ -142,7 +142,7 @@ export function readControlUiRootAsset(
     };
     let file = await read(location);
     if (!file && root.kind === "bundled" && fileRel.startsWith("assets/")) {
-      const retained = root.retainedAssets?.resolveAsset(fileRel);
+      const retained = await root.retainedAssets?.resolveAsset(fileRel);
       if (retained) {
         location = { ...retained, rootPath: retained.rootRealPath, rejectHardlinks: true };
         file = await read(location);

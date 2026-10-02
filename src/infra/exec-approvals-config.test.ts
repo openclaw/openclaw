@@ -2,7 +2,10 @@
 import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import {
+  parseLegacyExecApprovals,
+  tryParsePersistedExecApprovals,
+} from "./exec-approvals-config.js";
 import { saveExecApprovals } from "./exec-approvals-store.test-support.js";
 import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
@@ -194,7 +197,7 @@ describe("exec approvals default agent migration", () => {
   });
 });
 
-describe("persisted exec approvals schema", () => {
+describe("exec approvals policy schemas", () => {
   it("round-trips exact MCP grants and tolerates unrelated future agent metadata", () => {
     const mcpTools = [
       { server: "project.docs", tool: "write_note", source: "allow-always", addedAt: 123 },
@@ -214,25 +217,31 @@ describe("persisted exec approvals schema", () => {
       source: "allow-always",
       addedAt: 123,
     };
-    const parsed = tryParsePersistedExecApprovals(
+    const parsed = parseLegacyExecApprovals(
       JSON.stringify({
         version: 1,
         agents: { main: { mcpTools: [grant] }, default: { ask: "off" } },
       }),
     );
-    expect(parsed?.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
-    expect(parsed?.agents?.default).toBeUndefined();
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    expect(parsed.value.agents?.main).toMatchObject({ mcpTools: [grant], ask: "off" });
+    expect(parsed.value.agents?.default).toBeUndefined();
   });
 
   it("keeps legacy string allowlist entries while normalizing them", () => {
-    const parsed = tryParsePersistedExecApprovals(
+    const parsed = parseLegacyExecApprovals(
       JSON.stringify({
         version: 1,
         agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
       }),
     );
-    expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
-    expect(parsed?.agents?.main?.allowlist?.[1]).toEqual(
+    if (!parsed.ok) {
+      throw new Error(parsed.error);
+    }
+    expect(parsed.value.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
+    expect(parsed.value.agents?.main?.allowlist?.[1]).toEqual(
       expect.objectContaining({ pattern: "cat", source: undefined }),
     );
   });

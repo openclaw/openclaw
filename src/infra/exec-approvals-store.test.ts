@@ -13,6 +13,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { sha256Hex } from "./crypto-digest.js";
+import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import {
   assertNoPendingLegacyExecApprovals,
   ExecApprovalsMigrationRequiredError,
@@ -230,6 +231,30 @@ describe("exec approvals SQLite store", () => {
       allowlist_count: 3,
     });
   });
+
+  it.each(["update", "direct"] as const)(
+    "keeps malformed %s writes fail-closed instead of discarding invalid policy fields",
+    async (writer) => {
+      const file = {
+        version: 1,
+        defaults: { ask: "always" },
+        agents: { runner: { ask: "invalid" } },
+      } as unknown as ExecApprovalsFile;
+      if (writer === "update") {
+        const written = await updateExecApprovals({ update: () => file });
+        expect(written?.file.defaults).toMatchObject({ security: "deny", ask: "off" });
+        expect(written?.raw).toBe(serializeExecApprovals(file));
+      } else {
+        writeExecApprovalsConfigRow({ db: openOpenClawStateDatabase().db, file });
+      }
+      expect(readExecApprovalsSnapshot().raw).toBe(serializeExecApprovals(file));
+      expect(loadExecApprovals().defaults).toMatchObject({ security: "deny", ask: "off" });
+      expect((await loadExecApprovalsReadOnlyAsync()).defaults).toMatchObject({
+        security: "deny",
+        ask: "off",
+      });
+    },
+  );
 
   it("preserves raw-byte CAS hashes and returns null on a stale base", async () => {
     const missing = readExecApprovalsSnapshot();

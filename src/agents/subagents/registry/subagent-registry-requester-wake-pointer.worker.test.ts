@@ -7,26 +7,20 @@ import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpe
 import { mutateRequesterSettleWakeBatch } from "../completion/subagent-completion-admission.store.js";
 import type { SubagentLifecycleWakeContext } from "./subagent-registry-lifecycle-context.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  captureSubagentRunMutationSnapshot,
-  publishSubagentRunPostimages,
-} from "./subagent-registry-persistence.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   commitRequesterWake,
   getPendingWakeCommit,
   retryPendingWakeCommit,
 } from "./subagent-registry-requester-wake-commit.js";
-import {
-  persistSubagentRunsToDiskAsyncOrThrow,
-  withSubagentRunReadSnapshot,
-} from "./subagent-registry-state.js";
+import { withSubagentRunReadSnapshot } from "./subagent-registry-state.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 
-vi.mock("./subagent-registry-lifecycle-delivery.js", () => ({
+vi.mock("./subagent-registry-lifecycle-log.js", () => ({
   maskLifecycleIdentifier: () => "synthetic",
 }));
 
-it("publishes a selected requester wake across unchanged staging without accepting an older acknowledgement", async () => {
+it("publishes a selected requester wake before an overlapping row mutation plans", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const entry = createSubagentRunRecord({
       runId: "selected-wake",
@@ -38,9 +32,12 @@ it("publishes a selected requester wake across unchanged staging without accepti
       delivery: { status: "pending" },
       requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
     });
-    subagentRuns.set(entry.runId, entry);
     const context = captureOpenClawStateWorkerContext();
-    await persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, [entry.runId], { context });
+    await mutateSubagentRuns(
+      [entry.runId],
+      () => ({ value: undefined, postimages: new Map([[entry.runId, entry]]) }),
+      { context },
+    );
     const selected = await withSubagentRunReadSnapshot(
       subagentRuns,
       (snapshot) => ({ runIds: [...snapshot.keys()], sessionKeys: [] }),
@@ -88,46 +85,50 @@ it("publishes a selected requester wake across unchanged staging without accepti
       assertCurrent: () => {},
       onCommitted: () => {},
       onPublished: () => {},
-      retiredPreimages: new Set(),
     });
     const wakeResult = wake.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let staging: ReturnType<typeof publishSubagentRunPostimages> | undefined;
+    let successor: Promise<void> | undefined;
+    const successorPlanned = vi.fn();
     try {
       await Promise.race([wakeReached.promise, wake]);
-      staging = publishSubagentRunPostimages({
-        runs: subagentRuns,
-        previous: new Map([[entry, captureSubagentRunMutationSnapshot(entry)]]),
-        context,
-        assertCurrent: () => {},
-        persist: (source, callbacks, ...ids) =>
-          persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, {
-            context: source,
-            ...callbacks,
-          }),
-      });
-      await Promise.race([ackReached.promise, staging]);
+      successor = mutateSubagentRuns(
+        [entry.runId],
+        (rows) => {
+          successorPlanned();
+          const current = rows.get(entry.runId)!;
+          expect(current.requesterSettleWake?.status).toBe("dispatching");
+          const next = { ...structuredClone(current), cleanupHandled: true };
+          return { value: undefined, postimages: new Map([[next.runId, next]]) };
+        },
+        { context },
+      );
+      expect(successorPlanned).not.toHaveBeenCalled();
       releaseWake.resolve();
       expect(await wakeResult).toEqual({ value: { applied: true, publication: "published" } });
+      await Promise.race([ackReached.promise, successor]);
+      expect(subagentRuns.get(entry.runId)?.requesterSettleWake?.status).toBe("dispatching");
+      expect(selected.requesterSettleWake?.status).toBe("pending");
       releaseAck.resolve();
-      await expect(staging).resolves.toEqual({ outcome: "committed", publication: "superseded" });
-      expect(entry.requesterSettleWake?.status).toBe("dispatching");
+      await successor;
+      expect(successorPlanned).toHaveBeenCalledOnce();
+      expect(subagentRuns.get(entry.runId)?.cleanupHandled).toBe(true);
       expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.requesterSettleWake?.status).toBe(
         "dispatching",
       );
     } finally {
       releaseWake.resolve();
       releaseAck.resolve();
-      await Promise.allSettled([wake, staging]);
+      await Promise.allSettled([wake, successor]);
       held.mockRestore();
       subagentRuns.delete(entry.runId);
     }
   });
 });
 
-it("keeps a known requester wake commit while native staging waits for its acknowledgement", async () => {
+it("keeps a known requester wake commit across an immutable row publication", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const entry = createSubagentRunRecord({
       runId: "snapshot-wake",
@@ -140,7 +141,10 @@ it("keeps a known requester wake commit while native staging waits for its ackno
       delivery: { status: "pending" },
       requesterSettleWake: { status: "dispatching", attemptCount: 3, rearmGeneration: 1 },
     });
-    subagentRuns.set(entry.runId, entry);
+    await mutateSubagentRuns([entry.runId], () => ({
+      value: undefined,
+      postimages: new Map([[entry.runId, entry]]),
+    }));
     const unexpected = (): never => {
       throw new Error("Unexpected lifecycle side effect");
     };
@@ -150,13 +154,6 @@ it("keeps a known requester wake commit while native staging waits for its ackno
         resumedRuns: new Set(),
         subagentAnnounceTimeoutMs: 1_000,
         getRuntimeConfig: () => ({}),
-        persist: unexpected,
-        persistOrThrow: unexpected,
-        persistAsyncOrThrow: (source, callbacks, ...ids) =>
-          persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, {
-            context: source,
-            ...callbacks,
-          }),
         clearPendingLifecycleError: unexpected,
         countPendingDescendantRuns: async () => 0,
         getLatestRunForChildSession: () => null,
@@ -174,9 +171,10 @@ it("keeps a known requester wake commit while native staging waits for its ackno
         warn: vi.fn(),
       },
       scheduledRequesterSettleWakeTimers: new Map(),
-      scheduledRequesterSettleWakeRuns: new WeakSet(),
-      pendingRequesterSettleWakeRearms: new WeakSet(),
-      pendingRequesterSettleWakeCommits: new WeakMap(),
+      scheduledRequesterSettleWakeRuns: new Set(),
+      pendingRequesterSettleWakeRearms: new Set(),
+      cancelledRequesterSettleWakeRuns: new Set(),
+      pendingRequesterSettleWakeCommits: new Map(),
       newerGenerationOwnsSession: () => false,
       shouldSuppressSessionEffects: async () => false,
       sessionEffectsHostCurrent: () => true,
@@ -230,20 +228,14 @@ it("keeps a known requester wake commit while native staging waits for its ackno
         ),
       );
     const owner = captureOpenClawStateWorkerContext();
-    const previous = new Map([[entry, captureSubagentRunMutationSnapshot(entry)]]);
-    entry.cleanupHandled = true;
-    const publication = publishSubagentRunPostimages({
-      runs: subagentRuns,
-      previous,
-      context: owner,
-      assertCurrent: () => {
-        if (subagentRuns.get(entry.runId) !== entry) {
-          throw new Error("Registry row changed");
-        }
+    const publication = mutateSubagentRuns(
+      [entry.runId],
+      (rows) => {
+        const next = { ...structuredClone(rows.get(entry.runId)!), cleanupHandled: true };
+        return { value: undefined, postimages: new Map([[next.runId, next]]) };
       },
-      persist: (source, callbacks, ...ids) =>
-        persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, ids, { context: source, ...callbacks }),
-    });
+      { context: owner },
+    );
     const joinedPublication = publication.then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
@@ -260,7 +252,8 @@ it("keeps a known requester wake commit while native staging waits for its ackno
       ]);
       expect(getPendingWakeCommit(context, entry)).toBe(original);
       releaseAck.resolve();
-      expect(await publication).toEqual({ outcome: "committed", publication: "published" });
+      await publication;
+      expect(subagentRuns.get(entry.runId)?.cleanupHandled).toBe(true);
       expect(getPendingWakeCommit(context, entry)).toBe(original);
       releaseWake.resolve();
       await pendingWake;

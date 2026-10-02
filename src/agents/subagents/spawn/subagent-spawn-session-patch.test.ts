@@ -55,6 +55,7 @@ it("inherits accepted human credit when participant persistence is still queued"
       expect(loadSessionEntry(scope)?.participants ?? []).toEqual([]);
       const creation = createInitialSubagentSession({
         cfg: {},
+        requesterAgentId: agentId,
         targetAgentId: agentId,
         childSessionKey,
         incognito: false,
@@ -166,6 +167,7 @@ it.each(["creation", "fork"] as const)(
           operation === "creation"
             ? await createInitialSubagentSession({
                 cfg,
+                requesterAgentId: agentId,
                 targetAgentId: agentId,
                 childSessionKey,
                 incognito: false,

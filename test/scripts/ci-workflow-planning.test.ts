@@ -26,7 +26,6 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
-import { WINDOWS_NODE_CI_ADVISORY } from "../../scripts/full-release-validation-policy.mjs";
 import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
@@ -3969,16 +3968,13 @@ describe("ci workflow guards", () => {
     );
     expect(manifestRows.every((row) => row.runtime === "node")).toBe(true);
     for (const matrix of [...plannedRows, ...manifestRows]) {
-      const jobName = evaluateWorkflowExpression(
-        workflow.jobs[WINDOWS_NODE_CI_ADVISORY.aggregateJob].name,
-        {
-          eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          matrix,
-        },
-      );
-      expect(jobName).toMatch(WINDOWS_NODE_CI_ADVISORY.jobNamePattern);
+      const jobName = evaluateWorkflowExpression(workflow.jobs["checks-windows"].name, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix,
+      });
+      expect(jobName).toMatch(/^checks-windows-node-.+$/u);
     }
     expect(runStep.run).toContain('scripts?.["test:windows:ci:1"]');
     expect(runStep.run).toContain('scripts?.["test:windows:ci:2"]');
@@ -11250,10 +11246,11 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions ripgrep for real filesystem contract selections", () => {
+  it("provisions ripgrep for filesystem and SQLite ratchet selections", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
     const nativeTools = "src/agents/sessions/tools/index.test.ts";
     const bytePaths = "src/agents/sessions/tools/grep.byte-path.test.ts";
+    const sqliteRatchet = "test/scripts/check-database-worker-ratchet.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
     const selections = [
       { targets: [contract] },
@@ -11264,6 +11261,10 @@ describe("ci workflow guards", () => {
       { includePatterns: [bytePaths] },
       { groups: [{ shard_name: "agentic-agents-support", targets: [bytePaths] }] },
       { groups: [{ shard_name: "agentic-agents-support", includePatterns: [bytePaths] }] },
+      { targets: [sqliteRatchet] },
+      { includePatterns: [sqliteRatchet] },
+      { includePatterns: ["test/scripts/check-*-ratchet.test.ts"] },
+      { groups: [{ shard_name: "core-tooling-1", includePatterns: [sqliteRatchet] }] },
       { includePatterns: [unrelated] },
       { shardName: "agentic-agents-core-runtime" },
       { shardName: "agentic-agents-support" },
@@ -11293,6 +11294,10 @@ describe("ci workflow guards", () => {
       expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
     ) as { include: { requires_ripgrep?: boolean }[] };
     expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
+      true,
+      true,
+      true,
+      true,
       true,
       true,
       true,
@@ -11839,90 +11844,23 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    ["workflow_dispatch", "full-release-validation-123", 0],
-    ["workflow_dispatch", "", 1],
-    ["workflow_dispatch", "manual-full-release-validation-123", 1],
-    ["pull_request", "full-release-validation-123", 1],
-    ["push", "full-release-validation-123", 1],
-    ["schedule", "full-release-validation-123", 1],
-  ] as const)(
-    "ci-gate limits windows-node-ci advisory to FRV: %s %s",
-    (eventName, dispatchId, exit) => {
-      const gate = readCiWorkflow().jobs["ci-gate"];
-      const step = gate.steps.find(
-        (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
-      );
-      const context = {
-        eventName,
-        dispatchId,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-      };
-      const summary = path.join(tempDirs.make("ci-gate-advisory-"), "summary.md");
-      const outcome = runCiGateFixture(
-        `preflight=success|true\n${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=failure|true`,
-        {
-          FRV_WINDOWS_NODE_ADVISORY: String(
-            evaluateWorkflowExpression(step.env.FRV_WINDOWS_NODE_ADVISORY, context),
-          ),
-          GITHUB_STEP_SUMMARY: summary,
-        },
-      );
-      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(exit);
-      if (exit === 0) {
-        expect(outcome.stdout).toContain(`::notice title=${WINDOWS_NODE_CI_ADVISORY.id} advisory`);
-        expect(readFileSync(summary, "utf8")).toContain(
-          `Advisory class \`${WINDOWS_NODE_CI_ADVISORY.id}\``,
-        );
-        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
-      } else {
-        expect(outcome.stdout).toContain("::error title=CI job did not succeed");
-        expect(existsSync(summary)).toBe(false);
-      }
-    },
-  );
-
   it.skipIf(process.platform === "win32")(
-    "ci-gate keeps every other failed lane blocking alongside windows-node-ci advisory",
+    "ci-gate ignores the retired FRV Windows advisory environment and blocks the failed aggregate",
     () => {
-      const gate = readCiWorkflow().jobs["ci-gate"];
-      const summary = path.join(tempDirs.make("ci-gate-advisory-"), "summary.md");
-      const jobs: string[] = gate.needs;
-      for (const job of jobs.filter((name) => name !== WINDOWS_NODE_CI_ADVISORY.aggregateJob)) {
-        const outcome = runCiGateFixture(
-          `${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=failure|true\n${job}=failure|true`,
-          { FRV_WINDOWS_NODE_ADVISORY: "true", GITHUB_STEP_SUMMARY: summary },
-        );
-        expect(outcome.status, `${job}: ${outcome.stdout}\n${outcome.stderr}`).toBe(1);
-        expect(outcome.stdout.split("\n")).toContain(`${job}: failure (selected=true)`);
-        expect(outcome.stdout).toContain(`${job} finished with failure (selected=true)`);
-      }
+      const outcome = runCiGateFixture("preflight=success|true\nchecks-windows=failure|true", {
+        FRV_WINDOWS_NODE_ADVISORY: "true",
+      });
+      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+      expect(outcome.stdout).toContain("::error title=CI job did not succeed");
+      expect(outcome.stdout).not.toContain("::notice");
     },
   );
-
-  it.skipIf(process.platform === "win32").each([
-    ["skipped", "true"],
-    ["cancelled", "true"],
-    ["failure", "false"],
-    ["failure", ""],
-    ["failure", "true|"],
-    ["failure=", "true"],
-  ])("ci-gate rejects non-advisory Windows results %s selected=%s", (result, selected) => {
-    const outcome = runCiGateFixture(
-      `${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=${result}|${selected}`,
-      { FRV_WINDOWS_NODE_ADVISORY: "true" },
-    );
-    expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(1);
-    expect(outcome.stdout).toContain("::error title=CI job did not succeed");
-    expect(outcome.stdout).not.toContain("::notice");
-  });
 
   it.each([
     ["", true],
     ["manual-full-ci", true],
     ["full-release-validation-123", false],
-  ] as const)("full-CI receipt excludes advisory FRV dispatch %s", (dispatchId, expected) => {
+  ] as const)("full-CI receipt excludes FRV child dispatch %s", (dispatchId, expected) => {
     const receipt = readCiWorkflow().jobs["ci-gate"].steps.find(
       (step: WorkflowStep) => step.name === "Confirm validated workflow revision",
     );

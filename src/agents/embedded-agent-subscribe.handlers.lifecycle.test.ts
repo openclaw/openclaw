@@ -83,7 +83,7 @@ describe("embedded lifecycle", () => {
     await handleAgentEnd(ctx);
     expect(warnMeta(ctx)).toMatchObject({
       error:
-        "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+        "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
       providerRuntimeFailureKind: "auth_html",
     });
     expect(warnMeta(ctx).consoleMessage).not.toContain("rawError=");
@@ -101,8 +101,7 @@ describe("embedded lifecycle", () => {
     {
       raw: '{"type":"error","error":{"type":"server_error","message":"Upstream failed x-api-key: SECRET_CANARY_69737"}}',
       secret: "SECRET_CANARY_69737",
-      error:
-        "⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.",
+      error: "⚠️ The AI service is having trouble. Please try again in a moment.",
       observation: {
         providerErrorType: "server_error",
         providerErrorMessagePreview: "Upstream failed x-api-key: ***",
@@ -134,7 +133,7 @@ describe("embedded lifecycle", () => {
     });
     await handleAgentEnd(ctx);
     expect(warnMeta(ctx).consoleMessage).toBe(
-      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
+      "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`. rawError=connection refused",
     );
     for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
       expect(warnMeta(ctx).consoleMessage).not.toContain(control);
@@ -314,7 +313,8 @@ describe("embedded lifecycle", () => {
       await end;
       expectEvent(onAgentEvent, {
         phase: "error",
-        error: "LLM request failed: connection refused by the provider endpoint.",
+        error:
+          "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
         errorObservation: expect.objectContaining({ providerRuntimeFailureKind: "timeout" }),
         livenessState: "blocked",
       });

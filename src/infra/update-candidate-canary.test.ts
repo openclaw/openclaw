@@ -176,28 +176,52 @@ describe("update candidate canary", () => {
     }
   });
 
-  it("keeps snapshot and validation source selection inside the candidate", async () => {
-    stubHealthyGateway();
-    const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
-    mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
-      createCanarySnapshotResult(options.input, databasePath, warnings),
-    );
-    const servingRoot = path.join(root, "installed");
-    const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
-    const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), env });
-    expect(result.status).toBe("ok");
-    expect(result.steps[0]?.warnings).toEqual(warnings);
-    expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
-      process.execPath,
-      path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
-    ]);
-    expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
-    for (const call of mocks.spawn.mock.calls) {
-      expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
-    }
-    expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
-  });
+  it.each(
+    [
+      { runtime: "node", runtimeArgs: [] },
+      { runtime: "bun", runtimeArgs: ["--no-install"] },
+    ].filter(
+      ({ runtime }) =>
+        process.platform !== "win32" || runtime === (process.versions.bun ? "bun" : "node"),
+    ),
+  )(
+    "keeps $runtime snapshot and validation source selection inside the candidate",
+    async ({ runtime, runtimeArgs }) => {
+      stubHealthyGateway();
+      const warnings = ["Update checks could not inspect plugin esm-fixture: unsupported syntax."];
+      mocks.snapshot.mockImplementation(async (_command, options: { input: string }) =>
+        createCanarySnapshotResult(options.input, databasePath, warnings),
+      );
+      const servingRoot = path.join(root, "installed");
+      const env = { OPENCLAW_DEV_SOURCE_ROOT: servingRoot };
+      const nodeRunner = process.platform === "win32" ? process.execPath : path.join(root, runtime);
+      if (process.platform !== "win32") {
+        // The snapshot watchdog also launches this runtime for a real builtin-only I/O probe.
+        await fs.symlink(process.execPath, nodeRunner);
+      }
+      const result = await validateUpdateCandidateCanary({
+        ...canaryStateOptions(3000),
+        env,
+        nodeRunner,
+      });
+      expect(result.status).toBe("ok");
+      expect(result.steps[0]?.warnings).toEqual(warnings);
+      expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
+        nodeRunner,
+        ...runtimeArgs,
+        path.join(root, "dist", "infra", "update-candidate-state.worker.js"),
+      ]);
+      expect(mocks.snapshot.mock.calls[0]?.[1].baseEnv.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      expect(mocks.spawn.mock.calls.length).toBeGreaterThan(0);
+      for (const call of mocks.spawn.mock.calls) {
+        expect(call[0]).toBe(nodeRunner);
+        expect(call[1].slice(0, runtimeArgs.length)).toEqual(runtimeArgs);
+        expect(call[1].includes("--no-install")).toBe(runtime === "bun");
+        expect(call[2].env.OPENCLAW_DEV_SOURCE_ROOT).toBe(root);
+      }
+      expect(env.OPENCLAW_DEV_SOURCE_ROOT).toBe(servingRoot);
+    },
+  );
 
   it("preserves the runtime validation budget after a snapshot exceeds five minutes", async () => {
     databasePath = path.join(root, "snapshot-budget.sqlite");
@@ -580,7 +604,9 @@ describe("update candidate canary", () => {
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
     expect(completed.at(-1)?.argv.filter((arg) => arg === "--update-canary")).toHaveLength(2);
-    expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
+    expect(
+      completed.map((step) => step.argv.filter((arg) => arg !== "--no-install").slice(1, 3)),
+    ).toEqual([
       [],
       ["doctor", "--fix"],
       ["doctor", "--lint"],
@@ -608,6 +634,7 @@ describe("update candidate canary", () => {
       expect(childEnv[key]).toBeUndefined();
     }
     expect(mocks.spawn.mock.calls.find(([, args]) => args.includes("--check"))?.[1]).toEqual([
+      ...(process.versions.bun ? ["--no-install"] : []),
       path.join(root, "dist", "infra", "update-migrated-finalize.worker.js"),
       "--check",
     ]);
@@ -691,8 +718,12 @@ describe("update candidate canary", () => {
           child.stderr.write("openclaw-update-canary-progress: cli.main.gateway-run-bootstrap\n");
         } else {
           child.stderr.write(
-            formatCliFailureLines({ title: "The CLI command failed.", error, env: {} }).join("\n") +
-              "\n",
+            formatCliFailureLines({
+              title: "The CLI command failed.",
+              error,
+              argv: args,
+              env: options.env,
+            }).join("\n") + "\n",
           );
         }
         if (["lint", "startup", "config"].includes(scenario)) {

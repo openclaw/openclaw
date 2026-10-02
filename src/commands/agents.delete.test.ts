@@ -227,6 +227,7 @@ describe("agents delete command", () => {
     await withStateDirEnv("agents-delete-", async () => {
       const cfg: OpenClawConfig = {
         agents: {
+          ownership: "explicit",
           defaults: { authInheritance: { agentId: "ops" } },
           entries: { ops: {}, research: {} },
         },
@@ -438,11 +439,13 @@ describe("agents delete command", () => {
       const cfg: OpenClawConfig = {
         agents: {
           ownership: "explicit",
-          defaults: { systemAgent: { agentId: "ops" } },
+          defaults: {
+            systemAgent: { agentId: "ops" },
+            authInheritance: { agentId: "ops" },
+          },
           entries: {
             main: { workspace: path.join(stateDir, "workspace-main") },
             ops: {
-              default: true,
               agentDir: opsAgentDir,
               workspace: path.join(stateDir, "workspace-ops"),
             },

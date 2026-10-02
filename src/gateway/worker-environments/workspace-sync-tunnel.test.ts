@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { waitForChildClose, waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { waitForPidFile } from "../../../test/helpers/process-wait.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { createWorkerTunnelManager } from "./tunnel.js";
@@ -27,6 +28,7 @@ import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { stableWorkerPathComponent } from "./workspace-sync-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const RECEIVER_CLEANUP_MS = 10_000;
 
 describe("worker tunnel manager", () => {
   it.each(["setup", "rsync"] as const)(
@@ -337,7 +339,7 @@ describe("worker tunnel manager", () => {
 
   it.skipIf(process.platform === "win32")(
     "serializes fallback reset behind the live remote receiver",
-    async () => {
+    async ({ signal }) => {
       const root = tempDirs.make("openclaw-worker-convergent-sync-");
       const localPath = path.join(root, "local");
       const remoteHome = path.join(root, "remote-home");
@@ -455,9 +457,17 @@ describe("worker tunnel manager", () => {
           receiverChild.stderr?.on("data", (chunk: string) => {
             receiverStderr += chunk;
           });
-          receiverExited = waitForChildClose(receiverChild, 10_000);
+          const closed = createDeferred<{
+            code: number | null;
+            signal: NodeJS.Signals | null;
+          }>();
+          // Capture close at spawn so teardown can still join it after the test aborts.
+          receiverChild.once("close", (code, exitSignal) =>
+            closed.resolve({ code, signal: exitSignal }),
+          );
+          receiverExited = closed.promise;
           receiverGroupPid = await Promise.race([
-            waitForPidFile(receiverMarker, 10_000),
+            waitForPidFile(receiverMarker, signal),
             receiverExited.then(() => {
               throw new Error(receiverStderr || "test receiver exited before its marker");
             }),
@@ -570,7 +580,7 @@ describe("worker tunnel manager", () => {
         if (!receiverExited) {
           throw new Error("workspace receiver did not start");
         }
-        const receiverExit = await receiverExited;
+        const receiverExit = await withinTest(receiverExited, signal);
         expect(receiverExit.signal).toBeNull();
         expect(receiverExit.code).not.toBe(0);
         const result = await syncing;
@@ -660,8 +670,13 @@ describe("worker tunnel manager", () => {
             const gateWriter = await fs.open(receiverGate, "w");
             await gateWriter.write("cleanup\n");
             await gateWriter.close();
+          } else {
+            receiverChild.kill("SIGTERM");
           }
-          await receiverExited;
+          if (receiverExited) {
+            // Cleanup hang guard after release or SIGTERM, not a readiness race.
+            await withinTest(receiverExited, AbortSignal.timeout(RECEIVER_CLEANUP_MS));
+          }
         }
         await handle.stop();
       }

@@ -27,6 +27,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 
@@ -58,6 +59,7 @@ export function createChatDirectiveSuiteResources() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-chat-directive-suite-"));
   const databasePath = path.join(root, "openclaw-agent.sqlite");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+  const previousEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
   let metadataOwner: GatewayPluginMetadataOwner | undefined;
   return {
     root,
@@ -68,6 +70,7 @@ export function createChatDirectiveSuiteResources() {
     settleFixtures: () => fixtureLifetime.cleanup(),
     // The caller retains cleanup ownership before opening can fail.
     open() {
+      setTestEnvValue("OPENCLAW_STATE_DIR", root);
       openOpenClawAgentDatabase({ agentId: "main", env, path: databasePath });
       // Session cases share the installed inventory through per-case runtime resets.
       metadataOwner = retainGatewayPluginMetadata(createTestGatewayScheduler());
@@ -122,13 +125,15 @@ export function createChatDirectiveSuiteResources() {
     },
     async close() {
       try {
+        const metadataCleanup = await metadataOwner?.close();
+        expect(metadataCleanup?.failures ?? []).toEqual([]);
         await drainAgentDatabaseResources({ path: databasePath, agentId: "main" }, async () =>
           disposeOpenClawAgentDatabaseByPath(databasePath, { env }),
         );
         await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(env));
         fs.rmSync(root, { recursive: true, force: true });
       } finally {
-        await metadataOwner?.close();
+        previousEnv.restore();
       }
     },
   };

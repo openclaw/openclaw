@@ -14,7 +14,6 @@ type StreamFrame =
       kind: "media";
       payloadBase64: string;
       timestampMs?: number;
-      track?: string;
     }
   | { kind: "mark"; name?: string }
   | { kind: "stop" }
@@ -23,7 +22,6 @@ type StreamFrame =
 
 /** Adapter contract for provider media stream wire formats. */
 export interface StreamFrameAdapter {
-  readonly providerName: "twilio" | "telnyx";
   parseInbound(rawMessage: string): StreamFrame;
   serializeMedia(payloadBase64: string): string;
   serializeClear(): string;
@@ -53,7 +51,6 @@ function parseMediaFrame(msg: Record<string, unknown>): StreamFrame {
     kind: "media",
     payloadBase64: canonicalPayload,
     timestampMs: parseTimestampMs(mediaData?.timestamp),
-    track: typeof mediaData?.track === "string" ? mediaData.track : undefined,
   };
 }
 
@@ -116,7 +113,6 @@ function serializeMarkFrame(name: string, streamSid?: string): string {
 
 /** Twilio media stream adapter, retaining streamSid for outbound frames. */
 export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
-  readonly providerName = "twilio" as const;
   private streamSid = "";
 
   parseInbound(rawMessage: string): StreamFrame {
@@ -146,8 +142,6 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
 }
 
 export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
-  readonly providerName = "telnyx" as const;
-
   parseInbound(rawMessage: string): StreamFrame {
     return parseProviderInboundFrame(
       rawMessage,

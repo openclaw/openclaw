@@ -97,6 +97,13 @@ agent access, and runtime and sandbox requirements still apply. The
 `artifacts.list`, `artifacts.get`, and `artifacts.download` APIs require
 the broader `operator.read` scope.
 
+Hidden native sub-agents started through `sessions_spawn` use the initiating
+person's session-write authority for the exact owned child and its private
+parent completion. The child retains that person's current authority, model
+policy, and required sandbox. Direct `agent` RPC calls keep their existing
+broader scope requirements; copying a child session or run identifier does not
+grant launch permission.
+
 RPCs, events, and background tools use the same scope rules. A continuation with
 `operator.write` can read its GitHub identity and session state without another
 interactive message. Session access and execution-lifetime checks still apply.

@@ -521,7 +521,7 @@ describe("visible yielded session continuation", () => {
                 },
                 subagents: { maxSpawnDepth: 2, maxConcurrent: 4 },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             tools: {
               profile: "full",

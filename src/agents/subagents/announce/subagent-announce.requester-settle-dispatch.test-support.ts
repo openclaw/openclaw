@@ -1,6 +1,18 @@
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import type { RequesterSettleWakeBatchCallbacks } from "./subagent-announce.requester-settle-state.js";
 
 export const REQUESTER_KEY = "agent:main:main";
+
+export const publishWakeTransition: RequesterSettleWakeBatchCallbacks["transitionBatch"] = (
+  batch,
+  state,
+  onPublished,
+) => {
+  for (const entry of batch) {
+    entry.requesterSettleWake = state;
+  }
+  onPublished(batch);
+};
 
 export function settledChild(): SubagentRunRecord {
   return {

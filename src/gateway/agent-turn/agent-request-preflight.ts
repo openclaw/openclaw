@@ -104,7 +104,7 @@ export function prepareAgentRequestPreflight(params: {
     ]);
     return undefined;
   }
-  const collectorSession = findSwarmCollectorSession(requestSessionKey);
+  const collectorSession = findSwarmCollectorSession(requestSessionKey, selectedAgentId);
   let swarmExecutionLane: CommandLaneConfiguration | undefined;
   // Collector children always use subagent session keys, so ordinary traffic
   // must never pay the persisted-store read. The store fallback only covers a
@@ -135,6 +135,7 @@ export function prepareAgentRequestPreflight(params: {
     }
     const registeredCollector = findAuthorizedSwarmCollectorRequest({
       childSessionKey: request.sessionKey,
+      childAgentId: selectedAgentId,
       idempotencyKey: request.idempotencyKey,
       outputSchema: request.swarmOutputSchema,
     });

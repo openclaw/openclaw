@@ -1,29 +1,33 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { appendTranscriptTurn, readTranscriptTail } from "./transcript-store.js";
+import {
+  appendTranscriptTurn,
+  appendTranscriptTurnAsync,
+  readTranscriptTailAsync,
+} from "./transcript-store.js";
 
 // Mirrors the store's internal retention bound (kept module-local there).
 const SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES = 1_000;
 
 describe("system-agent transcript store", () => {
-  afterEach(() => {
-    closeOpenClawStateDatabase();
+  afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("appends turns and returns a bounded tail oldest-first", async () => {
     await withTestDir({ prefix: "openclaw-system-agent-transcript-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      appendTranscriptTurn({ role: "assistant", text: "welcome", at: 1 }, { env });
-      appendTranscriptTurn({ role: "user", text: "status", at: 2 }, { env });
-      appendTranscriptTurn({ role: "assistant", text: "healthy", at: 2 }, { env });
-      closeOpenClawStateDatabase();
+      await appendTranscriptTurnAsync({ role: "assistant", text: "welcome", at: 1 }, { env });
+      await appendTranscriptTurnAsync({ role: "user", text: "status", at: 2 }, { env });
+      await appendTranscriptTurnAsync({ role: "assistant", text: "healthy", at: 2 }, { env });
+      await closeOpenClawStateDatabaseAsync();
 
-      expect(readTranscriptTail(2, { env })).toEqual([
+      expect(await readTranscriptTailAsync(2, { env })).toEqual([
         { role: "user", text: "status", at: 2 },
         { role: "assistant", text: "healthy", at: 2 },
       ]);
-      expect(readTranscriptTail(0, { env })).toEqual([]);
+      expect(await readTranscriptTailAsync(0, { env })).toEqual([]);
     });
   });
 
@@ -34,7 +38,7 @@ describe("system-agent transcript store", () => {
         appendTranscriptTurn({ role: "user", text: `turn-${index}`, at: index }, { env });
       }
 
-      const turns = readTranscriptTail(SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES + 1, { env });
+      const turns = await readTranscriptTailAsync(SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES + 1, { env });
       expect(turns).toHaveLength(SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES);
       expect(turns[0]?.text).toBe("turn-1");
       expect(turns.at(-1)?.text).toBe(`turn-${SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES}`);
@@ -49,15 +53,15 @@ describe("system-agent transcript store", () => {
       appendTranscriptTurn({ role: "reset", text: "", at: 3 }, { env });
       appendTranscriptTurn({ role: "user", text: "after reset", at: 4 }, { env });
       appendTranscriptTurn({ role: "assistant", text: "new answer", at: 5 }, { env });
-      closeOpenClawStateDatabase();
+      await closeOpenClawStateDatabaseAsync();
 
-      expect(readTranscriptTail(10, { env })).toEqual([
+      expect(await readTranscriptTailAsync(10, { env })).toEqual([
         { role: "user", text: "before reset", at: 1 },
         { role: "assistant", text: "old answer", at: 2 },
         { role: "user", text: "after reset", at: 4 },
         { role: "assistant", text: "new answer", at: 5 },
       ]);
-      expect(readTranscriptTail(10, { afterLastReset: true, env })).toEqual([
+      expect(await readTranscriptTailAsync(10, { afterLastReset: true, env })).toEqual([
         { role: "user", text: "after reset", at: 4 },
         { role: "assistant", text: "new answer", at: 5 },
       ]);
@@ -74,9 +78,9 @@ describe("system-agent transcript store", () => {
         appendTranscriptTurn({ role: "user", text: "newer one", at: 3 }, { env });
         appendTranscriptTurn({ role: "assistant", text: "newer two", at: 4 }, { env });
         appendTranscriptTurn({ role: "user", text: "newer three", at: 5 }, { env });
-        closeOpenClawStateDatabase();
+        await closeOpenClawStateDatabaseAsync();
 
-        expect(readTranscriptTail(2, { afterLastReset: true, env })).toEqual([
+        expect(await readTranscriptTailAsync(2, { afterLastReset: true, env })).toEqual([
           { role: "assistant", text: "newer two", at: 4 },
           { role: "user", text: "newer three", at: 5 },
         ]);

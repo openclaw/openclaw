@@ -8,7 +8,7 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import * as mediaTaskStatus from "../../media-generation-task-status.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../../subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
@@ -121,10 +121,10 @@ function createInput(options?: {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
-  resetSubagentRegistryForTests();
+  await resetSubagentRegistryForTests({ persist: false });
   hoisted.promptPressureKeys.clear();
   hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
@@ -136,11 +136,11 @@ beforeEach(() => {
   }));
 });
 
-afterEach(() => {
+afterEach(async () => {
   vi.restoreAllMocks();
   deleteSession("exec-a");
   deleteSession("exec-z");
-  resetSubagentRegistryForTests();
+  await resetSubagentRegistryForTests({ persist: false });
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
@@ -204,14 +204,14 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       createdAt: 1,
       execution: { status: "queued" },
     } satisfies SubagentRunRecord;
-    addSubagentRunForTests(run);
+    seedSubagentRunForReadTest(run);
     const queued = await prepareEmbeddedAttemptPromptContext(fixture.input);
-    addSubagentRunForTests({ ...run, execution: { status: "running", startedAt: 2 } });
+    seedSubagentRunForReadTest({ ...run, execution: { status: "running", startedAt: 2 } });
     const running = await prepareEmbeddedAttemptPromptContext(fixture.input);
     expect(running.systemPromptForHook).toBe(queued.systemPromptForHook);
     expect(queued.runtimeContextMessageForCurrentTurn?.content).toContain("status=queued");
     expect(running.runtimeContextMessageForCurrentTurn?.content).toContain("status=running");
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests({ persist: false });
     const completed = await prepareEmbeddedAttemptPromptContext(fixture.input);
     expect(completed.runtimeContextMessageForCurrentTurn?.content).toContain(
       "## Active Subagents\nnone",

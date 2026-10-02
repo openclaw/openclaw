@@ -17,11 +17,15 @@ import {
 } from "../../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import {
+  persistRegistryFixture,
+  saveSubagentRegistryChangesToSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
+import {
   clearSubagentRunsReadCacheForTest,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
-  persistSubagentRunsToDiskOrThrow,
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
@@ -33,9 +37,7 @@ import {
   loadSubagentRegistryFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
   loadSubagentRunsForSessionsInDatabase,
-  saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentDisplayStatus } from "./subagent-session-metrics.js";
 
@@ -252,7 +254,7 @@ describe("subagent registry sqlite store", () => {
         expect(queries).not.toHaveBeenCalled();
 
         const replaced = { ...run, model: "updated-model" };
-        persistSubagentRunsToDiskOrThrow(new Map([[run.runId, replaced]]), [run.runId]);
+        persistRegistryFixture(new Map([[run.runId, replaced]]), [run.runId]);
         expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)).toMatchObject({
           model: replaced.model,
           task: run.task,
@@ -277,13 +279,13 @@ describe("subagent registry sqlite store", () => {
         ).toBe(replaced.model);
 
         const published = { ...replaced, model: "published-model" };
-        persistSubagentRunsToDiskOrThrow(new Map([[run.runId, published]]), [run.runId]);
+        persistRegistryFixture(new Map([[run.runId, published]]), [run.runId]);
         expect(
           getSubagentSessionListRunsSnapshotForSessions(new Map(), keys).get(run.runId)?.model,
         ).toBe(published.model);
         expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.task).toBe(run.task);
         expect(loadSubagentRegistryFromSqlite().get(run.runId)?.model).toBe(published.model);
-        persistSubagentRunsToDiskOrThrow(new Map(), [run.runId]);
+        persistRegistryFixture(new Map(), [run.runId]);
         expect(getSubagentSessionListRunsSnapshotForRead(new Map(), keys).size).toBe(0);
         expect(getSubagentRunsSnapshotForRead(new Map()).size).toBe(0);
         expect(loadSubagentRegistryFromSqlite().size).toBe(0);
@@ -603,6 +605,7 @@ describe("subagent registry sqlite store", () => {
 
   it("loads a canonical lightweight session-list projection", async () => {
     const run = createRun({
+      childAgentId: "main",
       model: "openai/gpt-5.6",
       swarmRunId: "stable-collector",
       generation: 3,
@@ -632,6 +635,7 @@ describe("subagent registry sqlite store", () => {
       runId: run.runId,
       swarmRunId: "stable-collector",
       childSessionKey: run.childSessionKey,
+      childAgentId: "main",
       requesterSessionKey: run.requesterSessionKey,
       model: "openai/gpt-5.6",
       generation: 3,

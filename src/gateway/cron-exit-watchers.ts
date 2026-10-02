@@ -34,7 +34,7 @@ export type CronExitResult = {
 };
 
 export type CronExitWatcherHandlers = {
-  legacyDefaultAgentId?: string;
+  getDefaultAgentId?: () => string | undefined;
   getProcessSupervisor: () => ProcessSupervisor;
   fireOnExit: (
     job: OnExitCronJob,
@@ -67,11 +67,10 @@ function scopeKey(jobId: string): string {
   return `${SCOPE_PREFIX}:${jobId}`;
 }
 
-function isWatchableExitJob(job: CronJob, legacyDefaultAgentId?: string): job is OnExitCronJob {
+function isWatchableExitJob(job: CronJob, defaultAgentId?: string): job is OnExitCronJob {
   return (
     job.enabled &&
-    (!legacyDefaultAgentId ||
-      tryResolveCronJobEffectiveAgentId(job, undefined, legacyDefaultAgentId) !== undefined) &&
+    tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== undefined &&
     hasCanonicalCronDeliveryMode(job.delivery) &&
     job.schedule.kind === "on-exit"
   );
@@ -84,6 +83,7 @@ export function createCronExitWatchers(
   options?: { retryBackoffMs?: readonly number[] },
 ): CronExitWatchers {
   let handlers = initialHandlers;
+  let retries = scheduler.scope();
   const ownerSettlements = new Set<Promise<void>>();
   const settleOwnerCallback = async <T>(operation: Promise<T>): Promise<T> => {
     const settlement = operation.then(
@@ -159,7 +159,7 @@ export function createCronExitWatchers(
   };
 
   const arm = (job: OnExitCronJob, consecutiveFailures = 0): Promise<void> => {
-    if (!isWatchableExitJob(job, handlers.legacyDefaultAgentId)) {
+    if (!isWatchableExitJob(job, handlers.getDefaultAgentId?.())) {
       return Promise.resolve();
     }
     const armed = createDeferredCore();
@@ -195,7 +195,7 @@ export function createCronExitWatchers(
       }
       try {
         const updated = await settleOwnerCallback(owner.updateWatcherState(slot.job, patch));
-        if (owns() && updated && isWatchableExitJob(updated, handlers.legacyDefaultAgentId)) {
+        if (owns() && updated && isWatchableExitJob(updated, handlers.getDefaultAgentId?.())) {
           slot.job = updated;
         }
       } catch (err) {
@@ -220,7 +220,7 @@ export function createCronExitWatchers(
       }
       const delayMs =
         retryBackoffMs[Math.min(slot.consecutiveFailures - 1, retryBackoffMs.length - 1)]!;
-      slot.retryJob = scheduler.schedule({
+      slot.retryJob = retries.schedule({
         id: `${scopeKey(job.id)}:retry`,
         delayMs,
         run: () => {
@@ -365,11 +365,14 @@ export function createCronExitWatchers(
   };
 
   const reconcile = (jobs: CronJob[]) => {
+    if (retries.signal.aborted) {
+      retries = scheduler.scope();
+    }
     const jobsById = new Map(jobs.map((job) => [job.id, job] as const));
     const want = new Map(
       jobs
         .filter((job): job is OnExitCronJob =>
-          isWatchableExitJob(job, handlers.legacyDefaultAgentId),
+          isWatchableExitJob(job, handlers.getDefaultAgentId?.()),
         )
         .map((j) => [j.id, j] as const),
     );
@@ -408,6 +411,8 @@ export function createCronExitWatchers(
   };
 
   const cancelAll = async () => {
+    const closingRetries = retries;
+    closingRetries.beginClose();
     const jobIds = new Set([
       ...active.keys(),
       ...Array.from(settlingCancelledSlots, (slot) => slot.job.id),
@@ -415,7 +420,10 @@ export function createCronExitWatchers(
     for (const jobId of jobIds) {
       cancel(jobId);
     }
-    await Promise.all(Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise));
+    await Promise.all([
+      closingRetries.stop(),
+      ...Array.from(settlingCancelledSlots, (slot) => slot.settlement.promise),
+    ]);
   };
 
   return {

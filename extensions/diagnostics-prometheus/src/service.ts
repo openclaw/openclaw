@@ -28,6 +28,7 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
+import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordGatewayRpcEvent } from "./service-gateway-rpc.js";
 import { recordMemorySample } from "./service-memory.js";
 
@@ -580,12 +581,7 @@ function recordDiagnosticEvent(
       });
       return;
     case "diagnostic.child_process.spawn":
-      store.counter(
-        "openclaw_child_process_spawn_total",
-        "Successful child launches through the shared spawn and exec owners.",
-        { family: normalizeDiagnosticValue(evt.family) },
-        numericValue(evt.count) ?? 0,
-      );
+      recordChildProcessSpawn(store, evt);
       return;
     case "diagnostic.memory.sample":
       recordMemorySample(store, evt.memory, BYTE_BUCKETS);

@@ -50,15 +50,18 @@ struct ChatSessionSidebar: View {
     @AppStorage("openclaw.chat.sidebar.ownerFilter") var sessionOwnerFilter = ""
     @AppStorage("openclaw.chat.sidebar.emptyGroups") var emptyGroups = ChatSessionSidebarModel.EmptyGroups.filtering
     @State private var observedOrder = ChatSessionSidebarModel.ObservedOrder()
+    @State private var lastSnoozeWake = Date.distantPast
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { context in
-            self.sidebar(now: context.date)
+            self.sidebar(now: max(context.date, self.lastSnoozeWake))
         }
     }
 
     private func sidebar(now: Date) -> some View {
-        let sections = self.rosterSections(observedOrder: self.observedOrder)
+        let sections = self.rosterSections(now: now, observedOrder: self.observedOrder)
+        let nextWake = OpenClawChatSessionSnooze.nextWake(
+            in: self.rosterData?.queryRows ?? self.viewModel.sessions, now: now)
         let projectedRows = sections.flatMap(\.nodes).flatMap(\.previewSessions)
         let ownership = self.ownership(for: projectedRows)
         let previewRequest = ChatSessionSidebarPreviews.Request(
@@ -114,6 +117,14 @@ struct ChatSessionSidebar: View {
             await model.pendingCacheWriteTask?.value
             guard !Task.isCancelled, ObjectIdentifier(self.viewModel) == previewRequest.modelID else { return }
             await self.previews.refresh(previewRequest, cache: cache)
+        }
+        .task(id: nextWake) {
+            guard let nextWake else { return }
+            do {
+                try await Task.sleep(for: .seconds(max(0, nextWake.timeIntervalSinceNow)))
+                try Task.checkCancellation()
+                self.lastSnoozeWake = max(nextWake, .now)
+            } catch {}
         }
         .task(id: self.groupRefreshID) {
             self.viewModel.refreshSessions(limit: 200)
