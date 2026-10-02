@@ -351,6 +351,7 @@ process.stdout.write(JSON.stringify({status:'error',reason:'original failure'})+
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
       }),
       nodeExecArgv,
+      runtimeArgs: [],
       action: mode === "startup" ? "triage" : "update",
       failure: mode === "startup" ? { ...failure, kind: "gateway-startup" } : undefined,
       parentPid,
