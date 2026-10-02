@@ -19,7 +19,9 @@ import {
 } from "../../projects/project-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
+import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
 import { buildDashboardSessionTitleSource } from "../dashboard-session-title.js";
+import { acceptGatewayDeviceSourceAuthority } from "../device-revocation.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
@@ -486,6 +488,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       };
     }
     let runPayload: Record<string, unknown> | undefined;
+    let initialTurnSourceAccepted = false;
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const allowExistingModelSelection = authorizeOperatorScopesForRequiredScope(
@@ -573,6 +576,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           sessionId: committed.entry.sessionId,
           lifecycleRevision: committed.entry.lifecycleRevision,
         });
+        if (hasInitialTurn && requestAuthority.family === "worker") {
+          initialTurnSourceAccepted = acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
+        }
       },
       afterCreate: async (session) => {
         if (!authority.hasActive()) {
@@ -586,6 +592,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           options,
           {
             ...options,
+            client: initialTurnSourceAccepted ? captureAgentTurnPrincipal(client) : client,
             params: {
               sessionKey: session.key,
               agentId: session.agentId,

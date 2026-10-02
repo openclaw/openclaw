@@ -515,7 +515,10 @@ async function authenticateGatewayConnectCore(
   return {
     authPolicy: captureGatewayAuthPolicy(context.configSnapshot, {
       role,
+      authMethod,
+      authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
       verifiedIdentity: authResult.user,
+      browserOrigin: context.browserOrigin,
     }),
     resolvedAuth,
     minProtocol,

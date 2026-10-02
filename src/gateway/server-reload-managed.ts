@@ -189,6 +189,7 @@ export function startManagedGatewayConfigReloader(
           previousRequired: string | undefined | null;
           previousCurrent: string | undefined;
           nextGeneration: string | undefined;
+          previousRuntimeConfig: OpenClawConfig;
           runtimeConfig: OpenClawConfig;
         }
       | undefined;
@@ -197,6 +198,7 @@ export function startManagedGatewayConfigReloader(
         await transactionOwnership.checkpoint();
         assertCurrent();
         const ownership = params.sharedGatewaySessionGenerationState.capture();
+        const previousRuntimeConfig = committedRuntimeConfig;
         const previousRequired = params.sharedGatewaySessionGenerationState.required;
         const prepared = await tryPrepareRuntimeSecrets(
           prepareRuntimeCandidate(nextConfig, sourceConfig, transactionOwnership),
@@ -219,6 +221,7 @@ export function startManagedGatewayConfigReloader(
           ownership,
           previousRequired,
           previousCurrent: ownership.generation,
+          previousRuntimeConfig,
           nextGeneration: params.resolveSharedGatewaySessionGenerationForConfig(
             prepared.snapshot.config,
           ),
@@ -236,6 +239,7 @@ export function startManagedGatewayConfigReloader(
       previousCurrent: previousSharedGatewaySessionGeneration,
       nextGeneration: nextSharedGatewaySessionGeneration,
       runtimeConfig: preparedRuntimeConfig,
+      previousRuntimeConfig,
     } = preparation;
     let restartTransaction: GatewayRestartTransactionResult | undefined;
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
@@ -276,6 +280,7 @@ export function startManagedGatewayConfigReloader(
           state: params.sharedGatewaySessionGenerationState,
           clients: params.clients,
           expectedGeneration: nextSharedGatewaySessionGeneration,
+          transition: { previous: previousRuntimeConfig, next: preparedRuntimeConfig },
         });
       }
       restartTransaction.settle("committed");

@@ -56,8 +56,10 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
   });
   return (
     prevResolvedAuth.mode !== nextResolvedAuth.mode ||
-    resolveSharedGatewaySessionGeneration(prevResolvedAuth, prev.gateway?.trustedProxies) !==
-      resolveSharedGatewaySessionGeneration(nextResolvedAuth, next.gateway?.trustedProxies)
+    // Proxy policy writes reconcile each principal instead of rotating a shared credential.
+    (prevResolvedAuth.mode !== "trusted-proxy" &&
+      resolveSharedGatewaySessionGeneration(prevResolvedAuth, prev.gateway?.trustedProxies) !==
+        resolveSharedGatewaySessionGeneration(nextResolvedAuth, next.gateway?.trustedProxies))
   );
 }
 
@@ -218,6 +220,8 @@ export async function commitGatewayConfigWrite(params: {
   application?: Promise<RuntimeConfigWriteApplicationStatus>;
   queueFollowUp: () => void;
 }> {
+  const previousRuntimeConfig =
+    params.context?.getCommittedRuntimeConfig?.() ?? params.snapshot.config;
   const application = params.awaitRuntimeApplication
     ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
     : undefined;
@@ -257,7 +261,10 @@ export async function commitGatewayConfigWrite(params: {
       // reconcile after responding, including receipts no runtime owner claimed.
       if (!application?.claimed) {
         queueMicrotask(() => {
-          params.context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(result.nextConfig);
+          params.context?.enforceSharedGatewayAuthGenerationForConfigWrite?.(
+            result.nextConfig,
+            previousRuntimeConfig,
+          );
           if (params.disconnectSharedAuthClients) {
             params.context?.disconnectClientsUsingSharedGatewayAuth?.();
           }

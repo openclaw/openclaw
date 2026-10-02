@@ -357,6 +357,7 @@ export async function prepareGatewayKernelState(params: {
   const sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
     current: resolveCurrentSharedGatewaySessionGeneration(),
     required: null,
+    authModeOverride: resolvedAuth.modeSource === "override" ? resolvedAuth.mode : undefined,
   });
   const preauthHandshakeTimeoutMs = undefined;
   const initialHooksConfig = runtimeConfig.hooksConfig;
