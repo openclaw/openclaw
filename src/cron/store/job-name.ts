@@ -2,6 +2,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
 import {
   executeExistingOpenClawStateRead,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -39,18 +40,19 @@ export async function prepareCronJobNameResolver(jobIds: string[], storePath?: s
 /** Read display metadata without loading payloads or running cron store repairs. */
 export function createCronJobNameResolver(
   jobIds: readonly string[],
+  options: OpenClawStateDatabaseOptions = {},
 ): (jobId: string) => string | undefined {
   let names: Map<string, string | undefined> | undefined;
   return (jobId) => {
     if (!names) {
-      const storePath = resolveCronJobsStorePath();
+      const storePath = resolveCronJobsStorePath(undefined, options.env);
       names =
         withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
           if (!tableExists(db, "cron_jobs")) {
             return new Map<string, string | undefined>();
           }
           return readCronJobNamesInDatabase(db, jobIds, storePath);
-        }) ?? new Map<string, string | undefined>();
+        }, options) ?? new Map<string, string | undefined>();
     }
     // Match native string binding, including a lone surrogate in stored provenance.
     return names.get(toUSVString(jobId));

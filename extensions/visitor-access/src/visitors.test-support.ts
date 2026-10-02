@@ -134,6 +134,9 @@ export function visitorProfileFixture(
     async request() {
       throw new Error("Expected a mocked Gateway request");
     },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session change subscription");
+    },
     async readSessionFacts() {
       throw new Error("Unexpected session facts request");
     },

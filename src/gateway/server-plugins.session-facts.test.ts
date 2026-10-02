@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.transcript-turn.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -72,6 +72,33 @@ function read(fixture: Fixture, sessionKeys: readonly string[]) {
 }
 
 describe("trusted plugin session facts", () => {
+  it("subscribes to narrow keyed invalidations until unsubscribed", () => {
+    const listener = vi.fn();
+    const unsubscribe = runtime.gateway.subscribeSessionChanges(listener);
+    try {
+      sessionChanges.emit({
+        agentId: "main",
+        sessionKey,
+        storePath: "/synthetic/private/store",
+        facts: { kind: "removed" },
+        factsInvalidated: "category",
+      });
+      sessionChanges.emit({ sessionKey, factsInvalidated: true });
+      sessionChanges.emit({ agentId: "main", sessionKey });
+      sessionChanges.emit({ all: true, scope: "stores", factsInvalidated: true });
+      expect(listener.mock.calls).toEqual([
+        [{ agentId: "main", sessionKey, factsInvalidated: "category" }],
+        [{ agentId: "main", sessionKey, factsInvalidated: "true" }],
+        [{ agentId: "main", sessionKey }],
+      ]);
+      unsubscribe();
+      sessionChanges.emit({ agentId: "main", sessionKey });
+      expect(listener).toHaveBeenCalledTimes(3);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("lists shared sessions as a trusted service while retaining a scoped client's visibility", () =>
     withFixture(async (fixture) => {
       const foreignKey = "agent:main:foreign-shared";

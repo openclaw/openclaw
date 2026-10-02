@@ -18,7 +18,6 @@ import {
 } from "../state/agent-deletion-journal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
@@ -63,7 +62,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    await closeOpenClawAgentDatabasesAsync(fixtureStateDir);
+    await closeOpenClawAgentDatabasesAsync();
     const retainedDatabase = path.join(
       fixtureStateDir,
       "agents",
@@ -225,7 +224,7 @@ describe("plugin host cleanup session stores", () => {
         },
       );
     }
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync();
     const retiredBefore = loadSessionEntry({
       agentId: "retired",
       storePath: sharedStore,
@@ -289,7 +288,7 @@ describe("plugin host cleanup session stores", () => {
         pluginExtensions: { fixture: { active: true } },
       },
     );
-    await closeOpenClawAgentDatabasesAsync(fixtureStateDir);
+    await closeOpenClawAgentDatabasesAsync();
     const databasePath = path.join(
       fixtureStateDir,
       "agents",
@@ -533,7 +532,7 @@ describe("plugin host cleanup session stores", () => {
       });
 
       expect(result).toEqual({ cleanupCount: 1, failures: [] });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync();
       const target = loadSessionEntry({ sessionKey: targetKey, storePath });
       expect(target?.pluginExtensions).toEqual({ other: { state: { preserved: true } } });
       expect(target?.pluginNextTurnInjections).toBeUndefined();
