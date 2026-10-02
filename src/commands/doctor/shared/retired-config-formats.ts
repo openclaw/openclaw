@@ -113,6 +113,27 @@ export function findRetiredConfigUpgradeRequirement(
       }
     }
   });
+  visitChannelEntries(config, "matrix", (scope, configPath) => {
+    checkKeys(scope, configPath, ["allowPrivateNetwork"]);
+    if (isRecord(scope.dm) && scope.dm.policy === "trusted") {
+      retired.push(`${configPath}.dm.policy`);
+    }
+    for (const section of ["groups", "rooms"]) {
+      const rooms = scope[section];
+      if (isRecord(rooms)) {
+        for (const [roomId, room] of Object.entries(rooms)) {
+          checkKeys(room, `${configPath}.${section}.${roomId}`, ["allow"]);
+        }
+      }
+    }
+  });
+  visitChannelEntries(config, "slack", (scope, configPath) => {
+    if (isRecord(scope.channels)) {
+      for (const [channelId, channel] of Object.entries(scope.channels)) {
+        checkKeys(channel, `${configPath}.channels.${channelId}`, ["allow"]);
+      }
+    }
+  });
   for (const channelId of ["discord", "line", "matrix", "telegram"]) {
     visitChannelEntries(config, channelId, (scope, configPath) => {
       checkKeys(scope.threadBindings, `${configPath}.threadBindings`, ["ttlHours"]);

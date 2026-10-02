@@ -83,6 +83,9 @@ Doctor also refuses these retired config inputs:
 - Telegram `dm`, `direct.*.threadReplies`, native draft preview settings, and scalar
   or flat streaming settings (`streamMode`, `chunkMode`, `blockStreaming`,
   `blockStreamingCoalesce`, and `draftChunk`), including account overrides.
+- Matrix `dm.policy: "trusted"`, flat `allowPrivateNetwork`, and `allow` in
+  `groups.<room>` or `rooms.<room>`, including account overrides.
+- Slack `channels.<id>.allow`, including account overrides.
 
 Configs containing these keys must be repaired before current validation can
 succeed. Doctor preserves the config and stops with recovery guidance instead
