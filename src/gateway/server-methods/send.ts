@@ -40,7 +40,7 @@ import {
   cancelTerminalSourceReplyDelivery,
   reconcileTerminalSourceReplyDelivery,
 } from "../../infra/outbound/source-reply-mirror.js";
-import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
+import { maybeResolvePluginMessagingTarget } from "../../infra/outbound/target-normalization.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
@@ -570,11 +570,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           const idLikeTarget = await withChannelReadAuthority(
             messageActionAuthorization?.scheduled ? commitAgentRuntimeAuthority : undefined,
             () =>
-              maybeResolveIdLikeTarget({
+              maybeResolvePluginMessagingTarget({
                 cfg,
                 channel,
                 input: resolvedTarget.to,
                 accountId,
+                requireIdLike: true,
               }),
           );
           const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
@@ -598,8 +599,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           if (implicitAgent && !implicitAgent.ok) {
             return { ok: false, error: implicitAgent.error, meta: { channel } };
           }
-          const effectiveAgentId =
-            explicitAgentId ?? sessionAgentId ?? (implicitAgent?.ok ? implicitAgent.agentId : null);
+          const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? implicitAgent?.agentId;
           if (!effectiveAgentId) {
             return {
               ok: false,

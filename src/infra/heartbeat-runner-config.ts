@@ -73,26 +73,6 @@ function resolveHeartbeatModelRef(params: {
   };
 }
 
-function usesCodexHarness(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  heartbeat?: HeartbeatConfig;
-  entry?: SessionEntry;
-  sessionKey?: string;
-}): boolean {
-  const modelRef = resolveHeartbeatModelRef(params);
-  return (
-    resolveEffectiveAgentRuntime({
-      cfg: params.cfg,
-      provider: modelRef.provider,
-      modelId: modelRef.model,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionEntry: params.entry,
-    }) === "codex"
-  );
-}
-
 export function shouldUseHeartbeatResponseToolPrompt(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -112,7 +92,17 @@ export function shouldUseHeartbeatResponseToolPrompt(params: {
   if (visibleReplies === "automatic") {
     return false;
   }
-  return usesCodexHarness(params);
+  const modelRef = resolveHeartbeatModelRef(params);
+  return (
+    resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.entry,
+    }) === "codex"
+  );
 }
 
 export function isHeartbeatTypingEnabled(params: {

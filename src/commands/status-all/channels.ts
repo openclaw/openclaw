@@ -458,6 +458,16 @@ export async function buildChannelsTable(
       manifestRecords: readOnlyPlugins.manifestRecords,
     }).map((hint) => [hint.channelId, hint]),
   );
+  const addFastModeRow = (channelId: string) => {
+    rows.push({
+      id: channelId,
+      label: sanitizeForLog(channelId).trim() || "configured-channel",
+      enabled: true,
+      state: "setup",
+      detail: "configured; status unavailable in fast mode",
+    });
+    visibleChannelIds.add(channelId);
+  };
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
       continue;
@@ -466,14 +476,7 @@ export async function buildChannelsTable(
     if (!hint || hint.channelId !== channelId) {
       if (!includeSetupFallbackPlugins && explicitConfiguredChannelIds.has(channelId)) {
         // Fast mode intentionally skips setup fallback plugins, but configured ids still deserve visibility.
-        rows.push({
-          id: channelId,
-          label: sanitizeForLog(channelId).trim() || "configured-channel",
-          enabled: true,
-          state: "setup",
-          detail: "configured; status unavailable in fast mode",
-        });
-        visibleChannelIds.add(channelId);
+        addFastModeRow(channelId);
       }
       continue;
     }
@@ -492,14 +495,7 @@ export async function buildChannelsTable(
       if (visibleChannelIds.has(channelId)) {
         continue;
       }
-      rows.push({
-        id: channelId,
-        label: sanitizeForLog(channelId).trim() || "configured-channel",
-        enabled: true,
-        state: "setup",
-        detail: "configured; status unavailable in fast mode",
-      });
-      visibleChannelIds.add(channelId);
+      addFastModeRow(channelId);
     }
   }
 

@@ -2,20 +2,14 @@ import type { ConnectPairingRequiredReason } from "../../packages/gateway-protoc
 import type { TableColumn } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { resolveOsSummary } from "../infra/os-summary.js";
-import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
-import type { MemoryPluginStatus } from "../status/memory-plugin.js";
-import type { StatusSummary } from "../status/summary.js";
-import type { HealthSummary } from "./health.js";
 import {
   buildStatusChannelsTableRows,
   statusChannelsTableColumns,
 } from "./status-all/channels-table.js";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
-import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
@@ -28,58 +22,36 @@ import {
   buildStatusSystemEventsTrailer,
   statusHealthColumns,
 } from "./status.command-sections.js";
-import { shortenText } from "./status.format.js";
-import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 import { formatUpdateAvailableHint } from "./status.update.js";
+import { shortenText } from "./text-format.js";
 
-export async function buildStatusCommandReportData(params: {
-  env: NodeJS.ProcessEnv;
-  opts: {
-    deep?: boolean;
-    verbose?: boolean;
-  };
-  surface: StatusOverviewSurface;
-  osSummary: ReturnType<typeof resolveOsSummary>;
-  summary: StatusSummary;
-  securityAudit?: SecurityAuditReport;
-  health?: HealthSummary;
-  usageLines?: string[];
-  lastHeartbeat: HeartbeatEventPayload | null;
-  agentStatus: Parameters<typeof buildStatusCommandOverviewRows>[0]["agentStatus"];
-  channels: {
-    rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
-  };
-  channelIssues: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]>;
-  memory: MemoryStatusSnapshot | null;
-  memoryPlugin: MemoryPluginStatus;
-  pluginCompatibility: PluginCompatibilityNotice[];
-  pairingRecovery: {
-    requestId: string | null;
-    reason: ConnectPairingRequiredReason | null;
-    remediationHint: string | null;
-  } | null;
-  tableWidth: number;
-  updateValue?: string;
-  updateRows?: Array<{ Item: string; Value: string }>;
-}) {
-  const ok = (value: string) => theme.success(value);
-  const warn = (value: string) => theme.warn(value);
-  const muted = (value: string) => theme.muted(value);
+export async function buildStatusCommandReportData(
+  params: Omit<
+    Parameters<typeof buildStatusCommandOverviewRows>[0],
+    "backupFreshness" | "osLabel"
+  > & {
+    opts: { deep?: boolean; verbose?: boolean };
+    osSummary: ReturnType<typeof resolveOsSummary>;
+    securityAudit?: SecurityAuditReport;
+    usageLines?: string[];
+    channels: {
+      rows: Array<Parameters<typeof buildStatusChannelsTableRows>[0]["rows"][number]>;
+    };
+    channelIssues: Array<
+      Parameters<typeof buildStatusChannelsTableRows>[0]["channelIssues"][number]
+    >;
+    pairingRecovery: {
+      requestId: string | null;
+      reason: ConnectPairingRequiredReason | null;
+      remediationHint: string | null;
+    } | null;
+    tableWidth: number;
+  },
+) {
   const overviewRows = buildStatusCommandOverviewRows({
-    env: params.env,
+    ...params,
     backupFreshness: await readBackupRunFreshness(params.env),
-    opts: params.opts,
-    surface: params.surface,
     osLabel: params.osSummary.label,
-    summary: params.summary,
-    health: params.health,
-    lastHeartbeat: params.lastHeartbeat,
-    agentStatus: params.agentStatus,
-    memory: params.memory,
-    memoryPlugin: params.memoryPlugin,
-    pluginCompatibility: params.pluginCompatibility,
-    updateValue: params.updateValue,
-    updateRows: params.updateRows,
   });
 
   const sessionsColumns = [
@@ -119,9 +91,9 @@ export async function buildStatusCommandReportData(params: {
     channelsRows: buildStatusChannelsTableRows({
       rows: params.channels.rows,
       channelIssues: params.channelIssues,
-      ok,
-      warn,
-      muted,
+      ok: theme.success,
+      warn: theme.warn,
+      muted: theme.muted,
       accentDim: theme.accentDim,
       formatIssueMessage: (message) => shortenText(message, 84),
     }),
