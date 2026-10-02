@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it } from "vitest";
 import {
   assertNonDestructiveReplacement,
+  isConfigSchemaPath,
   mergeAtPath,
   parseConfigSetPath,
   parseConfigSetValue,
@@ -276,5 +277,104 @@ describe("replacement guard advice", () => {
     expect(() => parseConfigSetPath("models.providers[local]service].models")).toThrow(
       "Invalid path (missing separator after bracket): models.providers[local]service].models",
     );
+  });
+});
+
+// extensions/imap/openclaw.plugin.json ships this shape: an account map whose values, and whose
+// values' own blocks, are $defs entries. Bundled manifests keep those refs when merged.
+const refBackedPluginSchema = {
+  $defs: {
+    watch: {
+      type: "object",
+      additionalProperties: false,
+      properties: { pollSeconds: { type: "integer", minimum: 15 } },
+    },
+    senderAuth: {
+      type: "object",
+      additionalProperties: false,
+      properties: { min: { type: "string", enum: ["verified", "unverified"] } },
+    },
+    secretRef: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        source: { type: "string" },
+        provider: { type: "string" },
+        id: { type: "string" },
+      },
+      required: ["source", "provider", "id"],
+    },
+    secretInput: {
+      anyOf: [{ type: "string", minLength: 1 }, { $ref: "#/$defs/secretRef" }],
+    },
+    addressToken: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        token: { type: "string" },
+        senders: { type: "array", items: { type: "string" } },
+      },
+      required: ["token", "senders"],
+    },
+    account: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        host: { type: "string", minLength: 1 },
+        watch: { $ref: "#/$defs/watch" },
+        senderAuth: { $ref: "#/$defs/senderAuth" },
+        password: { $ref: "#/$defs/secretInput" },
+        addressTokens: { type: "array", items: { $ref: "#/$defs/addressToken" } },
+      },
+      required: ["host"],
+    },
+  },
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    accounts: {
+      type: "object",
+      propertyNames: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+      additionalProperties: { $ref: "#/$defs/account" },
+    },
+  },
+};
+
+describe("isConfigSchemaPath", () => {
+  it.each([
+    "accounts.main.host",
+    "accounts.main.watch.pollSeconds",
+    "accounts.main.senderAuth.min",
+    "accounts.main.addressTokens[0].token",
+    "accounts.main.password.source",
+  ])("accepts the $defs-backed path %s", (rawPath) => {
+    expect(isConfigSchemaPath(refBackedPluginSchema, parseConfigSetPath(rawPath))).toBe(true);
+  });
+
+  it.each([
+    "accounts.main.notAField",
+    "accounts.main.watch.notAField",
+    "accounts.main.host.nested",
+  ])("keeps rejecting %s", (rawPath) => {
+    expect(isConfigSchemaPath(refBackedPluginSchema, parseConfigSetPath(rawPath))).toBe(false);
+  });
+
+  it("follows refs the schema builder mounts below the document root", async () => {
+    const { buildConfigSchemaCore } = await import("../config/schema.js");
+    const { schema } = buildConfigSchemaCore({
+      plugins: [{ id: "imap", configSchema: refBackedPluginSchema }],
+    });
+    expect(
+      isConfigSchemaPath(
+        schema,
+        parseConfigSetPath("plugins.entries.imap.config.accounts.main.watch.pollSeconds"),
+      ),
+    ).toBe(true);
+    expect(
+      isConfigSchemaPath(
+        schema,
+        parseConfigSetPath("plugins.entries.imap.config.accounts.main.notAField"),
+      ),
+    ).toBe(false);
   });
 });
