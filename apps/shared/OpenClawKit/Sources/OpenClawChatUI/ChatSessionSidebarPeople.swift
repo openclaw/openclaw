@@ -182,7 +182,7 @@ public final class OpenClawChatSidebarPeople {
         self.refreshActivity()
         let identified = entries.compactMap { entry -> (PresenceEntry, User)? in
             guard entry.reason != "disconnect", let value = entry.user,
-                  let user = try? GatewayPayloadDecoding.decode(value, as: User.self),
+                  let user = try? GatewayPayloadDecoding.decode(AnyCodable(value), as: User.self),
                   !user.id.isEmpty else { return nil }
             return (entry, user)
         }
