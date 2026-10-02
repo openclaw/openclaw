@@ -1105,7 +1105,7 @@ extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	9
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
-packages/agent-core/src/agent-loop.ts	3
+packages/agent-core/src/agent-loop.ts	2
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	3
@@ -1453,7 +1453,7 @@ src/agents/harness/selection.ts	4
 src/agents/harness/support.ts	1
 src/agents/harness/tool-result-middleware.ts	1
 src/agents/identity.ts	5
-src/agents/internal-runtime-context.ts	2
+src/agents/internal-runtime-context.ts	1
 src/agents/lazy-exec-tool.ts	2
 src/agents/lazy-process-tool.ts	2
 src/agents/live-cache-regression-policy.ts	2

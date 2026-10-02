@@ -280,7 +280,7 @@ export function createBoundSpawnInvocation(
     agentId: "main",
     sessionKey: parentSessionKey,
   });
-  return () =>
+  return (toolCallId = "spawn-production-boundary") =>
     withPluginRuntimeGatewayRequestScope(
       {
         context: bound.context as unknown as GatewayRequestContext,
@@ -288,7 +288,7 @@ export function createBoundSpawnInvocation(
       },
       () =>
         withGatewayToolCallerIdentity(caller, () =>
-          tool.execute!("spawn-production-boundary", { task: "bounded child", ...request }),
+          tool.execute!(toolCallId, { task: "bounded child", ...request }),
         ),
     );
 }

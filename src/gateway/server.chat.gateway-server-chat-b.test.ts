@@ -2567,7 +2567,7 @@ describe("gateway server chat", () => {
           error: expect.anything(),
         },
       ]);
-      const pending = listSessionPendingInputs({
+      const pending = await listSessionPendingInputs({
         agentId: "main",
         sessionKey: "agent:main:main",
         sessionId: "sess-main",

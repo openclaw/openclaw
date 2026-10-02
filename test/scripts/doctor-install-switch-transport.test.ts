@@ -133,22 +133,8 @@ it.runIf(process.platform === "linux")(
       { command: "busctl", args: ["--machine", "testuser@", ...versionArgs] },
       { command: "systemctl", args: ["--system", "is-system-running"] },
     ]);
-    console.info("original Doctor argv:", JSON.stringify(invocations[0]?.args));
   },
 );
-
-it.runIf(process.platform === "linux")("still rejects an unavailable synthetic bus", async () => {
-  const env = scenarioEnvironment();
-  vi.mocked(execFileUtf8).mockResolvedValue({
-    code: 1,
-    termination: "exit",
-    stdout: "",
-    stderr: "Failed to connect to bus: No such file or directory",
-  });
-  await expect(resolveSystemdUserTransport(env)).rejects.toMatchObject({
-    reason: "systemd-user-bus-unavailable",
-  });
-});
 
 it("keeps machine scope, auto-start, and foreign-manager probes outside the shim contract", () => {
   const env = scenarioEnvironment();

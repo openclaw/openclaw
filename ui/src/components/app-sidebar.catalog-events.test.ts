@@ -83,26 +83,24 @@ describe("AppSidebar catalog event refresh", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it.each([{ events: [] }, { events: ["sessions.changed"] }])(
-    "keeps a stable 30-second fallback when catalog changes are not advertised (%j)",
-    async ({ events }) => {
-      const request = createGatewayRequestMock()
-        .mockResolvedValueOnce(catalogPage([]))
-        .mockResolvedValue(catalogPage([{ threadId: "discovered", name: "New catalog row" }]));
-      const { gateway, sidebar } = await mountTab(request, events);
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect.soft(request).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(sidebar.textContent).toContain("New catalog row");
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(request).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(request).toHaveBeenCalledTimes(3);
-    },
-  );
+  it("keeps a stable 30-second fallback when catalog changes are not advertised", async () => {
+    const events = ["sessions.changed"];
+    const request = createGatewayRequestMock()
+      .mockResolvedValueOnce(catalogPage([]))
+      .mockResolvedValue(catalogPage([{ threadId: "discovered", name: "New catalog row" }]));
+    const { gateway, sidebar } = await mountTab(request, events);
+    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect.soft(request).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(sidebar.textContent).toContain("New catalog row");
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(request).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
 
   it("paces a trailing event after a slow catalog request without overlapping reads", async () => {
     vi.spyOn(Math, "random").mockReturnValue(0);

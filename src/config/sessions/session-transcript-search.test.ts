@@ -17,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { readSessionTranscriptWatermark, type TranscriptEvent } from "./session-accessor.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
 import {
@@ -224,15 +225,17 @@ describe("searchSessionTranscripts", () => {
     }, options);
     const watermark = readSessionTranscriptWatermark(scope);
     await expect(
-      runSessionColdStorageMaintenance({
-        config: {
-          agents: { list: [{ id: "main" }] },
-          session: {
-            store: resolveOpenClawAgentSqlitePath(options),
-            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+      withEnvAsync({ OPENCLAW_STATE_DIR: paths.stateDir }, () =>
+        runSessionColdStorageMaintenance({
+          config: {
+            agents: { list: [{ id: "main" }] },
+            session: {
+              store: resolveOpenClawAgentSqlitePath(options),
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
           },
-        },
-      }),
+        }),
+      ),
     ).resolves.toMatchObject({ archivedTranscripts: 1 });
     expect(readSessionTranscriptWatermark(scope)).toEqual(watermark);
     expect(search("needle", { sessionKeys: [sessionKey] })).toEqual({

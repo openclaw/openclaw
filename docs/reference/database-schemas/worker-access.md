@@ -480,6 +480,16 @@ the source after each notification and settles attempted registration even when
 its commit receipt is unavailable; committed topology publication retains the
 original shared-state generation.
 
+A caller refused before native opening does not retire other captured borrowers
+when the broker confirms settlement without committed work or cleanup failures.
+Its failed native generation closes before another operation can open one; the
+refused operation is not replayed. Uncertain outcomes and cleanup failures use the
+canonical owner's retirement and recovery path; replacement work waits for
+successful cleanup, and explicit revocation remains terminal. Borrowing through
+another registered path observes the executor's single maintenance claim. Alias
+registrations retain cleanup locators without creating independent maintenance
+owners, so a nested scope cannot close an executor retained by its parent.
+
 ## Carry facts, publish after commit
 
 Session branch summaries retain compact counts and headlines in the transcript
@@ -621,7 +631,7 @@ dispatch can refuse work; cancellation after execution must still join its nativ
 settlement. Close and shutdown join accepted work and cleanup before releasing
 the store or replacing its generation.
 
-Cold session reclamation opens and validates its captured existing file in the
+Cold archive requests open and validate their captured existing file in the
 reclamation worker, leaving the foreground executor available during integrity
 checks. Opening expectations do not grant native authority: the host accepts the
 worker's actual file identity and retained lease before dispatching the mutation.
@@ -656,6 +666,26 @@ retain publication. Later foreign archive commits are visible to the next snapsh
 Standalone recovery probes reuse the read worker without archive or writer admission.
 Maintenance finalization takes writer admission only when its worker requests native
 access, then rechecks current entries and retains admission through commit publication.
+
+Maintenance planning and planner statistics updates use the existing agent database
+executor. These metadata commands carry no transcript buffers and do not reserve
+the archive queue while waiting for their database's writer. After cold native
+admission, planning releases that writer and prepares a selection in a read
+transaction. Its reader remains retained until commit or cleanup. Commit takes
+the writer again, refreshes live protection, and checks current authority, selected
+rows, transcript versions, and active ancestry. Only changed or newly protected
+candidates invalidate the retained selection. Conflicting selections return
+for fresh planning; unrelated writes invalidate age hints without cancelling the
+plan. Each actor retains at most two preparations, allowing a revoked
+predecessor to finish cleanup alongside the coalesced planner. Cleanup of the exact
+operation and native close release those readers. Planning preserves age facts and
+the preservation-required rollback before retrying with current protection facts.
+Commit receipts publish archived-entry facts before releasing
+the writer, including when the ordinary result is lost. Archive materialization,
+finalization, and cold restoration keep their global memory bound and foreground
+progress during preparation. Incognito and explicit native maintenance scopes
+retain the same transaction kernels. Schemas, retention, and update behavior are
+unchanged.
 
 Physical page reclamation releases the session writer permit between vacuum units,
 so queued foreground writers receive their FIFO turn before the next unit. Each
@@ -781,8 +811,7 @@ failed visibility lookup joins worker retirement before its partial facts return
 the host observes that failure only if projection reaches the lookup before a
 history reset. SSE inline appends prepare source/run visibility in the same worker,
 retaining their numeric message sequence and rechecking source custody and stream
-authority before publication. Pending inputs and receipts and retained
-transcript-session keys remain migration debt. Process-held incognito databases and the existing
+authority before publication. Retained transcript-session keys remain migration debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 
@@ -894,9 +923,19 @@ the row projection. They prepare the requested row before selection and recheck
 current sharing and the captured store and session generation after awaited
 history reads, publishing the response in that synchronous frame. Cron run
 history keeps its recorded transcript when the live session advances. Responses
-own their nested metadata independently of resident rows. Pending-input
-reconciliation remains a separate synchronous owner; this change does not alter
-storage, migrations, configuration, or update behavior.
+own their nested metadata independently of resident rows.
+
+Pending-input history and exact pending-message reads use the same history worker
+for durable stores. Pages retain the 20-item and payload byte limits, ordering,
+and consumed-input filtering. Stale interruption commits through the agent writer,
+which rereads candidates under its transaction and asks the live host custody
+owner at transaction and commit admission. Those host checks perform no SQL;
+an aborted but registered owner retains the right to finish cancelled. Confirmed
+commit receipts update the returned page even if ordinary result delivery fails,
+and accepted work settles before database custody is released. Process-held
+incognito reads retain their existing owner until the separate actor cutover;
+stage, finish, append, and submitted-input recovery remain separate work. This
+changes no schema, retention, durability, configuration, or update behavior.
 
 A missing resident row gets a bounded worker sharing read before history treats
 it as absent. This preserves refusal for durable entries marked incognito, which

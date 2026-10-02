@@ -97,6 +97,17 @@ export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
   );
 }
 
+/** Return whether Claude accepts operator instructions within conversation history. */
+export function supportsClaudeInHistorySystemMessages(ref: ClaudeModelRef): boolean {
+  return (
+    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
+    resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
+    resolveClaudeFable5ModelIdentity(ref) !== undefined ||
+    resolveClaudeMythos5ModelIdentity(ref) !== undefined ||
+    /^claude-opus-4-8(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref))
+  );
+}
+
 /** Return whether a Claude model requires adaptive thinking instead of manual budgets. */
 export function requiresClaudeMandatoryAdaptiveThinking(ref: ClaudeModelRef): boolean {
   const modelId = resolveClaudeModelIdentity(ref);
@@ -171,14 +182,8 @@ export function supportsClaudeAdaptiveThinking(ref: ClaudeModelRef): boolean {
 
 /** Return whether a Claude model has a native 1M-token context window. */
 export function supportsClaude1MContext(ref: ClaudeModelRef): boolean {
-  const modelId = resolveClaudeModelIdentity(ref);
-  return (
-    resolveClaudeOpus5ModelIdentity(ref) !== undefined ||
-    resolveClaudeSonnet5ModelIdentity(ref) !== undefined ||
-    /(?:^|-)claude-(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-4-6)(?=$|[^a-z0-9])/.test(
-      modelId,
-    )
-  );
+  // The supported families currently coincide; split these predicates if either contract changes.
+  return supportsClaudeAdaptiveThinking(ref);
 }
 
 /** Return whether a Claude model supports Anthropic's native fast mode. */

@@ -68,6 +68,7 @@ export function buildStrictAnthropicReplayPolicy(
   options: {
     dropThinkingBlocks?: boolean;
     appendOnlyRuntimeContext?: boolean;
+    inHistorySystemUpdates?: boolean;
     sanitizeToolCallIds?: boolean;
     preserveNativeAnthropicToolUseIds?: boolean;
   } = {},
@@ -85,7 +86,9 @@ export function buildStrictAnthropicReplayPolicy(
         }
       : {}),
     preserveSignatures: true,
-    appendOnlyRuntimeContext: options.appendOnlyRuntimeContext ?? false,
+    appendOnlyRuntimeContext:
+      options.inHistorySystemUpdates || options.appendOnlyRuntimeContext || false,
+    ...(options.inHistorySystemUpdates ? { inHistorySystemUpdates: true } : {}),
     repairToolUseResultPairing: true,
     validateAnthropicTurns: true,
     allowSyntheticToolResults: true,
@@ -93,8 +96,7 @@ export function buildStrictAnthropicReplayPolicy(
   };
 }
 
-/** @deprecated Anthropic-family provider replay helper; prefer provider-local replay hooks. */
-export function shouldDropClaudeThinkingBlocks(
+function shouldDropClaudeThinkingBlocks(
   modelId?: string,
   model?: Pick<ProviderRuntimeModel, "params">,
 ): boolean {
@@ -114,8 +116,10 @@ export function shouldDropClaudeThinkingBlocks(
 export function buildAnthropicReplayPolicyForModel(
   modelId?: string,
   model?: Pick<ProviderRuntimeModel, "params">,
+  inHistorySystemUpdates = false,
 ): ProviderReplayPolicy {
   return buildStrictAnthropicReplayPolicy({
+    inHistorySystemUpdates,
     dropThinkingBlocks: shouldDropClaudeThinkingBlocks(modelId, model),
     appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({ id: modelId, params: model?.params }),
   });
@@ -125,9 +129,10 @@ export function buildAnthropicReplayPolicyForModel(
 export function buildNativeAnthropicReplayPolicyForModel(
   modelId?: string,
   model?: Pick<ProviderRuntimeModel, "params">,
+  inHistorySystemUpdates = false,
 ): ProviderReplayPolicy {
   return {
-    ...buildAnthropicReplayPolicyForModel(modelId, model),
+    ...buildAnthropicReplayPolicyForModel(modelId, model, inHistorySystemUpdates),
     preserveNativeAnthropicToolUseIds: true,
   };
 }
@@ -139,6 +144,7 @@ export function buildHybridAnthropicOrOpenAIReplayPolicy(
 ): ProviderReplayPolicy | undefined {
   if (ctx.modelApi === "anthropic-messages" || ctx.modelApi === "bedrock-converse-stream") {
     return buildStrictAnthropicReplayPolicy({
+      inHistorySystemUpdates: ctx.inHistorySystemUpdates,
       appendOnlyRuntimeContext: bindsClaudeThinkingPrefix({
         id: ctx.modelId,
         params: ctx.model?.params,

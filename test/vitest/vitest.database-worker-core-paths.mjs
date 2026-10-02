@@ -1,5 +1,6 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/bash-tools.visible-subagent-notify.test.ts",
   "src/system-agent/audit.test.ts",
   "src/system-agent/operations.test.ts",
   "src/system-agent/operations.setup.test.ts",
@@ -229,6 +230,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/subagents/registry/subagent-registry.persistence.test.ts",
   "src/agents/subagents/registry/subagent-registry-lifecycle.test.ts",
   "src/agents/subagents/registry/subagent-registry.test.ts",
+  "src/agents/subagents/registry/subagent-registry-running-registration.native.test.ts",
   "src/agents/subagents/registry/subagent-registry.session-failure.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.test.ts",
   "src/agents/subagents/spawn/subagent-spawn-session-patch.test.ts",
@@ -236,6 +238,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/cli-runner/prepare.durable-context.test.ts",
   "src/agents/embedded-agent-runner/run-orchestrator.projection.test.ts",
   "src/agents/embedded-agent-runner/run.prepared-harness-source-delivery.integration.test.ts",
+  "src/agents/embedded-agent-runner/run.prepared-runtime-workspace.integration.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
   "src/auto-reply/dispatch.block-streaming-recovery.test.ts",
   "src/auto-reply/reply/agent-runner-direct-runtime-config.test.ts",
@@ -256,6 +259,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/auto-reply/reply/abort.test.ts",
   "src/auto-reply/reply/dispatch-from-config.pending-restart.test.ts",
   "src/auto-reply/reply/session.acp-reset-routing.test.ts",
+  "src/auto-reply/reply/session-fork.test.ts",
   "src/auto-reply/reply/dispatch-acp.test.ts",
   "src/auto-reply/reply/session.test.ts",
   "src/agents/worktrees/empty-source.test.ts",
@@ -924,6 +928,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/gateway/session-row-projection.recovery.test.ts",
   "src/gateway/session-transcript-readers.test.ts",
   "src/gateway/worker-environments/worker-turn-transcript-footprint.test.ts",
+  "src/plugin-sdk/channel-inbound.test.ts",
   "src/plugin-sdk/session-transcript-mirror-runtime.test.ts",
   "src/plugin-sdk/session-store-runtime.test.ts",
   "src/plugin-sdk/session-store-runtime.conversation.test.ts",

@@ -11,7 +11,6 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerOperationAdmission,
 } from "../../../infra/sqlite-worker-operation-admission.js";
-import { prepareGatewayContextBindingOwner } from "../../../plugins/runtime/gateway-context-binding-owner.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-context-binding.js";
 import type { SessionStateNotice } from "../../../sessions/session-state-events.kernel.js";
 import { enqueueSessionStateNotice } from "../../../sessions/session-state-notices.js";
@@ -20,7 +19,7 @@ import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../../state/openclaw-state-worker-store.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
+import { immutableSubagentRun, subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunMutation } from "./subagent-registry-mutation.types.js";
 import type {
   SubagentRegistryWriteAuthority,
@@ -199,22 +198,6 @@ export class SubagentRegistryCommitReceiptError extends SubagentRegistryWriteErr
   }
 }
 
-function freezeValue(value: unknown): void {
-  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
-    return;
-  }
-  for (const child of Object.values(value)) {
-    freezeValue(child);
-  }
-  Object.freeze(value);
-}
-
-export function immutableSubagentRun(entry: SubagentRunRecord): SubagentRunRecord {
-  prepareGatewayContextBindingOwner(entry);
-  freezeValue(entry);
-  return entry;
-}
-
 function publishRows(
   runs: Map<string, SubagentRunRecord>,
   postimages: ReadonlyMap<string, SubagentRunRecord | null>,
@@ -234,10 +217,15 @@ function publishRows(
       runs.delete(runId);
     }
   }
+  const failures: unknown[] = [];
   try {
     afterInstall?.();
-  } finally {
+  } catch (error) {
+    failures.push(error);
+  }
+  try {
     if (postimages.size) {
+      assertSubagentRegistryWriteSourceCurrent(context);
       const events: Array<() => void> = [];
       publishSubagentRunsAfterAtomicStore(
         runs,
@@ -249,6 +237,16 @@ function publishRows(
         event();
       }
     }
+  } catch (error) {
+    failures.push(error);
+  }
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Subagent registry acknowledgement settlement failed", {
+      cause: failures[0],
+    });
   }
 }
 
