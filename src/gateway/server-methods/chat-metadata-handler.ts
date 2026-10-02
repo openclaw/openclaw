@@ -19,6 +19,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
+import { readWorkerPlacementIdentity } from "../worker-environments/placement-projector.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { prepareChatMetadataSessionRead } from "./chat-metadata-session-read.js";
@@ -94,6 +95,20 @@ export async function resolveChatMetadataReadParams(
     };
     try {
       assertVisible();
+      const sessionId = session.entry?.sessionId;
+      const placement = sessionId
+        ? context.workerSessionPlacementService?.getMany([sessionId]).get(sessionId)
+        : undefined;
+      const workerInference = placement
+        ? readWorkerPlacementIdentity(placement, context.workerEnvironmentService)?.inference
+        : undefined;
+      assertVisible();
+      assertRequestCurrent();
+      if (!session.isCurrentAtResponse()) {
+        throw new PreparedModelRuntimePublicationSupersededError(
+          "Session changed while preparing its metadata. Retry the request.",
+        );
+      }
       return {
         agentId: resolveSessionAgentId({
           sessionKey: params.sessionKey,
@@ -103,6 +118,7 @@ export async function resolveChatMetadataReadParams(
         sessionKey: session.canonicalKey,
         storePath: session.readSource?.path ?? session.storePath,
         sessionEntry: session.entry,
+        ...(workerInference ? { workerInference } : {}),
         isCurrent,
         assertCurrent: () => {
           assertVisible();

@@ -1,4 +1,5 @@
 import { describe, expect, onTestFinished, test, vi } from "vitest";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as acpMetadata from "../../acp/runtime/session-meta-readonly.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
@@ -12,8 +13,64 @@ import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
+import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 
 describe("gateway chat metadata native session ownership", () => {
+  test("projects only ambient worker-owned auth failures as available", () => {
+    const config = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    } satisfies OpenClawConfig;
+    const models = [
+      {
+        provider: "openai",
+        id: "gpt-5.6-sol",
+        name: "Sol",
+        available: false,
+        unavailableReason: "missing-auth",
+      },
+      {
+        provider: "openai",
+        id: "gpt-5.6-luna",
+        name: "Luna",
+        available: false,
+        unavailableReason: "missing-auth",
+      },
+    ] satisfies ModelChoice[];
+    const scope = { agentId: "main", workerInference: "worker" as const };
+
+    expect(projectSessionModelCatalog(scope, models, config)).toEqual([
+      { provider: "openai", id: "gpt-5.6-sol", name: "Sol" },
+      models[1],
+    ]);
+    expect(
+      projectSessionModelCatalog(
+        scope,
+        [{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }],
+        config,
+      ),
+    ).toEqual([{ ...models[0]!, unavailableReason: "cooldown", unavailableUntil: 123 }]);
+    expect(
+      projectSessionModelCatalog(
+        { ...scope, sessionEntry: { modelOverride: "gpt-5.6-luna" } },
+        models,
+        config,
+      ),
+    ).toEqual(models);
+    expect(
+      projectSessionModelCatalog(
+        {
+          ...scope,
+          sessionEntry: {
+            authProfileOverride: "openai:personal",
+            authProfileOverrideSource: "user",
+          },
+        },
+        models,
+        config,
+      ),
+    ).toEqual(models);
+  });
+
   test.each([false, true])(
     "keeps runtime-only startup projections scoped to their provider (default model: %s)",
     async (defaultModel) => {

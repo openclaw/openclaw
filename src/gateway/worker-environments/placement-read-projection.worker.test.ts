@@ -18,9 +18,16 @@ import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js"
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
 import { createNodeWorkspaceRetainCoordinator } from "./node-workspace-retain-coordinator.js";
 import { createWorkerPlacementDiskSpaceMonitor } from "./placement-disk-space.js";
+import {
+  projectWorkerSessionPlacement,
+  readWorkerPlacementIdentity,
+} from "./placement-projector.js";
 import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  writePlacementEnvironmentFixture,
+} from "./placement-test-fixtures.js";
 import { stagePlacementTurnClaimWorkerPublication } from "./placement-turn-authority.js";
 import { matchesWorkspaceResultClaim } from "./placement-workspace-result.js";
 import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
@@ -308,6 +315,35 @@ describe("worker placement read projection", () => {
     } finally {
       closing.release();
     }
+  });
+
+  it("derives inference from the bound snapshot without rewriting it", async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-inference-snapshot-"));
+    const database = openOpenClawStateDatabase();
+    const sessionId = "snapshot-worker";
+    const environmentId = "environment-" + sessionId;
+    const profileSnapshot = { settings: { device: "paired-node", inference: "worker" } };
+    writePlacementEnvironmentFixture(database, {
+      environmentId,
+      state: "attached",
+      ownerEpoch: 7,
+      attachedSessionIds: [sessionId],
+      providerId: "device",
+      profileId: "named-device",
+      nodeDeviceId: "paired-node",
+      profileSnapshot,
+    });
+    const { store, placement } = await activePlacement(database, sessionId);
+    const snapshot = await store.readProjection([sessionId]);
+    const environment = snapshot.environments.get(environmentId);
+    expect(environment).toMatchObject({ profileSnapshot, inference: "worker" });
+    const identity = readWorkerPlacementIdentity(placement, undefined, environment);
+    const projected = projectWorkerSessionPlacement(placement, undefined, undefined, identity);
+    expect(projected).toHaveProperty("inference", "worker");
+    expect(projected).not.toHaveProperty("profileSnapshot");
+    expect(
+      (await store.readProjection([sessionId])).environments.get(environmentId)?.profileSnapshot,
+    ).toEqual(profileSnapshot);
   });
 
   it("discovers disk-probe placements off thread in session order before live sample checks", async () => {

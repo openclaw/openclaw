@@ -180,6 +180,7 @@ export async function prepareNodeHostRuntime(params?: {
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
+        nativeInferenceConfig: config.nodeHost?.workerRuns?.nativeInferenceConfig,
         workspace: preparedWorkerWorkspace,
         containerEngine,
         ...(config.nodeHost?.workerRuns?.containerImage
@@ -230,6 +231,8 @@ export async function prepareNodeHostRuntime(params?: {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
+    nativeInferenceEnabled:
+      workerRunsEnabled && config.nodeHost?.workerRuns?.nativeInferenceConfig !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
     ...(workerHostingDisabledReason ? { workerHostingDisabledReason } : {}),
     initialInventory,
@@ -264,6 +267,7 @@ export async function prepareNodeHostRuntime(params?: {
           ? createNodeWorkerSupervisor({
               env,
               capacity: config.nodeHost?.workerRuns?.capacity,
+              nativeInferenceConfig: config.nodeHost?.workerRuns?.nativeInferenceConfig,
               onCapacityChanged: onRunnerCapacityChanged,
               workspace: workerWorkspace,
             })

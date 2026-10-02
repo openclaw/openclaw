@@ -3,6 +3,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { workerInferenceMetadata } from "./inference-placement.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import type {
   WorkerEnvironmentPlacementFacts,
@@ -92,6 +93,7 @@ export function readWorkerSessionPlacementProjectionInDatabase(
           providerId: record.providerId,
           profileId: record.profileId,
           profileSnapshot: record.profileSnapshot,
+          ...workerInferenceMetadata(record),
           state: record.state,
           leaseId: record.leaseId,
           ownerEpoch: record.ownerEpoch,
