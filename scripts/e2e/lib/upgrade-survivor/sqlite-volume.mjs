@@ -220,7 +220,7 @@ function seedUpgradeVolumeSessions(stateDir) {
     store[sessionKey] = {
       sessionId,
       ...(metadataOnly ? {} : { sessionFile: path.join(sessionsDir, `${sessionId}.jsonl`) }),
-      provider: "openai",
+      modelProvider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + index,
       label,
@@ -383,8 +383,8 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         assert(entry?.sessionId === fixture.sessionId, `volume entry changed: ${fixture.index}`);
         assert(entry?.label === fixture.label, `volume label changed: ${fixture.index}`);
         assert(
-          entry?.provider === "openai" || entry?.delivery?.origin?.provider === "openai",
-          `volume provider changed: ${fixture.index}`,
+          entry?.modelProvider === "openai",
+          `volume model provider changed: ${fixture.index}`,
         );
         assert(entry?.model === "gpt-5.5", `volume model changed: ${fixture.index}`);
         assert(

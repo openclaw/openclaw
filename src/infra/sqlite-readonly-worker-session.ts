@@ -1,11 +1,15 @@
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { serialize } from "node:v8";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { BrokerChild } from "../process/spawn-broker/child.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { recordChildProcessSpawn } from "../process/spawn-diagnostics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
-import { createSqliteAuthTransferReceiver } from "./sqlite-readonly-auth-transfer.js";
+import {
+  createSqliteAuthTransferReceiver,
+  createSqliteOperationTransferReceiver,
+} from "./sqlite-readonly-auth-transfer.js";
 import { retainSnapshotWork } from "./sqlite-readonly-location-cleanup.js";
 import {
   createSqliteReadOnlyWorkerError,
@@ -99,7 +103,9 @@ export function createSqliteReadOnlyWorkerSession(
         reject: (error: unknown) => void;
         cleanup: () => void;
         failure?: unknown;
-        auth?: ReturnType<typeof createSqliteAuthTransferReceiver>;
+        transfer?:
+          | ReturnType<typeof createSqliteAuthTransferReceiver>
+          | ReturnType<typeof createSqliteOperationTransferReceiver>;
       }
     | undefined;
   const { promise: closeSignal, resolve: resolveClosed } = createDeferredCore();
@@ -199,7 +205,7 @@ export function createSqliteReadOnlyWorkerSession(
     try {
       let value: SqliteReadOnlyWorkerValue;
       if (
-        pending.auth &&
+        pending.transfer &&
         !(
           typeof message.result === "object" &&
           message.result !== null &&
@@ -207,7 +213,7 @@ export function createSqliteReadOnlyWorkerSession(
           message.result.ok === false
         )
       ) {
-        const reply = pending.auth.accept(message.result);
+        const reply = pending.transfer.accept(message.result);
         if ("request" in reply) {
           child.send({ id: pending.id, transfer: reply.request }, (error) => {
             if (error) {
@@ -216,7 +222,7 @@ export function createSqliteReadOnlyWorkerSession(
           });
           return;
         }
-        value = reply.rows;
+        value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
           { stdout: JSON.stringify(message.result), stderr },
@@ -283,8 +289,10 @@ export function createSqliteReadOnlyWorkerSession(
           id,
           mode: options.mode,
           ...(options.mode === "auth-profile-rows"
-            ? { auth: createSqliteAuthTransferReceiver() }
-            : {}),
+            ? { transfer: createSqliteAuthTransferReceiver() }
+            : options.mode === "operation"
+              ? { transfer: createSqliteOperationTransferReceiver(options.command.type) }
+              : {}),
           resolve,
           reject,
           cleanup: () => {
@@ -302,24 +310,35 @@ export function createSqliteReadOnlyWorkerSession(
             return;
           }
           try {
-            child.send(
-              {
-                id,
-                args: host.requestArgs(pathname, options),
-                ...(options.mode === "auth-profile-rows"
+            const request = {
+              id,
+              args: host.requestArgs(pathname, options),
+              ...(options.mode === "auth-profile-rows"
+                ? {
+                    auth: {
+                      expectedIdentity: options.expectedIdentity,
+                    },
+                  }
+                : options.mode === "operation"
                   ? {
-                      auth: {
+                      operation: {
                         expectedIdentity: options.expectedIdentity,
+                        command: serialize(options.command).toString("base64"),
                       },
                     }
                   : {}),
-              },
-              (error) => {
-                if (error) {
-                  retire(error);
-                }
-              },
-            );
+            };
+            if (
+              options.mode === "operation" &&
+              Buffer.byteLength(JSON.stringify(request)) > SQLITE_READONLY_WORKER_MAX_BUFFER
+            ) {
+              throw new Error("SQLite read-only operation exceeded its request buffer");
+            }
+            child.send(request, (error) => {
+              if (error) {
+                retire(error);
+              }
+            });
           } catch (error) {
             retire(error);
           }

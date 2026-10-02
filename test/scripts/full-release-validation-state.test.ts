@@ -37,7 +37,6 @@ import {
   hydrateReusedPlan,
   readChild,
   releaseGhRetryDelayMs,
-  releasePlanGateFailures,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
   validateReleaseExecutionPlanArtifact,
@@ -1280,7 +1279,7 @@ describe("release decision policy", () => {
   });
 
   it.each(["beta", "stable", "full"])(
-    "reports Windows Node failures as policy advisory for %s publication",
+    "blocks %s release decisions and evidence on a failed Windows Node shard",
     (releaseProfile) => {
       const snapshot = child("normalCi", {
         conclusion: "failure",
@@ -1289,13 +1288,8 @@ describe("release decision policy", () => {
       });
       const result = classifyReleaseSnapshot({ children: [snapshot], releaseProfile });
       expect(result).toMatchObject({
-        blockers: [],
-        blockerCount: 0,
-        errors: [],
-        state: "passed",
-        advisoryJobs: [
+        blockers: [
           {
-            class: "windows-node-ci",
             child: "normalCi",
             job: windowsJob.name,
             conclusion: "failure",
@@ -1303,8 +1297,12 @@ describe("release decision policy", () => {
             url: windowsJob.url,
           },
         ],
+        blockerCount: 1,
+        errors: [],
+        state: "blocked_complete",
+        advisoryJobs: [],
       });
-      expect(terminalPolicyPass(snapshot)).toBe(true);
+      expect(terminalPolicyPass(snapshot)).toBe(false);
       const artifact = buildReleaseStateArtifact({
         children: [snapshot],
         decision: result,
@@ -1316,10 +1314,7 @@ describe("release decision policy", () => {
       });
       expect(validateReleaseStateArtifact(artifact).advisoryJobs).toEqual(result.advisoryJobs);
       expect(formatReleaseStateOutcome(artifact)).toContain(
-        "- Advisory [windows-node-ci]: checks-windows-node-test-2 (failure) https://example.invalid/windows",
-      );
-      expect(() => validateReleaseStateArtifact({ ...artifact, advisoryJobs: [] })).toThrow(
-        /advisory jobs differ/u,
+        "- Blocker: checks-windows-node-test-2 (failure) https://example.invalid/windows",
       );
       const manifest = buildReleaseValidationManifest({
         plan: executionPlan(),
@@ -1328,88 +1323,6 @@ describe("release decision policy", () => {
       });
       expect(manifest.version).toBe(4);
       expect(manifest.advisoryJobs).toEqual(result.advisoryJobs);
-    },
-  );
-
-  it.each([
-    ["normalCi", "macos-node"],
-    ["normalCi", "macos-swift (tests)"],
-    ["normalCi", "checks-node-core-test-nondist-shard"],
-    ["normalCi", "checks-fast-core"],
-    ["normalCi", "openclaw/ci-gate"],
-    ["normalCi", "checks-windows-packaged-install"],
-    ["releaseChecksCandidate", "checks-windows-node-test-2"],
-    ["releaseChecksCandidate", "install-smoke (linux)"],
-    ["releaseChecksCandidate", "upgrade-survivor"],
-    ["releaseChecksCandidate", "update-first-hop-compat / published driver"],
-    ["releaseChecksCandidate", "npm-pack"],
-    ["releaseChecksCandidate", "Run package acceptance / Package integrity"],
-    ["releaseChecksCandidate", "cross_os_release_checks / Linux / packaged upgrade"],
-    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged fresh"],
-    ["releaseChecksCandidate", "cross_os_release_checks / Windows / packaged upgrade"],
-    ["releaseChecksCandidate", "cross_os_release_checks / macOS / packaged fresh"],
-    ["releaseChecks", "Run QA Lab runtime-pair lane (core)"],
-    ["releaseChecks", "Run QA Lab live Telegram lane"],
-    ["npmTelegram", "Telegram package E2E"],
-    ["productPerformance", "benchmark"],
-  ])("keeps %s / %s blocking alongside a Windows Node advisory", (key, name) => {
-    const failure = { name, conclusion: "failure", status: "completed" };
-    const snapshots = [
-      child("normalCi", {
-        status: "completed",
-        conclusion: "failure",
-        jobs:
-          key === "normalCi"
-            ? [windowsJob, failure, ...(name === ciGate.name ? [] : [ciGate])]
-            : [windowsJob, ciGate],
-      }),
-    ];
-    if (key !== "normalCi") {
-      snapshots.push(child(key, { status: "completed", conclusion: "failure", jobs: [failure] }));
-    }
-    const result = classifyReleaseSnapshot({ children: snapshots });
-    expect(result).toMatchObject({
-      state: "blocked_complete",
-      blockers: [{ child: key, job: name }],
-      advisoryJobs: [{ job: windowsJob.name }],
-    });
-  });
-
-  it("keeps parent npm qualification blocking alongside Windows Node advisory", () => {
-    const result = classifyReleaseSnapshot({
-      children: [
-        child("normalCi", {
-          status: "completed",
-          conclusion: "failure",
-          jobs: [windowsJob, ciGate],
-        }),
-      ],
-      localFailures: releasePlanGateFailures([
-        { name: "Qualify release npm artifacts", required: true, result: "failure" },
-      ]),
-    });
-    expect(result).toMatchObject({
-      state: "blocked_complete",
-      blockers: [{ child: "<parent>", job: "Qualify release npm artifacts" }],
-      advisoryJobs: [{ job: windowsJob.name }],
-    });
-  });
-
-  it.each(["cancelled", "missing gate", "skipped gate", "cancelled shard"])(
-    "refuses advisory-only success with %s",
-    (scenario) => {
-      const snapshot = child("normalCi", {
-        status: "completed",
-        conclusion: scenario === "cancelled" ? "cancelled" : "failure",
-        jobs: [
-          { ...windowsJob, conclusion: scenario === "cancelled shard" ? "cancelled" : "failure" },
-          ...(scenario === "missing gate"
-            ? []
-            : [{ ...ciGate, conclusion: scenario === "skipped gate" ? "skipped" : "success" }]),
-        ],
-      });
-      expect(terminalPolicyPass(snapshot)).toBe(false);
-      expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
     },
   );
 
