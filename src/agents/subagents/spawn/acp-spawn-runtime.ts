@@ -23,7 +23,6 @@ import {
   resolveThinkingDefault,
 } from "../../model-selection.js";
 import type { PreparedSpawnThreadBinding } from "../../spawn-plan.js";
-import { persistAcpSpawnSessionFileBestEffort } from "./acp-spawn-requester.js";
 import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { splitModelRef } from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
@@ -59,7 +58,6 @@ export type AcpSpawnInitializedRuntime = {
   initialized: AcpSpawnInitializedSession;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
-  storePath: string;
 };
 
 type AcpSpawnRuntimeOptions = {
@@ -159,24 +157,13 @@ export async function initializeAcpSpawnRuntime(params: {
   const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: params.targetAgentId,
   });
-  let sessionEntry = loadSessionEntry({
+  const sessionEntry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
     agentId: params.targetAgentId,
     clone: false,
   });
   const sessionId = sessionEntry?.sessionId;
-  if (sessionId) {
-    sessionEntry = await persistAcpSpawnSessionFileBestEffort({
-      sessionId,
-      sessionKey: params.sessionKey,
-      storePath,
-      sessionEntry,
-      agentId: params.targetAgentId,
-      stage: "spawn",
-    });
-  }
-
   const initialized = await getAcpSessionManager().initializeSession({
     assertActive: params.assertActive,
     cfg: params.cfg,
@@ -196,7 +183,6 @@ export async function initializeAcpSpawnRuntime(params: {
     initialized,
     sessionId,
     sessionEntry,
-    storePath,
   };
 }
 
@@ -231,21 +217,6 @@ export async function bindPreparedAcpThread(params: {
         ? `Failed to create and bind a ${params.preparedBinding.channel} thread for this ACP session.`
         : `Failed to bind the current ${params.preparedBinding.channel} conversation for this ACP session.`,
     );
-  }
-
-  if (params.initializedRuntime.sessionId && params.preparedBinding.placement === "child") {
-    const boundThreadId = normalizeOptionalString(binding.conversation.conversationId);
-    if (boundThreadId) {
-      await persistAcpSpawnSessionFileBestEffort({
-        sessionId: params.initializedRuntime.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.initializedRuntime.storePath,
-        sessionEntry: params.initializedRuntime.sessionEntry,
-        agentId: params.targetAgentId,
-        threadId: boundThreadId,
-        stage: "thread-bind",
-      });
-    }
   }
 
   return binding;

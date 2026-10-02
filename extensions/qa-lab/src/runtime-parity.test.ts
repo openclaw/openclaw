@@ -262,6 +262,17 @@ describe("runtime parity", () => {
           toolName: "image_generate",
           content: [{ type: "text", text: "Image generation started" }],
         },
+        {
+          role: "assistant",
+          content: [
+            "  plain  ",
+            { type: "output_text", content: "nested" },
+            { type: "message", content: "message" },
+            { type: "unknown", text: " priority ", content: "ignored" },
+            { type: "toolResult", content: "ignored tool result" },
+            { type: "Output_Text", content: "ignored normalized type" },
+          ],
+        },
       ],
     });
 
@@ -276,6 +287,7 @@ describe("runtime parity", () => {
     expect(cell.toolCalls).toHaveLength(1);
     expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
+    expect(cell.finalText).toBe("plain nested message priority");
   });
 
   it("captures native tool execution from the canonical SQLite trajectory", async () => {

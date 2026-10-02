@@ -432,6 +432,32 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             unread: unread)
     }
 
+    func patchSession(
+        key: String,
+        expectedSessionID: String? = nil,
+        label: String?? = nil,
+        category: String?? = nil,
+        color: String?? = nil,
+        pinned: Bool? = nil,
+        archived: Bool? = nil,
+        snoozedUntil: OpenClawChatSnoozePatch?,
+        unread: Bool? = nil) async throws
+    {
+        guard let routeLease = await acquireSessionMutationRouteLease() else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
+        try await routeLease.patchSession(
+            key: key,
+            expectedSessionID: expectedSessionID,
+            label: label,
+            category: category,
+            color: color,
+            pinned: pinned,
+            archived: archived,
+            snoozedUntil: snoozedUntil,
+            unread: unread)
+    }
+
     func forkSession(parentKey: String) async throws -> String {
         try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
     }

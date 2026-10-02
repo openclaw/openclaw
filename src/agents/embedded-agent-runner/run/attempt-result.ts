@@ -1,8 +1,10 @@
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { isTransientNetworkError } from "../../../infra/retryable-network-errors.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
+import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
 import {
   INCOMPLETE_ASSISTANT_STREAM_RE,
   TERMINATED_TRANSPORT_MESSAGE_RE,
@@ -208,6 +210,7 @@ export function completeEmbeddedAttemptResult(
     contextBudgetStatus: prompt.contextBudgetStatus,
     yieldDetected: input.lifecycle.readYieldState().yieldDetected,
     yieldAcknowledgment: input.lifecycle.readYieldState().yieldAcknowledgment,
+    yieldMessageWaitRegistered: input.lifecycle.readYieldState().yieldMessageWaitRegistered,
     didDeliverSourceReplyViaMessageTool: hasDeliveredSourceReply(),
   };
   const terminal = projectAgentRunAttemptTerminal(state.terminal);
@@ -292,7 +295,26 @@ export function completeEmbeddedAttemptResult(
   const didSendDeterministicApprovalPromptNow = subscription.didSendDeterministicApprovalPrompt();
   const lastToolError = subscription.getLastToolError();
   const heartbeatToolResponse = subscription.getHeartbeatToolResponse();
-  const messagingToolSourceReplyPayloads = subscription.getMessagingToolSourceReplyPayloads();
+  // The runtime has settled. Progress sent as the last tool batch was written
+  // after every other tool result; an empty stop after it is the reply.
+  const terminalAssistant = state.currentAttemptAssistant;
+  const closingText = terminalAssistant
+    ? extractEmbeddedAssistantText(terminalAssistant).trim()
+    : "";
+  const progressIsReply =
+    subscription.endsWithSourceProgress() &&
+    state.terminal.kind === "ok" &&
+    terminalAssistant?.stopReason === "stop" &&
+    (!closingText || isSilentReplyText(closingText, SILENT_REPLY_TOKEN));
+  const completeLastProgress = <T extends { sourceReplyFinal?: boolean }>(sends: T[]): T[] => {
+    const index = sends.findLastIndex((send) => send.sourceReplyFinal === false);
+    return progressIsReply && index >= 0
+      ? sends.with(index, Object.assign({}, sends[index], { sourceReplyFinal: true }))
+      : sends;
+  };
+  const messagingToolSourceReplyPayloads = completeLastProgress(
+    subscription.getMessagingToolSourceReplyPayloads(),
+  );
   const hasToolMediaBlockReplyNow = subscription.hasToolMediaBlockReply();
   const settledTurnFinalizationContext = resolveSettledTurnFinalizationContext({
     assistant: state.currentAttemptCompletedAssistant ?? state.currentAttemptAssistant,
@@ -322,11 +344,13 @@ export function completeEmbeddedAttemptResult(
     didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
     messagingToolSentTexts: replayEvidence.messagingToolSentTexts,
     messagingToolSentMediaUrls,
-    messagingToolSentTargets: subscription.getMessagingToolSentTargets(),
+    messagingToolSentTargets: completeLastProgress(subscription.getMessagingToolSentTargets()),
     messagingToolSourceReplyPayloads,
     heartbeatToolResponse,
     sourceReplyDelivered: subscription.getSourceReplyDelivered(),
-    sourceReplyDeliveryState: subscription.getSourceReplyDeliveryState(),
+    sourceReplyDeliveryState: progressIsReply
+      ? "delivered"
+      : subscription.getSourceReplyDeliveryState(),
     toolMediaUrls: pendingToolMediaReply?.mediaUrls,
     toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
     toolTrustedLocalMedia: pendingToolMediaReply?.trustedLocalMedia,

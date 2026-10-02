@@ -2,7 +2,13 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { retainCommandProcessCleanup } from "../process/exec-spawn.js";
@@ -21,6 +27,36 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
     cleanup();
   }),
 );
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
+
+// Native hooks block their process thread. An unreferenced fixture worker flushes
+// the receipt independently; the durable marker still wins an operation-settlement race.
+function nativeEntryReceiptSource(marker: string): string {
+  const source = `${fixtureReceiptClientSource(receipts.endpoint)}
+sendReceipt(${JSON.stringify(marker)}, "entered");
+fixtureReceiptSocket.ref();
+await new Promise((resolve) => fixtureReceiptSocket.end(resolve));`;
+  return `new (require("node:worker_threads").Worker)(
+    new URL(${JSON.stringify(`data:text/javascript,${encodeURIComponent(source)}`)}),
+    { execArgv: [] },
+  ).unref();`;
+}
+
+async function nativeEntryBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
+  await Promise.race([
+    receipts.waitFor(marker, "entered"),
+    Promise.resolve(operation).then(() => {
+      expect(fs.existsSync(marker)).toBe(true);
+    }),
+  ]);
+}
 
 // Keep the fixture's writer open for native lock and failure probes.
 function fixture() {
@@ -195,9 +231,10 @@ it("preserves the parent agent writer lock and excludes its uncommitted migratio
   }
 });
 
-it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
+it.for(["timeout", "cancel", "read-failure", "close-failure"] as const)(
   "settles the schema worker before releasing ownership after %s",
-  async (outcome) => {
+  { timeout: 15_000 },
+  async (outcome, { signal }) => {
     const { stateDir, file, writer } = fixture();
     const blocked = outcome === "timeout" || outcome === "cancel";
     if (blocked) {
@@ -224,6 +261,7 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       DatabaseSync.prototype.prepare = function(sql) {
         if (isSource(this) && sql === 'PRAGMA user_version') {
           fs.writeFileSync(marker, JSON.stringify({pid:process.pid}));
+          ${nativeEntryReceiptSource(marker)}
           if (outcome === 'read-failure') throw new Error('native header read failed');
         }
         return prepare.call(this, sql);
@@ -247,7 +285,7 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
     const rejected = operation.catch((error: unknown) => error);
     try {
       if (blocked) {
-        await vi.waitFor(() => expect(fs.existsSync(marker)).toBe(true), { timeout: 10_000 });
+        await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
         if (outcome === "cancel") {
           controller.abort();
         } else {
@@ -278,7 +316,7 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       }
       const { pid } = JSON.parse(fs.readFileSync(marker, "utf8")) as { pid: number };
       expect(() => process.kill(pid, 0)).toThrow();
-      expect(fs.readdirSync(cache)).toEqual(["openclaw", "unrelated.txt"]);
+      expect(fs.readdirSync(cache).toSorted()).toEqual(["openclaw", "unrelated.txt"]);
       expect(fs.readdirSync(path.join(cache, "openclaw"))).toEqual([]);
       expect(fs.readFileSync(sentinel, "utf8")).toBe("preserved");
       expect(writer.prepare("PRAGMA user_version").get()).toEqual({
@@ -293,7 +331,6 @@ it.each(["timeout", "cancel", "read-failure", "close-failure"] as const)(
       writer.close();
     }
   },
-  15_000,
 );
 
 // Inject metadata faults only in the child; the parent must remain able to cancel it.
@@ -311,6 +348,7 @@ function writeMetadataFault(root: string, target: string, block: boolean): strin
           fs.writeFileSync(${JSON.stringify(path.join(root, "started.json"))}, JSON.stringify({
             pid: process.pid, stagingRoot: process.env.XDG_CACHE_HOME,
           }));
+          ${nativeEntryReceiptSource(path.join(root, "started.json"))}
           Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
         }
         throw Object.assign(new Error("metadata unavailable"), { code: "EIO" });
@@ -339,9 +377,9 @@ it.each(["", "-wal", "-shm", "-journal"])(
   },
 );
 
-it.each(["", "-wal", "-shm", "-journal"])(
+it.for(["", "-wal", "-shm", "-journal"])(
   "cancels blocked %s metadata before candidate discovery and removes staging after child exit",
-  async (suffix) => {
+  async (suffix, { signal }) => {
     const root = dirs.make("openclaw-metadata-cancel-");
     const file = path.join(root, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(file));
@@ -359,10 +397,10 @@ it.each(["", "-wal", "-shm", "-journal"])(
     const rejected = expect(inspection).rejects.toThrow("metadata cancellation");
     let report: { pid: number; stagingRoot: string } | undefined;
     try {
-      await vi.waitFor(() => {
-        report = JSON.parse(fs.readFileSync(path.join(root, "started.json"), "utf8"));
-        expect(report).toBeDefined();
-      });
+      const marker = path.join(root, "started.json");
+      await withinTest(nativeEntryBeforeSettlement(marker, rejected), signal);
+      report = JSON.parse(fs.readFileSync(marker, "utf8"));
+      expect(report).toBeDefined();
       expect(fs.existsSync(report!.stagingRoot)).toBe(true);
     } finally {
       controller.abort(new Error("metadata cancellation"));

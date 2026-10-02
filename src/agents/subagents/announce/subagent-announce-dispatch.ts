@@ -1,9 +1,3 @@
-/**
- * Subagent announcement dispatch strategy.
- *
- * Completion handoff and requester-visible replies use this to choose between
- * steering a subagent and directly delivering a message, with phase evidence.
- */
 type SubagentDeliveryPath = "steered" | "direct" | "queued" | "none";
 type SubagentAnnounceDeliveryDisposition =
   | "delivered"
@@ -12,7 +6,6 @@ type SubagentAnnounceDeliveryDisposition =
   | "retryable"
   | "ambiguous"
   | "permanent_failure";
-/** Stable reasons an announcement delivery can fail without throwing. */
 type SubagentAnnounceDeliveryFailureReason =
   | "completion_handoff_pending"
   | "completion_handoff_unavailable"
@@ -93,7 +86,6 @@ function mapSteerOutcomeToDeliveryResult(
   };
 }
 
-/** Runs the ordered steer/direct announcement delivery strategy. */
 export async function runSubagentAnnounceDispatch(params: {
   expectsCompletionMessage: boolean;
   requireDirectDelivery?: boolean;

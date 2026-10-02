@@ -248,6 +248,14 @@ job hangs until CI cancels it. To assert that a late reply changed nothing,
 await the task that settles that reply, as provider wizard and manual-key
 actions return it.
 
+Work a test starts must end with the test, because the process outlives it.
+Shut down Gateway channels and connections a test opens; their watchdog
+otherwise keeps reconnecting through the test's fixture. Fake transports and
+sockets must stop waiting when their read is cancelled, as the production stream
+transports do: `AsyncTimeout` cancels and abandons the operation that loses its
+race instead of joining it, so a fake that ignores cancellation keeps polling for
+the rest of the run.
+
 ## Troubleshooting
 
 ### Build fails while freezing Peekaboo sources

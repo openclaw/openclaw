@@ -2,6 +2,10 @@ import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path, { matchesGlob } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveTestGitCommits } from "../.github/actions/git-owner/test-prerequisites.mjs";
+import {
+  formatIosSimulatorSelectionSummary,
+  resolveIosSimulatorTestSelection,
+} from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -84,6 +88,9 @@ const changedNodeTestPlan = await importTargetPlan(
 );
 const dockerSeedPlan = existsSync("./scripts/lib/ci-docker-seed-plan.mts")
   ? await import(fromTarget("./scripts/lib/ci-docker-seed-plan.mts"))
+  : {};
+const publishedDriverUpdatePlan = existsSync("./scripts/lib/ci-published-driver-update-plan.mts")
+  ? await import(fromTarget("./scripts/lib/ci-published-driver-update-plan.mts"))
   : {};
 const channelContractPlan = await importTargetPlan(
   existsSync("./scripts/lib/channel-contract-test-plan.mts")
@@ -465,6 +472,9 @@ const targetWorkflow = existsSync(".github/workflows/ci.yml")
 const supportsOpenClawKitTests = targetWorkflow.includes("openclawkit-tests-contract-v1");
 const supportsCurrentAndroidCi = targetWorkflow.includes("android-ci-contract-v2");
 const supportsDockerSeedE2e = targetWorkflow.includes("docker-seed-e2e-contract-v1");
+const supportsPublishedDriverUpdate = targetWorkflow.includes(
+  "published-driver-update-contract-v1",
+);
 const useCompatibleAndroidCi = compatibilityTarget && !supportsCurrentAndroidCi;
 const androidTestTier = !fullNativeValidation && !useCompatibleAndroidCi;
 // Unit tests do not compile the benchmark. Keep its build when inputs
@@ -530,6 +540,8 @@ if (releaseGate) {
 const includeReleaseOnlyRuntimeTests =
   !mainValidation && (!isCanonicalRepository || (!runtimePullRequest && eventName !== "push"));
 const includePrExemptRuntimeTests = !runtimePullRequest;
+const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
+const nodeSelectionReasons = [];
 let selectedTestTargets;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
@@ -542,8 +554,20 @@ if (runtimePullRequest && runNodeFull) {
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     includeReleaseOnlyRuntimeTests,
     includePrExemptRuntimeTests,
+    selectionMode: nodeSelectionMode,
+    onSelection: (selection) => nodeSelectionReasons.push(selection),
   });
 }
+const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
+const iosSimulatorSelection = resolveIosSimulatorTestSelection(changedPaths, {
+  enabled: runIosBuild,
+  forceFull: !runtimePullRequest || releaseGate || compatibilityTarget || fullIosSimulatorPr,
+  fullReason: fullIosSimulatorPr
+    ? "OPENCLAW_CI_IOS_SIMULATOR_FULL"
+    : compatibilityTarget
+      ? "compatibility target"
+      : "scheduled, main, or release validation",
+});
 const uiOwnerScope = {
   unit: runUiTests,
   mocked: runControlUiE2e,
@@ -633,7 +657,12 @@ if (uiE2eSelection) {
   // Selection also applies to UI-only plans without a Node target inventory.
   runControlUiE2e = uiE2eSelection.files.length > 0;
   runUiE2e = runControlUiE2e || runBrowserExtensionE2e;
-  uiE2eJobCount = Math.min(uiE2eJobCount - 1, uiE2eSelection.files.length) + 1;
+  // Narrow PR selections share a runner instead of repeating setup across eight rows.
+  const controlUiRows =
+    uiE2eSelection.mode === "owners"
+      ? Math.ceil(uiE2eSelection.files.length / 30)
+      : uiE2eSelection.files.length;
+  uiE2eJobCount = Math.min(uiE2eJobCount - 1, controlUiRows) + 1;
 }
 if (selectedTestTargets && runWindows && !windowsTestPlan) {
   throw new Error("Current PR CI requires a target-owned Windows planner");
@@ -694,6 +723,19 @@ const dockerSeedLanes =
           : ["published-upgrade-survivor"]
         : []
     : [];
+if (
+  supportsPublishedDriverUpdate &&
+  typeof publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate !== "function"
+) {
+  throw new Error("Current CI target requires the published-driver update owner selector");
+}
+const publishedDriverUpdate =
+  isCanonicalRepository &&
+  supportsPublishedDriverUpdate &&
+  !docsOnly &&
+  (runtimePullRequest
+    ? publishedDriverUpdatePlan.shouldRunPublishedDriverUpdate(changedPaths)
+    : runProofTier && (ownerPathEvent || eventName === "workflow_dispatch" || mainValidation));
 // Canonical pushes also use compact bins: 80+ single-group jobs
 // drain the runner pool for minutes, and per-shard check names on
 // main have no branch-protection consumers. Dispatch (release
@@ -751,9 +793,21 @@ if (runtimePullRequest && runNodeFull) {
 // A Node-targeting fallback does not invalidate independently resolved
 // check families or their compiler/lint consumer graphs.
 const narrowCheckScope = proposedCheckScope?.mode === "scoped" ? proposedCheckScope : null;
-const runCheckPlan = Boolean(runCheck && narrowCheckScope);
+const extensionLintMode =
+  workflowEventName === "pull_request" &&
+  isCanonicalRepository &&
+  !releaseGate &&
+  !frozenTarget &&
+  !compatibilityTarget &&
+  changedPaths?.length &&
+  existsSync("scripts/lib/ci-extension-lint-plan.mts")
+    ? parseCiEnvFlag(process.env.OPENCLAW_CI_EXTENSION_LINT_FULL)
+      ? "full"
+      : "affected"
+    : undefined;
+const runCheckPlan = Boolean(runCheck && (narrowCheckScope || extensionLintMode));
 let typeGraphBoundaryOwner = "";
-if (runCheckPlan && narrowCheckScope.types) {
+if (runCheckPlan && proposedCheckScope?.types) {
   const { resolveChangedCiTsgoInputs } = await import(
     fromTarget("./scripts/lib/tsgo-core-test-shards.mts")
   );
@@ -761,8 +815,10 @@ if (runCheckPlan && narrowCheckScope.types) {
   typeGraphBoundaryOwner =
     runNodeFull &&
     !releaseFastLane &&
-    narrowCheckScope.additionalGroups.includes("boundaries") &&
-    (!compilerPaths || compilerPaths.every((file) => file.startsWith("extensions/")))
+    proposedCheckScope.additionalGroups.includes("boundaries") &&
+    (!narrowCheckScope ||
+      !compilerPaths ||
+      compilerPaths.every((file) => file.startsWith("extensions/")))
       ? "additional-checks"
       : "check-plan";
 }
@@ -862,14 +918,15 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const runBuildArtifacts =
-  runNodeFull &&
-  (changedScopeHasBuildImpact ||
-    runSqliteSessionLifecycle ||
-    runBrowserNativeHost ||
-    runDoctorPluginIndex ||
-    runDiscordComponentProof ||
-    runGatewayWatch ||
-    selectedTuiPty);
+  publishedDriverUpdate ||
+  (runNodeFull &&
+    (changedScopeHasBuildImpact ||
+      runSqliteSessionLifecycle ||
+      runBrowserNativeHost ||
+      runDoctorPluginIndex ||
+      runDiscordComponentProof ||
+      runGatewayWatch ||
+      selectedTuiPty));
 const runControlUiPerformance =
   !releaseFastLane &&
   (runNodeFull || runUiTests) &&
@@ -1287,6 +1344,7 @@ const manifest = {
   run_node: runNode,
   run_docker_seed_e2e: dockerSeedLanes.length > 0,
   docker_seed_lanes: dockerSeedLanes.join(" "),
+  run_published_driver_update: publishedDriverUpdate,
   run_macos: runMacos,
   run_android: runAndroid,
   run_skills_python: runSkillsPython,
@@ -1329,10 +1387,19 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
-  narrow_check_paths_json: narrowCheckScope ? JSON.stringify(changedPaths) : "",
+  narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
     ? JSON.stringify({
+        ...(extensionLintMode
+          ? {
+              extensionLintMode,
+              preserveFullChecks: !narrowCheckScope,
+              ...(process.env.OPENCLAW_CI_CHANGED_BASE
+                ? { changedBaseRef: process.env.OPENCLAW_CI_CHANGED_BASE }
+                : {}),
+            }
+          : {}),
         typeGraphBoundaryOwner,
         changedPaths,
         changedCoreTestPaths: changedCoreTestPaths ?? null,
@@ -1423,6 +1490,9 @@ const manifest = {
     (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
+  run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,
+  run_ios_lifecycle_tests: iosSimulatorSelection.lifecycle.selected,
+  ios_simulator_selection: iosSimulatorSelection,
   run_android_job: runAndroid,
   run_android_access_native: runAndroidAccessNative,
   use_compatible_android_ci: useCompatibleAndroidCi,
@@ -1483,12 +1553,7 @@ const hybridHostedEligible =
   isCanonicalRepository &&
   ["hybrid", "runson"].includes(process.env.OPENCLAW_CI_RUNNER_BACKEND ?? "") &&
   process.env.GITHUB_RUN_ATTEMPT === "1" &&
-  (eventName === "push" ||
-    ciQualification ||
-    (eventName === "pull_request" &&
-      ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"].includes(
-        process.env.OPENCLAW_CI_AUTHOR_ASSOCIATION ?? "",
-      )));
+  (eventName === "push" || ciQualification || eventName === "pull_request");
 let hybridHostedBaseRows = 0;
 let hybridHostedOffloadRows = 0;
 if (hybridHostedEligible) {
@@ -1523,6 +1588,7 @@ if (hybridHostedEligible) {
         process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY,
     ),
     "control-ui-performance": count(manifest.run_control_ui_performance),
+    "published-driver-update": count(manifest.run_published_driver_update),
     "native-i18n": count(manifest.run_native_i18n),
     "control-ui-i18n": count(manifest.run_control_ui_i18n),
     "checks-baseline-ratchets": count(hostedControlJobs && manifest.run_baseline_ratchets),
@@ -1690,6 +1756,7 @@ manifest.pr_job_count =
         "run_check_docs",
         "run_skills_python_job",
         "run_docker_seed_e2e",
+        "run_published_driver_update",
       ].reduce((sum, key) => sum + countPrJobs(manifest[key]), 0) +
       [
         ["run_checks_fast_core", "checks_fast_core_matrix"],
@@ -1751,6 +1818,12 @@ if (releaseFastLane) {
   }
 }
 if (process.env.GITHUB_STEP_SUMMARY) {
+  if (runIosBuild) {
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      formatIosSimulatorSelectionSummary(iosSimulatorSelection),
+    );
+  }
   if (uiE2eSelection) {
     const escapeSummaryCell = (value) =>
       String(value)
@@ -1777,6 +1850,35 @@ if (process.env.GITHUB_STEP_SUMMARY) {
           )
           .join("") +
         "\n",
+    );
+  }
+  if (selectedTestTargets) {
+    /** @type {Map<string, Set<string>>} */
+    const reasons = new Map();
+    for (const { rule, targets } of nodeSelectionReasons) {
+      for (const file of targets) {
+        const rules = reasons.get(file) ?? new Set();
+        rules.add(rule);
+        reasons.set(file, rules);
+      }
+    }
+    // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
+    const escape = (value) =>
+      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+    appendFileSync(
+      process.env.GITHUB_STEP_SUMMARY,
+      `### PR Node test selection (${nodeSelectionMode})\n\n` +
+        `Selected ${selectedTestTargets.length} files; ${changedNodeTestShards?.filter((shard) => !shard.requiresDist).length ?? 0} Node rows. ` +
+        "Set repository variable `OPENCLAW_CI_NODE_SELECTION=full` to restore the previous selection.\n\n" +
+        "<details><summary>Selected files and selection rules</summary>\n<pre>" +
+        selectedTestTargets
+          .map((file) =>
+            escape(
+              `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
+            ),
+          )
+          .join("\n") +
+        "</pre>\n</details>\n\n",
     );
   }
   appendFileSync(

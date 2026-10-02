@@ -16,11 +16,36 @@ type PolicyTestWatch = {
 // this inventory covers the remaining tests that changed targeting cannot
 // discover from imports alone.
 const policyTestWatches: readonly PolicyTestWatch[] = [
+  {
+    testFile: "test/scripts/ios-lifecycle-workflow.test.ts",
+    watchGlobs: [
+      ".github/workflows/ci.yml",
+      "scripts/lib/ci-ios-smoke-plan.mjs",
+      "apps/ios/project.yml",
+      "apps/ios/Tests/**",
+      "apps/macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift",
+      "apps/shared/OpenClawKit/Tests/OpenClawKitTests/NativeGatewayWebSocketFixture.swift",
+    ],
+  },
   // Browser-served route owners are not imports of the Playwright entry point.
   ...UI_E2E_OWNER_WATCHES.map(({ testFile, watchGlobs }): PolicyTestWatch => ({
     testFile,
     watchGlobs,
     sourceOnly: true,
+  })),
+  // New or removed modules and new import edges can escape a static inventory.
+  // Watch source edits conservatively: the absent inventory entry cannot own its guard.
+  ...[
+    "test/scripts/pr-wrapper-source-closure.test.ts",
+    "test/scripts/pr-worktree-provision.test.ts",
+    "test/scripts/eager-import-closure.test.ts",
+    "test/scripts/update-restart-module-outcome.test.ts",
+    "test/scripts/type-suppression-inventory.test.ts",
+    "test/scripts/plugin-sdk-surface-report.test.ts",
+  ].map((testFile): PolicyTestWatch => ({
+    testFile,
+    sourceOnly: true,
+    watchGlobs: ["{src,extensions,packages,scripts,ui/src}/**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}"],
   })),
   {
     testFile: "test/vitest-pr-exempt-retention.test.ts",

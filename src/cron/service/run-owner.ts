@@ -1,5 +1,6 @@
 import {
   CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+  CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE,
   tryResolveCronJobEffectiveAgentId,
 } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
@@ -29,18 +30,29 @@ export async function skipCronJobsWithoutOwners(
   },
 ): Promise<CronJob[]> {
   const source = opts?.source ?? captureCronServiceMutationSource(state);
+  const ownerError = state.deps.legacyDefaultAgentId
+    ? CRON_LEGACY_OWNER_REPAIR_REQUIRED_MESSAGE
+    : CRON_AGENT_SELECTION_REQUIRED_MESSAGE;
   const resolveOwnerAgentId = (job: CronJob) =>
     tryResolveCronJobEffectiveAgentId(
       job,
       state.deps.resolveDefaultAgentId
         ? state.deps.resolveDefaultAgentId()
         : state.deps.defaultAgentId,
+      state.deps.legacyDefaultAgentId,
     );
   const unresolved = new Map(
     candidates.filter((job) => !resolveOwnerAgentId(job)).map((job) => [job.id, job]),
   );
   if (unresolved.size === 0) {
     return candidates;
+  }
+  if (state.deps.legacyDefaultAgentId) {
+    state.deps.log.warn(
+      { jobIds: [...unresolved.keys()], error: ownerError },
+      "cron: awaiting Doctor ownership repair",
+    );
+    return candidates.filter((job) => !unresolved.has(job.id));
   }
   await recordSkippedCronRuns({
     state,
@@ -68,16 +80,16 @@ export async function skipCronJobsWithoutOwners(
       for (const job of skipped.jobs) {
         historySource.assertCurrent();
         state.deps.log.warn(
-          { jobId: job.id, error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE },
+          { jobId: job.id, error: ownerError },
           "cron: skipping job with unresolved owner",
         );
-        await emitOwnerlessFinished(state, job, nowMs, historySource, opts?.manualRun);
+        await emitOwnerlessFinished(state, job, nowMs, historySource, ownerError, opts?.manualRun);
       }
       // An acknowledged manual request still gets a result when its planned row was superseded.
       if (opts?.manualRun) {
         for (const job of skipped.rejected) {
           historySource.assertCurrent();
-          await emitOwnerlessFinished(state, job, nowMs, historySource, opts.manualRun);
+          await emitOwnerlessFinished(state, job, nowMs, historySource, ownerError, opts.manualRun);
         }
       }
       for (const notification of skipped.notifications) {
@@ -94,6 +106,7 @@ async function emitOwnerlessFinished(
   job: CronJob,
   nowMs: number,
   historySource: CronRunHistorySource,
+  error: string,
   manualRun?: { runId?: string; terminalTracker?: { emitted: boolean } },
 ): Promise<void> {
   const event: CronEvent & { action: "finished" } = {
@@ -102,7 +115,7 @@ async function emitOwnerlessFinished(
     job,
     status: "skipped",
     completionStatus: "failed",
-    error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
+    error,
     runId: manualRun?.runId,
     runAtMs: nowMs,
     durationMs: 0,

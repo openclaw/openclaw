@@ -2,9 +2,11 @@ import path from "node:path";
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionManager } from "../../../../src/agents/sessions/session-manager.js";
+import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
+import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { Agent } from "../../../agent-core/src/agent.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
@@ -83,7 +85,7 @@ import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 
 const initialHost = getAiTransportHost();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-responses-transcript-");
 const model = {
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
@@ -476,9 +478,6 @@ describe("native OpenAI Responses SSE continuation", () => {
   it.each(["current", "legacy without reasoning", "legacy without replay", "model", "session"])(
     "round-trips %s reasoning state through the SQLite session transcript",
     async (variant) => {
-      const { SessionManager } = await import("../../../../src/agents/sessions/session-manager.js");
-      const { upsertSessionEntryCore } =
-        await import("../../../../src/config/sessions/session-accessor.js");
       configureAiTransportHost({
         ...initialHost,
         plugin: { ...initialHost.plugin, resolveTransportTurnState: () => undefined },
@@ -545,7 +544,7 @@ describe("native OpenAI Responses SSE continuation", () => {
         );
       }
 
-      const dir = tempDirs.make("openclaw-responses-transcript-");
+      const dir = sessionDirs.make();
       const scope = {
         agentId: "main",
         sessionId: "session-1",

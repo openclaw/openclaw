@@ -188,6 +188,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -221,6 +223,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -231,6 +234,7 @@ class ChatComposerLayoutTest {
   @get:Rule
   val composeRule = createComposeRule()
 
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -2457,12 +2461,13 @@ class ChatComposerLayoutTest {
         down(center)
         up()
       }
-      composeRule.waitUntil {
+      awaitPostHistoryBranchList(postHistoryListReply)
+      assertEquals(
+        "android-screenshot-branch-02",
         controller.messages.value
           .lastOrNull()
-          ?.entryId == "android-screenshot-branch-02"
-      }
-      composeRule.waitUntil { postHistoryListReply.reached.isCompleted }
+          ?.entryId,
+      )
       assertFalse("The post-history listing reply is still held", release.isCompleted)
       assertTrue("The switch has not completed at transcript publication", controller.sessionBranchSwitching.value)
       assertFalse("The original opening remains retired", old.isShowing)
@@ -2939,6 +2944,22 @@ class ChatComposerLayoutTest {
       composeRule.unregisterIdlingResource(selection)
     }
     assertFalse("The admitted switch has settled", controller.sessionBranchSwitching.value)
+  }
+
+  private fun awaitPostHistoryBranchList(hold: BranchPostHistoryListReplyHold) {
+    val postHistoryList =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() = hold.reached.isCompleted
+
+        override fun getDiagnosticMessageIfBusy(): String = "The post-history branch list reply has not been reached"
+      }
+    composeRule.registerIdlingResource(postHistoryList)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(postHistoryList)
+    }
   }
 
   private fun showBranchChat(direction: LayoutDirection = LayoutDirection.Ltr): MainViewModel {
@@ -4888,19 +4909,22 @@ class ChatComposerLayoutTest {
   fun narrowComposerKeepsModelNamesOnOneLineWithLargeTextAndContextUsage() {
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
     val fontScale = mutableStateOf(1f)
-    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { fontScale.value }, talkActive = true)
+    val viewModel = showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { fontScale.value }, talkActive = true)
     val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
     val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
-    var modelLabel = "GPT-5.6 Sol"
+    val modelLabel = AtomicReference("GPT-5.6 Sol")
+    val catalogRequests = ConcurrentLinkedQueue<Pair<String, Job>>()
     val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      val requestedLabel = modelLabel.get()
+      if (method == "models.list") catalogRequests.add(requestedLabel to currentCoroutineContext().job)
       val response = originalRequest(gatewayId, method, params)
       if (method == "models.list") {
         val metadata = Json.parseToJsonElement(response).jsonObject
         val models =
           metadata.getValue("models").jsonArray.map { model ->
-            JsonObject(model.jsonObject + ("name" to JsonPrimitive(modelLabel)))
+            JsonObject(model.jsonObject + ("name" to JsonPrimitive(requestedLabel)))
           }
         JsonObject(metadata + ("models" to JsonArray(models))).toString()
       } else {
@@ -4923,17 +4947,34 @@ class ChatComposerLayoutTest {
       listOf(1f, 1.5f).forEach { scale ->
         composeRule.runOnIdle { fontScale.value = scale }
         listOf("Claude Opus 4.6", "GPT-5.6 Sol", "GPT-5.2", longName).forEach { name ->
+          val previousRequests = catalogRequests.size
           composeRule.runOnIdle {
-            modelLabel = name
+            modelLabel.set(name)
             controller.handleGatewayEvent("chat.metadata.changed", "{}")
           }
-          // Catalog publication can precede ViewModel collection and the picker rendering.
-          composeRule.waitUntil {
-            composeRule
-              .onAllNodes(hasContentDescription(nativeString("Model")) and hasText(name))
-              .fetchSemanticsNodes()
-              .size == 1
+          // Metadata refresh runs on IO; its job and Main's bridge must settle before layout assertions.
+          val catalogRefresh =
+            object : IdlingResource {
+              override val isIdleNow: Boolean
+                get() {
+                  val requests = catalogRequests.drop(previousRequests).filter { it.first == name }
+                  return requests.isNotEmpty() && requests.all { it.second.isCompleted } &&
+                    viewModel.chatModelCatalog.value.any { it.name == name }
+                }
+
+              override fun getDiagnosticMessageIfBusy(): String =
+                "Catalog label=$name requests=${catalogRequests.size - previousRequests} " +
+                  "published=${viewModel.chatModelCatalog.value.map { it.name }}"
+            }
+          composeRule.registerIdlingResource(catalogRefresh)
+          try {
+            composeRule.waitForIdle()
+          } finally {
+            composeRule.unregisterIdlingResource(catalogRefresh)
           }
+          composeRule
+            .onAllNodes(hasContentDescription(nativeString("Model")) and hasText(name))
+            .assertCountEquals(1)
           assertComposerControlsVisible(talkActive = true, modelLabel = name)
           val label = composeRule.onNodeWithText(name, useUnmergedTree = true).assertIsDisplayed()
           val layouts = mutableListOf<TextLayoutResult>()
@@ -5098,7 +5139,11 @@ class ChatComposerLayoutTest {
               .single()
           if (mode == "Photos") {
             assertEquals("image/jpeg", attachment.mimeType)
-            composeRule.waitUntil { composeRule.onAllNodesWithContentDescription("image/jpeg").fetchSemanticsNodes().isNotEmpty() }
+            composeRule.waitForIdle()
+            composeRule.onAllNodesWithContentDescription("image/jpeg").assertCountEquals(0)
+            imageDecodeDispatcher.scheduler.advanceUntilIdle()
+            composeRule.waitForIdle()
+            composeRule.onAllNodesWithContentDescription("image/jpeg").assertCountEquals(1)
             captureComposerProof("composer-photo")
             composeRule.onNodeWithContentDescription("image/jpeg").assertIsDisplayed().performClick()
             composeRule.onNodeWithContentDescription(nativeString("Close image preview")).assertIsDisplayed()
@@ -6132,7 +6177,10 @@ class ChatComposerLayoutTest {
         }
       }
       DeviceConfigurationOverride(DeviceConfigurationOverride.FontScale(fontScale())) {
-        CompositionLocalProvider(LocalLayoutDirection provides layoutDirection()) {
+        CompositionLocalProvider(
+          LocalLayoutDirection provides layoutDirection(),
+          LocalChatImageDecodeDispatcher provides imageDecodeDispatcher,
+        ) {
           ClawDesignTheme {
             renderedCanvasColor = ClawTheme.colors.canvas
             renderedSheetColor = ClawTheme.colors.surface

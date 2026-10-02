@@ -26,6 +26,20 @@ import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.j
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 
+function createEntryFixture(env: NodeJS.ProcessEnv) {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const sessionKey = "agent:main:readonly-entry";
+  writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    storePath: database.path,
+    sessionKey,
+    env,
+  };
+  return { database, scope };
+}
+
 it.each([false, true])(
   "returns unreadable-store data only after its connection closes (close failure: %s)",
   async (failClose) => {
@@ -87,9 +101,7 @@ it.each([false, true])(
   "keeps schema error classification with a disposable reader: %s",
   async (disposable) => {
     await withOpenClawTestState({ label: "readonly-entry-schema-error" }, async ({ env }) => {
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      const sessionKey = "agent:main:schema-error";
-      writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+      const { database, scope } = createEntryFixture(env);
       database.db.exec("DROP TABLE board_widgets");
       if (disposable) {
         await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
@@ -104,13 +116,7 @@ it.each([false, true])(
         throw failure;
       });
       try {
-        const result = loadSessionEntryReadOnlyResultInScope({
-          agentId: "main",
-          databaseAgentId: "main",
-          storePath: database.path,
-          sessionKey,
-          env,
-        });
+        const result = loadSessionEntryReadOnlyResultInScope(scope);
         expect(result.ok).toBe(false);
         if (result.ok) {
           throw new Error("Expected a selected-row failure");
@@ -130,16 +136,7 @@ it.each([false, true])(
 
 it("returns row data failures only after the native snapshot rolled back", async () => {
   await withOpenClawTestState({ label: "readonly-entry-error" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:entry-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const scope = {
-      agentId: "main",
-      databaseAgentId: "main",
-      storePath: database.path,
-      sessionKey,
-      env,
-    };
+    const { database, scope } = createEntryFixture(env);
     loadSessionEntryReadOnlyInScope(scope);
     const continuation = captureCanonicalSessionReaderContinuation(database);
     if (!continuation) {
@@ -163,16 +160,7 @@ it("returns row data failures only after the native snapshot rolled back", async
 
 it("does not downgrade a failed rollback to an ordinary row failure", async () => {
   await withOpenClawTestState({ label: "readonly-entry-rollback" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:rollback-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const scope = {
-      agentId: "main",
-      databaseAgentId: "main",
-      storePath: database.path,
-      sessionKey,
-      env,
-    };
+    const { database, scope } = createEntryFixture(env);
     loadSessionEntryReadOnlyInScope(scope);
     const continuation = captureCanonicalSessionReaderContinuation(database);
     if (!continuation) {
@@ -201,27 +189,15 @@ it("does not downgrade a failed rollback to an ordinary row failure", async () =
 
 it("keeps source refusal outside the ordinary row-error result", async () => {
   await withOpenClawTestState({ label: "readonly-entry-source" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:source-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+    const { scope } = createEntryFixture(env);
     const refusal = Object.assign(new Error("retained source changed"), {
       code: "ERR_SQLITE_ERROR",
       errcode: 26,
     });
     expect(() =>
-      loadSessionEntryReadOnlyResultInScope(
-        {
-          agentId: "main",
-          databaseAgentId: "main",
-          storePath: database.path,
-          sessionKey,
-          env,
-        },
-        undefined,
-        () => {
-          throw refusal;
-        },
-      ),
+      loadSessionEntryReadOnlyResultInScope(scope, undefined, () => {
+        throw refusal;
+      }),
     ).toThrow(refusal);
   });
 });
@@ -358,13 +334,19 @@ it("returns unavailable registry facts as locator data without catching candidat
   });
 });
 
-it.runIf(process.platform !== "win32").each([false, true])(
-  "retains a custom store alias through its data consumer (retargeted: %s)",
-  async (retarget) => {
+it.runIf(process.platform !== "win32").each([
+  { retarget: true, logicalAgentId: "main" },
+  { retarget: false, logicalAgentId: "ops" },
+])(
+  "retains logical $logicalAgentId through its alias consumer (retargeted: $retarget)",
+  async ({ retarget, logicalAgentId }) => {
     await withOpenClawTestState({ label: "readonly-store-alias" }, async ({ env, path }) => {
       const original = openOpenClawAgentDatabase({ agentId: "main", env });
-      const sessionKey = "agent:main:alias";
+      const sessionKey = `agent:${logicalAgentId}:alias`;
       writeSessionEntry(original, sessionKey, { sessionId: "original", updatedAt: 1 });
+      if (logicalAgentId !== "main") {
+        writeSessionEntry(original, "agent:main:alias", { sessionId: "other-agent", updatedAt: 1 });
+      }
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })
         : undefined;
@@ -372,13 +354,23 @@ it.runIf(process.platform !== "win32").each([false, true])(
       symlinkSync(original.path, alias);
       let consumed = false;
       const pending = withSessionEntryReadOnlyInWorker(
-        { agentId: "main", sessionKey, storePath: path("custom.json"), env },
+        {
+          agentId: logicalAgentId,
+          sessionKey,
+          storePath: logicalAgentId === "main" ? path("custom.json") : alias,
+          env,
+        },
         () => {},
-        async (read) => {
+        async (read, owner) => {
           if (!read.ok) {
             throw read.error;
           }
           expect(read.value?.sessionId).toBe("original");
+          expect(owner.scope).toMatchObject({
+            agentId: logicalAgentId,
+            databaseAgentId: "main",
+            storePath: original.path,
+          });
           consumed = true;
           await Promise.resolve();
           if (replacement) {
@@ -398,7 +390,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
   },
 );
 
-it.each(["logical", "omitted"] as const)(
+it.each(["logical", "omitted", "empty"] as const)(
   "fences the selected SQLite alias after a %s store read releases its initial owner",
   async (locator) => {
     await withOpenClawTestState({ label: "currency-selected-store-alias" }, async (state) => {
@@ -433,7 +425,11 @@ it.each(["logical", "omitted"] as const)(
         agentId: "main",
         sessionKey,
         env: state.env,
-        ...(locator === "logical" ? { storePath: join(state.sessionsDir(), "sessions.json") } : {}),
+        ...(locator === "logical"
+          ? { storePath: join(state.sessionsDir(), "sessions.json") }
+          : locator === "empty"
+            ? { storePath: "" }
+            : {}),
       };
       const current = await withSessionEntryReadOnlyInWorker(
         scope,

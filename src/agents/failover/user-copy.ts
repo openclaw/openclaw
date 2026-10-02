@@ -20,6 +20,7 @@ import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  splitFailoverAggregateLegs,
 } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
@@ -107,9 +108,20 @@ export function renderRateLimitOrOverloadedCopy(params: {
   if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
     return MODEL_CAPACITY_ERROR_USER_MESSAGE;
   }
-  return params.reason === "overloaded"
-    ? OVERLOADED_ERROR_USER_MESSAGE
-    : (extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE);
+  if (params.reason === "overloaded") {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const direct = extractProviderRateLimitMessage(raw);
+  if (direct) {
+    return direct;
+  }
+  for (const leg of splitFailoverAggregateLegs(raw)) {
+    const fromLeg = extractProviderRateLimitMessage(leg);
+    if (fromLeg) {
+      return fromLeg;
+    }
+  }
+  return RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -261,9 +273,10 @@ export function renderSanitizedUserFacingText(
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
-const HEARTBEAT_FAILURE_LEAD = "⚠️ Heartbeat check failed before it could produce an update";
-const HEARTBEAT_FAILURE_TAIL = "The main chat session remains available.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}. ${HEARTBEAT_FAILURE_TAIL}`;
+// A failed background turn can have partial effects; it does not establish chat health.
+const HEARTBEAT_FAILURE_LEAD = "⚠️ The background check did not complete.";
+const HEARTBEAT_FAILURE_LOG_HINT = "Troubleshooting: run `openclaw logs --follow` in a terminal.";
+export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}\n\n${HEARTBEAT_FAILURE_LOG_HINT}`;
 
 /** `reason` is the failure-reply owner's already sanitized and capped detail. */
 export function renderHeartbeatRunFailureCopy(reason?: string): string {
@@ -271,7 +284,7 @@ export function renderHeartbeatRunFailureCopy(reason?: string): string {
     return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
   }
   const terminator = /[.!?]$/u.test(reason) ? "" : ".";
-  return `${HEARTBEAT_FAILURE_LEAD}: ${reason}${terminator} ${HEARTBEAT_FAILURE_TAIL}`;
+  return `${HEARTBEAT_FAILURE_LEAD}\n\nDetails: ${reason}${terminator}\n${HEARTBEAT_FAILURE_LOG_HINT}`;
 }
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
@@ -404,6 +417,15 @@ export function renderRateLimitReplyCopy(params: {
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
     return RATE_LIMIT_RETRY_MESSAGE;
+  }
+  for (const attempt of attempts) {
+    if (attempt.reason !== "rate_limit" || !attempt.error) {
+      continue;
+    }
+    const hint = extractProviderRateLimitMessage(attempt.error);
+    if (hint) {
+      return params.sanitizeText?.(attempt.error) ?? hint;
+    }
   }
   const expiry = params.cooldownExpiry;
   const nowMs = params.nowMs ?? Date.now();

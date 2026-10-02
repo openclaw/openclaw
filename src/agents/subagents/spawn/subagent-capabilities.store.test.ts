@@ -30,6 +30,7 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { createSubagentSessionStore } from "./subagent-session-store.js";
+import { createSessionCapabilityLookup } from "./subagent-session-store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -219,6 +220,17 @@ describe("persisted subagent capability lookups", () => {
     ).toBe(3);
   });
 
+  it("uses the first matching normalized session ID in an explicit record", () => {
+    expect(
+      getSubagentDepthFromSessionStore(" duplicate-session ", {
+        store: {
+          "agent:main:subagent:first": { sessionId: "\tduplicate-session\n", spawnDepth: 2 },
+          "agent:main:subagent:later": { sessionId: "duplicate-session", spawnDepth: 4 },
+        },
+      }),
+    ).toBe(2);
+  });
+
   it.each(["", " ", "\t\r\n", "\u00a0\u2003\u2028\ufeff"])(
     "matches explicit stores for nested and by-id lineage without listing unrelated sessions (padding=%j)",
     (padding) => {
@@ -231,7 +243,7 @@ describe("persisted subagent capability lookups", () => {
       const dashboard = "agent:main:dashboard:spawned";
       const byId = "agent:main:subagent:by-id";
       const cycle = "agent:main:acp:cycle-one";
-      const store: Record<string, SessionEntry> = {
+      const entries: Record<string, SessionEntry> = {
         [root]: { sessionId: "root", updatedAt: 1, spawnDepth: 0 },
         [parent]: { sessionId: "parent-id", updatedAt: 1, spawnedBy: root },
         [child]: { sessionId: `${padding}child-id${padding}`, updatedAt: 1, spawnedBy: parent },
@@ -255,7 +267,7 @@ describe("persisted subagent capability lookups", () => {
       };
       runOpenClawAgentWriteTransaction(
         (database) => {
-          for (const [key, entry] of Object.entries(store)) {
+          for (const [key, entry] of Object.entries(entries)) {
             writeSessionEntry(database, key, entry);
           }
           for (let i = 0; i < 64; i++) {
@@ -269,24 +281,27 @@ describe("persisted subagent capability lookups", () => {
         { agentId: "main", path: storePath },
       );
       const listing = vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly");
+      const stores = [entries, createSessionCapabilityLookup(entries)];
       for (const key of [parent, child, acp, dashboard, byId, "child-id", cycle]) {
         const persisted = resolveSubagentCapabilityStore(key, { cfg });
-        expect(resolveStoredSubagentCapabilities(key, { cfg, store: persisted })).toEqual(
-          resolveStoredSubagentCapabilities(key, { store }),
-        );
-        expect(getSubagentDepthFromSessionStore(key, { cfg, store: persisted })).toBe(
-          getSubagentDepthFromSessionStore(key, { store }),
-        );
-        if (key !== "child-id") {
-          expect(isSubagentEnvelopeSession(key, { cfg, store: persisted })).toBe(
-            isSubagentEnvelopeSession(key, { store }),
+        for (const store of stores) {
+          expect(resolveStoredSubagentCapabilities(key, { cfg, store: persisted })).toEqual(
+            resolveStoredSubagentCapabilities(key, { store }),
           );
-          expect(
-            resolveStoredSubagentInheritedToolAllowlist(key, { cfg, store: persisted }),
-          ).toEqual(resolveStoredSubagentInheritedToolAllowlist(key, { store }));
-          expect(
-            resolveStoredSubagentInheritedToolDenylist(key, { cfg, store: persisted }),
-          ).toEqual(resolveStoredSubagentInheritedToolDenylist(key, { store }));
+          expect(getSubagentDepthFromSessionStore(key, { cfg, store: persisted })).toBe(
+            getSubagentDepthFromSessionStore(key, { store }),
+          );
+          if (key !== "child-id") {
+            expect(isSubagentEnvelopeSession(key, { cfg, store: persisted })).toBe(
+              isSubagentEnvelopeSession(key, { store }),
+            );
+            expect(
+              resolveStoredSubagentInheritedToolAllowlist(key, { cfg, store: persisted }),
+            ).toEqual(resolveStoredSubagentInheritedToolAllowlist(key, { store }));
+            expect(
+              resolveStoredSubagentInheritedToolDenylist(key, { cfg, store: persisted }),
+            ).toEqual(resolveStoredSubagentInheritedToolDenylist(key, { store }));
+          }
         }
       }
       expect(

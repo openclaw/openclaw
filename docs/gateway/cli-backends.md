@@ -457,8 +457,9 @@ bridge retains the admitted sender, account, and conversation; channel access an
 write permissions still apply. That authority ends with the turn or its
 cancellation, including when a warm CLI process is reused for a later turn.
 
-Automations created through the bridge inherit its final permitted tool set and
-supported native tool capabilities. When Claude's native `Bash` supplies `exec`,
+Automations created through the bridge without a finite `toolsAllow` list follow the
+owner session's tool policy at run time. A finite list is capped to the bridge's final
+permitted tools and supported native capabilities. When Claude's native `Bash` supplies `exec`,
 the saved automation retains its Gateway host target, including with an explicit
 `toolsAllow: ["exec"]` cap. Current account, tool, sandbox, and approval restrictions
 still apply; capturing the target does not grant broader execution permission.

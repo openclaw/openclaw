@@ -337,11 +337,7 @@ export function normalizeMessageId(raw: string | number): number {
     return Math.trunc(raw);
   }
   if (typeof raw === "string") {
-    const value = raw.trim();
-    if (!value) {
-      throw new Error("Message id is required for Telegram actions");
-    }
-    const parsed = parseStrictInteger(value);
+    const parsed = parseStrictInteger(raw);
     if (parsed !== undefined) {
       return parsed;
     }

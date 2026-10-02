@@ -136,13 +136,9 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "approval-gateway-runtime": 1,
   "approval-handler-runtime": 1,
   "approval-reply-runtime": 0,
-  "config-runtime": 115,
   "config-contracts": 0,
-  "inbound-reply-dispatch": 24,
-  "channel-reply-pipeline": 12,
+  "inbound-reply-dispatch": 21,
   "interactive-runtime": 11,
-  // +3: canonical incognito classifier projected through deprecated compatibility barrels.
-  "infra-runtime": 596,
   "ssrf-policy": 1,
   "ssrf-runtime": 1,
   // +1: deprecated agent media projection re-export during the media migration window.
@@ -163,12 +159,6 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   discord: 47,
   // +4: deprecated media projection type, builder, and turn aliases.
   "channel-inbound": 18,
-  "channel-lifecycle": 23,
-  // +1: shared ingress error factory projected through the deprecated message barrel.
-  // +1: shared ingress retention defaults projected through the deprecated message barrel.
-  // +1: WhatsApp ack-policy bridge counted through the channel-message legacy facade.
-  // Rendering helpers also remain available through this shipped legacy facade.
-  "channel-message": 136,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
@@ -190,29 +180,29 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
   const budgets = {
     publicEntrypoints: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS",
-      158,
+      154,
       env,
     ),
-    // #160931 (b4ae783fbfd) added three callable agent-harness-runtime exports
-    // without its ratchet update; these pin exactly that growth.
     publicExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS",
-      4587,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      3758,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS",
-      2693,
+      // +1: createChannelSecretContract consolidates seven channel secret contracts (approved by Peter, 2026-10-01).
+      2187,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      1139,
+      269,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS",
-      46,
+      0,
       env,
     ),
   };

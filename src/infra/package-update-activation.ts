@@ -40,7 +40,7 @@ function readPackageActivationContinuation(installKey: string) {
   const released = readReleasedPackageActivationReceipt(installKey);
   if (released) {
     throw new Error(
-      `Package publication recovery is pending. With an external Node, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
+      `Package publication recovery is pending. With the recorded external runtime, run ${released.recoveryCommand}, then use that original helper to repair or retire; keep other package managers stopped.`,
     );
   }
   assertPackageActivationLayout(anchor);
@@ -66,7 +66,7 @@ function readPackageActivationContinuation(installKey: string) {
   assertManagedUpdateLeaseDatabaseIdentity(record.descriptor.authority);
   if (record.phase !== "publication-complete") {
     throw new Error(
-      `Package publication is incomplete; its original continuation cannot run. With an external Node, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+      `Package publication is incomplete; its original continuation cannot run. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
     );
   }
   return record.descriptor.authority;
@@ -89,7 +89,7 @@ export function assertNoPendingPackageActivation(
   const anchor = resolvePackageActivationAnchor(installKey);
   const record = openPackageActivationJournal(anchor).read();
   throw new Error(
-    `Package publication recovery is pending. With an external Node, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
+    `Package publication recovery is pending. With the recorded external runtime, run ${recoveryCommand(record)} status, then repair or retire; keep other package managers stopped.`,
   );
 }
 
@@ -101,24 +101,21 @@ export async function preparePackageActivation(
   const options = { ...params.options, fence };
   if (
     process.platform === "win32" ||
-    process.versions.bun ||
     params.installTarget.manager !== "npm" ||
     params.installTarget.directNodeModulesRoot ||
     !(await fsp.lstat(params.stageRoot)).isDirectory()
   ) {
     return undefined;
   }
-  const nodeRunner = resolveExecutablePath(options.nodeRunner, { useCache: false });
+  const nodeRunner = resolveExecutablePath(options.runtime.path, { useCache: false });
   assertOriginal();
   if (!nodeRunner) {
     options.onUnavailable?.(
-      "Standalone package publication repair is unavailable: the selected Node executable could not be resolved.",
+      "Standalone package publication repair is unavailable: the selected runtime executable could not be resolved.",
     );
     return undefined;
   }
-  // Probe and seal the same selected runtime before the probe clears its environment.
-  options.nodeRunner = fs.realpathSync(nodeRunner);
-  const capable = await supportsPostCoreExecutor(params.stageRoot, options.nodeRunner);
+  const capable = await supportsPostCoreExecutor(params.stageRoot, nodeRunner);
   assertOriginal();
   if (!capable) {
     // Older targets keep their shipped update path, without a

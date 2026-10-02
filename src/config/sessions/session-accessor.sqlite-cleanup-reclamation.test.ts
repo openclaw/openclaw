@@ -288,6 +288,7 @@ describe("SQLite lifecycle cleanup reclamation", () => {
       });
       const before = structuredClone(loadSessionEntry(history));
       await closeOpenClawAgentDatabaseByPathAsync(database().path);
+      await closeOpenClawStateDatabaseAsync();
       const db = database();
       const failure = new Error("late native transcript read failure");
       const observed: unknown[] = [];

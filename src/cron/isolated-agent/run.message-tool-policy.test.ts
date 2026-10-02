@@ -405,7 +405,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       expect(runPrompt(cliRun, true)).toContain("Message delivery destination metadata");
     });
 
-    it("keeps a cron-tool default toolsAllow marker after a self-edit before CLI execution", async () => {
+    it("runs a self-edited automatic snapshot with the owner tools on CLI", async () => {
       mockCliAnnounce();
       const job = makeJob(announce, {
         toolsAllow: ["read", "cron"],
@@ -419,13 +419,9 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
         },
       });
       await runCronIsolatedAgentTurn(makeParams(job));
-      const cliRun = expectFields(
-        mockCall(runCliAgentMock)[0],
-        {
-          toolsAllow: ["read", "cron"],
-        },
-        "CLI run params",
-      );
+      // The automatic snapshot runs with the owner conversation's tools: no CLI cap.
+      const cliRun = expectFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
+      expect(cliRun.toolsAllow).toBeUndefined();
       expect(runPrompt(cliRun)).not.toContain("Message delivery destination metadata");
       expect(cliRun.transcriptPrompt).toBeUndefined();
     });
@@ -674,8 +670,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       await runCronIsolatedAgentTurn(makeParams());
       expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
       const prompt = runPrompt(embedded());
-      const unattendedPreamble =
-        "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
+      const unattendedPreamble = "This is an unattended scheduled run.";
       expect(prompt).toContain(unattendedPreamble);
       expect(prompt).not.toContain("Use the message tool");
       expect(prompt).toContain("Your response will be delivered automatically");

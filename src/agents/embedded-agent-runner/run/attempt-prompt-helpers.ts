@@ -26,7 +26,13 @@ import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-con
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
 import { normalizeContextTokenBudget } from "../utils.js";
+import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & {
+  decisionPromptBuildFields?: DecisionPromptBuildFields;
+  hasPendingNonPromptBuildContext: boolean;
+};
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
   Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
@@ -64,7 +70,7 @@ export async function resolvePromptBuildHookResult(params: {
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-}): Promise<PluginHookBeforePromptBuildResult> {
+}): Promise<ResolvedPromptBuildHookResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
   const queuedContext = cachedInjections
@@ -130,7 +136,35 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
+  const decisionPromptBuildFields = promptBuildResult
+    ? Object.fromEntries(
+        (
+          [
+            "systemPrompt",
+            "prependContext",
+            "appendContext",
+            "prependSystemContext",
+            "appendSystemContext",
+          ] as const
+        ).flatMap((field) =>
+          typeof promptBuildResult[field] === "string"
+            ? [[field, promptBuildResult[field]] as const]
+            : [],
+        ),
+      )
+    : undefined;
   return {
+    hasPendingNonPromptBuildContext: Boolean(
+      queuedContext.prependContext?.trim() ||
+      queuedContext.appendContext?.trim() ||
+      turnPrepareResult?.prependContext?.trim() ||
+      turnPrepareResult?.appendContext?.trim() ||
+      heartbeatContribution?.prependContext?.trim() ||
+      heartbeatContribution?.appendContext?.trim(),
+    ),
+    ...(decisionPromptBuildFields && Object.keys(decisionPromptBuildFields).length > 0
+      ? { decisionPromptBuildFields }
+      : {}),
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }

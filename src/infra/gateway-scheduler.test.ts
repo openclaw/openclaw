@@ -7,6 +7,11 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 
+const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => schedulerLog,
+}));
+
 function fixture() {
   const time = createGatewaySchedulerClock(1_000);
   const scheduler = createTestGatewayScheduler(time.clock);
@@ -328,6 +333,26 @@ describe("Gateway timed work", () => {
     gate.resolve();
     await initial;
     expect(scheduler.nextWakeAtMs).toBeNull();
+    await scheduler.stop();
+  });
+
+  it("logs one-shot runs at debug and repeating cadence runs only at trace", async () => {
+    const { time, scheduler } = fixture();
+    schedulerLog.debug.mockClear();
+    schedulerLog.trace.mockClear();
+    const sample = vi.fn();
+    scheduler.schedule({ id: "event-loop-health", delayMs: 20, everyMs: 20, run: sample });
+    scheduler.schedule({ id: "approval", delayMs: 30, run: () => {} });
+    await time.advanceBy(20);
+    await time.advanceBy(20);
+    await time.advanceBy(20);
+    expect(sample).toHaveBeenCalledTimes(3);
+    expect(schedulerLog.debug.mock.calls).toEqual([["running approval"]]);
+    expect(schedulerLog.trace.mock.calls).toEqual([
+      ["running event-loop-health"],
+      ["running event-loop-health"],
+      ["running event-loop-health"],
+    ]);
     await scheduler.stop();
   });
 

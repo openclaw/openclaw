@@ -1,18 +1,20 @@
 import path from "node:path";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Value } from "typebox/value";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertResponsesToolPayload } from "../../../packages/ai/src/providers/openai-responses-tools.js";
 import { SessionsCreateParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-create.js";
 import { validateToolArguments } from "../../../packages/llm-core/src/validation.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   expectRegisteredSubagentRun,
   supportedSpawnModelChoice,
 } from "../subagents/spawn/subagent-spawn.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-visible-cloud-spawn-");
 
 const hoisted = vi.hoisted(() => ({
   spawnSubagentDirectMock: vi.fn(),
@@ -212,92 +214,91 @@ describe("visible session placement and authority", () => {
       "Preserve the full task and report the relevant test evidence. ".repeat(30),
       "Include this final paragraph in the cloud worker assignment.",
     ].join("\n\n");
-    await withTestDir({ prefix: "openclaw-visible-cloud-spawn-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const key = "agent:main:dashboard:cloud-child";
-      const placement = { state: "active", environmentId: "cloud-box" };
-      const callGateway = vi.fn(async (method: string, request: Record<string, unknown>) => {
-        if (method === "sessions.create") {
-          Value.Assert(SessionsCreateParamsSchema, request);
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: key, storePath },
-            { sessionId: "cloud-child", updatedAt: 1 },
-          );
-          return { key, sessionId: "cloud-child", runStarted: false };
-        }
-        if (method === "sessions.dispatch") {
-          return { key, sessionId: "cloud-child", placement };
-        }
-        return { runId: "cloud-run", status: "accepted" };
-      });
-      const registerRun = vi.fn();
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config: {
-          session: { store: storePath },
-          agents: {
-            defaults: { subagents: { model: "mock-provider/child@child-profile" } },
-            list: [{ id: "main" }],
-          },
-          cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const key = "agent:main:dashboard:cloud-child";
+    const placement = { state: "active", environmentId: "cloud-box" };
+    const callGateway = vi.fn(async (method: string, request: Record<string, unknown>) => {
+      if (method === "sessions.create") {
+        Value.Assert(SessionsCreateParamsSchema, request);
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "cloud-child", updatedAt: 1 },
+        );
+        return { key, sessionId: "cloud-child", runStarted: false };
+      }
+      if (method === "sessions.dispatch") {
+        return { key, sessionId: "cloud-child", placement };
+      }
+      return { runId: "cloud-run", status: "accepted" };
+    });
+    const registerRun = vi.fn();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        session: { store: storePath },
+        agents: {
+          defaults: { subagents: { model: "mock-provider/child@child-profile" } },
+          list: [{ id: "main" }],
         },
-        callGateway: callGateway as never,
-        registerRun,
-        countActiveRuns: () => 0,
-      });
-      const result = await withCloudGateway(() =>
-        tool.execute("cloud-spawn", {
-          task,
-          visible: true,
-          worktree: true,
-          runTimeoutSeconds: 180,
-          placement: { kind: "profile", profileId: "build", os, machineClass: "tiny" },
-        }),
-      );
-      expect(callGateway.mock.calls.map(([method]) => method)).toEqual([
-        "sessions.create",
-        "sessions.dispatch",
-        "agent",
-      ]);
-      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).toMatchObject({
-        model: "mock-provider/child@child-profile",
-        titleSource: task.slice(0, 1000),
-      });
-      expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("task");
-      expect(callGateway).toHaveBeenCalledWith(
-        "sessions.dispatch",
-        {
-          key,
-          profileId: "build",
-          os,
-          machineClass: "tiny",
-        },
-        expect.objectContaining({ timeoutMs: null }),
-      );
-      expect(callGateway).toHaveBeenCalledWith(
-        "agent",
-        expect.objectContaining({
-          sessionKey: key,
-          sessionId: "cloud-child",
-          expectedExistingSessionId: "cloud-child",
-          message: expect.stringContaining(`[Subagent Task]\n\n${task}\n\nBegin.`),
-          timeout: 180,
-          deliver: false,
-          sessionEffects: "visible",
-        }),
-        expect.anything(),
-      );
-      expect(result.details).toMatchObject({
-        status: "accepted",
-        childSessionKey: key,
-        runId: "cloud-run",
-        placement,
-      });
-      expectRegisteredSubagentRun(registerRun, {
-        runId: "cloud-run",
-        childSessionKey: key,
+        cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
+      },
+      callGateway: callGateway as never,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+    const result = await withCloudGateway(() =>
+      tool.execute("cloud-spawn", {
         task,
-      });
+        visible: true,
+        worktree: true,
+        runTimeoutSeconds: 180,
+        placement: { kind: "profile", profileId: "build", os, machineClass: "tiny" },
+      }),
+    );
+    expect(callGateway.mock.calls.map(([method]) => method)).toEqual([
+      "sessions.create",
+      "sessions.dispatch",
+      "agent",
+    ]);
+    expect(mockCallArg(callGateway, 0, 1, "sessions.create")).toMatchObject({
+      model: "mock-provider/child@child-profile",
+      titleSource: task.slice(0, 1000),
+    });
+    expect(mockCallArg(callGateway, 0, 1, "sessions.create")).not.toHaveProperty("task");
+    expect(callGateway).toHaveBeenCalledWith(
+      "sessions.dispatch",
+      {
+        key,
+        profileId: "build",
+        os,
+        machineClass: "tiny",
+      },
+      expect.objectContaining({ timeoutMs: null }),
+    );
+    expect(callGateway).toHaveBeenCalledWith(
+      "agent",
+      expect.objectContaining({
+        sessionKey: key,
+        sessionId: "cloud-child",
+        expectedExistingSessionId: "cloud-child",
+        message: expect.stringContaining(`[Subagent Task]\n\n${task}\n\nBegin.`),
+        timeout: 180,
+        deliver: false,
+        sessionEffects: "visible",
+      }),
+      expect.anything(),
+    );
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: key,
+      runId: "cloud-run",
+      placement,
+    });
+    expectRegisteredSubagentRun(registerRun, {
+      runId: "cloud-run",
+      childSessionKey: key,
+      task,
     });
   });
 
@@ -329,95 +330,94 @@ describe("visible session placement and authority", () => {
     "registration-failed",
     "cancel-after-accept",
   ])("retains the cloud child without a local fallback when %s", async (failure) => {
-    await withTestDir({ prefix: "openclaw-cloud-spawn-failure-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const key = "agent:main:dashboard:cloud-child";
-      const controller = new AbortController();
-      const callGateway = vi.fn(async (method: string, request: Record<string, unknown>) => {
-        if (method === "sessions.create") {
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: key, storePath },
-            { sessionId: "cloud-child", updatedAt: 1 },
-          );
-          return { key, sessionId: "cloud-child", runStarted: false };
-        }
-        if (method === "sessions.dispatch") {
-          if (failure === "dispatch-failed") {
-            throw new Error("provider unavailable");
-          }
-          if (failure === "cancelled") {
-            controller.abort(new Error("caller stopped"));
-          }
-          return {
-            key,
-            sessionId: failure === "wrong-child" ? "replacement" : "cloud-child",
-            placement: { state: "active" },
-          };
-        }
-        if (method === "chat.abort") {
-          return { aborted: true, runIds: [request.runId] };
-        }
-        if (failure === "cancel-after-accept") {
-          controller.abort(new Error("parent stopped after acceptance"));
-        }
-        if (failure === "send-failed") {
-          throw new Error("initial reply lost");
-        }
-        return { runId: "cloud-run" };
-      });
-      const registerRun = vi.fn(() => {
-        if (failure === "registration-failed") {
-          throw new Error("registration unavailable");
-        }
-      });
-      const tool = createSessionsSpawnTool({
-        agentSessionKey: "agent:main:main",
-        config: {
-          session: { store: storePath },
-          agents: { list: [{ id: "main" }] },
-          cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
-        },
-        callGateway: callGateway as never,
-        registerRun,
-        countActiveRuns: () => 0,
-      });
-      const result = await withCloudGateway(() =>
-        tool.execute(
-          "cloud-failure",
-          {
-            task: "Test remotely",
-            visible: true,
-            worktree: true,
-            placement: { kind: "profile", profileId: "build" },
-          },
-          controller.signal,
-        ),
-      );
-      expect(result.details).toMatchObject({ status: "error", childSessionKey: key });
-      const methods = callGateway.mock.calls.map(([method]) => method);
-      expect(methods).not.toContain("sessions.delete");
-      if (["dispatch-failed", "cancelled", "wrong-child"].includes(failure)) {
-        expect(methods).not.toContain("agent");
-        expect(result.details).toMatchObject({ initialTaskStatus: "not-sent" });
-      }
-      if (failure === "send-failed") {
-        expect(result.details).toMatchObject({ initialTaskStatus: "unknown" });
-      }
-      if (["send-failed", "registration-failed", "cancel-after-accept"].includes(failure)) {
-        expect(callGateway).toHaveBeenCalledWith(
-          "chat.abort",
-          {
-            sessionKey: key,
-            runId: failure === "send-failed" ? "visible-cloud-spawn:cloud-child" : "cloud-run",
-          },
-          expect.anything(),
+    const dir = sessionDirs.make();
+    const storePath = path.join(dir, "sessions.json");
+    const key = "agent:main:dashboard:cloud-child";
+    const controller = new AbortController();
+    const callGateway = vi.fn(async (method: string, request: Record<string, unknown>) => {
+      if (method === "sessions.create") {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "cloud-child", updatedAt: 1 },
         );
+        return { key, sessionId: "cloud-child", runStarted: false };
+      }
+      if (method === "sessions.dispatch") {
+        if (failure === "dispatch-failed") {
+          throw new Error("provider unavailable");
+        }
+        if (failure === "cancelled") {
+          controller.abort(new Error("caller stopped"));
+        }
+        return {
+          key,
+          sessionId: failure === "wrong-child" ? "replacement" : "cloud-child",
+          placement: { state: "active" },
+        };
+      }
+      if (method === "chat.abort") {
+        return { aborted: true, runIds: [request.runId] };
       }
       if (failure === "cancel-after-accept") {
-        expect(result.details).toMatchObject({ runId: "cloud-run" });
-        expect(registerRun).not.toHaveBeenCalled();
+        controller.abort(new Error("parent stopped after acceptance"));
       }
-      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+      if (failure === "send-failed") {
+        throw new Error("initial reply lost");
+      }
+      return { runId: "cloud-run" };
     });
+    const registerRun = vi.fn(() => {
+      if (failure === "registration-failed") {
+        throw new Error("registration unavailable");
+      }
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        session: { store: storePath },
+        agents: { list: [{ id: "main" }] },
+        cloudWorkers: { profiles: { build: { provider: "fixture", settings: {} } } },
+      },
+      callGateway: callGateway as never,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+    const result = await withCloudGateway(() =>
+      tool.execute(
+        "cloud-failure",
+        {
+          task: "Test remotely",
+          visible: true,
+          worktree: true,
+          placement: { kind: "profile", profileId: "build" },
+        },
+        controller.signal,
+      ),
+    );
+    expect(result.details).toMatchObject({ status: "error", childSessionKey: key });
+    const methods = callGateway.mock.calls.map(([method]) => method);
+    expect(methods).not.toContain("sessions.delete");
+    if (["dispatch-failed", "cancelled", "wrong-child"].includes(failure)) {
+      expect(methods).not.toContain("agent");
+      expect(result.details).toMatchObject({ initialTaskStatus: "not-sent" });
+    }
+    if (failure === "send-failed") {
+      expect(result.details).toMatchObject({ initialTaskStatus: "unknown" });
+    }
+    if (["send-failed", "registration-failed", "cancel-after-accept"].includes(failure)) {
+      expect(callGateway).toHaveBeenCalledWith(
+        "chat.abort",
+        {
+          sessionKey: key,
+          runId: failure === "send-failed" ? "visible-cloud-spawn:cloud-child" : "cloud-run",
+        },
+        expect.anything(),
+      );
+    }
+    if (failure === "cancel-after-accept") {
+      expect(result.details).toMatchObject({ runId: "cloud-run" });
+      expect(registerRun).not.toHaveBeenCalled();
+    }
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 });

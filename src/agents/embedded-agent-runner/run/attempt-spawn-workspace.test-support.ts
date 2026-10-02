@@ -22,6 +22,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
 import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
+import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -35,6 +36,7 @@ import {
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { getSkillMocks, resetSkillMocks } from "./attempt-skills-mock.test-support.js";
 import type { SessionManagerMocks } from "./attempt-spawn-workspace.session-manager-mock.test-support.js";
 import { createSubscriptionMock } from "./attempt-spawn-workspace.subscription-mock.test-support.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -45,6 +47,9 @@ type GuardSessionManagerFn =
   typeof import("../../session-tool-result-guard-wrapper.js").guardSessionManager;
 type ShouldPreemptivelyCompactBeforePromptFn =
   typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
+type CreateCodingToolsFn = (
+  ...args: Parameters<typeof import("../../agent-tools.js").createOpenClawCodingToolsInternal>
+) => unknown;
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
@@ -78,7 +83,7 @@ type AttemptSpawnWorkspaceHoisted = {
   ensureGlobalUndiciEnvProxyDispatcherMock: UnknownMock;
   ensureGlobalUndiciDispatcherStreamTimeoutsMock: UnknownMock;
   ensureGlobalUndiciStreamTimeoutsMock: UnknownMock;
-  createOpenClawCodingToolsMock: UnknownMock;
+  createOpenClawCodingToolsMock: Mock<CreateCodingToolsFn>;
   subscribeEmbeddedAgentSessionMock: Mock<SubscribeEmbeddedAgentSessionFn>;
   installToolResultContextGuardMock: UnknownMock;
   installContextEngineLoopHookMock: UnknownMock;
@@ -91,7 +96,7 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveEmbeddedRunSkillEntriesMock: UnknownMock;
   resolveSkillsPromptForRunMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
-  getGlobalHookRunnerMock: Mock<() => unknown>;
+  getGlobalHookRunnerMock: Mock<typeof getGlobalHookRunner>;
   initializeGlobalHookRunnerMock: UnknownMock;
   runContextEngineMaintenanceMock: AsyncContextEngineMaintenanceMock;
   detectAndLoadPromptImagesMock: AsyncUnknownMock;
@@ -107,7 +112,9 @@ type AttemptSpawnWorkspaceHoisted = {
   sessionManager: SessionManagerMocks;
 };
 
-const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
+type AttemptBaseMocks = Omit<AttemptSpawnWorkspaceHoisted, keyof ReturnType<typeof getSkillMocks>>;
+
+const hoisted = vi.hoisted((): AttemptBaseMocks => {
   // Hoisted mocks must exist before the runner module graph is imported, because
   // runEmbeddedAttempt captures these dependencies at module load.
   const spawnSubagentDirectMock = vi.fn();
@@ -120,7 +127,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const ensureGlobalUndiciEnvProxyDispatcherMock = vi.fn();
   const ensureGlobalUndiciDispatcherStreamTimeoutsMock = vi.fn();
   const ensureGlobalUndiciStreamTimeoutsMock = vi.fn();
-  const createOpenClawCodingToolsMock = vi.fn(() => []);
+  const createOpenClawCodingToolsMock = vi.fn<CreateCodingToolsFn>(() => []);
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
@@ -144,14 +151,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     () => "always",
   );
   const hasCompletedBootstrapTurnMock = vi.fn<() => Promise<boolean>>(async () => false);
-  const resolveEmbeddedRunSkillEntriesMock = vi.fn(() => ({
-    shouldLoadSkillEntries: false,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  }));
-  const resolveSkillsPromptForRunMock = vi.fn(() => "");
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
-  const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
   const runContextEngineMaintenanceMock = vi.fn(async (_params?: unknown) => undefined);
   const detectAndLoadPromptImagesMock = vi.fn(async () => ({
@@ -221,10 +221,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     isWorkspaceBootstrapPendingMock,
     resolveContextInjectionModeMock,
     hasCompletedBootstrapTurnMock,
-    resolveEmbeddedRunSkillEntriesMock,
-    resolveSkillsPromptForRunMock,
     supportsModelToolsMock,
-    getGlobalHookRunnerMock,
+    getGlobalHookRunnerMock: vi.fn<typeof getGlobalHookRunner>(() => null),
     initializeGlobalHookRunnerMock,
     runContextEngineMaintenanceMock,
     detectAndLoadPromptImagesMock,
@@ -240,7 +238,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
 });
 
 export function getHoisted(): AttemptSpawnWorkspaceHoisted {
-  return hoisted;
+  return Object.assign(hoisted, getSkillMocks());
 }
 
 const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
@@ -439,20 +437,6 @@ vi.mock("../../workspace.js", async () => {
     isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
   };
 });
-
-vi.mock("../../../skills/runtime/env-overrides.js", () => ({
-  applySkillEnvOverrides: () => () => {},
-  applySkillEnvOverridesFromSnapshot: () => () => {},
-}));
-
-vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
-  resolveSkillsPrompt: (...args: unknown[]) => hoisted.resolveSkillsPromptForRunMock(...args),
-}));
-
-vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
-  resolveEmbeddedRunSkillEntries: (...args: unknown[]) =>
-    hoisted.resolveEmbeddedRunSkillEntriesMock(...args),
-}));
 
 vi.mock("../context-engine-maintenance.js", () => ({
   runContextEngineMaintenance: (params: unknown) => hoisted.runContextEngineMaintenanceMock(params),
@@ -995,14 +979,9 @@ export function resetEmbeddedAttemptHarness(
   hoisted.isWorkspaceBootstrapPendingMock.mockReset().mockResolvedValue(false);
   hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
   hoisted.hasCompletedBootstrapTurnMock.mockReset().mockResolvedValue(false);
-  hoisted.resolveEmbeddedRunSkillEntriesMock.mockReset().mockReturnValue({
-    shouldLoadSkillEntries: false,
-    skillEntries: [],
-    loadSkillEntries: vi.fn(() => []),
-  });
-  hoisted.resolveSkillsPromptForRunMock.mockReset().mockReturnValue("");
+  resetSkillMocks();
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
-  hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
+  hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(null);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
   hoisted.getHistoryLimitFromSessionKeyMock.mockReset().mockReturnValue(undefined);
   hoisted.limitHistoryTurnsMock.mockReset().mockImplementation((messages) => messages);

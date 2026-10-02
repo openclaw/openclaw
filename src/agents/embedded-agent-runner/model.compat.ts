@@ -1,4 +1,5 @@
 import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
+import { isVllmQwenThinkingCompat as hasVllmQwenThinkingCompat } from "../model-compat-catalog.js";
 import { normalizeProviderId } from "../model-selection.js";
 
 export function mergeModelMediaInput(
@@ -50,10 +51,7 @@ function isVllmQwenThinkingCompat(params: { provider: string; compat?: unknown }
     return false;
   }
   const thinkingFormat = (compat as { thinkingFormat?: unknown }).thinkingFormat;
-  return (
-    normalizeProviderId(params.provider) === "vllm" &&
-    (thinkingFormat === "qwen" || thinkingFormat === "qwen-chat-template")
-  );
+  return hasVllmQwenThinkingCompat(normalizeProviderId(params.provider), { thinkingFormat });
 }
 
 export function mergeModelCompat(

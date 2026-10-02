@@ -800,7 +800,7 @@ describe("generate-npm-package-lock", () => {
         "path",
         "unbundled",
       ] as const) {
-        const npmVersion = change === "npm version" ? "11.20.1" : "11.20.0";
+        const npmVersion = change === "npm version" ? "12.1.1" : "12.1.0";
         const bundledVersion = change === "bundle version" ? "0.0.1" : version;
         const npmPath =
           change === "path" ? "node_modules/other/node_modules/npm" : "node_modules/npm";
@@ -844,7 +844,7 @@ describe("generate-npm-package-lock", () => {
     mkdirSync(path.join(root, "package", child), { recursive: true });
     writeFileSync(
       path.join(root, "package/package.json"),
-      JSON.stringify({ name: "npm", version: "11.20.0" }),
+      JSON.stringify({ name: "npm", version: "12.1.0" }),
     );
     writeFileSync(
       path.join(root, "package", child, "package.json"),
@@ -856,12 +856,12 @@ describe("generate-npm-package-lock", () => {
     const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
     const lockfile = {
       packages: {
-        "node_modules/npm": { version: "11.20.0", integrity },
+        "node_modules/npm": { version: "12.1.0", integrity },
         [childPath]: { version: "9.9.2", inBundle: true },
       },
     };
-    const pins = new Set(["npm@11.20.0"]);
-    const integrities = new Map([["npm@11.20.0", new Set([integrity])]]);
+    const pins = new Set(["npm@12.1.0"]);
+    const integrities = new Map([["npm@12.1.0", new Set([integrity])]]);
     const check = (
       value: Parameters<typeof collectPnpmLockViolations>[0] = lockfile,
       tarball = bytes,

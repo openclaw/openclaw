@@ -11,7 +11,6 @@ import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
-import type { ModelCatalogBrowseView } from "../../agents/model-catalog-browse.js";
 import {
   createModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
@@ -83,11 +82,6 @@ type PreparedModelsListResult = {
   read: () => ModelsListResult;
   isCurrent: () => boolean;
 };
-
-function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBrowseView {
-  const view = params.view;
-  return view === "configured" || view === "provider-config" || view === "all" ? view : "default";
-}
 
 /** Builds one per-agent, snapshot-scoped route projection for Gateway thinking metadata. */
 export function createGatewayAgentModelCatalogProjector(params: ModelCatalogDecisionParams) {
@@ -307,7 +301,7 @@ export async function prepareModelsListResult(
   const initialConfig = publishedOwner?.config ?? requestConfig;
   const initialAgentId = normalizeAgentId(params.agentId ?? resolveDefaultAgentId(initialConfig));
   const profiles = resolveSessionCatalogProfiles(sessionEntry, initialConfig, initialAgentId);
-  const view = resolveModelsListView(params.params);
+  const view = params.params.view ?? "default";
   const refresh = params.params.refresh === true;
   const preloadedCatalog =
     params.preloadedCatalog?.agentId === initialAgentId &&

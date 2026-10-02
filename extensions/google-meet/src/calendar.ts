@@ -1,13 +1,11 @@
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { googleApiError } from "./google-api-errors.js";
+import { requestGoogleApi } from "./google-api.js";
 import { normalizeMeetUrl } from "./meet-url.js";
 
 const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
-const GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS = 30_000;
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -55,16 +53,6 @@ type GoogleMeetCalendarEventsResult = {
     selected: boolean;
   }>;
 };
-
-function appendQuery(url: string, query: Record<string, string | number | boolean | undefined>) {
-  const parsed = new URL(url);
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) {
-      parsed.searchParams.set(key, String(value));
-    }
-  }
-  return parsed.toString();
-}
 
 function normalizeGoogleMeetCalendarUri(value: string | undefined): string | undefined {
   if (!value?.trim()) {
@@ -195,10 +183,10 @@ async function fetchGoogleCalendarEvents(
   const now = params.now ?? new Date();
   const defaultTimeMax = new Date(now);
   defaultTimeMax.setDate(defaultTimeMax.getDate() + 7);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: appendQuery(
-      `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
-      {
+  return requestGoogleApi(
+    {
+      url: `${GOOGLE_CALENDAR_API_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`,
+      query: {
         maxResults: params.maxResults ?? 50,
         orderBy: "startTime",
         q: params.eventQuery?.trim() || undefined,
@@ -207,36 +195,23 @@ async function fetchGoogleCalendarEvents(
         timeMin: params.timeMin ?? now.toISOString(),
         timeMax: params.timeMax ?? defaultTimeMax.toISOString(),
       },
-    ),
-    init: {
-      headers: {
-        Authorization: `Bearer ${params.accessToken}`,
-        Accept: "application/json",
-      },
+      accessToken: params.accessToken,
+      allowedHostname: GOOGLE_CALENDAR_API_HOST,
+      auditContext: "google-meet.calendar.events.list",
+      prefix: "Google Calendar events.list",
+      scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
     },
-    policy: { allowedHostnames: [GOOGLE_CALENDAR_API_HOST] },
-    auditContext: "google-meet.calendar.events.list",
-    timeoutMs: GOOGLE_CALENDAR_REQUEST_TIMEOUT_MS,
-  });
-  try {
-    if (!response.ok) {
-      throw await googleApiError({
+    async (response) => {
+      const payload = await readProviderJsonResponse<{ items?: unknown }>(
         response,
-        prefix: "Google Calendar events.list",
-        scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
-      });
-    }
-    const payload = await readProviderJsonResponse<{ items?: unknown }>(
-      response,
-      "Google Calendar events.list",
-    );
-    if (payload.items !== undefined && !Array.isArray(payload.items)) {
-      throw new Error("Google Calendar events.list response had non-array items");
-    }
-    return { calendarId, events: (payload.items ?? []) as GoogleMeetCalendarEvent[], now };
-  } finally {
-    await release();
-  }
+        "Google Calendar events.list",
+      );
+      if (payload.items !== undefined && !Array.isArray(payload.items)) {
+        throw new Error("Google Calendar events.list response had non-array items");
+      }
+      return { calendarId, events: (payload.items ?? []) as GoogleMeetCalendarEvent[], now };
+    },
+  );
 }
 
 export async function listGoogleMeetCalendarEvents(

@@ -39,7 +39,7 @@ export function finalizeUpdatedJob(params: {
   explicitTriggerState?: CronJobPatch["state"];
 }) {
   const { job, nextJob, now } = params;
-  if (nextJob.schedule.kind === "every") {
+  if (params.scheduleChanged && nextJob.schedule.kind === "every") {
     const anchor = nextJob.schedule.anchorMs;
     if (typeof anchor !== "number" || !Number.isFinite(anchor)) {
       // Inherit the previous cadence anchor only for an unchanged-interval
@@ -55,13 +55,7 @@ export function finalizeUpdatedJob(params: {
         Number.isFinite(job.schedule.anchorMs)
           ? job.schedule.anchorMs
           : undefined;
-      const fallbackAnchorMs =
-        previousAnchorMs ??
-        (params.scheduleChanged
-          ? now
-          : typeof nextJob.createdAtMs === "number" && Number.isFinite(nextJob.createdAtMs)
-            ? nextJob.createdAtMs
-            : now);
+      const fallbackAnchorMs = previousAnchorMs ?? now;
       nextJob.schedule = {
         ...nextJob.schedule,
         anchorMs: Math.max(0, Math.floor(fallbackAnchorMs)),

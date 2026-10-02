@@ -265,6 +265,7 @@ function startPrepublishArtifactServer() {
   });
   server.listen(0, "127.0.0.1", () => {
     fs.writeFileSync(portFile, String(server.address().port));
+    process.send?.({ port: server.address().port });
   });
 }
 
@@ -879,6 +880,7 @@ async function main() {
 
   server.listen(0, "127.0.0.1", () => {
     fs.writeFileSync(portFile, String(server.address().port));
+    process.send?.({ port: server.address().port });
   });
 }
 

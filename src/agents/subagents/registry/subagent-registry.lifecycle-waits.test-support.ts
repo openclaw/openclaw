@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import * as mod from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createLifecycleAgentCallWaits(
   requesterSessionKey: string,
@@ -75,50 +76,56 @@ export function createLifecycleAgentCallWaits(
 export function createLifecycleWaits(requesterSessionKey: string) {
   const flushAsync = () => vi.dynamicImportSettled();
 
-  const waitForDeliveredCleanup = async (
-    runId: string,
-    options?: { allowPendingRequesterSettleWake?: boolean },
-  ) => {
-    const delivered = createDeferred();
+  const findRun = (runId: string) =>
+    mod
+      .listSubagentRunsForRequester(requesterSessionKey)
+      .find((candidate) => candidate.runId === runId);
+
+  // Registry mutations become observable when their writer publishes them.
+  // Waiting on that signal has no attempt or wall-clock bound: a state that is
+  // never published fails at the Vitest test timeout instead of losing a race
+  // against native worker writes on a loaded runner.
+  const waitForRun = async (runId: string, matches: (run: SubagentRunRecord) => boolean) => {
+    const reached = createDeferred<SubagentRunRecord>();
     const observe = () => {
-      const run = mod
-        .listSubagentRunsForRequester(requesterSessionKey)
-        .find((candidate) => candidate.runId === runId);
-      if (
-        run?.delivery?.status === "delivered" &&
-        typeof run.cleanupCompletedAt === "number" &&
-        (options?.allowPendingRequesterSettleWake === true || run.requesterSettleWake === undefined)
-      ) {
-        delivered.resolve();
+      const run = findRun(runId);
+      if (run && matches(run)) {
+        reached.resolve(run);
       }
     };
-    const stop = subscribeSubagentRunChanges(observe);
+    const stop = subscribeSubagentRunChanges("projection", observe);
     onTestFinished(stop);
     try {
       observe();
+      // Start due callbacks without spending retry time waiting for native worker reads.
       await vi.advanceTimersByTimeAsync(0);
-      await delivered.promise;
+      return await reached.promise;
     } finally {
       stop();
     }
   };
 
-  const waitForFrozenResult = async (runId: string, matches: (resultText: string) => boolean) => {
-    for (let attempt = 0; attempt < 80; attempt += 1) {
-      const run = mod
-        .listSubagentRunsForRequester(requesterSessionKey)
-        .find((candidate) => candidate.runId === runId);
-      const resultText = run?.completion?.resultText;
-      if (run && typeof resultText === "string" && matches(resultText)) {
-        return run;
-      }
-      await vi.advanceTimersByTimeAsync(1);
-      await flushAsync();
-    }
-    throw new Error(`run ${runId} frozen result did not refresh`);
+  const waitForDeliveredCleanup = async (
+    runId: string,
+    options?: { allowPendingRequesterSettleWake?: boolean },
+  ) => {
+    await waitForRun(
+      runId,
+      (run) =>
+        run.delivery?.status === "delivered" &&
+        typeof run.cleanupCompletedAt === "number" &&
+        (options?.allowPendingRequesterSettleWake === true ||
+          run.requesterSettleWake === undefined),
+    );
   };
 
-  const waitForFrozenResultText = async (runId: string, expectedText: string) =>
+  const waitForFrozenResult = (runId: string, matches: (resultText: string) => boolean) =>
+    waitForRun(
+      runId,
+      (run) => typeof run.completion?.resultText === "string" && matches(run.completion.resultText),
+    );
+
+  const waitForFrozenResultText = (runId: string, expectedText: string) =>
     waitForFrozenResult(runId, (resultText) => resultText === expectedText);
 
   return {

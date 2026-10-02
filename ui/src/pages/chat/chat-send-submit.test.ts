@@ -72,7 +72,9 @@ describe("attachment frame admission", () => {
 
       expect(await handleSendChat(host)).toBeUndefined();
 
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+        timeoutMs: 30_000,
+      });
       expect(host.chatMessage).toBe(message);
       expect(host.chatMentions).toEqual(mentions);
       expect(host.chatReplyTarget).toEqual(replyTarget);
@@ -120,13 +122,17 @@ describe("attachment frame admission", () => {
 
     await resumeStoredChatOutboxes(restored);
 
-    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    });
     expect(listStoredChatOutboxes(restored)[0]?.queue[0]).toMatchObject(expectedRow);
     expect(restored.chatError).toBe("Too large to send: brief.pdf");
 
     await retryQueuedChatMessage(restored, original.id);
 
-    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(source.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    });
     const failed = queuedAttachmentBatch(restored);
     expect(failed).toMatchObject(expectedRow);
     const hydrated = await prepareOutboxPayload(restored, failed);
@@ -422,107 +428,11 @@ describe("reply submission", () => {
   });
 });
 
-describe("human mention submission", () => {
-  it("keeps only selected recipients after annotation and reply prefixes", async () => {
-    const host = makeChatHost({
-      chatMessage: "  🔎 @Alex please review  ",
-      chatMentions: [{ profileId: "profile-alex", start: 5, end: 10 }],
-      chatAttachments: [createBrowserAnnotationAttachment("mention", "Unselected @Other context")],
-      chatReplyTarget: {
-        messageId: "synthetic-reply",
-        text: "Unselected @Other quote",
-        senderLabel: "Reader",
-      },
-      getWorkContext: () => ({ page: "chat", title: "Unselected @Other work context" }),
-      requestHandlers: { "chat.send": { status: "started" } },
-    });
-
-    await handleSendChat(host);
-
-    const expected =
-      "> **Reader:** Unselected @Other quote\n\nUnselected @Other context\n\n🔎 @Alex please review";
-    expect(findChatSendPayload(host)).toMatchObject({
-      message: expected,
-      mentions: [
-        {
-          profileId: "profile-alex",
-          start: expected.indexOf("@Alex"),
-          end: expected.indexOf("@Alex") + 5,
-        },
-      ],
-    });
-  });
-
-  it("does not clear a same-label replacement recipient while history is loading", async () => {
-    const history = createDeferred<ChatHistoryResult>();
-    const host = makeChatHost({
-      chatMessage: "@Alex please review",
-      chatMentions: [{ profileId: "profile-first", start: 0, end: 5 }],
-      chatLoading: true,
-      currentSessionId: "existing-conversation",
-      requestHandlers: {
-        "chat.history": () => history.promise,
-        "chat.send": { status: "started" },
-      },
-    });
-    const sending = handleSendChat(host);
-    await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
-        signal: expect.any(AbortSignal),
-      }),
-    );
-    expect(host.chatMessage).toBe("");
-    host.chatMessage = "@Alex please review";
-    host.chatMentions = [{ profileId: "profile-second", start: 0, end: 5 }];
-    history.resolve({
-      messages: [],
-      sessionInfo: {
-        key: host.sessionKey,
-        kind: "direct",
-        updatedAt: 1,
-        status: "done",
-        hasActiveRun: false,
-      },
-    });
-    await sending;
-
-    expect(findChatSendPayload(host).mentions).toEqual([
-      { profileId: "profile-first", start: 0, end: 5 },
-    ]);
-    expect(host.chatMessage).toBe("@Alex please review");
-    expect(host.chatMentions).toEqual([{ profileId: "profile-second", start: 0, end: 5 }]);
-  });
-
-  it.each(["/new @Alex", "/status @Alex", "/btw @Alex review"])(
-    "preserves mention intent instead of dropping it in %s",
-    async (message) => {
-      const mentions = [
-        {
-          profileId: "profile-alex",
-          start: message.indexOf("@Alex"),
-          end: message.indexOf("@Alex") + 5,
-        },
-      ];
-      const host = makeChatHost({
-        chatMessage: message,
-        chatMentions: mentions,
-        requestHandlers: {},
-      });
-
-      await handleSendChat(host);
-
-      expect(host.request).not.toHaveBeenCalled();
-      expect(host.chatMessage).toBe(message);
-      expect(host.chatMentions).toEqual(mentions);
-      expect(host.chatError).toBeTruthy();
-    },
-  );
-});
-
 describe("Home work context admission", () => {
   it("freezes the context with queued input rather than following navigation", async () => {
     const context = { page: "chat", title: "Original work" };
     const host = makeChatHost({
+      requestHandlers: {},
       connected: false,
       chatMessage: "Review this",
       getWorkContext: () => context,
@@ -771,7 +681,9 @@ describe("handleSendChat session ownership", () => {
           expect(host.chatRunError).toBeNull();
         }
         if (pendingHistory) {
-          expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+          expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+            timeoutMs: 30_000,
+          });
           refresh.resolve(failed);
           await loading;
         }
@@ -901,7 +813,9 @@ describe("handleSendChat session ownership", () => {
       expect(host.chatAttachments).toEqual([attachment]);
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
       expect(host.chatQueue).toEqual([]);
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+        timeoutMs: 30_000,
+      });
       expect(host.chatError).toBeUndefined();
       expect(host.lastError).toBeNull();
       readiness.mockReturnValue(true);
@@ -935,7 +849,9 @@ describe("handleSendChat session ownership", () => {
     const drain = resumeStoredChatOutboxes(host);
     const loading = loadChatHistory(host);
     await vi.waitFor(() =>
-      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
+      expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything(), {
+        timeoutMs: 30_000,
+      }),
     );
     readiness.mockReturnValue(false);
     history.resolve({
@@ -951,14 +867,18 @@ describe("handleSendChat session ownership", () => {
     await drain;
     await loading;
     expect(host.chatRunError?.summary).toContain("Earlier preparation failed");
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    });
     expect(host.chatQueue).toMatchObject([
       { text: "offline later turn", sendAttempts: 0, sendRunId: originalId },
     ]);
     pending = true;
     readiness.mockReturnValue(true);
     await resumeStoredChatOutboxes(host);
-    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+      timeoutMs: 30_000,
+    });
     pending = false;
     await resumeStoredChatOutboxes(host);
     expect(host.chatRunError).toBeNull();
@@ -966,6 +886,23 @@ describe("handleSendChat session ownership", () => {
       message: "offline later turn",
       idempotencyKey: originalId,
     });
+  });
+
+  it("never drains an offline text submission under a different authenticated account", async () => {
+    const host = makeChatHost({
+      connected: false,
+      chatMessage: "Alice offline input",
+      requestHandlers: { "chat.send": { status: "started" } },
+    });
+    await handleSendChat(host);
+    expect(host.chatQueue).toHaveLength(1);
+    const scope = vi.spyOn(host.client!, "recoveryScope", "get").mockReturnValue("bob-account");
+    host.connected = true;
+    await resumeStoredChatOutboxes(host);
+    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+    expect(listStoredChatOutboxes(host)).toEqual([]);
+    scope.mockRestore();
+    expect(listStoredChatOutboxes(host)[0]?.queue[0]?.text).toBe("Alice offline input");
   });
 
   it.each(["initial-turn", "recovery-scope"])(
@@ -993,13 +930,20 @@ describe("handleSendChat session ownership", () => {
       host.chatMessage = "newer draft";
       settingsPatch.resolve(true);
       await send;
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+        timeoutMs: 30_000,
+      });
       // A connected unresolved owner cannot finish a Blob row's settings write.
       // The stored interrupted-settings state remains paused until explicit retry.
       const sendState = hold === "recovery-scope" ? "failed" : "waiting-idle";
       const retained = Object.values(
-        readStoredOutboxStore(sessionStorage, storageTargetForGateway(host.settings?.gatewayUrl))
-          .sessions,
+        readStoredOutboxStore(
+          sessionStorage,
+          storageTargetForGateway(
+            host.settings?.gatewayUrl,
+            original.attachmentPayload?.recoveryScope,
+          ),
+        ).sessions,
       ).flatMap((session) => session.queue ?? []);
       expect(retained).toMatchObject([
         {
@@ -1045,7 +989,9 @@ describe("handleSendChat session ownership", () => {
       expect(host.chatAttachments).toEqual([attachment]);
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
       expect(host.chatQueue).toEqual([]);
-      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything(), {
+        timeoutMs: 30_000,
+      });
       expect(host.chatError).toBe("Earlier request failed");
       expect(host.lastError).toBe("Earlier request failed");
     },

@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

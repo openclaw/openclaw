@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardGatewaySelectionTests {
     @Test(arguments: [AppState.ConnectionMode.local, .remote, .unconfigured])

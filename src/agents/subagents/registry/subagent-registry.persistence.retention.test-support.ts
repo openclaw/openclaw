@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
+import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 
 export function registerSubagentDismissedRetentionCases({
   getRegistry,

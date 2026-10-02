@@ -14,14 +14,14 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
 import {
-  ensureProfileForEmail,
   linkEmail,
   setAvatar,
   setDisplayName,
   setUserProfileRole,
-} from "../../state/user-profiles.js";
+} from "../../state/user-profile-writes.worker.js";
+import { getProfileAvatar } from "../../state/user-profiles-avatar.test-support.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { materializeSkillResources, prepareSkillResourceDelivery } from "../runtime/resources.js";
 import { prepareSkillLibraryBundle, skillLibraryRevisionDir } from "./bundle.js";

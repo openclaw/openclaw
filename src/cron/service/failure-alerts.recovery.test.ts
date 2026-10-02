@@ -51,7 +51,7 @@ async function finalize(
       jobId: job.id,
       job: structuredClone(job),
       activeJobMarker: markCronJobActive(job.id),
-      ...authorCronRunCompletion(context.state, job, result),
+      ...authorCronRunCompletion(job, result),
       startedAt: context.clock.now,
       endedAt: context.clock.now + 10,
     },

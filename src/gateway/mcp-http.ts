@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { readAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { resolveToolLoopDetectionConfig } from "../agents/tool-loop-detection-config.js";
@@ -136,10 +135,12 @@ async function startMcpLoopbackServer(
   work: AsyncWorkScope,
 ): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
-  const [{ handleMcpJsonRpc }, { McpLoopbackToolCache }] = await Promise.all([
-    import("./mcp-http.handlers.js"),
-    import("./mcp-http.runtime.js"),
-  ]);
+  const [{ handleMcpJsonRpc }, { McpLoopbackToolCache }, { isCompletionGrantLineageCurrent }] =
+    await Promise.all([
+      import("./mcp-http.handlers.js"),
+      import("./mcp-http.runtime.js"),
+      import("./tool-resolution-completion.js"),
+    ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
@@ -235,10 +236,16 @@ async function startMcpLoopbackServer(
         }
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        // A completion grant is current only while its requester lineage verifies. The
+        // child entry can go away while preparation, hooks or approvals await, so the
+        // dispatch authorization and the tools' source-effect guard both re-check it.
+        const isGrantAndLineageCurrent = () =>
+          (boundClientGrant?.isCurrent() ?? true) &&
+          isCompletionGrantLineageCurrent({ cfg, context: requestContext });
         const authorizeToolCall = () =>
           !work.isClosing &&
           getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
-          (boundClientGrant?.isCurrent() ?? true);
+          isGrantAndLineageCurrent();
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
           ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
           : undefined;
@@ -274,9 +281,6 @@ async function startMcpLoopbackServer(
             toolCache.resolve({
               context: requestContext,
               admittedRunContext: boundClientGrant?.admittedRunContext,
-              sessionControlAuthority: readAdmittedRunOperatorAuthority(
-                boundClientGrant?.admittedRunContext,
-              ),
               rootedExecution: boundClientGrant?.rootedExecution,
               messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
               cfg,
@@ -396,7 +400,7 @@ async function startMcpLoopbackServer(
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: boundClientGrant.isCurrent,
+                  receiptAuthority: isGrantAndLineageCurrent,
                   cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
                   mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                   agentId: scopedTools.agentId,

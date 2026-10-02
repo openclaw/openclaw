@@ -43,6 +43,13 @@ as `scripts/changed-lanes.mjs` and skips the shared helper implementation
 itself. `check:changed` runs this report for changed test paths as a
 warning-only CI signal (GitHub warning annotations, not failures).
 
+Copy fixture trees whose files a test later executes directly (stubs on `PATH`,
+shebang wrappers, native binaries) with `copyTreeCloseOnExec` from
+`test/helpers/close-on-exec-copy.ts`, not a recursive `fs.cpSync` without a
+`filter`. On Node 24 that copy path opens files without close-on-exec, so a
+child forked by another Vitest thread mid-copy keeps the file writable and a
+later `execve` fails with `ETXTBSY`.
+
 ## Agent reliability evals (skills)
 
 We already have a few CI-safe tests that behave like "agent reliability evals":
@@ -89,6 +96,13 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   booting per test; import the narrow test API of a plugin or module rather than
   its full barrel. Do not add a serial Vitest config or a worker pin: fix the
   shared state that would need one.
+- Load compiled-subprocess declarations (`scripts/lib/vitest-worker-declarations.mts`)
+  at collection. The first such load in a Vitest invocation prepares the whole
+  compiled worker generation (tens of seconds warm, minutes cold), so an
+  `await import()` in a test or hook whose graph reaches a declaration spends
+  that preparation inside the test or hook deadline. Import the subject
+  statically; suites that re-import it per test add a side-effect import of
+  `src/test-utils/prepare-compiled-subprocesses.ts`.
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
 
@@ -113,6 +127,16 @@ closeOpenClawStateDatabaseAsync()` (or `closeStateDatabaseForTest()` from
 Otherwise the raw connection can fail with `SQLITE_BUSY`, or the snapshot can
 change underneath the test. `PRAGMA locking_mode=EXCLUSIVE; BEGIN EXCLUSIVE` on
 a raw connection proves that no other connection remains.
+
+## Skills watchers
+
+`skills.status` and skill snapshot preparation start real `@openclaw/fs-safe`
+watchers. In shared-worker lanes, the non-isolated runner closes any watchers a
+file leaves open and fails that file with `skills watchers failed`; otherwise
+their re-armed timers land on a later file's fake clock and abort its
+`vi.runAllTimersAsync()`. Close them in `afterEach` with
+`closeSkillsWatchers(true)`, or set `skills.load.watch: false` when the test
+does not exercise watching.
 
 ## Flake triage
 

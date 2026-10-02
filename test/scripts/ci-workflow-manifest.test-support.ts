@@ -49,6 +49,7 @@ export function runCiManifestFixture(options: {
   targetSelector?: boolean;
   changedPlannerDependencies?: string[];
   dockerSeedPlannerSource?: string;
+  publishedDriverUpdateCapability?: boolean;
   changedPaths?: string[] | null;
   checkFamilyScope?: boolean;
   ciLintPlan?: Awaited<ReturnType<typeof createChangedCiLintPlan>>;
@@ -521,6 +522,10 @@ export function runCiManifestFixture(options: {
         options.dockerSeedPlannerSource ??
           `export { resolveDockerSeedLanes, resolveChangedDockerSeedLanes } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-docker-seed-plan.mts")).href)};\n`,
       );
+      copyFileSync(
+        "scripts/lib/ci-published-driver-update-plan.mts",
+        path.join(scriptsDir, "ci-published-driver-update-plan.mts"),
+      );
       const sqliteLifecycleProof = path.join(
         root,
         "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
@@ -590,6 +595,9 @@ export function runCiManifestFixture(options: {
           ? ["openclawkit-tests-contract-v1"]
           : []),
         ...(options.bundledPlanner ? ["docker-seed-e2e-contract-v1"] : []),
+        ...((options.publishedDriverUpdateCapability ?? options.bundledPlanner)
+          ? ["published-driver-update-contract-v1"]
+          : []),
         ...((options.targetHostedRunnerProfileContract ?? options.bundledPlanner)
           ? ["hosted-runner-profile-contract-v1"]
           : []),
@@ -619,7 +627,7 @@ export function runCiManifestFixture(options: {
     );
     const trustedReleasePolicy = path.join(root, ".ci-harness/scripts/lib");
     mkdirSync(trustedReleasePolicy, { recursive: true });
-    for (const name of ["release-context.mjs", "release-version.mjs"]) {
+    for (const name of ["release-context.mjs", "release-version.mjs", "ci-ios-smoke-plan.mjs"]) {
       writeFileSync(path.join(trustedReleasePolicy, name), readFileSync(`scripts/lib/${name}`));
     }
     copyFileSync(
@@ -743,7 +751,6 @@ export function runCiManifestFixture(options: {
         ),
         GITHUB_REF: "refs/heads/main",
         OPENCLAW_CI_HOSTED_HEALTHY: "",
-        OPENCLAW_CI_AUTHOR_ASSOCIATION: "CONTRIBUTOR",
         OPENCLAW_CI_HEAD_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
         OPENCLAW_CI_RUNNER_PROFILE: options.runnerProfile ?? options.runnerBackend ?? "blacksmith",

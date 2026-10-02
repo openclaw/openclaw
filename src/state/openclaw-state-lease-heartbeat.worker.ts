@@ -15,6 +15,7 @@ import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase as startupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
+  LEASE_CONTENTION_RETRY_MS,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatReply,
   type LeaseHeartbeatParentMessage,
@@ -52,12 +53,16 @@ function openHeartbeatDatabase() {
         throw error;
       }
     }
-    Atomics.wait(shared, state.status, state.starting, Math.max(1, Math.min(25, remaining())));
+    Atomics.wait(
+      shared,
+      state.status,
+      state.starting,
+      Math.max(1, Math.min(LEASE_CONTENTION_RETRY_MS, remaining())),
+    );
   }
   throw new Error("state lease heartbeat startup deadline expired or owner stopped");
 }
 const db = openHeartbeatDatabase();
-const CONTENTION_RETRY_MS = 25;
 Atomics.store(shared, state.startupPhase, startupPhase["open-complete"]);
 let processOwner = params.processOwner;
 let heartbeat: ReturnType<typeof setTimeout> | undefined;
@@ -159,7 +164,7 @@ const renewInWorker = (explicit: boolean): number | undefined => {
     Math.max(
       1,
       Math.min(
-        contentionError === undefined ? params.heartbeatMs : CONTENTION_RETRY_MS,
+        contentionError === undefined ? params.heartbeatMs : LEASE_CONTENTION_RETRY_MS,
         expiresAt - Date.now(),
       ),
     ),
@@ -197,7 +202,10 @@ function activateHeartbeat(): void {
         activateHeartbeat,
         Math.max(
           1,
-          Math.min(params.heartbeatMs, Number(Atomics.load(shared, state.expiresAt)) - Date.now()),
+          Math.min(
+            LEASE_CONTENTION_RETRY_MS,
+            Number(Atomics.load(shared, state.expiresAt)) - Date.now(),
+          ),
         ),
       );
       return;

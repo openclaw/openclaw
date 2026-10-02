@@ -120,7 +120,8 @@ describeControlUiE2e("Control UI dashboard A2UI", () => {
       path: path.resolve("extensions/canvas/src/host/a2ui/a2ui.bundle.js"),
       type: "module",
     });
-    const result = await page.evaluate(() => {
+    const result = await page.evaluate(async () => {
+      await customElements.whenDefined("openclaw-a2ui-host");
       const emitted: unknown[] = [];
       Reflect.set(globalThis, "openclaw", {
         state: {

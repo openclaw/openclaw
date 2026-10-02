@@ -440,7 +440,7 @@ internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDict
     remember(context, viewModel) {
       ChatDictationController(
         recognizer = AndroidChatDictationRecognizer(context),
-        requestPermission = viewModel::requestDictationPermission,
+        requestPermission = viewModel::requestRecordAudioPermission,
         acquireMic = viewModel::tryAcquireDictationMic,
         releaseMic = viewModel::releaseDictationMic,
       )

@@ -7,8 +7,14 @@ import { expectDefined } from "../packages/normalization-core/src/expect.js";
 import { isRecord } from "../packages/normalization-core/src/record-coerce.js";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import { decodeXml } from "../src/shared/xml.ts";
-import { collectToolDisplaySources, selectDeterministicTranslation } from "./android-app-i18n.ts";
+import {
+  collectToolDisplaySources,
+  findClosingDelimiter,
+  lineNumber,
+  selectDeterministicTranslation,
+} from "./android-app-i18n.ts";
 import { translateNativeEntries } from "./control-ui-i18n.ts";
+import { compareAscii as compareCodePoints } from "./lib/canonical-json.mjs";
 import { NATIVE_I18N_LOCALES } from "./native-i18n-locales.ts";
 
 type NativeI18nSurface = "android" | "apple";
@@ -394,52 +400,6 @@ function extractKotlinInterpolations(source: string): NativeInterpolation[] | nu
     }
   }
   return values;
-}
-
-function compareCodePoints(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function lineNumber(source: string, offset: number): number {
-  return source.slice(0, offset).split("\n").length;
-}
-
-function findClosingDelimiter(
-  source: string,
-  openingIndex: number,
-  opening: string,
-  closing: string,
-): number | null {
-  let depth = 0;
-  let quoted = false;
-  let escaped = false;
-  for (let index = openingIndex; index < source.length; index += 1) {
-    const character = source[index];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (quoted && character === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (character === '"') {
-      quoted = !quoted;
-      continue;
-    }
-    if (quoted) {
-      continue;
-    }
-    if (character === opening) {
-      depth += 1;
-    } else if (character === closing) {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return null;
 }
 
 function readMultilineStringLiteral(

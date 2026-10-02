@@ -1,6 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";

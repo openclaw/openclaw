@@ -16,7 +16,7 @@ import {
   parseStoredChatOutboxScope,
   resolvePendingComposerSessions,
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
   type ChatComposerScope,
@@ -69,6 +69,7 @@ export function createStoredChatOutboxReader() {
     state.client,
     state.client?.recoveryScope,
     state.client?.recoveryScopeReady,
+    owner?.recoveryScope,
     state.connected,
     presence,
   ];
@@ -144,7 +145,7 @@ export function createStoredChatOutboxReader() {
     },
     read(state: StoredOutboxReaderScope) {
       lastState = state;
-      const gatewayOwner = storageTargetForGateway(state.settings?.gatewayUrl).gatewayOwner;
+      const gatewayOwner = storageTargetForComposer(state).gatewayOwner;
       const recoveryScope = observeOutboxRecoveryOwner(state);
       if (owner?.gatewayOwner !== gatewayOwner || owner?.recoveryScope !== recoveryScope) {
         owner = recoveryScope ? { gatewayOwner, recoveryScope } : undefined;
@@ -171,7 +172,7 @@ function listStoredComposerRows(
     return [];
   }
   try {
-    const target = storageTargetForGateway(state.settings?.gatewayUrl);
+    const target = storageTargetForComposer(state);
     const store = readProjectedOutboxStore(storage, target);
     if (resolvePendingComposerSessions(store, state)) {
       try {

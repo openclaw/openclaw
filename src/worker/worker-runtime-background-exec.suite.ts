@@ -8,7 +8,11 @@ import { fileURLToPath } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import {
   deleteSession,
@@ -72,10 +76,10 @@ export function registerWorkerBackgroundExecLifecycleTests({
 }: WorkerCrashFixture) {
   it
     .runIf(process.platform === "linux" || process.platform === "darwin")
-    .each(["worker", "anchor", "node-host", "environment-stop"] as const)(
+    .for(["worker", "anchor", "node-host", "environment-stop"] as const)(
     "stops registered background execs after %s",
     { timeout: 120_000 },
-    async (crashed) => {
+    async (crashed, { signal }) => {
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: ["background-tool", "text"],
         backgroundCommand: `exec '${process.execPath.replaceAll("'", "'\\''")}' heartbeat.cjs`,
@@ -232,10 +236,13 @@ export function registerWorkerBackgroundExecLifecycleTests({
               admitted.resolve(message.receipt as NodeWorkerLaunchReceipt);
             }
           });
-          running = await withTestTimeout(
-            admitted.promise,
-            WORKER_INFERENCE_START_TIMEOUT_MS,
-            "node supervisor did not admit the registered-exec fixture",
+          running = await withinTest(
+            awaitGateBeforeSettlement(
+              admitted.promise,
+              once(nodeHost, "close"),
+              "node supervisor did not admit the registered-exec fixture",
+            ),
+            signal,
           );
         }
         expect(running.state).toBe("running");

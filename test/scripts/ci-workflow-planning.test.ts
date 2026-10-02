@@ -915,6 +915,7 @@ describe("release fast lane", () => {
       "run_sqlite_session_lifecycle",
       "run_qa_smoke_ci",
       "run_docker_seed_e2e",
+      "run_published_driver_update",
     ]) {
       expect(outputs[key], key).toBe("false");
     }
@@ -2326,6 +2327,8 @@ describe("ci workflow guards", () => {
       for (const family of [
         "run_build_artifacts",
         "run_ios_build",
+        "run_ios_voice_cleanup_tests",
+        "run_ios_lifecycle_tests",
         "run_macos_swift",
         "run_checks_windows",
         "run_ui_tests",
@@ -2516,6 +2519,8 @@ describe("ci workflow guards", () => {
         preflightOutputs: {
           compatibility_target: String(historical),
           run_openclawkit_tests: "true",
+          run_ios_voice_cleanup_tests: "true",
+          run_ios_lifecycle_tests: "true",
           release_scope: "full",
         },
       };
@@ -2548,6 +2553,7 @@ describe("ci workflow guards", () => {
           : {
               smoke: [
                 "Swift lint",
+                ...(historical ? [] : ["Configure iOS build and report simulator selection"]),
                 ...(historical ? [] : ["Prepare iOS simulator"]),
                 "Build iOS app",
                 ...(historical ? [] : ["Run focused iOS voice cleanup simulator tests"]),
@@ -2557,6 +2563,7 @@ describe("ci workflow guards", () => {
               tests: [
                 "Test Watch RTC engine",
                 "Swift lint",
+                "Configure iOS build and report simulator selection",
                 "Prepare iOS simulator",
                 "Build iOS app",
                 "Run focused iOS voice cleanup simulator tests",
@@ -2766,6 +2773,7 @@ describe("ci workflow guards", () => {
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
         const definition = job as {
           if?: string;
+          uses?: string;
           "runs-on": string;
           strategy?: {
             matrix: string | { include?: Record<string, unknown>[]; [key: string]: unknown };
@@ -2795,9 +2803,16 @@ describe("ci workflow guards", () => {
             );
           }
         }
+        const runners = definition.uses?.startsWith("./.github/workflows/")
+          ? Object.values(readWorkflow(definition.uses.slice(2)).jobs).map(
+              (child) => (child as { "runs-on": string })["runs-on"],
+            )
+          : [definition["runs-on"]];
         for (const row of selectedRows) {
-          if (allSelected || hostedLabels.has(String(evaluate(definition["runs-on"], row)))) {
-            rows.push(name);
+          for (const runner of runners) {
+            if (allSelected || hostedLabels.has(String(evaluate(runner, row)))) {
+              rows.push(name);
+            }
           }
         }
       }
@@ -2818,7 +2833,7 @@ describe("ci workflow guards", () => {
         ...common,
         eventName: "workflow_dispatch",
         releaseGate: true,
-        scopeEnv: { OPENCLAW_CI_AUTHOR_ASSOCIATION: "", OPENCLAW_CI_HEAD_REPOSITORY: "" },
+        scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "" },
       });
       expect(ordinary.status, ordinary.output).toBe(0);
       expect(Number(ordinary.outputs.pr_job_count)).toBe(
@@ -3308,12 +3323,6 @@ describe("ci workflow guards", () => {
     it.each<{ label: string } & Partial<Parameters<typeof runCiManifestFixture>[0]>>([
       { label: "retry", scopeEnv: { GITHUB_RUN_ATTEMPT: "2" } },
       { label: "missing attempt", scopeEnv: { GITHUB_RUN_ATTEMPT: "" } },
-      {
-        label: "untrusted author",
-        eventName: "pull_request" as const,
-        changedPaths: [".github/workflows/ci.yml"],
-        scopeEnv: { OPENCLAW_CI_AUTHOR_ASSOCIATION: "NONE" },
-      },
       { label: "manual", eventName: "workflow_dispatch" as const },
       { label: "frozen", eventName: "workflow_dispatch" as const, historicalCompatibility: true },
       { label: "noncanonical", repository: "contributor/openclaw" },
@@ -4752,7 +4761,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it("resolves one event-aware logical runner profile without changing physical routing", () => {
+  it("resolves event-aware check and Node profiles independently of the author", () => {
     const scenarios: {
       expected: string;
       expectedNode?: string;
@@ -4798,8 +4807,10 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
-        name: "fork pull request is hosted",
+        expectedNode: "hybrid",
+        name: "untrusted fork first attempt plans Node shards with the configured hybrid backend",
         options: {
+          authorAssociation: "NONE",
           configuredProfile: "hybrid",
           eventName: "pull_request" as const,
           headRepository: "contributor/openclaw",
@@ -4808,7 +4819,52 @@ describe("ci workflow guards", () => {
       },
       {
         expected: "github",
-        name: "untrusted same-repository pull request is hosted",
+        expectedNode: "blacksmith",
+        name: "untrusted fork first attempt plans Node shards for its Blacksmith runners",
+        options: {
+          authorAssociation: "FIRST_TIME_CONTRIBUTOR",
+          eventName: "pull_request" as const,
+          headRepository: "contributor/openclaw",
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        expectedNode: "blacksmith",
+        name: "trusted fork first attempt plans Node shards for its Blacksmith runners",
+        options: {
+          authorAssociation: "CONTRIBUTOR",
+          eventName: "pull_request" as const,
+          headRepository: "contributor/openclaw",
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        expectedNode: "hybrid",
+        name: "trusted fork first attempt plans Node shards with the configured hybrid backend",
+        options: {
+          authorAssociation: "CONTRIBUTOR",
+          configuredProfile: "hybrid",
+          eventName: "pull_request" as const,
+          headRepository: "contributor/openclaw",
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "github",
+        name: "trusted fork retry plans for its hosted runners",
+        options: {
+          authorAssociation: "CONTRIBUTOR",
+          eventName: "pull_request" as const,
+          headRepository: "contributor/openclaw",
+          runAttempt: 2,
+          targetSupportsContract: true,
+        },
+      },
+      {
+        expected: "blacksmith",
+        name: "untrusted same-repository pull request keeps the configured profile",
         options: {
           authorAssociation: "NONE",
           configuredProfile: "blacksmith",
@@ -4847,8 +4903,25 @@ describe("ci workflow guards", () => {
       ...[
         { name: "trusted canonical PR", expected: "hybrid", expectedNode: "runson" },
         { name: "PR retry", expected: "hybrid", expectedNode: "hybrid", runAttempt: 2 },
-        { name: "returning-contributor fork", expected: "github", headRepository: "fork/openclaw" },
-        { name: "untrusted author", expected: "github", authorAssociation: "NONE" },
+        // Trusted forks plan for their hybrid Blacksmith labels; RunsOn stays same-repository.
+        {
+          name: "returning-contributor fork",
+          expected: "github",
+          expectedNode: "hybrid",
+          headRepository: "fork/openclaw",
+        },
+        {
+          name: "returning-contributor fork retry",
+          expected: "github",
+          headRepository: "fork/openclaw",
+          runAttempt: 2,
+        },
+        {
+          name: "untrusted author",
+          expected: "hybrid",
+          expectedNode: "runson",
+          authorAssociation: "NONE",
+        },
         { name: "noncanonical repository", expected: "github", repository: "fork/openclaw" },
         { name: "push", expected: "hybrid", eventName: "push" as const },
         { name: "ordinary dispatch", expected: "github", eventName: "workflow_dispatch" as const },
@@ -5369,7 +5442,7 @@ describe("ci workflow guards", () => {
     };
     const manifest = runCiManifestFixture({
       ...fixture,
-      scopeEnv: { OPENCLAW_CI_AUTHOR_ASSOCIATION: "", OPENCLAW_CI_HEAD_REPOSITORY: "" },
+      scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: "" },
     });
     expect(manifest.status, manifest.output).toBe(0);
     expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBeGreaterThan(0);
@@ -5462,11 +5535,20 @@ describe("ci workflow guards", () => {
           ).toBe(expected);
         }
       }
+      expect(
+        evaluateWorkflowExpression(artifactRunner, {
+          ...context,
+          eventName: "pull_request",
+          authorAssociation: "NONE",
+          headRepository: "fork/openclaw",
+        }),
+        "build-artifacts: untrusted fork first attempt",
+      ).toBe(expected);
       for (const override of [
         { runnerBackend: "github" },
         { runnerBackend: "hybrid", runAttempt: 2 },
         { eventName: "workflow_dispatch" },
-        { eventName: "pull_request", authorAssociation: "NONE", headRepository: "fork/openclaw" },
+        { eventName: "pull_request", headRepository: "fork/openclaw", runAttempt: 2 },
       ] as const) {
         expect(evaluateWorkflowExpression(artifactRunner, { ...context, ...override })).toBe(
           "ubuntu-24.04",
@@ -5479,9 +5561,21 @@ describe("ci workflow guards", () => {
     // PR events validate the artifact build on hosted runners (landing gate
     // stays satisfiable during Blacksmith outages); Testbox leases are
     // dispatch-only, mirroring ci-check-testbox.yml.
-    expect(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"]).toBe(
-      "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
-    );
+    for (const [eventName, expected] of [
+      ["pull_request", "ubuntu-24.04"],
+      ["workflow_dispatch", "blacksmith-16vcpu-ubuntu-2404"],
+    ] as const) {
+      expect(
+        evaluateWorkflowExpression(buildArtifactsTestbox.jobs["build-artifacts"]["runs-on"], {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          additionalNeeds: {
+            admission: { outputs: { runner: "blacksmith-16vcpu-ubuntu-2404" }, result: "success" },
+          },
+        }),
+      ).toBe(expected);
+    }
     for (const stepName of ["Begin Testbox", "Run Testbox"]) {
       expect(
         buildArtifactsTestbox.jobs["build-artifacts"].steps.find(
@@ -5952,10 +6046,18 @@ describe("ci workflow guards", () => {
 
     for (const revision of ["base", "head"]) {
       const ensureRevisionStep = additionalJob.steps.find(
-        (step: WorkflowStep) => step.name === `Ensure Plugin SDK API diff ${revision} commit`,
+        (step: WorkflowStep) =>
+          step.name ===
+          (revision === "base"
+            ? "Ensure additional check comparison base"
+            : "Ensure Plugin SDK API diff head commit"),
       );
       for (const [eventName, group, eligible] of [
         ["pull_request", "plugin-sdk-api-diff", false],
+        ["pull_request", "extension-package-boundary", revision === "base"],
+        ["push", "extension-package-boundary", false],
+        ["schedule", "extension-package-boundary", false],
+        ["workflow_dispatch", "extension-package-boundary", false],
         ["push", "plugin-sdk-api-diff", false],
         ["workflow_dispatch", "plugin-sdk-api-diff", true],
         ["workflow_dispatch", "boundaries", false],
@@ -8032,6 +8134,13 @@ describe("ci workflow guards", () => {
         run_macos_swift: "false",
         run_openclawkit_tests: "false",
         run_ios_build: "false",
+        run_ios_voice_cleanup_tests: "false",
+        run_ios_lifecycle_tests: "false",
+        ios_simulator_selection: JSON.stringify({
+          mode: "not-selected",
+          voice: { selected: false, reasons: ["iOS job not selected"] },
+          lifecycle: { selected: false, reasons: ["iOS job not selected"] },
+        }),
         run_android: "false",
         run_android_job: "false",
         run_android_access_native: "false",
@@ -9763,8 +9872,8 @@ describe("ci workflow guards", () => {
         expected: { blacksmith: false, dependencyCache: "false" },
       },
       {
-        // Runner routing follows contributor trust; the exact dependency cache
-        // stays fork-gated either way, so a fork never writes what main reads.
+        // Runner capacity is author-independent; exact dependency restores
+        // still require a same-repository PR.
         name: "fork pull request from returning contributor",
         context: {
           authorAssociation: "CONTRIBUTOR",
@@ -9784,7 +9893,7 @@ describe("ci workflow guards", () => {
           repository: "openclaw/openclaw",
           runAttempt: 1,
         },
-        expected: { blacksmith: false, dependencyCache: "false" },
+        expected: { blacksmith: true, dependencyCache: "false" },
       },
       {
         name: "workflow dispatch",
@@ -10996,6 +11105,7 @@ describe("ci workflow guards", () => {
       "android",
       "android-access-native",
       "docker-seed-e2e",
+      "published-driver-update",
       "pr-fail-fast",
     ];
 
@@ -11064,6 +11174,32 @@ describe("ci workflow guards", () => {
       expect(projected, job).toBe(eligible);
     }
   });
+
+  it.each([
+    { eventName: "pull_request", sameRevision: true, result: "success", exitCode: 0 },
+    { eventName: "schedule", sameRevision: true, result: "failure", exitCode: 1 },
+    { eventName: "pull_request", sameRevision: true, result: "skipped", exitCode: 1 },
+    { eventName: "workflow_dispatch", sameRevision: false, result: "skipped", exitCode: 0 },
+  ] as const)(
+    "gates published-driver $eventName sameRevision=$sameRevision result=$result",
+    ({ eventName, sameRevision, result, exitCode }) => {
+      const revision = "a".repeat(40);
+      const gate = runCiGateFixture(
+        renderCiGateEnvironment(
+          {
+            eventName,
+            sha: revision,
+            preflightOutputs: {
+              run_published_driver_update: "true",
+              checkout_revision: sameRevision ? revision : "b".repeat(40),
+            },
+          },
+          { "published-driver-update": result },
+        ),
+      );
+      expect(gate.status, `${gate.stdout}${gate.stderr}`).toBe(exitCode);
+    },
+  );
 
   it("reduces iOS screenshots only after every shard's latest attempt succeeded", () => {
     const reducer = readCiWorkflow().jobs["ios-screenshot-evidence"];
@@ -11801,4 +11937,90 @@ describe("ci workflow guards", () => {
       expect(runStep.run.split(file)).toHaveLength(3);
     }
   });
+});
+
+describe("extension lint PR admission", () => {
+  it.each([
+    { eventName: "pull_request", kill: "false", mode: "affected" },
+    { eventName: "pull_request", kill: "true", mode: "full" },
+    { eventName: "pull_request", kill: "1", mode: "full" },
+    { eventName: "schedule", kill: "false", mode: undefined },
+    { eventName: "workflow_dispatch", kill: "false", mode: undefined },
+  ] as const)(
+    "keeps $eventName extension coverage under kill=$kill",
+    ({ eventName, kill, mode }) => {
+      // Re-export the real installed owners while the existing harness supplies
+      // its bounded compiler inventory. No new shared fixture capability is needed.
+      const owner = pathToFileURL(path.resolve("scripts/lib/ci-extension-lint-plan.mts")).href;
+      const lint = pathToFileURL(path.resolve("scripts/run-oxlint-shards.mts")).href;
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        checkFamilyScope: true,
+        historicalCompatibility: false,
+        runnerProfile: "hybrid",
+        eventName,
+        changedPaths: ["tsconfig.json"],
+        changedPlannerSource: `
+        import { writeFileSync } from "node:fs";
+        writeFileSync(new URL("./ci-extension-lint-plan.mts", import.meta.url), ${JSON.stringify(`export { resolveCiExtensionLintSelection } from ${JSON.stringify(owner)};\n`)});
+        writeFileSync(new URL("../run-oxlint-shards.mts", import.meta.url), ${JSON.stringify(`export { createExtensionOxlintShards, createOxlintExtensionRootScope, selectExtensionOxlintStripe } from ${JSON.stringify(lint)};\n`)});
+        export const createChangedNodeTestShards = () => [{
+          checkName: "selected-extension-lint-test", shardName: "selected-extension-lint-test",
+          configs: [], targets: ["src/selected.test.ts"], requiresDist: false,
+          runner: "ubuntu-24.04",
+        }];
+      `,
+        scopeEnv: {
+          OPENCLAW_CI_EXTENSION_LINT_FULL: kill,
+          OPENCLAW_CI_CHANGED_BASE: "a".repeat(40),
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_check_plan).toBe(String(eventName === "pull_request"));
+      if (mode) {
+        const input = JSON.parse(manifest.outputs.check_plan_input_json!);
+        expect(input.extensionLintMode).toBe(mode);
+        expect(input.changedBaseRef).toBe("a".repeat(40));
+        expect(input.preserveFullChecks).toBe(true);
+        expect(input.lintCoreMatrix.include).toEqual([{ stripe: 1 }, { stripe: 2 }]);
+        expect(input.typeGraphBoundaryOwner).toBe("additional-checks");
+        expect(
+          JSON.parse(manifest.checkPlanOutputs.check_matrix!).include.map(
+            (row: { task: string }) => row.task,
+          ),
+        ).toContain("prod-types");
+        expect(
+          JSON.parse(manifest.checkPlanOutputs.check_matrix!).include.map(
+            (row: { task: string }) => row.task,
+          ),
+        ).toContain("test-types");
+      } else {
+        expect(manifest.outputs.check_plan_input_json).toBe("");
+        expect(manifest.outputs.run_lint_extensions).toBe("true");
+      }
+      const steps = readCiWorkflow().jobs["check-plan"].steps;
+      const ensureBase = steps.find(
+        (step: WorkflowStep) => step.name === "Ensure extension lint comparison base",
+      );
+      const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+        eventName,
+        runAttempt: 1,
+        repository: "openclaw/openclaw",
+        githubEvent: { pull_request: { base: { ref: "main" } } },
+        preflightOutputs: {
+          ...manifest.outputs,
+          diff_base_revision: "a".repeat(40),
+          check_plan_input_json: manifest.outputs.check_plan_input_json || "{}",
+        },
+      };
+      expect(evaluateWorkflowExpression(`\${{ ${ensureBase.if} }}`, context)).toBe(
+        eventName === "pull_request",
+      );
+      expect(evaluateWorkflowExpression(ensureBase.with["base-sha"], context)).toBe("a".repeat(40));
+      expect(evaluateWorkflowExpression(ensureBase.with["fetch-ref"], context)).toBe("main");
+      expect(steps.indexOf(ensureBase)).toBeLessThan(
+        steps.findIndex((step: WorkflowStep) => step.name === "Setup Node environment"),
+      );
+    },
+  );
 });

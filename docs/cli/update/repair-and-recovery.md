@@ -119,7 +119,14 @@ capture; they do not replace it with already migrated state. State-directory
 relocation leaves its original location and recorded paths intact.
 Inherited control-plane and managed-helper runs retain their existing capture
 behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
-copy does not replace an earlier update's originals.
+copy does not replace an earlier update's originals. Standalone `doctor --fix`
+snapshots databases under its own maintenance custody with a single isolated backup worker.
+Shared database families larger than 64 MiB keep discovery copies in an isolated process
+so a slow copy does not block Doctor's main thread from processing cancellation.
+Standalone Doctor captures are retained for 30 days: the next standalone `doctor --fix`
+retires older sealed Doctor captures and reports each removal; incomplete captures
+and update captures are never retired automatically, so take a verified backup
+when you need a long-term copy.
 
 These captures are evidence for manual recovery. Active writers can change state
 during capture; an observed change leaves the capture incomplete and produces a
@@ -571,8 +578,9 @@ openclaw --profile work update cleanup --dry-run --json
 Cleanup targets the selected profile and `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH`
 overrides. It displays that state directory and does not redirect to a managed
 service. Confirm the displayed directory is the installation you intend to clean.
-`--dry-run` reads only configuration and recovery metadata, without opening
-databases, taking a maintenance lock, loading plugins, or creating state.
+`--dry-run` reads configuration and recovery metadata, including existing update
+history for startup-migration backups, without taking a maintenance lock, loading
+plugins, or creating state.
 Candidate bytes still require identity verification; historical artifacts are
 listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
@@ -611,6 +619,12 @@ eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
 protected. Old manifests are verified offline where possible; missing evidence
 is a reason to retain an artifact. Cleanup has no automatic expiration policy.
+Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
+after Doctor verifies migration completion and update history records a successful
+update that started later. Until then they appear as protected. Changed or
+unrecorded backups remain protected or blocked; cleanup never infers permission
+to delete from their filenames. Keep these files with your pre-upgrade backups
+while you still need to restore the matching database generation.
 Private package, command-shim, and Git runtime backups remain owned by the update
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.

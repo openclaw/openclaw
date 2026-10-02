@@ -111,6 +111,24 @@ export function readChatPaneMutationAccess(
   };
 }
 
+export function readChatPublicationAccess(
+  snapshot: ApplicationGatewaySnapshot,
+  session: GatewaySessionRow,
+  participationBlocked: boolean,
+) {
+  const canMutate = !session.archived && !participationBlocked;
+  return {
+    canPublishShared:
+      canMutate &&
+      readSessionMethodAccess(snapshot, {
+        method: "sessions.github.publish",
+        requiredScope: "operator.sessions.write",
+        session,
+      }).allowed,
+    canPublishPersonal: canMutate && hasOperatorWriteAccess(snapshot.hello?.auth ?? null),
+  };
+}
+
 export function renderChatPaneComposerControls(params: {
   state: ChatPageHost;
   selectedSession: GatewaySessionRow | undefined;

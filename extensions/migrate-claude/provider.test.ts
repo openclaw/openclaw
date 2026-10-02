@@ -473,7 +473,8 @@ describe("Claude migration provider", () => {
     expect(
       plan.items
         .filter((item) => item.id.startsWith("skill:claude-command-"))
-        .map((item) => item.id),
+        .map((item) => item.id)
+        .toSorted(),
     ).toEqual(["skill:claude-command-commit", "skill:claude-command-team-review"]);
     expect(planItemById(plan.items, "skill:review").action).toBe("copy");
     expect(planItemById(plan.items, "archive:CLAUDE.local.md").action).toBe("archive");

@@ -6,11 +6,7 @@ import { afterEach, expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  controlUiSessionUrl,
-  installMockGateway,
-  pauseVirtualClock,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openMockAbortableRun } from "./chat-run-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -717,14 +713,14 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
     await currentPage.locator(".agent-chat__input textarea").fill("keep working");
-    // The working timer starts at the send click; pause first so the elapsed
-    // reading is exactly the fastForward below, not inflated by real time.
-    await pauseVirtualClock(currentPage);
+    // Fix wall time without freezing the mock ACK and rendering timers.
+    const startedAt = Date.now();
+    await currentPage.clock.setFixedTime(startedAt);
     await currentPage.getByRole("button", { name: "Send message" }).click();
     await gateway.waitForRequest("chat.send");
     await currentPage.locator(".chat-working-indicator").waitFor();
 
-    await currentPage.clock.fastForward(177_000);
+    await currentPage.clock.setFixedTime(startedAt + 177_000);
 
     await expect
       .poll(() => currentPage.locator(".chat-working-indicator__elapsed").textContent())

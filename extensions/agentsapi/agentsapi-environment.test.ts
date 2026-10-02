@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentToolParam } from "openai/resources/beta/agents/agents";
+import OpenAI from "openai";
+import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -151,7 +152,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.spyOn(AbortSignal, "timeout").mockImplementation(() => new AbortController().signal);
   mocks.prepareInputs.mockReset().mockResolvedValue({ files: [], mappingText: "" });
-  mocks.uploadInputs.mockReset().mockResolvedValue(undefined);
+  mocks.uploadInputs.mockReset().mockResolvedValue({ status: "uploaded" });
   mocks.collectOutputs.mockReset().mockResolvedValue([]);
   mocks.resolvePrompt.mockReset().mockImplementation((prompt) => prompt);
   mocks.fetch.mockImplementation(async ({ url }) => {
@@ -171,6 +172,39 @@ afterEach(() => {
 });
 
 describe("Agents API attempt environment selection", () => {
+  it.each([
+    { nativeTools: [] },
+    {
+      nativeTools: [
+        { type: "web_search", mode: "cached", allowed_domains: ["example.com"] },
+        { type: "programmatic_tool_calling", enabled: false },
+        { type: "future_native_tool", options: { feature: true } },
+      ],
+    },
+  ])(
+    "forwards native tools $nativeTools unchanged only when creating a session",
+    async ({ nativeTools }) => {
+      const created = await attempt(undefined, undefined, undefined, undefined, { nativeTools });
+
+      expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toHaveProperty("agent.tools", nativeTools);
+      mocks.fetch.mockClear();
+
+      const continued = await attempt(
+        undefined,
+        created.bind.mock.calls[0]![0],
+        undefined,
+        undefined,
+        {
+          nativeTools: nativeTools.length ? [] : [{ type: "web_search", mode: "live" }],
+        },
+      );
+
+      expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+      expect(await requestBody(0)).toEqual({ agent: { reasoning: { effort: null } } });
+    },
+  );
+
   it.each([
     { access: "enabled" },
     { access: "disabled", allowed_domains: null },
@@ -234,28 +268,6 @@ describe("Agents API attempt environment selection", () => {
     expect(bind).not.toHaveBeenCalled();
   });
 
-  it("requires reset before adopting a legacy tool binding with a hosted network policy", async () => {
-    const binding = {
-      sessionId: "session-fixture",
-      authFingerprint: createHash("sha256")
-        .update(JSON.stringify(["fixture-model", "fixture-not-a-real-api-key", []]))
-        .digest("hex"),
-    };
-    const { result } = await attempt(undefined, binding, undefined, undefined, {
-      openai_host: { network: { access: "restricted", allowed_domains: ["api.github.com"] } },
-    });
-
-    expect(result).toMatchObject({
-      terminal: {
-        kind: "failed",
-        error: expect.objectContaining({
-          message: expect.stringContaining("reset the OpenClaw session"),
-        }),
-      },
-    });
-    expect(mocks.fetch).not.toHaveBeenCalled();
-  });
-
   it.each([undefined, "openai_hosted", "self_hosted"])(
     "uses configured environment %s in the SDK session-create request",
     async (environment) => {
@@ -272,7 +284,13 @@ describe("Agents API attempt environment selection", () => {
           environment === "self_hosted"
             ? { type: "self_hosted", workspace_directory: path.resolve(workspaceDir) }
             : { type: "openai_hosted" },
-        agent: { model: "fixture-model", tools: [{ type: "web_search", mode: "live" }] },
+        agent: {
+          model: "fixture-model",
+          tools: [
+            { type: "web_search", mode: "live" },
+            { type: "programmatic_tool_calling", enabled: true },
+          ],
+        },
       });
       if (environment === "self_hosted") {
         expect(createRequest).toHaveProperty("environment", {
@@ -292,7 +310,7 @@ describe("Agents API attempt environment selection", () => {
   );
 
   it.each([undefined, "openai_hosted", "self_hosted"])(
-    "continues a compatible %s binding without creating or rewriting its remote identity",
+    "continues a compatible %s binding without replacing its remote session",
     async (environment) => {
       const binding = savedBinding(environment);
       const { result, bind } = await attempt(
@@ -321,12 +339,6 @@ describe("Agents API attempt environment selection", () => {
 
   it.each([
     { name: "hosted to self-hosted", previous: undefined, next: "self_hosted" },
-    {
-      name: "legacy hosted to self-hosted",
-      previous: undefined,
-      next: "self_hosted",
-      legacy: true,
-    },
     { name: "self-hosted to hosted", previous: "self_hosted", next: "openai_hosted" },
     {
       name: "self-hosted workspace change",
@@ -334,40 +346,195 @@ describe("Agents API attempt environment selection", () => {
       next: "self_hosted",
       workspaceDir: "/fixture/other-project",
     },
-  ])(
-    "requires reset for $name before native writes",
-    async ({ previous, next, workspaceDir, legacy }) => {
-      const { result, bind } = await attempt(
-        next,
-        savedBinding(previous, legacy ? [] : undefined),
-        workspaceDir,
-      );
+  ])("requires reset for $name before native writes", async ({ previous, next, workspaceDir }) => {
+    const { result, bind } = await attempt(next, savedBinding(previous), workspaceDir);
 
-      expect(result).toMatchObject({
-        terminal: {
-          kind: "failed",
-          error: expect.objectContaining({
-            message: expect.stringContaining("reset the OpenClaw session"),
-          }),
-        },
+    expect(result).toMatchObject({
+      terminal: {
+        kind: "failed",
+        error: expect.objectContaining({
+          message: expect.stringContaining("reset the OpenClaw session"),
+        }),
+      },
+    });
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    expect(bind).not.toHaveBeenCalled();
+  });
+
+  it.each(["openai_hosted", "self_hosted"])(
+    "continues two %s sessions with the rotated key and original native IDs",
+    async (environment) => {
+      let createdCount = 0;
+      mocks.fetch.mockImplementation(async ({ url }) => {
+        const pathname = new URL(url).pathname;
+        const response = pathname.endsWith("/items")
+          ? Response.json({ data: [], has_more: false })
+          : Response.json({
+              id: pathname.endsWith("/agents/sessions")
+                ? `rotation-session-${++createdCount}`
+                : pathname.split("/").at(-1),
+            });
+        return { response, finalUrl: url, release: async () => {} };
       });
-      expect(mocks.fetch).not.toHaveBeenCalled();
-      expect(bind).not.toHaveBeenCalled();
+      const bindings: AgentsApiBinding[] = [];
+      for (const sessionId of ["local-first", "local-second"]) {
+        const created = await attempt(
+          environment,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          { sessionId },
+        );
+        expect(created.result).toMatchObject({ terminal: { kind: "ok" } });
+        bindings.push(created.bind.mock.calls[0]![0]);
+      }
+      mocks.fetch.mockClear();
+      for (const [index, binding] of bindings.entries()) {
+        const continued = await attempt(
+          environment,
+          binding,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          {
+            sessionId: index === 0 ? "local-first" : "local-second",
+            resolvedApiKey: "fixture-rotated-api-key",
+          },
+        );
+        expect(continued.result).toMatchObject({ terminal: { kind: "ok" } });
+      }
+      expect(createdCount).toBe(2);
+      expect(
+        mocks.fetch.mock.calls.map(([request]) => ({
+          path: new URL(request.url).pathname,
+          auth: new Headers(request.init?.headers).get("authorization"),
+        })),
+      ).toEqual(
+        bindings.flatMap(({ sessionId }) =>
+          ["", "/events", "/items"].map((suffix) => ({
+            path: `/v1/agents/sessions/${sessionId}${suffix}`,
+            auth: "Bearer fixture-rotated-api-key",
+          })),
+        ),
+      );
     },
   );
 
-  it("adopts a hosted legacy tool fingerprint without changing the remote session", async () => {
-    const binding = savedBinding(undefined, []);
-    const { result, bind } = await attempt("openai_hosted", binding);
+  it.each([401, 403])(
+    "retains ordinary HTTP %s access errors and the existing binding",
+    async (status) => {
+      const created = await attempt("openai_hosted");
+      const binding = created.bind.mock.calls[0]![0];
+      mocks.fetch.mockClear();
+      mocks.fetch.mockImplementation(async ({ url }) => ({
+        response: Response.json(
+          { error: { message: "Fixture key cannot access session", type: "authentication_error" } },
+          { status },
+        ),
+        finalUrl: url,
+        release: async () => {},
+      }));
+      const denied = await attempt(
+        "openai_hosted",
+        binding,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { resolvedApiKey: "fixture-denied-api-key" },
+      );
+      expect(denied.result).toMatchObject({
+        terminal: { kind: "failed", error: expect.objectContaining({ status }) },
+      });
+      expect(mocks.fetch.mock.calls.map(([request]) => new URL(request.url).pathname)).toEqual([
+        `/v1/agents/sessions/${binding.sessionId}`,
+      ]);
+      expect(denied.bind).not.toHaveBeenCalled();
+    },
+  );
 
-    expect(result).toMatchObject({ terminal: { kind: "ok" } });
-    expect(bind).toHaveBeenCalledWith(savedBinding(undefined));
-    expect(
-      new Request(mocks.fetch.mock.calls[0]![0].url, mocks.fetch.mock.calls[0]![0].init).method,
-    ).toBe("POST");
-    expect(new URL(mocks.fetch.mock.calls[0]![0].url).pathname).toBe(
-      "/v1/agents/sessions/session-fixture",
-    );
+  it.each([
+    ...[
+      { operation: "reasoning update", suffix: "" },
+      { operation: "input submission", suffix: "/events" },
+      { operation: "item retrieval", suffix: "/items" },
+    ].map(({ operation, suffix }) => ({
+      operation,
+      suffix,
+      status: 404,
+      type: "not_found_error",
+      backendMessage: "No managed agent resource found: session-fixture",
+      userMessage:
+        "Agents API could not find the saved session or this API key cannot access it. Check that the key belongs to the session's project and has the required permissions, then retry.",
+    })),
+    {
+      operation: "input submission with the original-key requirement",
+      suffix: "/events",
+      status: 403,
+      type: "forbidden",
+      backendMessage: "hosted session input requires the API key that created its CCA thread",
+      userMessage:
+        "Agents API currently requires the original API key to send input to this hosted session. Restore that key, then retry to continue the same session.",
+    },
+  ])(
+    "reports inaccessible saved sessions during $operation as a terminal preflight",
+    async ({ suffix, status, type, backendMessage, userMessage }) => {
+      const created = await attempt("openai_hosted");
+      const binding = created.bind.mock.calls[0]![0];
+      const fetch = mocks.fetch.getMockImplementation()!;
+      mocks.fetch.mockImplementation(async (request) => {
+        if (new URL(request.url).pathname === `/v1/agents/sessions/${binding.sessionId}${suffix}`) {
+          return {
+            response: Response.json({ error: { message: backendMessage, type } }, { status }),
+            finalUrl: request.url,
+            release: async () => {},
+          };
+        }
+        return fetch(request);
+      });
+
+      const { result } = await attempt("openai_hosted", binding);
+
+      expect(result.terminal.kind).toBe("failed");
+      if (result.terminal.kind !== "failed") {
+        throw new Error("Expected the saved-session request to fail");
+      }
+      expect(result.terminal.error).toBeInstanceOf(AgentHarnessPreflightError);
+      expect(result.terminal.error).toMatchObject({
+        message: expect.stringContaining(backendMessage),
+        userMessage,
+        cause: expect.objectContaining({ status, type }),
+      });
+    },
+  );
+
+  it("preserves missing-model errors for ordinary fallback", async () => {
+    mocks.fetch.mockImplementation(async ({ url }) => ({
+      response: Response.json(
+        { error: { message: "The model fixture-model does not exist", code: "model_not_found" } },
+        { status: 404 },
+      ),
+      finalUrl: url,
+      release: async () => {},
+    }));
+
+    const { result } = await attempt("openai_hosted");
+
+    expect(result.terminal.kind).toBe("failed");
+    if (result.terminal.kind !== "failed") {
+      throw new Error("Expected the missing model request to fail");
+    }
+    expect(result.terminal.error).toBeInstanceOf(OpenAI.NotFoundError);
+    expect(result.terminal.error).toMatchObject({ code: "model_not_found", status: 404 });
   });
 
   it("rejects an invalid runtime environment setting before native writes", async () => {
@@ -456,9 +623,16 @@ describe("Agents API attempt environment selection", () => {
       replacePrompt: false,
       recorderMedia: true,
     },
+    {
+      name: "inline document pages with a hook-replaced prompt",
+      preparedPrompt: true,
+      replacePrompt: true,
+      recorderMedia: false,
+      images: [{ type: "image" as const, data: "cGFnZQ==", mimeType: "image/png" }],
+    },
   ])(
     "stages managed attachments for new and resumed self-hosted turns with $name",
-    async ({ preparedPrompt, replacePrompt, recorderMedia }) => {
+    async ({ preparedPrompt, replacePrompt, recorderMedia, images }) => {
       const fixture = await workspaceAttachmentFixture();
       let binding: AgentsApiBinding | undefined;
       try {
@@ -508,6 +682,7 @@ describe("Agents API attempt environment selection", () => {
             undefined,
             priorNote ? `${prompt}\n\n${priorNote}` : prompt,
             recorder,
+            images,
           );
 
           expect(submitted.result.terminal).toEqual({ kind: "ok" });
@@ -523,6 +698,15 @@ describe("Agents API attempt environment selection", () => {
           for (const [index, attachmentPath] of attachmentPaths.entries()) {
             expect(attachmentPath.startsWith(`${fixture.remoteRoot}${path.sep}`)).toBe(true);
             expect(await fs.readFile(attachmentPath)).toEqual(contents[index]);
+          }
+          if (images) {
+            expect(text).toContain("The Agents API harness does not support inline image inputs.");
+            expect(text).toContain(
+              "Original attachments are available at the prepared execution paths above.",
+            );
+            expect(text).toContain(
+              "inspect those files with available tools to try another approach",
+            );
           }
           expect(media).toEqual(originalMedia);
           binding ??= submitted.bind.mock.calls[0]![0];
@@ -636,6 +820,8 @@ async function attempt(
   pluginConfig?: Record<string, unknown>,
   prompt = "Fixture prompt",
   userTurnTranscriptRecorder?: AgentHarnessAttemptParamsV2["userTurnTranscriptRecorder"],
+  images?: AgentHarnessAttemptParamsV2["images"],
+  overrides: Partial<AgentHarnessAttemptParamsV2> = {},
 ) {
   // Authentication/tool construction are host-prepared and mocked at their boundaries.
   const authStorage = AuthStorage.inMemory();
@@ -649,6 +835,7 @@ async function attempt(
     timeoutMs: 1_000,
     prompt,
     media,
+    images,
     userTurnTranscriptRecorder,
     provider: "openai",
     modelId: "fixture-model",
@@ -687,6 +874,7 @@ async function attempt(
       waitForApproval: async () => undefined,
     },
   };
+  Object.assign(params, overrides);
   const bind = vi.fn<(next: AgentsApiBinding) => Promise<void>>(async () => {});
   const result = await runAgentsApiAttempt(
     params,
@@ -763,20 +951,14 @@ async function workspaceAttachmentFixture() {
   return { gatewayRoot, remoteRoot, release };
 }
 
-function savedBinding(
-  environment: string | undefined,
-  legacyTools?: AgentToolParam.AgentToolConfigParamFunction[],
-) {
-  const identity: unknown[] = ["fixture-model", "fixture-not-a-real-api-key"];
+function savedBinding(environment: string | undefined) {
+  const identity: unknown[] = ["fixture-model"];
   if (environment === "self_hosted") {
     identity.push({ type: "self_hosted", workspace_directory: "/fixture/project" });
   }
-  if (legacyTools) {
-    identity.push(legacyTools);
-  }
   return {
     sessionId: "session-fixture",
-    authFingerprint: createHash("sha256").update(JSON.stringify(identity)).digest("hex"),
+    configFingerprint: createHash("sha256").update(JSON.stringify(identity)).digest("hex"),
   };
 }
 

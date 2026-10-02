@@ -20,6 +20,8 @@ import {
   isCoreQuotaExhausted,
   isGraphqlQuotaExhausted,
 } from "../../scripts/pr-lib/gh-api-preflight.mjs";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   REVIEWED_HEAD,
@@ -332,10 +334,10 @@ function makeMismatchedWrapperRepo({
   const git = createWrapperGit(fixtureEnv);
   // Copy private object stores before creating worktrees, whose absolute
   // back-links must refer to this fixture. No refs or mutable files are shared.
-  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
-  cpSync(template.bin, bin, copyOptions);
-  cpSync(template.canonical, canonical, copyOptions);
-  cpSync(template.origin, origin, copyOptions);
+  // PATH stubs and canonical scripts/pr are executed directly.
+  copyTreeCloseOnExec(template.bin, bin);
+  copyTreeCloseOnExec(template.canonical, canonical);
+  cpSync(template.origin, origin, { recursive: true, mode: fsConstants.COPYFILE_FICLONE });
   git(canonical, ["remote", "set-url", "origin", origin]);
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
 
@@ -1537,8 +1539,9 @@ exit 99
       parkCanonicalOffAnchor(fixture);
       const anchor = materializeAnchor(fixture);
       writeFileSync(join(fixture.bin, "gh"), "#!/bin/sh\necho forbidden-gh >&2\nexit 99\n");
+      const nodeExecPath = requireNodeTool("node");
       const run = (args: string[]) =>
-        spawnSync(process.execPath, args, {
+        spawnSync(nodeExecPath, args, {
           cwd: anchor,
           encoding: "utf8",
           env: fixture.env,
@@ -1557,7 +1560,7 @@ exit 99
       // Import the actual adapter closure before it rejects missing arguments.
       // Real provisioning and allocation-lease renewal have separate flows.
       const provision = spawnSync(
-        process.execPath,
+        nodeExecPath,
         [
           "--import",
           join(anchor, "scripts/tsx.mjs"),
@@ -1648,7 +1651,7 @@ exit 99
       fixture.git(fixture.linked, ["commit", "-m", "test: candidate change"]);
       const head = fixture.git(fixture.linked, ["rev-parse", "HEAD"]).stdout.trim();
       const planned = spawnSync(
-        process.execPath,
+        nodeExecPath,
         [join(anchor, "scripts/pr-lib/crabbox-gate-plan.mts"), "--base", base, "--head", head],
         {
           cwd: fixture.linked,

@@ -105,8 +105,7 @@ import {
   waitForReloadState,
 } from "./config-reload.test-support.js";
 import { installWatcherMock } from "./config-reload.watcher.test-support.js";
-import { applyHookMappings } from "./hooks-mapping.js";
-import { commitHooksConfigReload } from "./hooks.js";
+import { applyHookMappings, commitHookTransformMappingReload } from "./hooks-mapping.js";
 import { createChannelManager } from "./server-channels.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import type { GatewayCronState } from "./server-cron.js";
@@ -132,6 +131,7 @@ import {
   createTestCronState,
   createValidConfigSnapshot,
   enableChannelReloadsForTest,
+  makePluginReloadResult,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { createGatewayReloadHandlers as createGatewayReloadHandlersImpl } from "./server-reload-hot.js";
@@ -215,7 +215,7 @@ function createGatewayReloadHandlers(
     pruneInactiveChannelAccountState: vi.fn(),
     stopPostReadySidecars: vi.fn(),
     reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return makePluginReloadResult();
     }),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -252,7 +252,7 @@ function startManagedGatewayConfigReloader(params: ManagedReloaderTestParams) {
     startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => {}),
     reloadPlugins: vi.fn<ReloadHandlerParams["reloadPlugins"]>(async ({ prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(), channels: new Set() }).retire();
       return makePluginReloadResult();
     }),
     logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -403,6 +403,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   advancePreparedModelRuntimeConfig: hoisted.advancePreparedModelRuntimeConfig,
+  beginPreparedModelRuntimePluginDrain: () => ({ pendingPublication: false, release: () => {} }),
   markPreparedModelRuntimeSnapshotsStale: (
     reason?: string,
     options?: { waitForReplacement?: boolean; preserveReplacementWait?: boolean },
@@ -433,7 +434,7 @@ vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   reloadSessionMcpRuntimes: hoisted.reloadSessionMcpRuntimes,
 }));
 
-vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+vi.mock("../plugins/installed-plugin-index-record-reader.js", () => ({
   clearLoadInstalledPluginIndexInstallRecordsCache: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(async () => ({})),
   loadInstalledPluginIndexInstallRecordsSync: vi.fn(() => ({})),
@@ -534,16 +535,6 @@ async function withReloadChannelManager(
       expect(outcome.status).toBe("fulfilled");
     }
   }
-}
-
-function makePluginReloadResult(
-  overrides: Partial<GatewayPluginReloadResult> = {},
-): GatewayPluginReloadResult {
-  return {
-    runtime: { operationId: "test-reload", generation: 1, pluginIds: [] },
-    activeChannels: new Set(),
-    ...overrides,
-  };
 }
 
 function createTestCronReconciliation() {
@@ -1192,7 +1183,7 @@ async function withManagedChannelSecretFixture(
     startChannel: manager.startChannel,
     stopChannel: manager.stopChannel,
     reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-      prepareConfigEffects({ pluginIds: new Set(["notes"]), channels: new Set() });
+      prepareConfigEffects({ pluginIds: new Set(["notes"]), channels: new Set() }).retire();
       await commitRuntime();
       return makePluginReloadResult({
         activeChannels: new Set(["mattermost"]),
@@ -2570,7 +2561,10 @@ describe("gateway targeted service reload", () => {
         getPluginRegistry: () => registry,
         reloadPluginServices,
         reloadPlugins: async ({ commitRuntime, prepareConfigEffects }) => {
-          prepareConfigEffects({ pluginIds: new Set(runtime.pluginIds), channels: new Set() });
+          prepareConfigEffects({
+            pluginIds: new Set(runtime.pluginIds),
+            channels: new Set(),
+          }).retire();
           await commitRuntime();
           events.push("replaced-plugin");
           if (outcome === "plugin failure") {
@@ -2931,7 +2925,7 @@ describe("gateway hot reload commit policy", () => {
         transform: { modulePath: transformPath },
       },
     ];
-    commitHooksConfigReload();
+    commitHookTransformMappingReload();
     const applyActiveTransform = () =>
       applyHookMappings(activeMappings, {
         payload: {},
@@ -5775,10 +5769,12 @@ describe("gateway plugin hot reload handlers", () => {
     const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
     const pruneInactiveChannelAccountState = vi.fn();
     const reloadPlugins = vi.fn<ReloadHandlerParams["reloadPlugins"]>(async (params) => {
-      params.prepareConfigEffects({
-        pluginIds: new Set(runtime.pluginIds),
-        channels: new Set(["discord"]),
-      });
+      params
+        .prepareConfigEffects({
+          pluginIds: new Set(runtime.pluginIds),
+          channels: new Set(["discord"]),
+        })
+        .retire();
       await params.commitRuntime();
       current = false;
       return makePluginReloadResult({

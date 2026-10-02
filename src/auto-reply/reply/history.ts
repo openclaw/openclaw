@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
@@ -15,17 +16,7 @@ export function evictOldHistoryKeys<T>(
   historyMap: Map<string, T[]>,
   maxKeys: number = MAX_HISTORY_KEYS,
 ): void {
-  if (historyMap.size <= maxKeys) {
-    return;
-  }
-  const keysToDelete = historyMap.size - maxKeys;
-  const iterator = historyMap.keys();
-  for (let i = 0; i < keysToDelete; i++) {
-    const key = iterator.next().value;
-    if (key !== undefined) {
-      historyMap.delete(key);
-    }
-  }
+  pruneMapToMaxSize(historyMap, maxKeys);
 }
 
 export type { HistoryEntry } from "./history.types.js";

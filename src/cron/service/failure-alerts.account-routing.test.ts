@@ -473,7 +473,7 @@ describe("cron failure alert account routing", () => {
         failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron" },
       });
       const deferredNotifications: DeferredCronNotifications = [];
-      const outcome = authorCronRunCompletion(state, job, {
+      const outcome = authorCronRunCompletion(job, {
         status: "ok",
         deliveryState: {
           delivered: deliveryStatus === "not-delivered" ? false : undefined,

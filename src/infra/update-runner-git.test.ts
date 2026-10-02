@@ -2,7 +2,14 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import * as tempRoot from "./tmp-openclaw-dir.js";
+import { createUpdateRun } from "./update-run-ledger.js";
 import {
   expectRuntime,
   runFixtureGit as git,
@@ -667,12 +674,32 @@ describe("Git checkout execution", () => {
     "settles cancelled candidate %s before returning",
     async (phase) => {
       const targetSha = await advanceRemote();
-      await expectCancelledGitCandidateCleanup({
-        phase,
-        fixture: { localRoot: root, baseSha: beforeSha, targetSha },
-        pnpmVersion: "12.0.0",
-        runRealGit: git,
-      });
+      const env = { OPENCLAW_STATE_DIR: path.join(directory, "update-state") };
+      const control = path.join(directory, "update-coordinator");
+      await fs.mkdir(control);
+      vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+      const run: NonNullable<UpdateCommandOptions["run"]> = {
+        runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+        env,
+      };
+      const guards = createUpdateCommandExecutionGuards({ run }, root);
+      try {
+        await withUpdateCommandExecutor(run.runId, async (executor) => {
+          guards.admitExecutor(await executor.enter(root));
+          await expectCancelledGitCandidateCleanup({
+            phase,
+            fixture: { localRoot: root, baseSha: beforeSha, targetSha },
+            pnpmVersion: "12.0.0",
+            runRealGit: git,
+            progress: createUpdateRunProgress(run, {}, guards.recordStep),
+            onAbort: () => {
+              run.interrupted = true;
+            },
+          });
+        });
+      } finally {
+        await closeStateDatabaseForTest();
+      }
       await expectRuntime(root, beforeSha);
     },
   );

@@ -81,7 +81,27 @@ export function createSessionHistoryWorkerReaders(
       "historical-eviction-candidates",
       "eviction candidates",
       (input) => ({ kind: "historical-eviction-candidates", ...input }),
-      (value) => value.sessionIds,
+      (value) => {
+        if (!("sessionIds" in value)) {
+          throw new Error(
+            "Session history worker returned archived instead of historical candidates",
+          );
+        }
+        return value.sessionIds;
+      },
+    ),
+    readArchivedEvictionCandidates: reader(
+      "historical-eviction-candidates",
+      "archived eviction candidates",
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
+      (value) => {
+        if (!("batch" in value)) {
+          throw new Error(
+            "Session history worker returned historical instead of archived candidates",
+          );
+        }
+        return value.batch;
+      },
     ),
     readArchivePruning: reader(
       "session-archive-pruning",
@@ -112,6 +132,12 @@ export function createSessionHistoryWorkerReaders(
       "title fields",
       (input) => ({ kind: "session-title-fields", ...input }),
       (value) => value.fields,
+    ),
+    readWatermark: reader(
+      "transcript-watermark",
+      "a transcript watermark",
+      (input) => ({ kind: "transcript-watermark", ...input }),
+      (value) => value.watermark,
     ),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
@@ -282,6 +308,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
+    readGoalOperationReceipt: reader(
+      "goal-operation-receipt",
+      "a Goal operation receipt",
+      (input) => ({ kind: "goal-operation-receipt", ...input }),
+      (value) => value.result,
+    ),
     readEntryResult: reader(
       "session-entry-read",
       "an entry",
@@ -312,6 +344,12 @@ export function createSessionHistoryWorkerReaders(
           return value.entries;
         },
       ),
+    readStoreSummary: reader(
+      "session-store-summary",
+      "a store summary",
+      (input) => ({ kind: "session-store-summary", ...input }),
+      (value) => value.summary,
+    ),
     readIdentityEvidence: reader(
       "session-identity-evidence",
       "identity evidence",

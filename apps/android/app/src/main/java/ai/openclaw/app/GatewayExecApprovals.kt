@@ -431,7 +431,7 @@ private fun parseGatewayExecApprovalPresentation(
       external
         ?.let {
           if (!it.hasExactKeys(setOf("label", "decisions")) || it.strictNonEmptyString("label") == null) return null
-          val values = (it["decisions"] as? JsonArray)?.map { value -> value.strictString() ?: return null } ?: return null
+          val values = (it["decisions"] as? JsonArray)?.map { value -> value.asJsonStringOrNull() ?: return null } ?: return null
           if (values.size !in 1..2 || values.distinct().size != values.size || values.any { decision -> decision !in setOf("allow-once", "allow-always") }) return null
           values
         }.orEmpty()
@@ -494,7 +494,7 @@ private fun parseTerminalApproval(
 
 private fun parseAllowedDecisions(items: JsonArray?): List<String>? {
   if (items == null || items.size !in 1..3) return null
-  val decisions = items.map { item -> item.strictString() ?: return null }
+  val decisions = items.map { item -> item.asJsonStringOrNull() ?: return null }
   if (decisions.distinct().size != decisions.size || "deny" !in decisions) return null
   return decisions.takeIf { values -> values.all { it in APPROVAL_DECISIONS } }
 }
@@ -509,17 +509,12 @@ private fun JsonObject.optionalString(
 ): OptionalString? {
   val value = this[key]
   if (value == null || value is JsonNull) return OptionalString(null)
-  val string = value.strictString() ?: return null
+  val string = value.asJsonStringOrNull() ?: return null
   if (requireNonEmpty && string.isEmpty()) return null
   return OptionalString(string)
 }
 
-private fun JsonObject.strictString(key: String): String? = this[key].strictString()
-
-private fun JsonElement?.strictString(): String? =
-  (this as? JsonPrimitive)
-    ?.takeIf { it.isString }
-    ?.content
+private fun JsonObject.strictString(key: String): String? = this[key].asJsonStringOrNull()
 
 private fun JsonObject.strictNonEmptyString(key: String): String? =
   strictString(key)

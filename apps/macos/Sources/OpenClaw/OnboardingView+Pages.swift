@@ -615,13 +615,46 @@ extension OnboardingView {
                 self.installStepRow(
                     title: bundled ? "Start the Gateway" : "Start the background service",
                     detail: bundled
-                        ? "Runs while OpenClaw is open."
+                        ? (GatewayProcessManager.shared.gatewayHosting == .service
+                            ? "Keeps running after you quit OpenClaw."
+                            : "Runs while OpenClaw is open.")
                         : "Runs quietly and starts again after a restart.",
                     state: self.installStepStates.service)
                 self.installStepRow(
                     title: bundled ? "Ready" : "Ready for the next step",
                     detail: "Once the Gateway answers, you’ll connect your AI.",
                     state: self.cliInstalled ? .done : .pending)
+
+                if bundled {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Keep OpenClaw running when the app is closed", isOn: Binding(
+                            get: { GatewayProcessManager.shared.gatewayHosting == .service },
+                            set: { self.setKeepGatewayRunning($0) }))
+                            .disabled(self.installingCLI || self.updatingGatewayHosting ||
+                                !GatewayProcessManager.shared.keepGatewayRunningAvailable)
+                        Text(
+                            "Runs the Gateway as a background service so channels and automations " +
+                                "keep working after you quit OpenClaw.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if self.updatingGatewayHosting {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Updating how the Gateway runs…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let gatewayHostingError {
+                            Text(gatewayHostingError)
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
 
                 if self.installFailed {
                     OnboardingErrorCard(

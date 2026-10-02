@@ -2,8 +2,6 @@ import {
   assertSubagentRegistryWriteSourceCurrent,
   waitForPendingSubagentRegistryWrites,
 } from "../agents/subagents/registry/subagent-registry-persistence.js";
-// Subagent session reactivation helper.
-// Continues yielded or completed subagent work when a user messages the child session.
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   getLatestSubagentRunByChildSessionKey,
@@ -11,16 +9,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
-/**
- * Reactivates a yielded or completed subagent session under its next run id.
- *
- * `task` is the canonical user-supplied prompt text that just dispatched the
- * follow-up. When provided, it is persisted on the new run record so a later
- * orphan recovery / gateway restart rewraps the follow-up prompt rather than
- * the stale original task. Without this, sessions.send and agent.run callers
- * could reactivate a completed run with the new run id but lose the new
- * prompt text from restart redispatch.
- */
+/** Persist the dispatched follow-up prompt so restart recovery cannot reuse the original task. */
 export async function reactivateCompletedSubagentSession(params: {
   sessionKey: string;
   runId?: string;
@@ -67,7 +56,7 @@ export async function reactivateCompletedSubagentSession(params: {
     params.assertCurrent?.();
     return !params.gatewayContextResolver || Boolean(params.gatewayContextResolver());
   };
-  const runtime = await import("../agents/subagents/registry/subagent-registry-runtime.js");
+  const runtime = await import("../agents/subagents/registry/subagent-registry.js");
   for (;;) {
     if (!isOriginalOwnerCurrent()) {
       return false;
@@ -94,12 +83,11 @@ export async function reactivateCompletedSubagentSession(params: {
         task: hasTask ? task : paused.task,
         ...gatewayBinding,
       })
-    : runtime.replaceSubagentRunAfterSteer({
+    : runtime.replaceSubagentRunAfterSteerCore({
         previousRunId: source.runId,
         nextRunId: runId,
         fallback: source,
         runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
-        persistenceFailure: "throw",
         ...(hasTask ? { task } : {}),
         ...gatewayBinding,
       });

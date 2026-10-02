@@ -15,7 +15,6 @@ import {
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetArgs,
-  reportRatchetSuccess,
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
@@ -204,7 +203,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       return 1;
     }
     if (increased.length === 0) {
-      reportRatchetSuccess(
+      console.log(
         `Line-cap ratchet OK: ${paths.length} changed source files; no new violations or over-cap growth.`,
       );
     }

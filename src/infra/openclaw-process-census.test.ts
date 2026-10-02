@@ -694,9 +694,17 @@ it.each(["container", "missing self", "deadline"])(
   },
 );
 
-it.each([100, 200, 300])(
-  "excludes a Windows updater ancestor only with an earlier start (%s)",
-  (parentStart) => {
+it.each(
+  [100, 200, 300].flatMap((parentStart) =>
+    [
+      "openclaw update repair --run-id=update-run-123",
+      String.raw`node --title "" "C:\app\openclaw.mjs" update repair --run-id=update-run-123`,
+      String.raw`"C:\Program Files\node.exe" --title "C:\Team Notes\\" "C:\app\openclaw.mjs" update repair --run-id=update-run-123`,
+    ].map((commandLine) => ({ parentStart, commandLine })),
+  ),
+)(
+  "excludes a Windows updater ancestor only with an earlier start ($parentStart, $commandLine)",
+  ({ parentStart, commandLine }) => {
     mockProcessPlatform("win32");
     windows.mockReturnValue([
       {
@@ -710,28 +718,39 @@ it.each([100, 200, 300])(
         pid: launcher,
         parentPid: 0,
         startIdentity: String(parentStart),
-        commandLine: "openclaw update repair --run-id=update-run-123",
+        commandLine,
         cwd: "C:\\app",
       },
       {
         pid: peer,
+        parentPid: 0,
         commandLine: 'node "C:\\Temp\\Retained Runtime\\tree\\worker.js"',
         cwd: "C:\\app",
       },
-      { pid: peer + 1, commandLine: "node worker.js", cwd: "c:/temp/retained runtime/tree" },
+      {
+        pid: peer + 1,
+        parentPid: 0,
+        commandLine: "node worker.js",
+        cwd: "c:/temp/retained runtime/tree",
+      },
       { pid: peer + 2 },
       { pid: peer + 3, foreignOwner: true },
       { pid: peer + 4, foreignOwner: true, commandLine: "node --id=update-run-123" },
       {
         pid: peer + 5,
+        parentPid: 0,
         commandLine: "node worker.js",
         cwd: "\\\\?\\C:\\Temp\\Retained Runtime\\tree",
       },
       {
         pid: peer + 6,
+        parentPid: 0,
         commandLine: 'node "file:///C:/Temp/Retained%20Runtime/tree/worker.js"',
         cwd: "C:\\app",
       },
+      { pid: peer + 7, parentPid: 0, commandLine: '"unterminated.exe', cwd: "C:\\app" },
+      { pid: peer + 8, parentPid: 0, commandLine: "node\0 --id=update-run-123", cwd: "C:\\app" },
+      { pid: peer + 9, parentPid: 0, commandLine: "", cwd: "C:\\app" },
     ]);
     expect(
       inspectOtherOpenClawProcesses({
@@ -746,8 +765,9 @@ it.each([100, 200, 300])(
         peer + 4,
         peer + 5,
         peer + 6,
+        peer + 8,
       ],
-      unverifiedPids: [peer + 2],
+      unverifiedPids: [peer + 2, peer + 7, peer + 9],
       error: "Retry update repair as Administrator using the same Windows account.",
     });
   },

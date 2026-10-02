@@ -49,12 +49,12 @@ import {
   withRecentSessionTranscriptActiveEvents,
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SessionTranscriptReadFenceError } from "../../config/sessions/session-transcript-read-fence.js";
 import {
   isSessionTranscriptLeafControl,
   selectSessionTranscriptLeafControlledPath,
 } from "../../config/sessions/transcript-tree.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { logVerbose } from "../../globals.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -69,6 +69,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { readPreflightTranscriptContextMessages } from "./agent-runner-memory-transcript-context.js";
 import {
   buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
@@ -82,6 +83,7 @@ import {
   truncateMemoryFlushErrorMessage,
 } from "./memory-flush-errors.js";
 import {
+  estimatePromptTokensForMemoryFlush,
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveCompactionThreshold,
@@ -136,16 +138,6 @@ function hasMatchingTranscriptByteCompactionLatch(
     activeBytes >= maxBytes &&
     activeBytes - latch.activeBytes < maxBytes
   );
-}
-
-function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
-  const trimmed = normalizeOptionalString(prompt);
-  if (!trimmed) {
-    return undefined;
-  }
-  const message: AgentMessage = { role: "user", content: trimmed, timestamp: Date.now() };
-  const tokens = asPositiveFiniteNumber(estimateMessagesTokens([message]));
-  return tokens === undefined ? undefined : Math.ceil(tokens);
 }
 
 function resolveMemoryFlushModelFallbackOptions(
@@ -497,11 +489,11 @@ async function estimateProviderPromptTokens(
     : undefined;
 }
 
-async function estimatePromptTokensFromSessionTranscript(params: {
-  agentId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  storePath?: string;
+async function estimatePromptTokensFromSessionTranscript({
+  abortSignal,
+  ...params
+}: Parameters<typeof readPreflightTranscriptContextMessages>[0] & {
+  abortSignal?: AbortSignal;
   contextWindowTokens: number;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
@@ -554,18 +546,13 @@ async function estimatePromptTokensFromSessionTranscript(params: {
         transcriptByteSize: snapshot.byteSize,
       };
     }
-    const messages = (await readSessionMessagesAsync(
+    const messages = await readPreflightTranscriptContextMessages(
       {
-        agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+        ...params,
         sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
       },
-      {
-        mode: "full",
-        reason: "preflight-compaction-estimate",
-      },
-    )) as AgentMessage[];
+      abortSignal,
+    );
     const estimatedTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
@@ -582,8 +569,9 @@ async function estimatePromptTokensFromSessionTranscript(params: {
       outputTokens: normalizedOutputTokens,
       transcriptByteSize: snapshot.byteSize,
     };
-  } catch {
-    return undefined;
+  } catch (error) {
+    abortSignal?.throwIfAborted();
+    return error instanceof SessionTranscriptReadFenceError ? Promise.reject(error) : undefined;
   }
 }
 
@@ -700,6 +688,7 @@ export async function runSessionCompactionIfNeeded(params: {
       ? undefined
       : await estimatePromptTokensFromSessionTranscript({
           ...compactionTarget,
+          abortSignal: params.abortSignal,
           sessionId: entry.sessionId,
           contextWindowTokens,
         });
@@ -1464,6 +1453,8 @@ export async function runMemoryFlushIfNeeded(params: {
       phase: "memory_flushing",
     });
   }
+  const { turnAdoptionLifecycle } = params.followupRun;
+  const stopHeartbeat = startFollowupRunPreAdoptionHeartbeat(turnAdoptionLifecycle, abortSignal);
   // Only runnable maintenance owns a run context. The matching finally is
   // the sole cleanup path so setup, execution, and persistence exits cannot orphan it.
   try {
@@ -1620,6 +1611,7 @@ export async function runMemoryFlushIfNeeded(params: {
   } catch (error) {
     return await recordFailure(error);
   } finally {
+    stopHeartbeat?.();
     if (parentRunId && !abortSignal?.aborted) {
       emitAgentRunStatusEvent({
         runId: parentRunId,

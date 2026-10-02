@@ -35,14 +35,12 @@ export function createSubagentRegistryListener(config: {
     completeSubagentRunWithRecovery,
     warn,
   } = config;
-  let listenerStarted = false;
   let listenerStop: (() => void) | null = null;
 
   function ensureListener() {
-    if (listenerStarted) {
+    if (listenerStop) {
       return;
     }
-    listenerStarted = true;
     listenerStop = onAgentEvent((evt) => {
       void (async () => {
         if (!evt || evt.stream !== "lifecycle") {
@@ -202,7 +200,6 @@ export function createSubagentRegistryListener(config: {
         listenerStop();
         listenerStop = null;
       }
-      listenerStarted = false;
     },
   };
 }

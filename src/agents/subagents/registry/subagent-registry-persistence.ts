@@ -589,7 +589,10 @@ export async function publishSubagentRunPostimages(params: {
   let capturing = true;
   let publication: Promise<void>;
   try {
-    params.assertCurrent();
+    // Deferred publication checks session facts after joining its writer FIFO.
+    if (!params.withPublication) {
+      params.assertCurrent();
+    }
     publication = params.persist(
       params.context,
       {

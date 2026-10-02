@@ -42,7 +42,10 @@ import {
 } from "../github-public-api.js";
 import { WRITE_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { searchRemoteProjects } from "../project-github-search.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
@@ -376,12 +379,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" })
               ).store;
             } else {
-              const projection = getSessionRowProjection(context);
-              if (!projection) {
-                throw new Error(
-                  "Session projection is unavailable before Gateway startup completes",
-                );
-              }
+              const projection = requireSessionRowProjection(context);
               do {
                 await projection.ensureMaterialized();
               } while (projection.needsMaterialization);

@@ -59,7 +59,7 @@ describe("update progress", () => {
     run = runRecord();
     vi.mocked(getUpdateRunForProgressAsync)
       .mockReset()
-      .mockImplementation(async () => run);
+      .mockImplementation(async () => structuredClone(run));
     vi.mocked(writeUpdateRunReportArtifact).mockReset().mockResolvedValue(reportPath);
     vi.mocked(getUpdateRun).mockImplementation(() => run);
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: false });
@@ -91,7 +91,7 @@ describe("update progress", () => {
       { step: "staging", status: "completed" },
       { step: "validating", status: "in_progress" },
     );
-    presentation.progress.onStepStart?.(step);
+    presentation.progress.onStepStart?.(step, run);
     expect(log).toHaveBeenCalledWith("validating — build...");
     presentation.progress.onStepComplete?.({
       ...step,
@@ -676,7 +676,7 @@ describe("update progress", () => {
 
     const output = log.mock.calls.flat().join("\n");
     expect(output).toContain("OpenClaw updated to 2026.9.5");
-    expect(output).toContain("Recovery: verified serving 2026.9.5.");
+    expect(output).toContain("Recorded recovery: verified serving 2026.9.5.");
     expect(output).not.toContain("stale-readiness-failure");
     expect(output).not.toContain("state-migration-started");
     await printResult(stale, { json: true, run: context }, { record: captured });

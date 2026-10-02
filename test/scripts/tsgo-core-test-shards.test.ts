@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { listStagedChangedPaths } from "../../scripts/changed-lanes.mts";
 import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import {
@@ -21,7 +21,13 @@ import {
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import {
@@ -59,6 +65,9 @@ describe("tsgo core test shards", () => {
     }
     for (const [file, owner] of [
       ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
+      ["src/agents/subagents/spawn/acp-spawn-target.test.ts", "agents-sessions"],
+      ["src/agents/session-maintenance/run.test.ts", "agents-sessions"],
+      ["src/agents/main-session-recovery/main-session-restart-recovery.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
       ["ui/src/components/agent-avatar-face.test.ts", "ui-components"],
@@ -404,6 +413,13 @@ describe("changed core test graph selection", () => {
 
 // The compiler owns dependency reachability; test root partitions alone cannot prove it.
 const lifetime = createFixtureLifetime();
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts.close();
+});
 afterEach(() => lifetime.cleanup());
 
 it.runIf(process.platform !== "win32").each([
@@ -842,6 +858,12 @@ if (process.argv[2] === "boundary") {
         expect(fs.readdirSync(path.join(root, ".artifacts/dist-artifacts.lock"))).toEqual([]);
       }
       // Target only the boundary owner PID; its managed compiler must forward and join its group.
+      const receiptClient = write(
+        "compiler-receipts.mjs",
+        `${fixtureReceiptClientSource(fixtureReceipts.endpoint)}
+export { sendReceipt };
+`,
+      );
       write(
         "node_modules/.bin/tsgo",
         `#!/usr/bin/env node
@@ -851,7 +873,7 @@ let terminating=false;
 const finish=()=>{if(terminating && (child.exitCode!==null || child.signalCode!==null)){fs.writeFileSync('compiler.joined','joined');process.exit(0);}};
 child.once('exit',finish);
 process.on('SIGTERM',()=>{terminating=true;fs.writeFileSync('compiler.signal','SIGTERM');finish();});
-child.once('message',()=>{child.disconnect();fs.writeFileSync('compiler.pid',String(process.pid));fs.writeFileSync('descendant.pid',String(child.pid));});
+child.once('message',async()=>{child.disconnect();const {sendReceipt}=await import(${JSON.stringify(pathToFileURL(receiptClient).href)});fs.writeFileSync('compiler.pid',String(process.pid));fs.writeFileSync('descendant.pid',String(child.pid));sendReceipt(${JSON.stringify(root)},'ready');});
 setInterval(()=>{},1000);
 `,
       );
@@ -878,11 +900,29 @@ setInterval(()=>{},1000);
         ),
       );
       try {
-        const compilerPid = await waitForPidFile(path.join(root, "compiler.pid"), 5_000);
-        const descendantPid = await waitForPidFile(path.join(root, "descendant.pid"), 5_000);
+        const readPids = () => {
+          const readPid = (name: string) => {
+            const file = path.join(root, name);
+            const pid = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : Number.NaN;
+            if (!Number.isInteger(pid) || pid <= 0) {
+              throw new Error(`timeout waiting for pid in ${file}`);
+            }
+            return pid;
+          };
+          return { compilerPid: readPid("compiler.pid"), descendantPid: readPid("descendant.pid") };
+        };
+        // The query captures compiler stdout. Its durable PID records precede the
+        // separate receipt, so an early driver exit checks those same records.
+        const { compilerPid, descendantPid } = await withinTest(
+          Promise.race([
+            fixtureReceipts.waitFor(root, "ready").then(readPids),
+            running.then(readPids),
+          ]),
+          signal,
+        );
         expect(ownerPid).toBeDefined();
         process.kill(ownerPid!, "SIGTERM");
-        const canceled = await running;
+        const canceled = await withinTest(running, signal);
         expect(canceled.error).toBeUndefined();
         expect(canceled.status).toBe(143);
         expect(canceled.stderr).toContain("interrupted by SIGTERM");

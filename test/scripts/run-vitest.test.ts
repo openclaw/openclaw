@@ -32,14 +32,11 @@ import {
 import { parseTestProjectsArgs } from "../../scripts/test-projects.test-support.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
-import { isProcessAlive, waitForChildClose } from "../helpers/process-wait.js";
-import { withTestTimeout } from "../helpers/promise.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
-// These bounds only guard broken fixtures; readiness and exit are asserted via process signals.
-const LOAD_SENSITIVE_PROCESS_TIMEOUT_MS = process.env.CI ? 30_000 : 15_000;
-
 const file = "test/scripts/run-vitest.test.ts";
 const toolingConfig = "test/vitest/vitest.tooling.config.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
@@ -534,12 +531,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
     }
   });
 
-  posixIt.each([
+  posixIt.for([
     { timeout: false, exitCode: 0, expectedCode: 0 },
     { timeout: true, exitCode: 0, expectedCode: 1 },
     { timeout: true, exitCode: 7, expectedCode: 7 },
     { timeout: true, exitCode: null, expectedCode: null },
-  ])("settles descendants (timeout=$timeout, child=$exitCode)", async (row) => {
+  ])("settles descendants (timeout=$timeout, child=$exitCode)", async (row, context) => {
     const watchedEnv = {
       OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
     };
@@ -583,7 +580,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
     } finally {
       vi.useRealTimers();
     }
-    const rawExit = waitForChildClose(watched.child, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
+    const rawExit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        watched.child.once("close", (code, closeSignal) => resolve({ code, signal: closeSignal }));
+        watched.child.once("error", reject);
+      },
+    );
     let descendantPid = 0;
     const lines = createInterface({ input: watched.child.stdout! });
     const ready = new Promise<void>((resolve, reject) => {
@@ -608,8 +610,16 @@ registerHooks({resolve(specifier, context, nextResolve) {
     });
 
     try {
-      const snapshot = await withTestTimeout(
-        Promise.all([ready, rawExit, watched.completion]).then(([, raw, result]) => {
+      const snapshot = await withinTest(
+        Promise.all([
+          awaitGateBeforeSettlement(
+            ready,
+            watched.completion,
+            "fixture closed before reporting readiness",
+          ),
+          rawExit,
+          watched.completion,
+        ]).then(([, raw, result]) => {
           const psArgs =
             process.platform === "linux" ? ["-eL", "-o", "pgid=,state="] : ["-axo", "pgid=,state="];
           const stateResult = spawnSync("ps", psArgs, {
@@ -630,8 +640,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
               .every((processRow) => /^[ZX]/.test(processRow?.[2] ?? ""));
           return { groupStopped, noOutputTimedOut, raw, result };
         }),
-        LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-        "timed out waiting for watched Vitest completion",
+        context.signal,
       );
 
       const signal = row.exitCode === null ? "SIGTERM" : null;
