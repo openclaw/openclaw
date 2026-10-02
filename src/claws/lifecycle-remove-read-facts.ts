@@ -9,6 +9,7 @@ import type {
   OpenClawAgentDatabaseOwnerInspection,
   OpenClawRegisteredAgentDatabase,
 } from "../state/openclaw-agent-db-contract.js";
+import { readClawInventory } from "./inventory-read.js";
 import type { ClawInventory } from "./inventory-read.kernel.js";
 import type { AttachedCronJob } from "./lifecycle-delete-support.js";
 import type { ClawRemovePlanOptions } from "./lifecycle-remove-contract.js";
@@ -33,9 +34,11 @@ export async function readClawRemovePlanStatus(
         readInstallRecords: () => [...readFacts.inventory.installs],
       }
     : options.packageDeps;
+  const inventory = readFacts?.inventory ?? (await readClawInventory(options));
   const status = await readClawStatus(target, {
     ...options,
-    ...(readFacts ? { inventory: readFacts.inventory, readOnly: true } : {}),
+    inventory,
+    readOnly: true,
     ...(packageDeps ? { packageDeps } : {}),
   });
   const records = options.exactAgentId

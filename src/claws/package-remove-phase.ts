@@ -17,6 +17,7 @@ export async function applyClawPackageRemovalPhase(
     agentId: string;
     operationId: string;
     assertCurrent: () => void;
+    assertWorkerAdmissionCurrent?: () => void;
   },
 ): Promise<ClawPackageRemovalPhaseResult> {
   const ordered = orderClawPackageRemovals(decisions);

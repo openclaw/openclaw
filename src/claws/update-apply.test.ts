@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -20,6 +20,52 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
 
 describe("applyClawUpdatePlan", () => {
+  it("does not advance install provenance after the CLI lease retires during cron", async () => {
+    const env = {
+      OPENCLAW_STATE_DIR: join(tempDirs.make("openclaw-claw-update-retired-lease-"), "state"),
+    };
+    persistClawInstallRecord({ ...addPlan, claw: install.claw }, { env, status: "complete" });
+    const updatePlan = plan([]);
+    const cronStarted = createDeferred();
+    const cronCompleted = createDeferred();
+    const rollbackCron = vi.fn(async () => undefined);
+    let leaseCurrent = true;
+    const update = applyClawUpdatePlan(
+      updatePlan,
+      { targetManifest: manifest, targetSource: source },
+      {
+        config: {},
+        env,
+        ...consent(updatePlan),
+        assertCurrent: () => {
+          if (!leaseCurrent) {
+            throw new Error("Claw update lease retired");
+          }
+        },
+        rebuildPlan: async () => updatePlan,
+        buildAddPlan: async () => addPlan,
+        applyWorkspace: async () => ({ appliedPaths: [], rollback: async () => undefined }),
+        applyMcp: async () => ({ appliedNames: [], rollback: async () => undefined }),
+        applyCron: async () => {
+          cronStarted.resolve();
+          await cronCompleted.promise;
+          return { appliedIds: [], rollback: rollbackCron };
+        },
+      },
+    );
+    const rejected = expect(update).rejects.toMatchObject({
+      code: "provenance_update_failed",
+      message: "Claw update lease retired",
+    });
+    await awaitGateBeforeSettlement(cronStarted.promise, update, "Update settled before cron");
+    leaseCurrent = false;
+    cronCompleted.resolve();
+
+    await rejected;
+    expect(readClawInstallRecord("worker", { env })?.claw.version).toBe("1.0.0");
+    expect(rollbackCron).toHaveBeenCalledOnce();
+  });
+
   it("rejects consent that does not match the preview before rebuilding", async () => {
     const updatePlan = plan([]);
     const rebuildPlan = vi.fn();

@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => {
     stateTableGet: vi.fn(),
     openExistingOpenClawStateDatabaseReadOnly: vi.fn(),
     applyClawAddPlan: vi.fn(),
+    readClawInventory: vi.fn(),
     readClawStatus: vi.fn(),
     buildClawRemovePlan: vi.fn(),
     applyClawRemovePlan: vi.fn(),
@@ -102,6 +103,13 @@ vi.mock("../state/openclaw-state-lease.js", async () => ({
 vi.mock("../claws/add.js", async () => ({
   ...(await vi.importActual<typeof import("../claws/add.js")>("../claws/add.js")),
   applyClawAddPlan: mocks.applyClawAddPlan,
+}));
+
+vi.mock("../claws/inventory-read.js", async () => ({
+  ...(await vi.importActual<typeof import("../claws/inventory-read.js")>(
+    "../claws/inventory-read.js",
+  )),
+  readClawInventory: mocks.readClawInventory,
 }));
 
 vi.mock("../claws/lifecycle-state.js", async () => ({
@@ -244,6 +252,14 @@ describe("claws cli", () => {
       installRecord: { agentId: plan.agent.finalId },
     }));
     mocks.readClawStatus.mockReset();
+    mocks.readClawInventory.mockReset();
+    mocks.readClawInventory.mockResolvedValue({
+      installs: [],
+      packages: [],
+      workspaceFiles: [],
+      mcpServers: [],
+      cronJobs: [],
+    });
     mocks.readClawStatus.mockResolvedValue({
       schemaVersion: "openclaw.clawStatus.v1",
       records: [],
@@ -767,6 +783,14 @@ describe("claws cli", () => {
   });
 
   it("reports installed Claw status by agent id", async () => {
+    const inventory = {
+      installs: [],
+      packages: [],
+      workspaceFiles: [],
+      mcpServers: [{ agentId: "demo-agent", name: "docs" }],
+      cronJobs: [],
+    };
+    mocks.readClawInventory.mockResolvedValue(inventory);
     mocks.readClawStatus.mockResolvedValue({
       schemaVersion: "openclaw.clawStatus.v1",
       target: "demo-agent",
@@ -783,7 +807,10 @@ describe("claws cli", () => {
 
     await runCli(["claws", "status", "demo-agent", "--json"]);
 
-    expect(mocks.readClawStatus).toHaveBeenCalledWith("demo-agent");
+    expect(mocks.readClawStatus).toHaveBeenCalledWith("demo-agent", {
+      inventory,
+      readOnly: true,
+    });
     expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
       schemaVersion: "openclaw.clawStatus.v1",
       summary: { claws: 1 },
@@ -874,6 +901,27 @@ describe("claws cli", () => {
         { kind: "skill", source: "clawhub", ref: "@acme/demo-skill", version: "1.0.0" },
         "/tmp/demo-workspace",
       );
+      input.captureGatewayProjection?.(
+        { id: "demo-agent" },
+        {
+          actions: [
+            {
+              kind: "package",
+              id: "skill:@acme/demo-skill",
+              blocked: false,
+              details: {
+                kind: "skill",
+                source: "clawhub",
+                ref: "@acme/demo-skill",
+                version: "1.0.0",
+                integrity,
+                ownerAction: "install",
+                riskWarning: warning,
+              },
+            },
+          ],
+        },
+      );
       return {
         ...(await baseBuild(input)),
         actions: [
@@ -926,6 +974,90 @@ describe("claws cli", () => {
         riskWarning: "changed",
       }),
     ).toThrow(/review.*again/i);
+  });
+
+  it("uses reviewed skill warnings for an exclusively Claw-owned upgrade", async () => {
+    const { root } = await cliTestHelpers.writePackageFixture(tempDirs);
+    const warning = "Review this upgraded skill.";
+    const integrity = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const skill = {
+      kind: "skill" as const,
+      source: "clawhub" as const,
+      ref: "@acme/demo-skill",
+      version: "1.0.0",
+    };
+    mocks.preflightClawPackage.mockResolvedValue({
+      ok: false,
+      code: "skill_version_conflict",
+      message: "The installed skill has another version.",
+      integrity,
+      warning,
+    });
+    const baseBuild = mocks.buildClawUpdatePlan.getMockImplementation();
+    if (!baseBuild) {
+      throw new Error("missing update fixture implementation");
+    }
+    mocks.buildClawUpdatePlan.mockImplementation(async (input) => {
+      expect(await input.packagePreflight(skill, "/tmp/demo-workspace")).toMatchObject({
+        ok: false,
+        code: "skill_version_conflict",
+      });
+      input.captureGatewayProjection?.(
+        { id: "demo-agent" },
+        {
+          actions: [
+            {
+              kind: "package",
+              id: "skill:@acme/demo-skill",
+              blocked: false,
+              details: { ...skill, integrity, ownerAction: "install", riskWarning: warning },
+            },
+          ],
+        },
+      );
+      return {
+        ...(await baseBuild(input)),
+        actions: [
+          {
+            kind: "package",
+            id: "skill:@acme/demo-skill",
+            action: "change",
+            target: "clawhub:@acme/demo-skill@1.0.0",
+            blocked: false,
+            reason: "Upgrade exclusively Claw-owned skill",
+            desiredDigest: "sha256:planned-skill",
+          },
+        ],
+      };
+    });
+
+    await runCli(["claws", "update", "demo-agent", "--from", root, "--dry-run", "--json"]);
+    expect(JSON.parse(mocks.logs[0] ?? "{}")).toMatchObject({
+      skillWarnings: [{ ref: skill.ref, version: skill.version, integrity, riskWarning: warning }],
+    });
+
+    mocks.logs.length = 0;
+    await runCli([
+      "claws",
+      "update",
+      "demo-agent",
+      "--from",
+      root,
+      "--yes",
+      "--plan-integrity",
+      "sha256:update-plan",
+      "--json",
+    ]);
+    const consent = mocks.applyClawUpdatePlan.mock.calls[0]?.[2]?.skillConsent;
+    expect(consent).toBeDefined();
+    expect(() =>
+      consent.assertApproved({
+        ref: skill.ref,
+        version: skill.version,
+        integrity,
+        riskWarning: warning,
+      }),
+    ).not.toThrow();
   });
 
   it("prints capability escalation details in human update previews", async () => {

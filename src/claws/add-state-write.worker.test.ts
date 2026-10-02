@@ -3,14 +3,23 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import type { installPluginFromClawHub } from "../plugins/clawhub.js";
+import {
+  beginAgentDeletionJournal,
+  completeAgentDeletionJournalInDatabase,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { acquireClawPackageLifecycleLease } from "../state/claw-package-lifecycle-lease.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
+  claimCompletedAgentDeletionForAdd,
   persistClawCronPendingRefForAdd,
   persistClawInstallRecordForAdd,
   persistClawMcpPendingRefForAdd,
@@ -86,6 +95,85 @@ it("completes a basic Claw Add without shared-state SQL on the caller thread", a
     sql.restore();
   }
   expect(readClawInstallRecord("worker", { env: state.env })?.status).toBe("complete");
+});
+
+it.each(["direct", "worker"] as const)(
+  "keeps unfinished agent deletion fenced from %s Claw Add state writes",
+  async (stateMode) => {
+    const { plan } = await makeProvenancePlan(state.root, {
+      schemaVersion: 1,
+      agent: { id: "worker" },
+    });
+    beginAgentDeletionJournal(
+      {
+        agentId: "worker",
+        operationId: "delete-pending",
+        agentDir: state.agentDir("worker"),
+        workspaceDir: plan.agent.workspace,
+        sessionsDir: state.sessionsDir("worker"),
+        deleteFiles: false,
+      },
+      { env: state.env },
+    );
+
+    await expect(
+      persistClawInstallRecordForAdd(plan, {
+        env: state.env,
+        ...(stateMode === "worker" ? { stateMode } : {}),
+        status: "pending",
+      }),
+    ).rejects.toThrow("Claw add is blocked by agent deletion recovery.");
+    expect(readClawInstallRecord("worker", { env: state.env })).toBeUndefined();
+    expect(readAgentDeletionJournal("worker", { env: state.env })).toMatchObject({
+      operationId: "delete-pending",
+      cleanupCompleted: false,
+    });
+  },
+);
+
+it("does not claim a successor deletion after the worker recorded the previous completed one", async () => {
+  const { plan } = await makeProvenancePlan(state.root, {
+    schemaVersion: 1,
+    agent: { id: "worker" },
+  });
+  const deletion = {
+    agentId: "worker",
+    agentDir: state.agentDir("worker"),
+    workspaceDir: plan.agent.workspace,
+    sessionsDir: state.sessionsDir("worker"),
+    deleteFiles: false,
+  };
+  beginAgentDeletionJournal({ ...deletion, operationId: "delete-original" }, { env: state.env });
+  runOpenClawStateWriteTransaction(
+    (database) => completeAgentDeletionJournalInDatabase(database, "worker", "delete-original"),
+    { env: state.env },
+  );
+  let observedOperationId: string | undefined;
+  await persistClawInstallRecordForAdd(plan, {
+    env: state.env,
+    stateMode: "worker",
+    status: "pending",
+    onCompletedDeletion: (operationId) => {
+      observedOperationId = operationId;
+    },
+  });
+  expect(observedOperationId).toBe("delete-original");
+
+  beginAgentDeletionJournal({ ...deletion, operationId: "delete-successor" }, { env: state.env });
+  runOpenClawStateWriteTransaction(
+    (database) => completeAgentDeletionJournalInDatabase(database, "worker", "delete-successor"),
+    { env: state.env },
+  );
+  await expect(
+    claimCompletedAgentDeletionForAdd("worker", observedOperationId!, {
+      env: state.env,
+      stateMode: "worker",
+    }),
+  ).rejects.toThrow("Completed agent deletion changed during Claw add.");
+  expect(readAgentDeletionJournal("worker", { env: state.env })).toMatchObject({
+    operationId: "delete-successor",
+    cleanupCompleted: true,
+  });
 });
 
 it("persists and reads package ownership through the shared worker", async () => {
@@ -255,6 +343,9 @@ it("installs a plugin through the worker while holding its lifecycle lease", asy
           ownerAction: "install" as const,
           installId: "lease-probe",
           ...emptyPluginPlanEvidence,
+          capabilityGrantsByPluginId: {
+            "lease-probe": emptyPluginCapabilityEvidence.grants,
+          },
         },
         blocked: false,
       },

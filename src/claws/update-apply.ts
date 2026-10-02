@@ -376,6 +376,7 @@ export async function applyClawUpdatePlan(
     options.assertCurrent?.();
   };
   const assertForwardCurrent = (phase?: "after-agent-commit") => {
+    options.assertCurrent?.();
     options.assertForwardCurrent?.();
     assertReviewedCurrent(phase);
   };

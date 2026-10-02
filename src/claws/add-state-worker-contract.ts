@@ -23,7 +23,11 @@ export type ClawAddStateWorkerOperations = {
       expectedExistingPlan?: ClawAddPlan;
       deferLegacyPlanUpgrade?: boolean;
     };
-    output: PersistedClawInstall;
+    output: { install: PersistedClawInstall; completedDeletionOperationId?: string };
+  };
+  "claws.add.claimCompletedDeletion": {
+    input: { agentId: string; operationId: string };
+    output: void;
   };
   "claws.add.updateInstallStatus": {
     input: {
@@ -128,6 +132,7 @@ export type ClawAddStateCommand = {
 
 const clawAddStateCommands = {
   "claws.add.persistInstall": true,
+  "claws.add.claimCompletedDeletion": true,
   "claws.add.updateInstallStatus": true,
   "claws.add.deleteInstall": true,
   "claws.add.recordAgentProvenance": true,

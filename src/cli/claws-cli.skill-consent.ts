@@ -1,11 +1,5 @@
-import { clawTargetPackages } from "../claws/application-provenance.js";
 import type { ClawSkillInstallConsent } from "../claws/packages.js";
-import type {
-  ClawAddPlan,
-  ClawManifest,
-  ClawOpenClawProfile,
-  ClawPackagePreflightResult,
-} from "../claws/types.js";
+import type { ClawAddPlan } from "../claws/types.js";
 import type { ClawUpdatePlan } from "../claws/update-plan-types.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -51,11 +45,8 @@ export function addPlanSkillWarnings(plan: ClawAddPlan): ClawCliSkillWarning[] {
 
 export function updatePlanSkillWarnings(params: {
   plan: ClawUpdatePlan;
-  manifest: ClawManifest;
-  profile?: ClawOpenClawProfile;
-  preflights: ReadonlyMap<string, ClawPackagePreflightResult>;
+  targetAddPlan?: ClawAddPlan;
 }): ClawCliSkillWarning[] {
-  const targets = clawTargetPackages(params.manifest, params.profile);
   return params.plan.actions.flatMap((action) => {
     if (
       action.kind !== "package" ||
@@ -65,25 +56,19 @@ export function updatePlanSkillWarnings(params: {
     ) {
       return [];
     }
-    const target = targets.get(action.id);
-    const preflight = params.preflights.get(action.id);
-    if (!target || target.kind !== "skill" || !preflight?.ok) {
+    const targetAction = params.targetAddPlan?.actions.find(
+      (candidate) => candidate.id === action.id,
+    );
+    if (
+      !params.targetAddPlan ||
+      !targetAction ||
+      targetAction.kind !== "package" ||
+      targetAction.blocked ||
+      targetAction.details?.kind !== "skill"
+    ) {
       throw new Error("The Claw skill trust review is incomplete.");
     }
-    if (!preflight.warning || preflight.action === "reuse") {
-      return [];
-    }
-    if (preflight.action !== "install" || !preflight.integrity) {
-      throw new Error("The Claw skill trust review is incomplete.");
-    }
-    return [
-      {
-        ref: target.ref,
-        version: target.version,
-        integrity: preflight.integrity,
-        riskWarning: preflight.warning,
-      },
-    ];
+    return addPlanSkillWarnings({ ...params.targetAddPlan, actions: [targetAction] });
   });
 }
 

@@ -1,6 +1,9 @@
 import { mergeWorkspaceSetupStateInDatabase } from "../agents/workspace-state-store.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
-import { readAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
+import {
+  claimCompletedAgentDeletionJournal,
+  readAgentDeletionJournalInDatabase,
+} from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { clawPackageLifecycleLeaseKey } from "../state/claw-package-lifecycle-lease.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
@@ -67,16 +70,15 @@ export function executeClawAddStateCommand(
       const result = (() => {
         switch (command.type) {
           case "claws.add.persistInstall": {
-            if (
-              readAgentDeletionJournalInDatabase(
-                database,
-                command.input.plan.agent.finalId,
-                "runtime",
-              )
-            ) {
+            const deletion = readAgentDeletionJournalInDatabase(
+              database,
+              command.input.plan.agent.finalId,
+              "runtime",
+            );
+            if (deletion && !deletion.cleanupCompleted) {
               throw new Error("Claw add is blocked by agent deletion recovery.");
             }
-            return persistClawInstallRecord(command.input.plan, {
+            const install = persistClawInstallRecord(command.input.plan, {
               database,
               status: command.input.status,
               nowMs: command.input.nowMs,
@@ -84,6 +86,22 @@ export function executeClawAddStateCommand(
               expectedExistingPlan: command.input.expectedExistingPlan,
               deferLegacyPlanUpgrade: command.input.deferLegacyPlanUpgrade,
             });
+            return {
+              install,
+              ...(deletion ? { completedDeletionOperationId: deletion.operationId } : {}),
+            };
+          }
+          case "claws.add.claimCompletedDeletion": {
+            const { agentId, operationId } = command.input;
+            const deletion = readAgentDeletionJournalInDatabase(database, agentId, "runtime");
+            if (
+              deletion?.operationId !== operationId ||
+              !deletion.cleanupCompleted ||
+              !claimCompletedAgentDeletionJournal(agentId, operationId, { database })
+            ) {
+              throw new Error("Completed agent deletion changed during Claw add.");
+            }
+            return;
           }
           case "claws.add.updateInstallStatus":
             return updateClawInstallRecordStatus(command.input.agentId, command.input.status, {

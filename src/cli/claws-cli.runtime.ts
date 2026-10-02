@@ -19,6 +19,7 @@ import {
   ClawExportError,
   exportClawAgent,
 } from "../claws/export.js";
+import { readClawInventory } from "../claws/inventory-read.js";
 import {
   assertClawsLabsEnabled,
   CLAWS_LABS_DISABLED_MESSAGE,
@@ -535,7 +536,8 @@ export async function runClawsStatusCommand(
   opts: ClawsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
-  const status = await readClawStatus(target);
+  const inventory = await readClawInventory();
+  const status = await readClawStatus(target, { inventory, readOnly: true });
   if (opts.json) {
     writeRuntimeJson(runtime, status);
   } else {

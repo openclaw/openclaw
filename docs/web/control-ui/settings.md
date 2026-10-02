@@ -518,6 +518,19 @@ including limited access to contacts or photos. Precise location is read-only
 on iOS; **Open Settings** opens the system setting. Talk shows the device's
 Voice Wake, Talk mode, Talk button, background Talk, and speakerphone controls.
 
+## Claws (Labs)
+
+Enable **Settings → Labs → Claws** to browse official Claw packages from
+ClawHub on the **Agents** page. Search the catalog, review the files and
+capabilities a Claw will install, then select **Add** to create its agent.
+The agent's settings show its installed resources and offer **Update** and
+**Remove** with a review before either change. See [Claws](/cli/claws) for
+the package contract and local-source CLI commands.
+
+Turning the Labs switch off hides discovery, Add, and Update. Agents already
+installed from Claws keep running; their status and safe removal remain
+available.
+
 ## Custom plugin UI
 
 Find **Labs** in the **System** section of the Settings sidebar, after **Infrastructure**.

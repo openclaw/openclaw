@@ -44,7 +44,6 @@ import {
   type ClawRemovePlanReadFacts,
 } from "./lifecycle-remove-read-facts.js";
 import { clawRemoveStateBlockers } from "./lifecycle-remove-state-blockers.js";
-import { readClawStatus } from "./lifecycle-status.js";
 import { clawMcpRemovalSelector, planClawMcpServerRemoval } from "./mcp.js";
 import { clawMonitorSnapshotSchema } from "./monitor-cleanup-contract.js";
 import { applyClawPackageRemovalPhase } from "./package-remove-phase.js";
@@ -409,8 +408,8 @@ export async function applyClawRemovePlan(
     throw new ClawRemoveError("remove_changed", "Claw-owned state changed after remove planning.");
   }
   const agentId = plan.agentId;
-  const current = await readClawStatus(plan.agentId, options);
-  const record = current.records[0];
+  const { records } = await readClawRemovePlanStatus(agentId, { ...options, exactAgentId: true });
+  const record = records[0];
   const plannedAgentAction = plan.actions.find(
     (action) => action.kind === "agent" && action.id === agentId,
   );
@@ -589,6 +588,7 @@ export async function applyClawRemovePlan(
           agentId,
           operationId: configRemoval.operationId,
           assertCurrent,
+          assertWorkerAdmissionCurrent: configRemoval.assertWorkerAdmissionCurrent,
         });
         result.packages = removed.packages;
         result.pluginRuntime = removed.application;

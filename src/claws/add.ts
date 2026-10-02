@@ -16,6 +16,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { planWithPackageActions, sameCommittedAgent, statusAtLeast } from "./add-plan-helpers.js";
 import {
+  claimCompletedAgentDeletionForAdd,
   deleteClawInstallRecordForAdd,
   persistClawInstallRecordForAdd,
   recordAgentProvenanceForAdd,
@@ -75,7 +76,9 @@ type ClawAddApplyOptions = ClawAddStateOptions & {
   commitConfig?: ConfigCommit;
   persistRecord?: (
     plan: Parameters<typeof persistClawInstallRecord>[0],
-    options?: Parameters<typeof persistClawInstallRecord>[1],
+    options?: Parameters<typeof persistClawInstallRecord>[1] & {
+      onCompletedDeletion?: (operationId: string) => void;
+    },
   ) => PersistedClawInstall | Promise<PersistedClawInstall>;
   deleteRecord?: (
     agentId: Parameters<typeof deleteClawInstallRecord>[0],
@@ -207,6 +210,7 @@ export async function applyClawAddPlan(
 
   const persistRecord = options.persistRecord ?? persistClawInstallRecordForAdd;
   let installRecord: PersistedClawInstall;
+  let completedDeletionOperationId: string | undefined;
   try {
     assertForwardCurrent(initialPhase);
     installRecord = await persistRecord(plan, {
@@ -215,6 +219,9 @@ export async function applyClawAddPlan(
       expectedExistingRecord: options.resumeRecord,
       expectedExistingPlan: options.resumePlan,
       deferLegacyPlanUpgrade: options.resumePlan !== undefined,
+      onCompletedDeletion: (operationId) => {
+        completedDeletionOperationId = operationId;
+      },
     });
   } catch (error) {
     if (error instanceof ClawAddMutationError) {
@@ -554,6 +561,14 @@ export async function applyClawAddPlan(
     // The transform runs before persistence can still fail; record the fact only after commit.
     // Moving this into the callback retains the workspace and reports a write that never landed.
     configCommitted = true;
+    if (completedDeletionOperationId) {
+      assertForwardCurrent("after-agent-commit");
+      await claimCompletedAgentDeletionForAdd(
+        plan.agent.finalId,
+        completedDeletionOperationId,
+        forwardStateOptions("after-agent-commit"),
+      );
+    }
     try {
       assertForwardCurrent("after-agent-commit");
       await recordAgentProvenanceForAdd(

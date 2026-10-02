@@ -21,14 +21,26 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { clawCronGatewayInput, markClawCronRefRemoved, readClawCronRefs } from "./cron.js";
+import { applyClawAddPlan } from "./add.js";
+import {
+  CLAW_CRON_REF_SCHEMA_VERSION,
+  clawCronGatewayInput,
+  markClawCronRefRemoved,
+  readClawCronRefs,
+  upsertClawCronRef,
+} from "./cron.js";
 import { readClawStatusForGateway } from "./gateway-status-worker.js";
 import { readClawInventory } from "./inventory-read.js";
 import { withClawAgentConfigRemoval } from "./lifecycle-config-removal.js";
 import { quiescentClawMonitorGateway } from "./lifecycle-remove.test-support.js";
 import { applyClawRemovePlan, buildClawRemovePlan, readClawStatus } from "./lifecycle-state.js";
 import { createClawRemoveTestFixtures } from "./lifecycle-state.test-helpers.js";
-import { digestClawMcpServer, readClawMcpServerRefs, upsertClawMcpServerRef } from "./mcp.js";
+import {
+  CLAW_MCP_REF_SCHEMA_VERSION,
+  digestClawMcpServer,
+  readClawMcpServerRefs,
+  upsertClawMcpServerRef,
+} from "./mcp.js";
 import {
   persistClawInstallRecord,
   persistClawPackageRef,
@@ -102,6 +114,125 @@ function seedAttachedCronJob(
 }
 
 describe("Claw status and remove", () => {
+  it.each(["direct", "worker"] as const)(
+    "readds a Claw after completed removal using %s state writes",
+    async (stateMode) => {
+      const current = await addFixture();
+      const removePlan = await buildClawRemovePlan("worker", {
+        env: current.env,
+        config: current.getConfig(),
+      });
+      const removed = await applyClawRemovePlan(removePlan, {
+        ...removeOptions(current, removePlan),
+        trashPath: async (pathname) => {
+          await rm(pathname, { recursive: true, force: true });
+          return true;
+        },
+      });
+      expect(removed).toMatchObject({ status: "complete", agentRemoved: true });
+      const deletion = readAgentDeletionJournal("worker", { env: current.env });
+      expect(deletion).toMatchObject({ cleanupCompleted: true });
+      expect(loadConfig().agents?.entries?.worker).toBeUndefined();
+
+      const readded = await applyClawAddPlan(current.plan, {
+        env: current.env,
+        ...(stateMode === "worker" ? { stateMode } : {}),
+        consentPlanIntegrity: current.plan.planIntegrity,
+        commitConfig: async (transform) => {
+          expect(readAgentDeletionJournal("worker", { env: current.env })?.operationId).toBe(
+            deletion?.operationId,
+          );
+          await state.writeConfig(transform(loadConfig()));
+        },
+      });
+
+      expect(readded).toMatchObject({ status: "complete", configCommitted: true });
+      const persistedConfig = JSON.parse(
+        await readFile(state.configPath, "utf8"),
+      ) as OpenClawConfig;
+      expect(persistedConfig.agents?.entries?.worker).toBeDefined();
+      expect(readAgentDeletionJournal("worker", { env: current.env })).toBeUndefined();
+    },
+  );
+
+  it("removes an orphan with only MCP provenance through the CLI read path", async () => {
+    const server = { command: "docs-mcp" };
+    const config = { mcp: { servers: { docs: server } } };
+    await state.writeConfig(config);
+    upsertClawMcpServerRef(
+      {
+        schemaVersion: CLAW_MCP_REF_SCHEMA_VERSION,
+        agentId: "orphan-mcp",
+        name: "docs",
+        configDigest: digestClawMcpServer(server),
+        relationship: "managed",
+        origin: "claw-introduced",
+        independentOwner: false,
+        status: "complete",
+        createdAtMs: 1,
+        updatedAtMs: 2,
+      },
+      { env: state.env },
+    );
+
+    const plan = await buildClawRemovePlan("orphan-mcp", {
+      env: state.env,
+      config,
+      sourceMcpServers: { docs: server },
+      exactAgentId: true,
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.actions).toContainEqual(expect.objectContaining({ kind: "mcpServer", id: "docs" }));
+
+    const result = await applyClawRemovePlan(plan, {
+      env: state.env,
+      config,
+      sourceMcpServers: { docs: server },
+      exactAgentId: true,
+      monitorGateway: quiescentClawMonitorGateway,
+      consentPlanIntegrity: plan.planIntegrity,
+      purgeSessions: async () => false,
+      trashPath: async () => true,
+    });
+    expect(result.status).toBe("complete");
+    expect(result.mcpServers).toContainEqual({ name: "docs", action: "removed" });
+    expect(loadConfig().mcp?.servers?.docs).toBeUndefined();
+    expect(readClawMcpServerRefs("orphan-mcp", { env: state.env })).toEqual([]);
+  });
+
+  it("plans an orphan with only cron provenance through the CLI read path", async () => {
+    upsertClawCronRef(
+      {
+        schemaVersion: CLAW_CRON_REF_SCHEMA_VERSION,
+        agentId: "orphan-cron",
+        manifestId: "daily",
+        declarationKey: "claw:orphan-cron:daily",
+        schedulerJobId: "scheduler-daily",
+        status: "complete",
+        job: {
+          id: "daily",
+          schedule: { cron: "0 9 * * *", timezone: "UTC" },
+          session: "main",
+          message: "Prepare the report",
+        },
+        createdAtMs: 1,
+        updatedAtMs: 3,
+      },
+      { env: state.env },
+    );
+
+    const plan = await buildClawRemovePlan("orphan-cron", {
+      env: state.env,
+      config: {},
+      sourceMcpServers: {},
+      exactAgentId: true,
+    });
+
+    expect(plan.blockers).not.toContainEqual(expect.objectContaining({ code: "claw_not_found" }));
+    expect(plan.actions).toContainEqual(expect.objectContaining({ kind: "cronJob", id: "daily" }));
+  });
+
   it("plans exact-agent removal from read-worker facts without opening the state database", async () => {
     const current = await addFixture({ withFile: true });
     const inventory = await readClawInventory({ env: current.env });
@@ -987,7 +1118,6 @@ describe("Claw status and remove", () => {
     });
     const packageDeps = {
       resolvePlugin,
-      acquirePackageLease: vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() })),
     };
     const plan = await buildClawRemovePlan("worker", {
       env: current.env,

@@ -80,6 +80,12 @@ const inventory = {
 };
 const coordinate = { packageName: "@openclaw/workflow-operator", version: "1.2.0" };
 const pluginIntegrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
+const pluginCapabilityGrants = {
+  hooks: {
+    allowPromptInjection: { effective: false },
+    allowConversationAccess: { effective: false },
+  },
+};
 const labsConfig = {
   gateway: { controlUi: { experimental: { claws: true } } },
   agents: { list: [{ id: "workflow-operator" }] },
@@ -207,11 +213,9 @@ describe("Gateway Claw lifecycle plans", () => {
                   skills: [],
                   dangerousConfigFlags: [],
                 },
-                capabilityGrants: {
-                  hooks: {
-                    allowPromptInjection: { effective: false },
-                    allowConversationAccess: { effective: false },
-                  },
+                capabilityGrants: pluginCapabilityGrants,
+                capabilityGrantsByPluginId: {
+                  "workflow-operator-plugin": pluginCapabilityGrants,
                 },
               },
             },
@@ -247,6 +251,9 @@ describe("Gateway Claw lifecycle plans", () => {
         ownerAction: "install",
         integrity: pluginIntegrity,
         declaredCapabilities: { tools: ["workflow.run"] },
+        capabilityGrantsByPluginId: {
+          "workflow-operator-plugin": pluginCapabilityGrants,
+        },
         reviewToken: expect.any(String),
       },
     ]);

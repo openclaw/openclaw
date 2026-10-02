@@ -2,6 +2,10 @@ import {
   mergeWorkspaceSetupState,
   type WorkspaceSetupState,
 } from "../agents/workspace-state-store.js";
+import {
+  claimCompletedAgentDeletionJournal,
+  readAgentDeletionJournal,
+} from "../state/agent-deletion-journal.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import type { ClawPackageLifecycleLeaseIdentity } from "../state/claw-package-lifecycle-lease.js";
 import type { PersistedClawCronRef } from "./cron.js";
@@ -29,13 +33,22 @@ export type ClawPackageRefStateOptions = ClawAddStateOptions & {
 
 export async function persistClawInstallRecordForAdd(
   plan: Parameters<typeof persistClawInstallRecord>[0],
-  options: NonNullable<Parameters<typeof persistClawInstallRecord>[1]> & ClawAddStateOptions = {},
+  options: NonNullable<Parameters<typeof persistClawInstallRecord>[1]> &
+    ClawAddStateOptions & { onCompletedDeletion?: (operationId: string) => void } = {},
 ): Promise<ReturnType<typeof persistClawInstallRecord>> {
   if (options.stateMode !== "worker") {
     options.assertCurrent?.();
-    return persistClawInstallRecord(plan, options);
+    const deletion = readAgentDeletionJournal(plan.agent.finalId, options, "runtime");
+    if (deletion && !deletion.cleanupCompleted) {
+      throw new Error("Claw add is blocked by agent deletion recovery.");
+    }
+    const install = persistClawInstallRecord(plan, options);
+    if (deletion) {
+      options.onCompletedDeletion?.(deletion.operationId);
+    }
+    return install;
   }
-  return execute(options, {
+  const result = await execute(options, {
     type: "claws.add.persistInstall",
     input: {
       plan,
@@ -45,6 +58,28 @@ export async function persistClawInstallRecordForAdd(
       expectedExistingPlan: options.expectedExistingPlan,
       deferLegacyPlanUpgrade: options.deferLegacyPlanUpgrade,
     },
+  });
+  if (result.completedDeletionOperationId) {
+    options.onCompletedDeletion?.(result.completedDeletionOperationId);
+  }
+  return result.install;
+}
+
+export async function claimCompletedAgentDeletionForAdd(
+  agentId: string,
+  operationId: string,
+  options: ClawAddStateOptions = {},
+): Promise<void> {
+  if (options.stateMode !== "worker") {
+    options.assertCurrent?.();
+    if (!claimCompletedAgentDeletionJournal(agentId, operationId, options)) {
+      throw new Error("Completed agent deletion changed during Claw add.");
+    }
+    return;
+  }
+  return execute(options, {
+    type: "claws.add.claimCompletedDeletion",
+    input: { agentId, operationId },
   });
 }
 

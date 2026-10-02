@@ -370,6 +370,7 @@ type ApplyClawPackageRemovalOptions = OpenClawStateDatabaseOptions & {
   applyRuntime?: PluginLifecycleRuntimeApply;
   deps?: PackageRemovalDeps;
   assertCurrent?: () => void;
+  assertWorkerAdmissionCurrent?: () => void;
 };
 
 export async function applyClawPackageRemovals(
@@ -435,7 +436,10 @@ async function applyClawPackageRemovalsUnlocked(
               assertCurrent,
               ...(lease.identity ? { packageLeaseIdentity: lease.identity } : {}),
             })
-          : await claimClawPackageRefStatus(ref, status, claimOptions),
+          : await claimClawPackageRefStatus(ref, status, {
+              ...claimOptions,
+              assertCurrent: options.assertWorkerAdmissionCurrent ?? options.assertCurrent,
+            }),
       );
       claimedRef = result;
       assertCurrent();

@@ -21,6 +21,7 @@ import type {
   OpenClawStateDatabase,
   OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -146,6 +147,7 @@ async function commitClawAgentConfigRemoval(
 type CommittedClawAgentRemoval = ClawAgentConfigRemovalResult & {
   operationId: string;
   assertCurrent: (database?: OpenClawStateDatabase) => void;
+  assertWorkerAdmissionCurrent: () => void;
   drainMonitors: () => Promise<void>;
   completeDeletion: (database: OpenClawStateDatabase) => void;
   runDatabaseCleanup: AgentDeletionOperation["runDatabaseCleanup"];
@@ -175,7 +177,7 @@ export async function withClawAgentConfigRemoval<T>(
         params.fallbackWorkspace,
         stateOptions.env,
       );
-      const matchesInstall = (database: OpenClawStateDatabase) =>
+      const matchesInstall = (database: Pick<OpenClawStateDatabase, "db">) =>
         expectedInstall === undefined ||
         isDeepStrictEqual(
           readClawInstallRecordFromDatabase(database.db, params.agentId) ?? null,
@@ -230,6 +232,19 @@ export async function withClawAgentConfigRemoval<T>(
         assertOwned(database);
         params.assertForwardCurrent?.();
       };
+      const assertWorkerAdmissionCurrent = () => {
+        // The package-status worker holds SQLite's writer while admitting this read.
+        deletion.assertCurrent();
+        const matches = withExistingOpenClawStateDatabaseCurrentReadOnly(
+          (database) => matchesInstall(database),
+          stateOptions,
+        );
+        if (matches !== true) {
+          throw new Error(`Claw removal no longer owns agent ${params.agentId}.`);
+        }
+        deletion.assertCurrent();
+        params.assertForwardCurrent?.();
+      };
       try {
         // Fence new claims and drain existing owners before any external or local removal effect.
         if (params.quiesceMonitors) {
@@ -258,6 +273,7 @@ export async function withClawAgentConfigRemoval<T>(
             ...result,
             operationId: deletion.entry.operationId,
             assertCurrent,
+            assertWorkerAdmissionCurrent,
             drainMonitors: async () => {
               assertCurrent();
               await params.drainMonitors?.(deletion.entry.operationId);

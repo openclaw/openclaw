@@ -1,4 +1,3 @@
-import { clawPackageKey } from "../claws/application-provenance.js";
 import {
   ClawHubSourceError,
   readMatchingCachedClawHubSource,
@@ -16,7 +15,7 @@ import { preflightClawPackage } from "../claws/packages.js";
 import { readClawManifestFile } from "../claws/reader.js";
 import {
   CLAW_OUTPUT_STABILITY,
-  type ClawPackagePreflightResult,
+  type ClawAddPlan,
   type ClawReadResult,
   type ClawSourceIdentity,
 } from "../claws/types.js";
@@ -209,7 +208,7 @@ export async function runClawsUpdateCommand(
     return;
   }
 
-  const preflights = new Map<string, ClawPackagePreflightResult>();
+  let targetAddPlan: ClawAddPlan | undefined;
   const plan = await buildClawUpdatePlan({
     agentId: target,
     targetManifest: loaded.manifest,
@@ -218,19 +217,13 @@ export async function runClawsUpdateCommand(
     targetSource: loaded.source,
     config,
     sourceMcpServers: listedMcpServers.mcpServers,
-    packagePreflight: async (pkg, workspace) => {
-      const preflight = await preflightClawPackage(pkg, workspace, { config });
-      preflights.set(clawPackageKey(pkg), preflight);
-      return preflight;
+    packagePreflight: (pkg, workspace) => preflightClawPackage(pkg, workspace, { config }),
+    captureGatewayProjection: (_desiredAgent, addPlan) => {
+      targetAddPlan = addPlan;
     },
     diagnostics: loaded.diagnostics,
   });
-  const skillWarnings = updatePlanSkillWarnings({
-    plan,
-    manifest: loaded.manifest,
-    profile: loaded.openClawProfile,
-    preflights,
-  });
+  const skillWarnings = updatePlanSkillWarnings({ plan, targetAddPlan });
   if (opts.dryRun || plan.blockers.length > 0 || plan.actions.some((action) => action.blocked)) {
     if (opts.json) {
       writeRuntimeJson(runtime, { ...plan, skillWarnings });
