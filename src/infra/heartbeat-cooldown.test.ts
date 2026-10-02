@@ -223,6 +223,34 @@ describe("shouldDeferWake", () => {
   });
 
   describe("flood guard", () => {
+    it("counts a reachable clock-step buffer without assuming timestamp order", () => {
+      const recentRunStarts: number[] = [];
+      let lastRunStartedAtMs = 0;
+      const record = (ts: number) => {
+        recordRunStart(recentRunStarts, ts);
+        lastRunStartedAtMs = ts;
+      };
+      record(990_000);
+      record(935_000); // backward wall-clock step; outside the final 60s window
+      record(945_000);
+      record(955_000);
+      record(965_000);
+      record(969_999);
+
+      const now = 1_000_000;
+      expect(lastRunStartedAtMs).toBe(recentRunStarts[recentRunStarts.length - 1]);
+      expect(
+        decide({
+          source: "exec-event",
+          now,
+          nextDueMs: 0,
+          lastRunStartedAtMs,
+          recentRunStarts,
+          reason: "exec-event",
+        }),
+      ).toEqual({ defer: true, reason: "flood", retryAtMs: 1_005_001 });
+    });
+
     it("defers at the default threshold only while starts remain in the flood window", () => {
       const now = 1_000_000;
       expect(

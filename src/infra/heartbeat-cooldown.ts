@@ -86,21 +86,26 @@ function checkFloodGuard(input: ShouldDeferInput): DeferDecision | null {
     return null;
   }
   const windowStart = input.now - floodWindow;
-  let inWindow = 0;
-  let thresholdOldestTs: number | undefined;
-  for (let i = input.recentRunStarts.length - 1; i >= 0; i--) {
-    const ts = input.recentRunStarts[i];
+  // The buffer is insertion-ordered, not timestamp-sorted. A backward wall-clock
+  // step can therefore leave an out-of-window stamp between newer in-window runs.
+  const inWindowTs: number[] = [];
+  for (const ts of input.recentRunStarts) {
     if (ts === undefined || ts < windowStart) {
-      break;
+      continue;
     }
-    inWindow += 1;
-    if (inWindow === floodThreshold) {
-      thresholdOldestTs = ts;
-    }
+    inWindowTs.push(ts);
   }
-  return inWindow >= floodThreshold && thresholdOldestTs !== undefined
-    ? { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 }
-    : null;
+  if (inWindowTs.length < floodThreshold) {
+    return null;
+  }
+  // Newest first: the threshold-th start is the oldest timestamp that still
+  // keeps floodThreshold runs inside the active window.
+  inWindowTs.sort((a, b) => b - a);
+  const thresholdOldestTs = inWindowTs[floodThreshold - 1];
+  if (thresholdOldestTs === undefined) {
+    return null;
+  }
+  return { defer: true, reason: "flood", retryAtMs: thresholdOldestTs + floodWindow + 1 };
 }
 
 export function recordRunStart(

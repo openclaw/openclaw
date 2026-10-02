@@ -16,6 +16,7 @@ import {
   HEARTBEAT_SKIP_PREEMPTED,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
+  requestHeartbeatAndWait,
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -222,6 +223,51 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(30_000);
     expect(runSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("flood guard trips through the registered handler after a backward clock step", async () => {
+    const runner = start();
+
+    const manualAt = async (ts: number) => {
+      vi.setSystemTime(new Date(ts));
+      const pending = requestHeartbeatAndWait({
+        source: "manual",
+        intent: "manual",
+        reason: "manual",
+        agentId: "main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      await pending;
+    };
+
+    await manualAt(990_000);
+    await manualAt(935_000); // backward wall-clock step
+    await manualAt(945_000);
+    await manualAt(955_000);
+    await manualAt(965_000);
+    await manualAt(969_999);
+    expect(runSpy).toHaveBeenCalledTimes(6);
+
+    vi.setSystemTime(new Date(1_000_000));
+    const pendingDeferral = requestHeartbeatAndWait({
+      source: "interval",
+      intent: "scheduled",
+      reason: "interval",
+      agentId: "main",
+      scheduledEveryMs: 30 * 60_000,
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    const deferral = await pendingDeferral;
+
+    expect(runSpy).toHaveBeenCalledTimes(6);
+    expect(deferral).toEqual({
+      status: "skipped",
+      reason: "flood",
+      retryAtMs: 1_005_001,
+    });
+    runner.stop();
   });
 
   it("does not delay the next cron tick after repeated requests-in-flight skips", async () => {
