@@ -7,19 +7,21 @@ export async function openNativeSessionMenu(params: {
   // The pane can paint before its session metadata makes the header menu available.
   const menu = await new Promise<HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null>(
     (resolve) => {
-      const finish = (menu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null) => {
+      const finish = (
+        resolvedMenu: HTMLElementTagNameMap["openclaw-chat-header-session-menu"] | null,
+      ) => {
         observer.disconnect();
         signal.removeEventListener("abort", cancelled);
-        resolve(menu);
+        resolve(resolvedMenu);
       };
       const check = () => {
         if (signal.aborted || !isCurrent() || !pane.isConnected) {
           finish(null);
           return;
         }
-        const menu = pane.querySelector("openclaw-chat-header-session-menu");
-        if (menu) {
-          finish(menu);
+        const renderedMenu = pane.querySelector("openclaw-chat-header-session-menu");
+        if (renderedMenu) {
+          finish(renderedMenu);
         }
       };
       const observer = new MutationObserver(check);
