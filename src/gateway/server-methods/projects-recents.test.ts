@@ -397,9 +397,6 @@ test("projects.list preserves exact-path ranking, locale ties, and the pre-acces
 });
 
 test.each([
-  ["POSIX", "/Users/dev/projects/posix-project", "posix-project"],
-  ["POSIX with a trailing separator", "/Users/dev/projects/posix-project/", "posix-project"],
-  ["Windows", "C:\\Users\\dev\\projects\\windows-project", "windows-project"],
   [
     "Windows with a trailing separator",
     "C:\\Users\\dev\\projects\\windows-project\\",

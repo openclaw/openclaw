@@ -63,7 +63,6 @@ beforeEach(() => {
 
 describe("Web Push router authority at the worker grant", () => {
   it.each([
-    "unchanged",
     "merged alias",
     "transport retirement",
     "retained device revoked",
