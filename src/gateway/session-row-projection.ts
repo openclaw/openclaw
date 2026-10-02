@@ -512,7 +512,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     retainUserProfileCatalog(),
     sessionChanges.subscribeFacts(membership.invalidate),
     sessionChanges.subscribeProjection(mark),
-    onSessionLifecycleEvent(mark),
+    // Participant writers publish facts before their display-only lifecycle notice.
+    onSessionLifecycleEvent((change) =>
+      mark(change.reason === "participants" ? { ...change, facts: { kind: "unchanged" } } : change),
+    ),
     onSessionIdentityMutation(generations.mutate),
   ];
   function isCurrent(row: records.Row) {

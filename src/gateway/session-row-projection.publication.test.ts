@@ -19,6 +19,7 @@ import { applySessionEntryExactReplacements } from "../config/sessions/session-a
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
   emitSessionIdentityMutation,
+  emitSessionLifecycleEvent,
   onSessionIdentityMutation,
 } from "../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -133,6 +134,15 @@ it.each(["native", "worker"] as const)(
             ...scope,
             storePath: warm!.storeTarget.storePath,
             facts: { kind: "unchanged" },
+          });
+          expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
+          expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
+          // Participant persistence already published its compact facts before this notice.
+          emitSessionLifecycleEvent({
+            agentId: scope.agentId,
+            sessionKey: scope.sessionKey,
+            reason: "participants",
+            scope: "session-entry",
           });
           expect(projection.sharingTarget(query)?.entry).toMatchObject(expected);
           expect(projection.capture(query)?.publishedSource).toBe(publishedSource);
