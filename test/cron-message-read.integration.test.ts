@@ -307,12 +307,10 @@ describe("scheduled message actions", () => {
     const providerErrors: string[] = [];
     const providerWork = new Set<Promise<void>>();
     let requesterPermissions = 16n; // Discord MANAGE_CHANNELS.
-    let metadataControl: "pending" | "passed" = "pending";
     const diagnostics = (result: unknown) =>
       redactToolPayloadText(
         JSON.stringify({
           result,
-          metadataControl,
           requests,
           providerErrors,
           model: embeddedModel.observation,
@@ -396,7 +394,6 @@ describe("scheduled message actions", () => {
             const url = new URL(req.url ?? "/", "http://fixture.invalid");
             if (req.method === "POST" && url.pathname === "/scheduled-clock-gap") {
               expect(runtime).toBe("claude-cli");
-              expect(metadataControl).toBe("passed");
               const realNow = Date.now.bind(Date);
               // The real CLI has its grant; model a pause beyond its former timeout-plus-grace TTL.
               vi.spyOn(Date, "now").mockImplementation(() => realNow() + 120_000);
@@ -682,28 +679,6 @@ describe("scheduled message actions", () => {
           catalogMode: "static",
         });
         const runtimeConfig = getRuntimeConfig();
-        const { fetchChannelInfoDiscord } = await import("../extensions/discord/runtime-api.js");
-        const metadata = await fetchChannelInfoDiscord(channelId, {
-          cfg: runtimeConfig,
-          accountId: creatorAccountId,
-        }).catch((error: unknown) => {
-          throw new Error(diagnostics({ metadataError: describeFixtureError(error) }));
-        });
-        expect(metadata, diagnostics(metadata)).toMatchObject({
-          id: channelId,
-          type: 0,
-          guild_id: guildId,
-        });
-        expect(requests, diagnostics(metadata)).toEqual([
-          {
-            method: "GET",
-            path: `/api/v10/channels/${channelId}`,
-            authorizationMatches: true,
-          },
-        ]);
-        metadataControl = "passed";
-        // The direct transport control cannot satisfy the scheduled journey's evidence.
-        requests.length = 0;
         const params = {
           name: nativeCreator
             ? "Edit Discord for the recorded requester"

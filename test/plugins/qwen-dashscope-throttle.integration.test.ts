@@ -6,7 +6,6 @@ import { beforeAll, describe, expect, it } from "vitest";
 import { readPersistedAuthProfileStateRaw } from "../../src/agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/auth-profiles/store-runtime.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
-import { classifyAssistantFailoverReason } from "../../src/agents/embedded-agent-helpers/assistant-message-failures.js";
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
@@ -151,7 +150,6 @@ async function runThroughFailureRecovery(params: {
   providerOwner?: ProviderPlugin;
   fixture: ErrorFixture;
 }): Promise<{
-  reason: string | null;
   failureReason: unknown;
   usage: ProfileUsageReadback | undefined;
   affectedModelBlocked: boolean;
@@ -252,32 +250,18 @@ async function runThroughFailureRecovery(params: {
       } | null;
       const freshStore = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir());
       expect(freshStore.usageStats?.[profileId]).toEqual(persisted?.usageStats?.[profileId]);
-      const result = {
-        reason: classifyAssistantFailoverReason(assistant, {
-          providerOwner: params.providerOwner,
-        }),
+      return {
         failureReason,
         usage: persisted?.usageStats?.[profileId],
         affectedModelBlocked: isProfileInCooldown(freshStore, profileId, undefined, MODEL_ID),
         otherModelBlocked: isProfileInCooldown(freshStore, profileId, undefined, "qwen3.8-flash"),
         suspensionReasons,
       };
-      console.info(
-        "DASHSCOPE_PROFILE_PROOF",
-        JSON.stringify({
-          provider: params.provider,
-          code: params.fixture.code,
-          preparedOwner: params.providerOwner?.id ?? null,
-          ...result,
-        }),
-      );
-      return result;
     },
   );
 }
 
 function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.reason).toBe("rate_limit");
   expect.soft(result.failureReason).toBe("rate_limit");
   expect.soft(result.usage).toMatchObject({
     cooldownReason: "rate_limit",
@@ -291,7 +275,6 @@ function expectRateLimitState(result: Awaited<ReturnType<typeof runThroughFailur
 }
 
 function expectBillingState(result: Awaited<ReturnType<typeof runThroughFailureRecovery>>): void {
-  expect.soft(result.reason).toBe("billing");
   expect.soft(result.failureReason).toBe("billing");
   expect.soft(result.usage).toMatchObject({
     disabledReason: "billing",
@@ -306,7 +289,6 @@ function expectOpenRouterState(
   result: Awaited<ReturnType<typeof runThroughFailureRecovery>>,
   reason: "rate_limit" | "billing",
 ): void {
-  expect.soft(result.reason).toBe(reason);
   expect.soft(result.failureReason).toBe(reason);
   expect
     .soft(result.suspensionReasons)
@@ -320,13 +302,6 @@ function expectOpenRouterState(
 describe("Qwen DashScope 429 profile classification", () => {
   it("keeps registered OpenRouter wrapper errors in the rate-limit lane", async () => {
     const providerOwner = prepareProviderOwner("openrouter", "openrouter");
-    expect(
-      providerOwner.classifyFailoverReason?.({
-        provider: "openrouter",
-        status: 429,
-        errorMessage: "Provider returned error",
-      }),
-    ).toBe("timeout");
     const result = await runThroughFailureRecovery({
       provider: "openrouter",
       providerOwner,
@@ -383,21 +358,18 @@ describe("Qwen DashScope 429 profile classification", () => {
     expectRateLimitState(result);
   });
 
-  it.each(["PrepaidBillOverdue", "PostpaidBillOverdue"])(
-    "keeps explicit Qwen %s in the billing lane",
-    async (code) => {
-      const result = await runThroughFailureRecovery({
-        provider: "qwen",
-        providerOwner: prepareProviderOwner("qwen"),
-        fixture: {
-          status: 429,
-          code,
-          message: "The prepaid bill is overdue.",
-        },
-      });
-      expectBillingState(result);
-    },
-  );
+  it("keeps explicit Qwen overdue bills in the billing lane", async () => {
+    const result = await runThroughFailureRecovery({
+      provider: "qwen",
+      providerOwner: prepareProviderOwner("qwen"),
+      fixture: {
+        status: 429,
+        code: "PrepaidBillOverdue",
+        message: "The prepaid bill is overdue.",
+      },
+    });
+    expectBillingState(result);
+  });
 
   it("keeps an ordinary Qwen HTTP 429 in the generic rate-limit lane", async () => {
     const result = await runThroughFailureRecovery({

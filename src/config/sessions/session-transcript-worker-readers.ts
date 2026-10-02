@@ -71,6 +71,12 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
     ),
+    readLifecycleArtifactPlan: reader(
+      "lifecycle-artifact-plan",
+      "lifecycle artifact plan",
+      (input) => ({ kind: "lifecycle-artifact-plan", ...input }),
+      (value) => value,
+    ),
     readMemorySessionTargets: reader(
       "memory-session-targets",
       "memory session targets",

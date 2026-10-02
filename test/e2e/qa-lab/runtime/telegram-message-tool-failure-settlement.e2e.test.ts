@@ -11,8 +11,7 @@ type JsonObject = Record<string, unknown>;
 const BOT_TOKEN = `424242:${"A".repeat(35)}`;
 const CHAT_ID = -1001234;
 const SENDER_ID = 777;
-const FAILURE_TEXT =
-  "⚠️ mock-openai/gpt-5.6-luna-alt request failed (provider internal error, HTTP 500). This is usually temporary — try again shortly.";
+const FAILURE_TEXT = "⚠️ The AI service is having trouble. Please try again in a moment.";
 const RAW_ERROR_CANARY = "untrusted-provider-detail-qa-canary";
 const REQUEST_TEXT =
   "Please investigate this request. This turn should visibly settle even if the agent fails.";

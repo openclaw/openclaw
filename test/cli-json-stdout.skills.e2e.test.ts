@@ -160,7 +160,8 @@ describe("cli json stdout contract", () => {
             message,
           },
         });
-        expect(result.stderr).toContain(message);
+        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+        expect(result.stderr).not.toContain(message);
         expect(result.stderr.length).toBeLessThan(2_048);
       },
       { prefix: "openclaw-skills-json-failure-e2e-" },
