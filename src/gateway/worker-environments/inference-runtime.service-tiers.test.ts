@@ -32,8 +32,8 @@ const transport = vi.hoisted(() => ({
 vi.mock("openai", () => ({
   default: class {
     responses = {
-      create: (request: Record<string, unknown>) => {
-        transport.requests.push(request);
+      create: (payload: Record<string, unknown>) => {
+        transport.requests.push(payload);
         return {
           withResponse: async () => ({
             response: new Response(null, { status: 200 }),

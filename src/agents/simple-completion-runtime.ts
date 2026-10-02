@@ -76,6 +76,14 @@ import { resolveUtilityModelRefForAgent } from "./utility-model.js";
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
 
+type PreparedStreamCompletionModel =
+  | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
+      recordServiceTierObservation?: ReturnType<
+        NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>["prepareServiceTierObserver"]
+      >;
+    })
+  | Extract<PreparedSimpleCompletionModel, { error: string }>;
+
 type SimpleCompletionSelectionParams = {
   cfg: OpenClawConfig;
   agentId: string;
@@ -193,7 +201,7 @@ export async function prepareSimpleCompletionModel(
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
   },
   assertCurrent?: () => void,
-): Promise<PreparedSimpleCompletionModel> {
+): Promise<PreparedStreamCompletionModel> {
   params.signal?.throwIfAborted();
   const config = params.cfg ?? {};
   const preparedModelRuntime = params.preparedModelRuntime;
@@ -221,7 +229,7 @@ async function prepareSimpleCompletionModelCore(
   params: PrepareSimpleCompletionModelParams,
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
-): Promise<PreparedSimpleCompletionModel> {
+): Promise<PreparedStreamCompletionModel> {
   const { modelResolver, workspaceDir } = context;
   const resolved = await modelResolver(
     params.provider,
@@ -481,6 +489,7 @@ async function prepareSimpleCompletionModelCore(
         );
   const selectedCredential = auth.profileId ? authStore?.profiles[auth.profileId] : undefined;
   const recordServiceTierObservation =
+    params.transport === "provider-stream" &&
     auth.profileId &&
     selectedCredential?.type === "api_key" &&
     model.provider === "openai" &&
@@ -647,6 +656,7 @@ export async function acquireSimpleCompletionModelWithSelection(
       prepareSimpleCompletionModelCore(
         {
           ...params,
+          transport: "simple-completion",
           provider: selection.provider,
           modelId: selection.modelId,
           modelIdSource: "selected",

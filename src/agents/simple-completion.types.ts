@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
-import type { PreparedAccountCatalogAccess } from "./prepared-model-runtime-auth.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 export type PreparedSimpleCompletionModel =
@@ -10,9 +9,6 @@ export type PreparedSimpleCompletionModel =
       auth: ResolvedProviderAuth;
       /** Non-reversible owner proof captured from the same auth snapshot. */
       sourceAuthFingerprint?: string;
-      recordServiceTierObservation?: ReturnType<
-        PreparedAccountCatalogAccess["prepareServiceTierObserver"]
-      >;
     }
   | {
       error: string;
