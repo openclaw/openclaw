@@ -227,6 +227,7 @@ export function createGatewayPluginRequestHandler(params: {
   getRouteRegistry?: () => PluginRegistry;
   log: SubsystemLogger;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  isTransportAdmissionClosed?: () => boolean;
 }): PluginHttpRequestHandler {
   const { log } = params;
   return async (req, res, providedPathContext, dispatchContext) => {
@@ -349,7 +350,7 @@ export function createGatewayPluginRequestHandler(params: {
         // An outer root would make gateway.suspend.prepare nested and permanently unreachable.
         const handled = canRunPluginHttpRouteWithoutAdmission(route)
           ? await runRoute()
-          : await runWithGatewayHttpWorkAdmission(res, runRoute);
+          : await runWithGatewayHttpWorkAdmission(res, runRoute, params.isTransportAdmissionClosed);
         if (handled) {
           return true;
         }
@@ -375,6 +376,7 @@ export function createGatewayPluginUpgradeHandler(params: {
   getRouteRegistry?: () => PluginRegistry;
   log: SubsystemLogger;
   getGatewayRequestContext?: () => GatewayRequestContext | undefined;
+  isTransportAdmissionClosed?: () => boolean;
 }): PluginHttpUpgradeHandler {
   const { log } = params;
   return async (req, socket, head, providedPathContext, dispatchContext) => {
@@ -457,6 +459,7 @@ export function createGatewayPluginUpgradeHandler(params: {
                 );
               },
             )) !== false,
+          params.isTransportAdmissionClosed,
         );
         if (handled) {
           return true;

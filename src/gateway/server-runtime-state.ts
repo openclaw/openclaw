@@ -104,6 +104,8 @@ export async function createGatewayHttpTransport(params: {
   getReadiness?: ReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
+  /** Refuses new transport work once this Gateway generation begins closing. */
+  isTransportAdmissionClosed?: () => boolean;
   isTerminalEnabled: () => boolean;
   handleWatchNodeRequest?: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleNodeWorkerBundleTransferRequest?: ArtifactTransferHttpCallback;
@@ -178,27 +180,31 @@ export async function createGatewayHttpTransport(params: {
     if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
       return false;
     }
-    return await runWithGatewayHttpWorkAdmission(res, async () => {
-      if (!loadedHooksRequestHandler) {
-        // Hooks are cold for most gateway starts; create the handler only after a request
-        // matches the configured base path so startup avoids importing hook runtime code.
-        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
-        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
-          scheduler: params.scheduler,
-          deps: params.deps,
-          dispatcher: await getHookDispatcher(),
-          getHooksConfig: params.hooksConfig,
-          getClientIpConfig: params.getHookClientIpConfig,
-          bindHost: params.bindHost,
-          port: params.port,
-          logHooks: params.logHooks,
-          ...(params.getGatewayRequestContext
-            ? { resolveGatewayContext: params.getGatewayRequestContext }
-            : {}),
-        });
-      }
-      return await loadedHooksRequestHandler(req, res);
-    });
+    return await runWithGatewayHttpWorkAdmission(
+      res,
+      async () => {
+        if (!loadedHooksRequestHandler) {
+          // Hooks are cold for most gateway starts; create the handler only after a request
+          // matches the configured base path so startup avoids importing hook runtime code.
+          const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+          loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+            scheduler: params.scheduler,
+            deps: params.deps,
+            dispatcher: await getHookDispatcher(),
+            getHooksConfig: params.hooksConfig,
+            getClientIpConfig: params.getHookClientIpConfig,
+            bindHost: params.bindHost,
+            port: params.port,
+            logHooks: params.logHooks,
+            ...(params.getGatewayRequestContext
+              ? { resolveGatewayContext: params.getGatewayRequestContext }
+              : {}),
+          });
+        }
+        return await loadedHooksRequestHandler(req, res);
+      },
+      params.isTransportAdmissionClosed,
+    );
   };
 
   const handleMcpOAuthCallbackRequest = async (req: IncomingMessage, res: ServerResponse) => {
@@ -231,6 +237,7 @@ export async function createGatewayHttpTransport(params: {
       getRouteRegistry: resolvePluginRouteRegistry,
       log: params.logPlugins,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      isTransportAdmissionClosed: params.isTransportAdmissionClosed,
     });
     return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
   };
@@ -255,6 +262,7 @@ export async function createGatewayHttpTransport(params: {
       getRouteRegistry: resolvePluginRouteRegistry,
       log: params.logPlugins,
       getGatewayRequestContext: params.getGatewayRequestContext,
+      isTransportAdmissionClosed: params.isTransportAdmissionClosed,
     });
     return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
   };
@@ -352,6 +360,7 @@ export async function createGatewayHttpTransport(params: {
       handleNodeWorkspaceTransferRequest: params.handleNodeWorkspaceTransferRequest,
       getReadiness: params.getReadiness,
       getStartup: params.getStartup,
+      isTransportAdmissionClosed: params.isTransportAdmissionClosed,
       getRuntimeConfig: loadRuntimeConfig,
       getGatewayRequestContext: params.getGatewayRequestContext,
       isStartupPluginRuntimeReady: params.isStartupPluginRuntimeReady,
@@ -379,6 +388,7 @@ export async function createGatewayHttpTransport(params: {
       nodeDesktopStreamBroker: params.nodeDesktopStreamBroker,
       getGatewayRequestContext: params.getGatewayRequestContext,
       isStartupPending: params.isStartupPending,
+      isTransportAdmissionClosed: params.isTransportAdmissionClosed,
       ingressTransport,
       reportUnattributableProxy,
     });

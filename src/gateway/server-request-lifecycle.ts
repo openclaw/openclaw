@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import {
+  GATEWAY_CLOSING_UNAVAILABLE_REASON,
   GATEWAY_RESTART_UNAVAILABLE_REASON,
   GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS,
   GATEWAY_SUSPEND_UNAVAILABLE_REASON,
@@ -101,6 +102,19 @@ export function workAdmissionUnavailableError(method: string) {
       },
     },
   );
+}
+
+/** Retryable refusal for new work arriving at a generation that already began closing. */
+export function gatewayClosingUnavailableError(method: string) {
+  return errorShape(ErrorCodes.UNAVAILABLE, `${method} unavailable during gateway shutdown`, {
+    retryable: true,
+    retryAfterMs: 1_000,
+    details: {
+      method,
+      reason: GATEWAY_CLOSING_UNAVAILABLE_REASON,
+      phase: getGatewaySuspendAdmissionPhase(),
+    },
+  });
 }
 
 /** Cancels passive waiters without abandoning their owner's admitted writes. */
