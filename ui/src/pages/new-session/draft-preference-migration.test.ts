@@ -10,15 +10,7 @@ afterEach(() => {
 });
 
 it("does not restore an accepted name when an older first-load browser migration commits last", async () => {
-  expect(
-    replaceBrowserPreference("ws://gateway.example", "main", {
-      workspace: "/repo",
-      folder: "/repo",
-      worktree: true,
-      baseRef: "main",
-      worktreeName: "first-task",
-    }),
-  ).toBe(true);
+  seedBrowserPreferences();
   const prefs = identityPreferences(true, undefined, {});
   const migrationStarted = createDeferred();
   const releaseMigration = createDeferred();
