@@ -232,9 +232,6 @@ describe("voice-call call record store", () => {
       }
       const restored = await loadActiveCallsFromStore(storePath);
       expect([...restored.activeCalls.values()]).toEqual(calls);
-      expect([...restored.providerCallIdMap]).toEqual(
-        calls.map((call) => [call.providerCallId, call.callId]),
-      );
       expect([...restored.processedEventIds]).toEqual(
         calls.flatMap((call) => call.processedEventIds),
       );

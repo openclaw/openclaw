@@ -106,12 +106,15 @@ the Board agent. API clients can pass `view: { involvingMe?: boolean,
 involvingProfileId?: string, includePeople?: boolean }` to
 `workboard.sessionsBoard.read`; `includePeople` returns the people facet for the picker.
 
-Classification is shared across the Gateway and uses the configured utility
-model. Reads follow the current caller's session visibility; the board and its
+Classification is shared across the Gateway. Reads follow the current caller's
+session visibility; the board and its
 classification cache follow the Gateway's trusted-operator model.
 Interactive edits are admitted under the caller's live authority immediately before the write, while background classification runs under the plugin service's authority.
+Background classification uses the Gateway system actor to see non-incognito, non-draft shared sessions independently of who opened the board, including when roles are configured.
 Draft sessions are creator-private and never enter a Sessions board, its facts reads,
 or utility-model requests; incognito sessions are excluded the same way.
+Before the first classification returns any sessions, an empty board shows
+**Classifying sessions…** and refreshes when classification completes.
 
 New Sessions boards use these columns, in this order:
 
@@ -183,13 +186,15 @@ hooks, but only for boards that an operator or tool read within the last 15
 minutes; an unviewed board costs nothing until it is opened again. Only changed
 session facts or board specs need reclassification; activity timestamps alone do
 not count as a change, so pins survive ordinary session activity. Facts
-reads batch at most 40 sessions. Utility requests classify at most eight sessions
-per call to fit the 600-token response cap, with at least 30 seconds between
-calls for each board. Larger boards classify in the background while prior
-placements or the fallback column remain visible. Previews are bounded and
-redacted before inference. The utility model belongs to the board's
-`orchestration.defaultAssignee`, or the configured default agent when that field
-is unset. Session scope filters do not select the utility model. Session state, observer digests,
+reads batch at most 40 sessions. Utility requests group sessions by their owning
+agent and classify at most eight sessions per group per pass to fit each call's
+600-token response cap. Groups run sequentially within one board pass, with at
+least 30 seconds between passes. Larger groups classify in the background while
+prior placements or the fallback column remain visible. Previews are bounded and
+redacted before inference. Each group uses its session agent's utility model, or
+the board's `orchestration.defaultAssignee` when set, so multi-agent Gateways need
+no implicit default owner. A failed group retains its prior placements without
+blocking the other groups. Session state, observer digests,
 and pull-request state stay owned by the Gateway; Workboard stores only the board
 spec and placement cache in its SQLite tables.
 

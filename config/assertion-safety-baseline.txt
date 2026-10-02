@@ -545,7 +545,6 @@ extensions/matrix/src/setup-dm-policy.ts	5
 extensions/matrix/src/test-runtime.ts	9
 extensions/matrix/src/tool-actions.ts	1
 extensions/mattermost/src/channel.ts	5
-extensions/mattermost/src/gateway-auth-bypass.ts	3
 extensions/mattermost/src/mattermost/client.ts	6
 extensions/mattermost/src/mattermost/directory.ts	2
 extensions/mattermost/src/mattermost/interactions.ts	3
@@ -554,7 +553,7 @@ extensions/mattermost/src/mattermost/monitor-slash.ts	1
 extensions/mattermost/src/mattermost/monitor-websocket.ts	1
 extensions/mattermost/src/mattermost/monitor.ts	1
 extensions/mattermost/src/mattermost/slash-commands.ts	1
-extensions/mattermost/src/mattermost/slash-state.ts	3
+extensions/mattermost/src/mattermost/slash-state.ts	1
 extensions/mattermost/src/session-route.ts	1
 extensions/mattermost/src/setup-core.ts	2
 extensions/memory-core/index.ts	4
@@ -1009,15 +1008,12 @@ extensions/voice-call/doctor-contract-api.ts	1
 extensions/voice-call/index.ts	2
 extensions/voice-call/setup-api.ts	1
 extensions/voice-call/src/config.ts	2
-extensions/voice-call/src/manager.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
 extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/providers/shared/response-body.ts	1
-extensions/voice-call/src/providers/twilio/api.ts	2
 extensions/voice-call/src/response-generator.ts	3
 extensions/voice-call/src/runtime.ts	1
-extensions/voice-call/src/tts-provider-voice.ts	1
 extensions/voice-call/src/webhook.ts	7
 extensions/voyage/embedding-batch.ts	1
 extensions/web-readability/web-content-extractor.ts	2
