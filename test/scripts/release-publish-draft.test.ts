@@ -208,7 +208,7 @@ it("renders the extended-stable context through the real publication entry point
       "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
         "This release is OpenClaw from the end of July 2026, plus critical security updates, " +
         "reliability and performance fixes, and features like new model support. " +
-        "The current latest version of OpenClaw is " +
+        "The latest version of OpenClaw at the time of this release is " +
         "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
     ),
   ).toBe(true);

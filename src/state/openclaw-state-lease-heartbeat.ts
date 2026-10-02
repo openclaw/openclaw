@@ -427,11 +427,15 @@ export function startOpenClawStateLeaseHeartbeat(
         : undefined,
     );
   };
-  worker.once("error", (error) =>
-    fail(
-      renewalFailure ? exitError() : toErrorObject(error, "state lease heartbeat worker failed"),
-    ),
-  );
+  worker.once("error", (error) => {
+    if (renewalFailure) {
+      fail(exitError());
+      return;
+    }
+    const failure = toErrorObject(error, "state lease heartbeat worker failed");
+    failure.message += lossDetail();
+    fail(failure);
+  });
   worker.once("exit", (code) => fail(exitError(code)));
   worker.on("message", (reply: LeaseHeartbeatReply | null) => {
     if (reply === null) {

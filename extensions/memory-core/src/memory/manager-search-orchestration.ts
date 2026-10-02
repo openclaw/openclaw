@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -38,7 +38,6 @@ import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
