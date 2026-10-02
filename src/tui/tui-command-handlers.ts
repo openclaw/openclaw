@@ -130,7 +130,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       allowDuringPending: isBtwCommand(message),
     });
 
-  const reportBlockedMessageSubmit = (_message: string, admission: TuiChatSubmitBlock) => {
+  const reportBlockedMessageSubmit = (admission: TuiChatSubmitBlock) => {
     if (admission.reason === "pending") {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message", {
         coalesceConsecutive: true,
@@ -149,7 +149,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const admitSessionAction = () => {
     const admission = resolveTuiSessionActionAdmission(state);
     if (admission.status === "blocked") {
-      reportBlockedMessageSubmit("", admission);
+      reportBlockedMessageSubmit(admission);
       return false;
     }
     return true;
@@ -872,7 +872,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const sendMessage = async (text: string, timeoutMs = opts.timeoutMs) => {
     const admission = resolveMessageAdmission(text);
     if (admission.status === "blocked") {
-      reportBlockedMessageSubmit(text, admission);
+      reportBlockedMessageSubmit(admission);
       return;
     }
     const isBtw = isBtwCommand(text);
