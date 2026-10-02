@@ -18,6 +18,10 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  captureSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
@@ -177,6 +181,10 @@ export class ComposedGatewayHarness {
   transcriptGate: TranscriptGate | undefined;
   providerPlan: ProviderPlan = { kind: "immediate", text: "done" };
 
+  // The simulated worker changes process.env; Gateway storage must survive service restarts.
+  private readonly gatewayStorageEnvironment = captureSessionTranscriptStorageEnvironment(
+    process.env,
+  );
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly connectionWork = new GatewayConnectionWork();
@@ -558,7 +566,13 @@ export class ComposedGatewayHarness {
           gate.entered.resolve();
           await gate.release.promise;
         }
-        const result = await committer.commit(params);
+        const result = await committer.commit({
+          ...params,
+          sessionTarget: captureSessionTranscriptTargetBinding({
+            ...params.sessionTarget,
+            env: this.gatewayStorageEnvironment,
+          }),
+        });
         if (gate?.phase === "after-apply") {
           gate.entered.resolve();
           await gate.release.promise;
