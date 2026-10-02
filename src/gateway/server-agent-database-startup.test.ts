@@ -19,7 +19,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import * as inspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
@@ -110,13 +109,6 @@ DatabaseSync.prototype.prepare = function(sql) {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
-  const readBudget = inspection.readSqliteInspectionBudget;
-  vi.spyOn(inspection, "readSqliteInspectionBudget").mockImplementation(
-    (operation, pathname, size) => {
-      const budget = readBudget(operation, pathname, size);
-      return pausedPaths.includes(pathname) ? { ...budget, timeoutMs: 1 } : budget;
-    },
-  );
   return {
     env,
     releasePath,

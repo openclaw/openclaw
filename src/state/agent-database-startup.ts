@@ -144,7 +144,6 @@ class AgentDatabaseStartupAdmission {
   scheduling(env: NodeJS.ProcessEnv) {
     return {
       signal: this.signal,
-      path: (target: PendingInspection["target"]) => target.path,
       canDefer: (target: PendingInspection["target"]) =>
         this.deferInspections && target.agentId !== undefined,
       track: (work: Promise<unknown>) => this.track(work),

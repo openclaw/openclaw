@@ -18,17 +18,8 @@ function createResult(): OpenClawDatabaseSchemaPreflight {
 }
 
 describe("bounded agent database preflight scheduling", () => {
-  it("shares one foreground wait across large active and queued agent inspections", async () => {
+  it("shares one foreground wait across active and queued agent inspections", async () => {
     vi.useFakeTimers();
-    const budget = vi
-      .spyOn(sqliteInspection, "readSqliteInspectionBudget")
-      .mockReturnValue(
-        sqliteInspection.resolveSqliteInspectionBudget(
-          "startup readiness",
-          "large.sqlite",
-          38 * 1024 ** 3,
-        ),
-      );
     const releases = [createDeferred(), createDeferred(), createDeferred(), createDeferred()];
     const tracked: Promise<unknown>[] = [];
     const started: number[] = [];
@@ -52,7 +43,6 @@ describe("bounded agent database preflight scheduling", () => {
       undefined,
       {
         signal: new AbortController().signal,
-        path: (target) => `agent-${target}`,
         canDefer: () => true,
         track: (work) => tracked.push(work),
         defer,
@@ -90,7 +80,6 @@ describe("bounded agent database preflight scheduling", () => {
         release.resolve();
       }
       await Promise.allSettled([run, ...tracked]);
-      budget.mockRestore();
       vi.useRealTimers();
     }
   });
@@ -107,7 +96,6 @@ describe("bounded agent database preflight scheduling", () => {
       undefined,
       {
         signal: new AbortController().signal,
-        path: (pathname) => pathname,
         canDefer: () => false,
         track: () => {},
         defer,
@@ -132,10 +120,6 @@ describe("bounded agent database preflight scheduling", () => {
 
   it("keeps deferred inspections alive until the Gateway owner stops", async () => {
     vi.useFakeTimers();
-    const budget = vi.spyOn(sqliteInspection, "readSqliteInspectionBudget").mockReturnValue({
-      timeoutMs: 1,
-      size: "fixture",
-    });
     const gateway = new AbortController();
     const released = createDeferred();
     const tracked: Promise<unknown>[] = [];
@@ -153,7 +137,6 @@ describe("bounded agent database preflight scheduling", () => {
           undefined,
           {
             signal: gateway.signal,
-            path: (pathname) => pathname,
             canDefer: () => true,
             track: (work) => {
               tracked.push(work);
@@ -161,7 +144,7 @@ describe("bounded agent database preflight scheduling", () => {
             defer: () => [],
           },
         );
-        await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersByTimeAsync(5_000);
         await foreground;
       });
       expect(inspectionSignal?.aborted).toBe(false);
@@ -172,19 +155,12 @@ describe("bounded agent database preflight scheduling", () => {
       gateway.abort();
       released.resolve();
       await Promise.allSettled(tracked);
-      budget.mockRestore();
       vi.useRealTimers();
     }
   });
 
-  it("rejects an expired inspection failure before background ownership is established", async () => {
+  it("rejects a deferred failure while a strict store still prevents handoff", async () => {
     vi.useFakeTimers();
-    const budget = vi
-      .spyOn(sqliteInspection, "readSqliteInspectionBudget")
-      .mockImplementation((_operation, pathname) => ({
-        timeoutMs: pathname === "unowned.sqlite" ? 1 : 100,
-        size: "fixture",
-      }));
     const releases = [createDeferred(), createDeferred()];
     const failure = new Error("unowned database inspection failed");
     const started: number[] = [];
@@ -204,15 +180,14 @@ describe("bounded agent database preflight scheduling", () => {
       undefined,
       {
         signal: new AbortController().signal,
-        path: (target) => (target === 0 ? "unowned.sqlite" : "healthy.sqlite"),
-        canDefer: () => true,
+        canDefer: (target) => target !== 1,
         track: () => {},
         defer,
       },
     );
     void run.catch(() => {});
     try {
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(5_000);
       releases[0]!.resolve();
       await vi.advanceTimersByTimeAsync(0);
       releases[1]!.resolve();
@@ -224,7 +199,6 @@ describe("bounded agent database preflight scheduling", () => {
         release.resolve();
       }
       await Promise.allSettled([run]);
-      budget.mockRestore();
       vi.useRealTimers();
     }
   });

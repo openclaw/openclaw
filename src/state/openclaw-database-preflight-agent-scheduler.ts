@@ -1,7 +1,6 @@
 import { availableParallelism } from "node:os";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
-  readSqliteInspectionBudget,
   resolveSqliteInspectionSignal,
   withSqliteReadOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker.js";
@@ -31,7 +30,6 @@ export async function preflightAgentDatabasesBounded<T>(
   signal?: AbortSignal,
   startup?: {
     signal: AbortSignal;
-    path: (target: T) => string;
     canDefer: (target: T) => boolean;
     track: (work: Promise<unknown>) => void;
     defer: (
@@ -40,7 +38,6 @@ export async function preflightAgentDatabasesBounded<T>(
     ) => AgentDatabaseAdmissionRefusal[];
   },
 ): Promise<AgentDatabasePreflightStats> {
-  const startupDeadline = performance.now() + AGENT_DATABASE_STARTUP_WAIT_MS;
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
   const claimAgentTarget = (realPath: string, agentId: string | undefined) => {
@@ -66,13 +63,11 @@ export async function preflightAgentDatabasesBounded<T>(
     void completion.promise.catch(() => {});
   }
   const deferred = new Set<number>();
-  const active = new Set<number>();
   const concurrency = Math.min(
     AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
     availableParallelism(),
     targets.length,
   );
-  let deferredReason = "";
   let deferredRefusals: AgentDatabaseAdmissionRefusal[] = [];
   const inspectionSignal = startup
     ? signal
@@ -84,13 +79,6 @@ export async function preflightAgentDatabasesBounded<T>(
     if (!startup || deferred.size === 0 || deferredRefusals.length > 0 || failures.size > 0) {
       return;
     }
-    if (active.size === concurrency && [...active].every((index) => deferred.has(index))) {
-      for (let index = nextInspectionIndex; index < targets.length; index += 1) {
-        if (startup.canDefer(targets[index]!)) {
-          deferred.add(index);
-        }
-      }
-    }
     if (targets.some((_, index) => inspections[index] === undefined && !deferred.has(index))) {
       return;
     }
@@ -100,7 +88,7 @@ export async function preflightAgentDatabasesBounded<T>(
           target: targets[index]!,
           result: completions[index]!.promise,
         })),
-        deferredReason,
+        `The ${AGENT_DATABASE_STARTUP_WAIT_MS / 1000} second foreground startup budget elapsed; inspection continues.`,
       );
       foreground.resolve();
     } catch (error) {
@@ -131,22 +119,6 @@ export async function preflightAgentDatabasesBounded<T>(
         incompatible: [],
         indeterminate: [],
       };
-      active.add(index);
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      if (startup && startup.canDefer(target) && !deferred.has(index)) {
-        const pathname = startup.path(target);
-        const { timeoutMs, size } = readSqliteInspectionBudget("startup readiness", pathname);
-        const waitMs = Math.min(timeoutMs, Math.max(0, startupDeadline - performance.now()));
-        timer = setTimeout(() => {
-          if (failures.size > 0 || inspectionSignal?.aborted) {
-            return;
-          }
-          deferred.add(index);
-          deferredReason ||= `The ${size} database at ${pathname} did not finish within the ${AGENT_DATABASE_STARTUP_WAIT_MS / 1000} second foreground startup budget; inspection continues.`;
-          settleForeground();
-        }, waitMs);
-        timer.unref();
-      }
       try {
         await inspect(target, inspection, claimAgentTarget, (input, requestSignal, snapshot) =>
           reader.inspect(input, inspectionSignal ?? requestSignal, snapshot),
@@ -158,8 +130,6 @@ export async function preflightAgentDatabasesBounded<T>(
         completions[index]!.reject(error);
         return;
       } finally {
-        clearTimeout(timer);
-        active.delete(index);
         settleForeground();
       }
     }
@@ -188,7 +158,25 @@ export async function preflightAgentDatabasesBounded<T>(
     }
   });
   startup?.track(completed);
-  await (startup ? Promise.race([completed, foreground.promise]) : completed);
+  const timer =
+    startup &&
+    setTimeout(() => {
+      if (failures.size > 0 || inspectionSignal?.aborted) {
+        return;
+      }
+      targets.forEach((target, index) => {
+        if (inspections[index] === undefined && startup.canDefer(target)) {
+          deferred.add(index);
+        }
+      });
+      settleForeground();
+    }, AGENT_DATABASE_STARTUP_WAIT_MS);
+  timer?.unref();
+  try {
+    await (startup ? Promise.race([completed, foreground.promise]) : completed);
+  } finally {
+    clearTimeout(timer);
+  }
 
   // Workers are fully joined before propagating failure or cancellation so
   // every started database close and snapshot cleanup has completed.
