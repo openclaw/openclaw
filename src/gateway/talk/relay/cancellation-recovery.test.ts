@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.js";
-import type { RealtimeVoiceProviderPlugin } from "../../../plugins/types.js";
 import { resetClientVoiceConfirmationStateForTest } from "../../../talk/client-voice-confirmation.test-support.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
@@ -21,7 +20,11 @@ import {
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
 } from "./index.js";
-import { drainRelayTestSessions, makeRelayTransport } from "./index.test-support.js";
+import {
+  createIdleRelayProvider,
+  drainRelayTestSessions,
+  makeRelayTransport,
+} from "./index.test-support.js";
 import { relaySessions } from "./state.js";
 
 const activeRelaySessions = new Map<string, string>();
@@ -29,15 +32,10 @@ const activeRelaySessions = new Map<string, string>();
 function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridge> = {}) {
   let request: RealtimeVoiceBridgeCreateRequest | undefined;
   const transport = makeRelayTransport(transportOverrides);
-  const provider: RealtimeVoiceProviderPlugin = {
-    id: "relay-test",
-    label: "Relay Test",
-    isConfigured: () => true,
-    createBridge: (bridgeRequest) => {
-      request = bridgeRequest;
-      return transport;
-    },
-  };
+  const provider = createIdleRelayProvider((bridgeRequest) => {
+    request = bridgeRequest;
+    return transport;
+  });
   const broadcastToConnIds = vi.fn();
   const warn = vi.fn();
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
