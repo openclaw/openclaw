@@ -5,7 +5,7 @@ import {
   buildRestartRecoveryTerminalDeliveryEvidence,
   constrainRestartRecoveryDeliveryPayloads,
 } from "./agent-command-restart-recovery.js";
-import { hasMessagingToolDeliveryToSource } from "./subagents/announce/subagent-announce-completion-delivery.js";
+import { resolveMessagingToolDeliveryEvidence } from "./subagents/announce/subagent-announce-completion-delivery.js";
 
 describe("buildCurrentRunRestartRecoveryClaim", () => {
   it("persists the complete generated-media policy, including an empty allowlist", () => {
@@ -213,7 +213,7 @@ describe("constrainRestartRecoveryDeliveryPayloads", () => {
 describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
   it.each([false, true])(
     "retains the source final marker %s through durable projection",
-    (sourceReplyFinal) => {
+    async (sourceReplyFinal) => {
       const original = {
         messagingToolSentTargets: [
           {
@@ -235,13 +235,13 @@ describe("buildRestartRecoveryTerminalDeliveryEvidence", () => {
         "original",
       );
       expect(stored?.messagingToolSentTargets?.[0]?.sourceReplyFinal).toBe(sourceReplyFinal);
-      expect(
-        hasMessagingToolDeliveryToSource(
-          stored!,
-          { channel: "discord", to: "channel:123" },
-          { requireFinalReply: true },
-        ),
-      ).toBe(sourceReplyFinal);
+      const { hasFinalMessagingToolDelivery } = await resolveMessagingToolDeliveryEvidence({
+        cfg: {} as never,
+        requesterSessionKey: "restart-recovery-test",
+        result: stored!,
+        deliveryTarget: { channel: "discord", to: "channel:123" },
+      });
+      expect(hasFinalMessagingToolDelivery).toBe(sourceReplyFinal);
     },
   );
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ChannelMessagingAdapter } from "../../../channels/plugins/types.public.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -6,7 +7,12 @@ import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { setActivePluginRegistry } from "../../../plugins/runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../../test-utils/channel-plugins.js";
 import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 
@@ -475,4 +481,87 @@ describe("late exact requester recovery", () => {
       expect(fixture.send).not.toHaveBeenCalled();
     },
   );
+
+  it("rechecks source ownership after classifying a late recovered receipt", async () => {
+    const lookupStarted = createDeferredCore();
+    const releaseLookup = createDeferredCore();
+    const resolveOutboundSessionRoute = vi.fn(async ({ target }: { target: string }) => {
+      lookupStarted.resolve();
+      await releaseLookup.promise;
+      if (target !== "D000000001") {
+        return null;
+      }
+      return {
+        sessionKey: "agent:main:slack:user:U123",
+        baseSessionKey: "agent:main:slack:user:U123",
+        recipientSessionExact: true,
+        peer: { kind: "direct" as const, id: "U123" },
+        chatType: "direct" as const,
+        from: "slack:U123",
+        to: "user:U123",
+      };
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "slack",
+              capabilities: { chatTypes: ["direct", "channel"] },
+            }),
+            messaging: {
+              inferTargetChatType: ({ to }: { to: string }) =>
+                to.startsWith("channel:") || to.startsWith("thread:") ? "channel" : "direct",
+              resolveOutboundSessionRoute: resolveOutboundSessionRoute as unknown as NonNullable<
+                ChannelMessagingAdapter["resolveOutboundSessionRoute"]
+              >,
+            },
+          },
+        },
+      ]),
+    );
+    onTestFinished(() => setActivePluginRegistry(createTestRegistry()));
+
+    const fixture = setup();
+    fixture.params.directOrigin = { channel: "slack", to: "user:U123", accountId: "acct-1" };
+    const delivery = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.state.entry = {
+      ...fixture.state.entry,
+      restartRecoveryTerminalRunIds: [sourceRunId],
+      restartRecoveryTerminalDeliveryEvidence: [
+        {
+          runId: sourceRunId,
+          transcriptRunId: "recovery-successor",
+          captured: true,
+          payloads: [{ visible: true }],
+          messagingToolSentTargets: [
+            {
+              provider: "slack",
+              accountId: "acct-1",
+              to: "D000000001",
+              sourceReplyFinal: true,
+              visible: true,
+            },
+          ],
+        },
+      ],
+    };
+    fixture.readDone.resolve();
+    fixture.dispatchDone.resolve({ status: "accepted" });
+
+    await lookupStarted.promise;
+    fixture.state.allowed = false;
+    releaseLookup.resolve();
+    await expect(delivery).resolves.toMatchObject({
+      delivered: false,
+      path: "none",
+      reason: "source_owner_changed",
+      terminal: true,
+    });
+    expect(fixture.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
 });
