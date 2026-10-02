@@ -249,6 +249,51 @@ describe("CodexAppServerEventProjector native tool audit projection", () => {
     );
   });
 
+  it("mirrors raw exec_command workspace rejection without a commandExecution item", async () => {
+    const projector = await createProjector();
+    const callId = "native-exec-workspace-rejection";
+    const args = {
+      cmd: "printf 'blocked\\n' > /outside-workspace/blocked.txt",
+      workdir: "/workspace",
+    };
+    const rejection =
+      "command rejected: writing outside of the project; rejected by user approval settings";
+
+    await notify(projector, "rawResponseItem/completed", {
+      item: {
+        type: "function_call",
+        call_id: callId,
+        name: "exec_command",
+        arguments: JSON.stringify(args),
+      },
+    });
+    await notify(projector, "rawResponseItem/completed", {
+      item: {
+        type: "function_call_output",
+        call_id: callId,
+        output: rejection,
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    const assistant = requireRecord(result.messagesSnapshot[1], "native exec call");
+    const call = requireRecord(requireArray(assistant.content, "native exec content")[0], "call");
+    expect(call).toMatchObject({
+      type: "toolCall",
+      id: callId,
+      name: "bash",
+    });
+    expect(call.arguments).toEqual({ command: args.cmd, cwd: args.workdir });
+    const toolResult = requireRecord(result.messagesSnapshot[2], "native exec result");
+    expect(toolResult).toMatchObject({
+      role: "toolResult",
+      toolCallId: callId,
+      toolName: "bash",
+      isError: true,
+      content: [{ type: "text", text: rejection }],
+    });
+  });
+
   it("does not double-count a successful code-mode patch and its canonical FileChange", async () => {
     const projector = await createProjector();
     const outerCallId = "code-mode-patch-exec";
